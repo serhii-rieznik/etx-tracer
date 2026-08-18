@@ -862,7 +862,11 @@ uint wavefront_camera_vertex_slot(uint path_index, uint path_length) {
 
 uint wavefront_light_vertex_slot(uint path_index, uint path_length) {
   GPUWavefrontResources resources = wavefront_load_resources();
-  return wavefront_vertex_slot_from_limit(path_index, path_length, wavefront_light_fixed_max_bounces(resources));
+  uint fixed_max_bounces = wavefront_light_fixed_max_bounces(resources);
+  if (fixed_max_bounces <= 3u) {
+    return wavefront_vertex_slot_from_limit(path_index, path_length, fixed_max_bounces);
+  }
+  return min(path_length, fixed_max_bounces) * resources.path_capacity + path_index;
 }
 
 uint wavefront_path_vertex_slot(bool from_camera, uint path_index, uint path_length) {

@@ -350,7 +350,7 @@ ETX_SHARED_INLINE bool random_continue(uint32_t path_length, uint32_t start_path
     return false;
   }
 
-  const float p = clamp(eta_scaled_max_t, 0.01f, 1.0f);
+  const float p = clamp(eta_scaled_max_t, 0.01f, kSamplerMaximumContinuationProbability);
   if (smp.next() > p) {
     return false;
   }

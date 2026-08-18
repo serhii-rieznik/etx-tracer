@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -2473,6 +2474,27 @@ RHICreatePipelineResult MTDevice::create_compute_pipeline(const RHIComputePipeli
   const RHIPipeline handle = Handle::construct(0u, _impl->next_pipeline_index++, 1u);
   _impl->pipelines.emplace(handle, std::move(pipeline));
   return {RHIResult::Success, handle};
+}
+
+std::vector<RHICreatePipelineBatchEntry> MTDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency) {
+  (void)max_concurrency;
+  std::vector<RHICreatePipelineBatchEntry> results(descs.size());
+  for (size_t i = 0u; i < descs.size(); ++i) {
+    const auto begin = std::chrono::steady_clock::now();
+    const RHICreatePipelineResult result = create_compute_pipeline(descs[i]);
+    const auto end = std::chrono::steady_clock::now();
+    results[i] = {
+      .result = result.result,
+      .handle = result.handle,
+      .elapsed_ms = std::chrono::duration<double, std::milli>(end - begin).count(),
+      .cache_hit = false,
+    };
+  }
+  return results;
+}
+
+void MTDevice::persist_pipeline_cache() {
+  flush_pipeline_binary_archive(_impl, "pipeline_batch");
 }
 
 RHIResult MTDevice::destroy_buffer(RHIBuffer buffer) {

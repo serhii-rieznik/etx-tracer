@@ -83,7 +83,7 @@ extern "C" int main(int argc, char* argv[]) {
 #if defined(ETX_PLATFORM_APPLE)
   desc.window_title = "ETX Tracer";
 #else
-  desc.window_title = "etx-tracer";
+  desc.window_title = "ETX Tracer";
 #endif
   desc.win32.console_utf8 = true;
   desc.win32.console_create = true;

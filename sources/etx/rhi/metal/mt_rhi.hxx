@@ -108,6 +108,8 @@ struct MTDevice {
   RHICreateBindlessResult create_sampler(const RHISamplerDesc& desc);
   RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
   RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);
+  std::vector<RHICreatePipelineBatchEntry> create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency);
+  void persist_pipeline_cache();
 
   RHIResult destroy_buffer(RHIBuffer buffer);
   RHIResult destroy_texture(RHITexture texture);

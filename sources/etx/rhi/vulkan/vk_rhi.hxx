@@ -293,6 +293,8 @@ struct VKDevice {
 
   RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
   RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);
+  std::vector<RHICreatePipelineBatchEntry> create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency);
+  void persist_pipeline_cache();
   RHIResult reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc);
   RHIResult reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc);
   RHIResult destroy_pipeline(RHIPipeline pipeline);

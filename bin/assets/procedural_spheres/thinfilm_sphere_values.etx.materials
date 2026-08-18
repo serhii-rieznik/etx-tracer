@@ -1,0 +1,368 @@
+newmtl et::camera
+class perspective
+viewport 1280 720
+origin 0.000000 4.400000 14.000000
+target 0.000000 1.600000 0.000000
+up 0.000000 1.000000 0.000000
+fov 36.000000
+clip-far 100.000000
+id camera
+active 1
+
+newmtl et::env
+color 0.030000 0.035000 0.045000
+
+newmtl et::dir
+color 5.000000 4.600000 4.000000
+direction -0.450000 0.650000 -0.610000
+angular_diameter 3.000000
+
+newmtl floor_mat
+material class diffuse
+Kd 0.320000 0.320000 0.340000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl plastic_000nm
+material class openpbr
+Kd 0.800000 0.180000 0.080000
+Ks 1.000000 1.000000 1.000000
+Pr 0.280000
+metalness 0.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl plastic_250nm
+material class openpbr
+Kd 0.800000 0.180000 0.080000
+Ks 1.000000 1.000000 1.000000
+Pr 0.280000
+metalness 0.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 250.000000 250.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl plastic_400nm
+material class openpbr
+Kd 0.800000 0.180000 0.080000
+Ks 1.000000 1.000000 1.000000
+Pr 0.280000
+metalness 0.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 400.000000 400.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl plastic_550nm
+material class openpbr
+Kd 0.800000 0.180000 0.080000
+Ks 1.000000 1.000000 1.000000
+Pr 0.280000
+metalness 0.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 550.000000 550.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl plastic_700nm
+material class openpbr
+Kd 0.800000 0.180000 0.080000
+Ks 1.000000 1.000000 1.000000
+Pr 0.280000
+metalness 0.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 700.000000 700.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl plastic_850nm
+material class openpbr
+Kd 0.800000 0.180000 0.080000
+Ks 1.000000 1.000000 1.000000
+Pr 0.280000
+metalness 0.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 850.000000 850.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl metal_000nm
+material class openpbr
+Kd 1.000000 0.720000 0.330000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 1.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl metal_250nm
+material class openpbr
+Kd 1.000000 0.720000 0.330000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 1.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 250.000000 250.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl metal_400nm
+material class openpbr
+Kd 1.000000 0.720000 0.330000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 1.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 400.000000 400.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl metal_550nm
+material class openpbr
+Kd 1.000000 0.720000 0.330000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 1.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 550.000000 550.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl metal_700nm
+material class openpbr
+Kd 1.000000 0.720000 0.330000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 1.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 700.000000 700.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl metal_850nm
+material class openpbr
+Kd 1.000000 0.720000 0.330000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 1.000000
+transmission 0.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 850.000000 850.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl glass_000nm
+material class openpbr
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.120000
+metalness 0.000000
+transmission 1.000000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl glass_250nm
+material class openpbr
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.120000
+metalness 0.000000
+transmission 1.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 250.000000 250.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl glass_400nm
+material class openpbr
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.120000
+metalness 0.000000
+transmission 1.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 400.000000 400.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl glass_550nm
+material class openpbr
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.120000
+metalness 0.000000
+transmission 1.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 550.000000 550.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl glass_700nm
+material class openpbr
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.120000
+metalness 0.000000
+transmission 1.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 700.000000 700.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl glass_850nm
+material class openpbr
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.120000
+metalness 0.000000
+transmission 1.000000
+int_ior glass
+ext_ior 1.0
+thinfilm range 850.000000 850.000000 ior 1.500000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl et::plane
+id floor
+material floor_mat
+center 0.000000 -0.850000 0.000000
+size 13.500000 8.500000
+
+newmtl et::sphere
+id plastic_000nm_sphere
+material plastic_000nm
+center -5.000000 0.000000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id plastic_250nm_sphere
+material plastic_250nm
+center -3.000000 0.000000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id plastic_400nm_sphere
+material plastic_400nm
+center -1.000000 0.000000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id plastic_550nm_sphere
+material plastic_550nm
+center 1.000000 0.000000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id plastic_700nm_sphere
+material plastic_700nm
+center 3.000000 0.000000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id plastic_850nm_sphere
+material plastic_850nm
+center 5.000000 0.000000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id metal_000nm_sphere
+material metal_000nm
+center -5.000000 1.800000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id metal_250nm_sphere
+material metal_250nm
+center -3.000000 1.800000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id metal_400nm_sphere
+material metal_400nm
+center -1.000000 1.800000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id metal_550nm_sphere
+material metal_550nm
+center 1.000000 1.800000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id metal_700nm_sphere
+material metal_700nm
+center 3.000000 1.800000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id metal_850nm_sphere
+material metal_850nm
+center 5.000000 1.800000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id glass_000nm_sphere
+material glass_000nm
+center -5.000000 3.600000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id glass_250nm_sphere
+material glass_250nm
+center -3.000000 3.600000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id glass_400nm_sphere
+material glass_400nm
+center -1.000000 3.600000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id glass_550nm_sphere
+material glass_550nm
+center 1.000000 3.600000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id glass_700nm_sphere
+material glass_700nm
+center 3.000000 3.600000 0.000000
+radius 0.700000
+subdivisions 5
+
+newmtl et::sphere
+id glass_850nm_sphere
+material glass_850nm
+center 5.000000 3.600000 0.000000
+radius 0.700000
+subdivisions 5

@@ -1,0 +1,55 @@
+{
+  "blue_noise": true,
+  "geometry": "cornellbox.etx",
+  "integrator": {
+    "selected": "bdpt",
+    "settings": {
+      "bdpt": [
+        {
+          "class": 2,
+          "description": "Mode",
+          "id": "bdpt-mode",
+          "meta": 1,
+          "value": 2,
+          "value.max": 3,
+          "value.min": 0
+        }
+      ],
+      "debug": [
+        {
+          "class": 2,
+          "description": "Visualize",
+          "id": "mode",
+          "meta": 1,
+          "value": 0,
+          "value.max": 16,
+          "value.min": 0
+        }
+      ],
+      "vcm": [
+        {
+          "class": 5,
+          "description": "general-options",
+          "id": "desc",
+          "meta": 0,
+          "value": "No options available"
+        }
+      ]
+    }
+  },
+  "light_sampling": "ris_from_distribution",
+  "materials": "cornellbox.etx.materials",
+  "max-path-length": 1023,
+  "min-path-length": 0,
+  "multiple_importance_sampling": false,
+  "random-termination-start": 6,
+  "samples": 32,
+  "spectral": false,
+  "strategies": {
+    "connect_to_camera": true,
+    "connect_to_light": true,
+    "connect_vertices": true,
+    "direct_hit": true,
+    "merge_vertices": true
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "blue_noise": true,
+  "integrator": {
+    "selected": "pt"
+  },
+  "light_sampling": "ris_from_distribution",
+  "materials": "thinfilm_sphere_values.etx.materials",
+  "max-path-length": 16,
+  "min-path-length": 1,
+  "multiple_importance_sampling": true,
+  "random-termination-start": 6,
+  "samples": 96,
+  "spectral": false,
+  "strategies": {
+    "connect_to_camera": true,
+    "connect_to_light": true,
+    "connect_vertices": true,
+    "direct_hit": true,
+    "merge_vertices": true
+  }
+}

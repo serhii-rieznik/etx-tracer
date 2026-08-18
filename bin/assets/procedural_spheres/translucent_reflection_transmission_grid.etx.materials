@@ -1,0 +1,630 @@
+newmtl et::camera
+class perspective
+viewport 1280 720
+origin 0.000000 8.200000 14.500000
+target 0.000000 0.900000 0.000000
+up 0.000000 1.000000 0.000000
+fov 42.000000
+clip-far 100.000000
+id camera
+active 1
+
+newmtl et::atmosphere
+anisotropy 0.825000
+altitude 1000.000000
+rayleigh 1.000000
+mie 1.000000
+ozone 1.000000
+quality 0.125000
+color 1.000000 1.000000 1.000000
+
+newmtl et::dir
+color 4.000000 3.650000 3.150000
+direction -0.420000 0.660000 -0.620000
+angular_diameter 3.000000
+
+newmtl floor_mat
+material class diffuse
+Kd 0.300000 0.310000 0.330000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl translucent_base
+material class translucent
+Ks 1.000000 0.180000 0.035000
+Kt 0.000000 0.000000 0.000000
+Pr 0.020000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl translucent_rough_0_trans_0
+base translucent_base
+Kt 0.000000 0.000000 0.000000
+Pr 0.020000
+
+newmtl translucent_rough_0_trans_1
+base translucent_base
+Kt 0.100000 0.018000 0.003500
+Pr 0.020000
+
+newmtl translucent_rough_0_trans_2
+base translucent_base
+Kt 0.220000 0.039600 0.007700
+Pr 0.020000
+
+newmtl translucent_rough_0_trans_3
+base translucent_base
+Kt 0.380000 0.068400 0.013300
+Pr 0.020000
+
+newmtl translucent_rough_0_trans_4
+base translucent_base
+Kt 0.550000 0.099000 0.019250
+Pr 0.020000
+
+newmtl translucent_rough_0_trans_5
+base translucent_base
+Kt 0.750000 0.135000 0.026250
+Pr 0.020000
+
+newmtl translucent_rough_0_trans_6
+base translucent_base
+Kt 1.000000 0.180000 0.035000
+Pr 0.020000
+
+newmtl translucent_rough_1_trans_0
+base translucent_base
+Kt 0.000000 0.000000 0.000000
+Pr 0.100000
+
+newmtl translucent_rough_1_trans_1
+base translucent_base
+Kt 0.100000 0.018000 0.003500
+Pr 0.100000
+
+newmtl translucent_rough_1_trans_2
+base translucent_base
+Kt 0.220000 0.039600 0.007700
+Pr 0.100000
+
+newmtl translucent_rough_1_trans_3
+base translucent_base
+Kt 0.380000 0.068400 0.013300
+Pr 0.100000
+
+newmtl translucent_rough_1_trans_4
+base translucent_base
+Kt 0.550000 0.099000 0.019250
+Pr 0.100000
+
+newmtl translucent_rough_1_trans_5
+base translucent_base
+Kt 0.750000 0.135000 0.026250
+Pr 0.100000
+
+newmtl translucent_rough_1_trans_6
+base translucent_base
+Kt 1.000000 0.180000 0.035000
+Pr 0.100000
+
+newmtl translucent_rough_2_trans_0
+base translucent_base
+Kt 0.000000 0.000000 0.000000
+Pr 0.220000
+
+newmtl translucent_rough_2_trans_1
+base translucent_base
+Kt 0.100000 0.018000 0.003500
+Pr 0.220000
+
+newmtl translucent_rough_2_trans_2
+base translucent_base
+Kt 0.220000 0.039600 0.007700
+Pr 0.220000
+
+newmtl translucent_rough_2_trans_3
+base translucent_base
+Kt 0.380000 0.068400 0.013300
+Pr 0.220000
+
+newmtl translucent_rough_2_trans_4
+base translucent_base
+Kt 0.550000 0.099000 0.019250
+Pr 0.220000
+
+newmtl translucent_rough_2_trans_5
+base translucent_base
+Kt 0.750000 0.135000 0.026250
+Pr 0.220000
+
+newmtl translucent_rough_2_trans_6
+base translucent_base
+Kt 1.000000 0.180000 0.035000
+Pr 0.220000
+
+newmtl translucent_rough_3_trans_0
+base translucent_base
+Kt 0.000000 0.000000 0.000000
+Pr 0.380000
+
+newmtl translucent_rough_3_trans_1
+base translucent_base
+Kt 0.100000 0.018000 0.003500
+Pr 0.380000
+
+newmtl translucent_rough_3_trans_2
+base translucent_base
+Kt 0.220000 0.039600 0.007700
+Pr 0.380000
+
+newmtl translucent_rough_3_trans_3
+base translucent_base
+Kt 0.380000 0.068400 0.013300
+Pr 0.380000
+
+newmtl translucent_rough_3_trans_4
+base translucent_base
+Kt 0.550000 0.099000 0.019250
+Pr 0.380000
+
+newmtl translucent_rough_3_trans_5
+base translucent_base
+Kt 0.750000 0.135000 0.026250
+Pr 0.380000
+
+newmtl translucent_rough_3_trans_6
+base translucent_base
+Kt 1.000000 0.180000 0.035000
+Pr 0.380000
+
+newmtl translucent_rough_4_trans_0
+base translucent_base
+Kt 0.000000 0.000000 0.000000
+Pr 0.550000
+
+newmtl translucent_rough_4_trans_1
+base translucent_base
+Kt 0.100000 0.018000 0.003500
+Pr 0.550000
+
+newmtl translucent_rough_4_trans_2
+base translucent_base
+Kt 0.220000 0.039600 0.007700
+Pr 0.550000
+
+newmtl translucent_rough_4_trans_3
+base translucent_base
+Kt 0.380000 0.068400 0.013300
+Pr 0.550000
+
+newmtl translucent_rough_4_trans_4
+base translucent_base
+Kt 0.550000 0.099000 0.019250
+Pr 0.550000
+
+newmtl translucent_rough_4_trans_5
+base translucent_base
+Kt 0.750000 0.135000 0.026250
+Pr 0.550000
+
+newmtl translucent_rough_4_trans_6
+base translucent_base
+Kt 1.000000 0.180000 0.035000
+Pr 0.550000
+
+newmtl translucent_rough_5_trans_0
+base translucent_base
+Kt 0.000000 0.000000 0.000000
+Pr 0.750000
+
+newmtl translucent_rough_5_trans_1
+base translucent_base
+Kt 0.100000 0.018000 0.003500
+Pr 0.750000
+
+newmtl translucent_rough_5_trans_2
+base translucent_base
+Kt 0.220000 0.039600 0.007700
+Pr 0.750000
+
+newmtl translucent_rough_5_trans_3
+base translucent_base
+Kt 0.380000 0.068400 0.013300
+Pr 0.750000
+
+newmtl translucent_rough_5_trans_4
+base translucent_base
+Kt 0.550000 0.099000 0.019250
+Pr 0.750000
+
+newmtl translucent_rough_5_trans_5
+base translucent_base
+Kt 0.750000 0.135000 0.026250
+Pr 0.750000
+
+newmtl translucent_rough_5_trans_6
+base translucent_base
+Kt 1.000000 0.180000 0.035000
+Pr 0.750000
+
+newmtl translucent_rough_6_trans_0
+base translucent_base
+Kt 0.000000 0.000000 0.000000
+Pr 0.950000
+
+newmtl translucent_rough_6_trans_1
+base translucent_base
+Kt 0.100000 0.018000 0.003500
+Pr 0.950000
+
+newmtl translucent_rough_6_trans_2
+base translucent_base
+Kt 0.220000 0.039600 0.007700
+Pr 0.950000
+
+newmtl translucent_rough_6_trans_3
+base translucent_base
+Kt 0.380000 0.068400 0.013300
+Pr 0.950000
+
+newmtl translucent_rough_6_trans_4
+base translucent_base
+Kt 0.550000 0.099000 0.019250
+Pr 0.950000
+
+newmtl translucent_rough_6_trans_5
+base translucent_base
+Kt 0.750000 0.135000 0.026250
+Pr 0.950000
+
+newmtl translucent_rough_6_trans_6
+base translucent_base
+Kt 1.000000 0.180000 0.035000
+Pr 0.950000
+
+newmtl et::plane
+id floor
+material floor_mat
+center 0.000000 0.000000 0.000000
+size 15.500000 15.500000
+
+newmtl et::sphere
+id translucent_rough_0_trans_0_sphere
+material translucent_rough_0_trans_0
+center -5.250000 0.620000 -5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_0_trans_1_sphere
+material translucent_rough_0_trans_1
+center -5.250000 0.620000 -3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_0_trans_2_sphere
+material translucent_rough_0_trans_2
+center -5.250000 0.620000 -1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_0_trans_3_sphere
+material translucent_rough_0_trans_3
+center -5.250000 0.620000 0.000000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_0_trans_4_sphere
+material translucent_rough_0_trans_4
+center -5.250000 0.620000 1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_0_trans_5_sphere
+material translucent_rough_0_trans_5
+center -5.250000 0.620000 3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_0_trans_6_sphere
+material translucent_rough_0_trans_6
+center -5.250000 0.620000 5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_1_trans_0_sphere
+material translucent_rough_1_trans_0
+center -3.500000 0.620000 -5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_1_trans_1_sphere
+material translucent_rough_1_trans_1
+center -3.500000 0.620000 -3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_1_trans_2_sphere
+material translucent_rough_1_trans_2
+center -3.500000 0.620000 -1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_1_trans_3_sphere
+material translucent_rough_1_trans_3
+center -3.500000 0.620000 0.000000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_1_trans_4_sphere
+material translucent_rough_1_trans_4
+center -3.500000 0.620000 1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_1_trans_5_sphere
+material translucent_rough_1_trans_5
+center -3.500000 0.620000 3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_1_trans_6_sphere
+material translucent_rough_1_trans_6
+center -3.500000 0.620000 5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_2_trans_0_sphere
+material translucent_rough_2_trans_0
+center -1.750000 0.620000 -5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_2_trans_1_sphere
+material translucent_rough_2_trans_1
+center -1.750000 0.620000 -3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_2_trans_2_sphere
+material translucent_rough_2_trans_2
+center -1.750000 0.620000 -1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_2_trans_3_sphere
+material translucent_rough_2_trans_3
+center -1.750000 0.620000 0.000000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_2_trans_4_sphere
+material translucent_rough_2_trans_4
+center -1.750000 0.620000 1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_2_trans_5_sphere
+material translucent_rough_2_trans_5
+center -1.750000 0.620000 3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_2_trans_6_sphere
+material translucent_rough_2_trans_6
+center -1.750000 0.620000 5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_3_trans_0_sphere
+material translucent_rough_3_trans_0
+center 0.000000 0.620000 -5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_3_trans_1_sphere
+material translucent_rough_3_trans_1
+center 0.000000 0.620000 -3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_3_trans_2_sphere
+material translucent_rough_3_trans_2
+center 0.000000 0.620000 -1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_3_trans_3_sphere
+material translucent_rough_3_trans_3
+center 0.000000 0.620000 0.000000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_3_trans_4_sphere
+material translucent_rough_3_trans_4
+center 0.000000 0.620000 1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_3_trans_5_sphere
+material translucent_rough_3_trans_5
+center 0.000000 0.620000 3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_3_trans_6_sphere
+material translucent_rough_3_trans_6
+center 0.000000 0.620000 5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_4_trans_0_sphere
+material translucent_rough_4_trans_0
+center 1.750000 0.620000 -5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_4_trans_1_sphere
+material translucent_rough_4_trans_1
+center 1.750000 0.620000 -3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_4_trans_2_sphere
+material translucent_rough_4_trans_2
+center 1.750000 0.620000 -1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_4_trans_3_sphere
+material translucent_rough_4_trans_3
+center 1.750000 0.620000 0.000000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_4_trans_4_sphere
+material translucent_rough_4_trans_4
+center 1.750000 0.620000 1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_4_trans_5_sphere
+material translucent_rough_4_trans_5
+center 1.750000 0.620000 3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_4_trans_6_sphere
+material translucent_rough_4_trans_6
+center 1.750000 0.620000 5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_5_trans_0_sphere
+material translucent_rough_5_trans_0
+center 3.500000 0.620000 -5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_5_trans_1_sphere
+material translucent_rough_5_trans_1
+center 3.500000 0.620000 -3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_5_trans_2_sphere
+material translucent_rough_5_trans_2
+center 3.500000 0.620000 -1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_5_trans_3_sphere
+material translucent_rough_5_trans_3
+center 3.500000 0.620000 0.000000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_5_trans_4_sphere
+material translucent_rough_5_trans_4
+center 3.500000 0.620000 1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_5_trans_5_sphere
+material translucent_rough_5_trans_5
+center 3.500000 0.620000 3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_5_trans_6_sphere
+material translucent_rough_5_trans_6
+center 3.500000 0.620000 5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_6_trans_0_sphere
+material translucent_rough_6_trans_0
+center 5.250000 0.620000 -5.250000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_6_trans_1_sphere
+material translucent_rough_6_trans_1
+center 5.250000 0.620000 -3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_6_trans_2_sphere
+material translucent_rough_6_trans_2
+center 5.250000 0.620000 -1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_6_trans_3_sphere
+material translucent_rough_6_trans_3
+center 5.250000 0.620000 0.000000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_6_trans_4_sphere
+material translucent_rough_6_trans_4
+center 5.250000 0.620000 1.750000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_6_trans_5_sphere
+material translucent_rough_6_trans_5
+center 5.250000 0.620000 3.500000
+radius 0.620000
+subdivisions 5
+
+newmtl et::sphere
+id translucent_rough_6_trans_6_sphere
+material translucent_rough_6_trans_6
+center 5.250000 0.620000 5.250000
+radius 0.620000
+subdivisions 5

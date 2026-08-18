@@ -1,0 +1,515 @@
+newmtl et::camera
+class perspective
+viewport 960 720
+origin 0.000000 9.002925 19.390915
+target 0.000000 8.581814 18.483906
+up 0.000000 0.907009 -0.421111
+fov 31.000002
+clip-far 100.000000
+id camera
+active 1
+
+newmtl et::atmosphere
+anisotropy 0.825000
+altitude 1000.000000
+rayleigh 1.000000
+mie 1.000000
+ozone 1.000000
+quality 0.125000
+color 1.000000 1.000000 1.000000
+
+newmtl et::dir
+color 3.000000 2.700000 2.350000
+direction -0.661844 0.495459 -0.562568
+angular_diameter 3.000000
+
+newmtl floor_mat
+material class openpbr
+Kd 0.420000 0.420000 0.420000
+Ks 1.000000 1.000000 1.000000
+Pr 0.650000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+newmtl grid_x0_z0_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.080000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x0_z1_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.080000
+metalness 0.166667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x0_z2_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.080000
+metalness 0.333333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x0_z3_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.080000
+metalness 0.500000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x0_z4_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.080000
+metalness 0.666667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x0_z5_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.080000
+metalness 0.833333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x0_z6_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.080000
+metalness 1.000000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x1_z0_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x1_z1_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 0.166667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x1_z2_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 0.333333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x1_z3_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 0.500000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x1_z4_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 0.666667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x1_z5_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 0.833333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x1_z6_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+metalness 1.000000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x2_z0_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.360000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x2_z1_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.360000
+metalness 0.166667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x2_z2_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.360000
+metalness 0.333333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x2_z3_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.360000
+metalness 0.500000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x2_z4_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.360000
+metalness 0.666667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x2_z5_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.360000
+metalness 0.833333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x2_z6_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.360000
+metalness 1.000000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x3_z0_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.500000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x3_z1_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.500000
+metalness 0.166667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x3_z2_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.500000
+metalness 0.333333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x3_z3_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.500000
+metalness 0.500000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x3_z4_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.500000
+metalness 0.666667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x3_z5_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.500000
+metalness 0.833333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x3_z6_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.500000
+metalness 1.000000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x4_z0_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.640000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x4_z1_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.640000
+metalness 0.166667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x4_z2_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.640000
+metalness 0.333333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x4_z3_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.640000
+metalness 0.500000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x4_z4_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.640000
+metalness 0.666667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x4_z5_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.640000
+metalness 0.833333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x4_z6_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.640000
+metalness 1.000000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x5_z0_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.780000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x5_z1_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.780000
+metalness 0.166667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x5_z2_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.780000
+metalness 0.333333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x5_z3_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.780000
+metalness 0.500000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x5_z4_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.780000
+metalness 0.666667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x5_z5_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.780000
+metalness 0.833333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x5_z6_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.780000
+metalness 1.000000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x6_z0_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.920000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x6_z1_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.920000
+metalness 0.166667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x6_z2_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.920000
+metalness 0.333333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x6_z3_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.920000
+metalness 0.500000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x6_z4_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.920000
+metalness 0.666667
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x6_z5_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.920000
+metalness 0.833333
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl grid_x6_z6_mat
+material class openpbr
+Kd 0.800000 0.800000 0.800000
+Ks 1.000000 1.000000 1.000000
+Pr 0.920000
+metalness 1.000000
+int_ior glass
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000

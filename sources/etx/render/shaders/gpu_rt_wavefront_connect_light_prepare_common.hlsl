@@ -174,7 +174,7 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
     return false;
   }
 
-  const uint vertex_stride = wavefront_light_fixed_max_bounces(input_value.resources) + 1u;
+  const uint vertex_stride = input_value.resources.max_path_length + 1u;
   const uint queue_descriptor = wavefront_queue_current_descriptor(true);
   const uint queue_count = wavefront_queue_count(queue_descriptor);
   const uint queue_index = dispatch_index;
@@ -283,7 +283,6 @@ void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput
   wavefront_store_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index, task);
 }
 #endif
-
 #if ETX_CONNECT_LIGHT_RESOLVE_STAGE
 void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batch_index) {
   WavefrontConnectLightPrepareInput input_value = (WavefrontConnectLightPrepareInput)0;

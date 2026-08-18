@@ -186,6 +186,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer);
   bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
   bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t path_capacity);
+  bool ensure_light_history_capacity(RHIContext& ctx, uint32_t required_bounces, uint32_t max_bounces);
   void request_pipeline_preparation(const SceneRepresentation& scene, const char* reason);
   void poll_preparation_tasks(RHIContext& ctx, bool wait_for_active = false);
   bool begin_pipeline_publish(std::shared_ptr<PendingPipelinePreparation> result);
@@ -230,6 +231,7 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _camera_buffer = {};
   RHIBindlessHandle _blue_noise_buffer = {};
   RHIBindlessHandle _wavefront_resources_buffer = {};
+  GPUWavefrontResources _wavefront_resources = {};
   RHIBindlessHandle _camera_state_buffer = {};
   RHIBindlessHandle _light_state_buffer = {};
   RHIBindlessHandle _camera_hit_buffer = {};
@@ -338,16 +340,17 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _wavefront_camera_queue_count = 0u;
   uint32_t _wavefront_light_queue_count = 0u;
   uint32_t _wavefront_light_max_path_length = 0u;
+  uint32_t _wavefront_light_history_capacity_bounces = 0u;
   uint32_t _wavefront_tile_index = 0u;
   uint32_t _wavefront_tile_max_pixels = 0u;
   uint32_t _wavefront_tile_count = 1u;
   uint32_t _wavefront_tile_path_capacity = 0u;
-  uint32_t _wavefront_steps_per_render = 16u;
+  uint32_t _wavefront_steps_per_render = 256u;
   uint2 _wavefront_tile_base_origin = {};
   uint2 _wavefront_tile_base_size = {};
   bool _wavefront_tile_plan_valid = false;
   bool _wavefront_camera_phase_initialized = false;
-  bool _batch_coarse_progress = false;
+  bool _batch_coarse_progress = true;
   RHIResourceState _camera_queue_count_readback_state = RHIResourceState::Undefined;
   RHIResourceState _light_queue_count_readback_state = RHIResourceState::Undefined;
   uint32_t _integrator_mode = 0u;

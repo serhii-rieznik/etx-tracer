@@ -323,6 +323,14 @@ RHICreatePipelineResult RHIDevice::create_compute_pipeline(const RHIComputePipel
   return dispatch_device(_backend, _impl, [&](auto* device) { return device->create_compute_pipeline(desc); });
 }
 
+std::vector<RHICreatePipelineBatchEntry> RHIDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency) {
+  return dispatch_device(_backend, _impl, [&](auto* device) { return device->create_compute_pipelines(descs, max_concurrency); });
+}
+
+void RHIDevice::persist_pipeline_cache() {
+  dispatch_device(_backend, _impl, [](auto* device) { device->persist_pipeline_cache(); });
+}
+
 RHIResult RHIDevice::reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc) {
   return dispatch_device(_backend, _impl, [&](auto* device) { return device->reload_graphics_pipeline(pipeline, new_desc); });
 }

@@ -1,0 +1,79 @@
+newmtl et::camera
+class perspective
+viewport 1280 720
+origin 0.000000 4.556972 14.440473
+target 0.000000 4.320975 13.468719
+up 0.000000 0.971754 -0.235997
+fov 38.000000
+clip-far 100.000000
+id camera
+active 1
+
+newmtl et::atmosphere
+anisotropy 0.825000
+altitude 1000.000000
+rayleigh 1.000000
+mie 1.000000
+ozone 1.000000
+quality 0.125000
+color 1.000000 1.000000 1.000000
+
+newmtl et::dir
+color 6.500000 6.100000 5.200000
+direction -0.420568 0.720974 -0.550744
+angular_diameter 2.500000
+
+newmtl conductor_gold_spectral
+material class conductor
+Kd 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.220000
+int_ior gold
+ext_ior air
+emitter color 0.000000 0.000000 0.000000
+newmtl dielectric_thinfilm_sapphire
+material class dielectric
+Kd 1.000000 1.000000 1.000000
+Kt 1.000000 1.000000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.200000
+int_ior sapphire
+ext_ior air
+emitter color 0.000000 0.000000 0.000000
+thinfilm range 560.000000 560.000000 ior 1.380000
+
+newmtl floor_mat
+material class diffuse
+Kd 0.360000 0.360000 0.370000
+Ks 1.000000 1.000000 1.000000
+int_ior 1.500000
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl spectral_diffuse_amber
+material class diffuse
+Kd 1.176013 0.634065 0.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.500000
+int_ior 1.500000
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl spectral_diffuse_violet
+material class diffuse
+Kd 0.000000 0.468355 0.935624
+Ks 1.000000 1.000000 1.000000
+Pr 0.500000
+int_ior 1.500000
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000
+
+newmtl translucent_cyan
+material class translucent
+Kd 0.617323 0.973641 0.738748
+Kt 0.617323 0.973641 0.738748
+Ks 1.000000 1.000000 1.000000
+Pr 0.550000
+int_ior 1.500000
+ext_ior 1.0
+emitter color 0.000000 0.000000 0.000000

@@ -62,6 +62,10 @@ if(APPLE)
   set_source_files_properties(platform_ui_macos.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()
 
+if(WIN32)
+  target_sources(raytracer PRIVATE platform_ui_windows.cxx)
+endif()
+
 if(APPLE)
   set(ETX_TRACER_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/macos/AppIcon.icns")
   set(ETX_MACOS_CODE_SIGN_IDENTITY "-" CACHE STRING
@@ -202,6 +206,10 @@ endif()
 target_link_libraries(raytracer
   PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
 )
+
+if(WIN32)
+  target_link_libraries(raytracer PRIVATE Comctl32 Dwmapi)
+endif()
 
 target_include_directories(raytracer
     PRIVATE "${APPLICATION_CONTROL_GENERATED_DIRECTORY}"

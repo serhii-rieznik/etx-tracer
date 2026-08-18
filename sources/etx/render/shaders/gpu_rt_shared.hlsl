@@ -403,7 +403,7 @@ bool gpu_random_continue(uint path_length, uint start_path_length, float eta_sca
     return false;
   }
 
-  float probability = clamp(continuation, 0.01f, 1.0f);
+  float probability = clamp(continuation, 0.01f, kSamplerMaximumContinuationProbability);
   if (rnd01(seed) > probability) {
     return false;
   }

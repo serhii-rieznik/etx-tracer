@@ -29,6 +29,9 @@ namespace {
 
 constexpr uint32_t kRecentFileLimit = 8u;
 constexpr size_t kRetainedApplicationCommandResultLimit = 256u;
+constexpr uint32_t kGPUWavefrontLegacyStepsPerFrame = 16u;
+constexpr uint32_t kGPUWavefrontDefaultStepsPerFrame = 256u;
+constexpr uint32_t kGPUWavefrontSettingsVersion = 1u;
 
 bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const uint2 image_size, std::vector<float4>& output) {
   output.clear();
@@ -258,7 +261,16 @@ void RTApplication::init(const ApplicationConfig& config) {
     raster_renderer.init(render_context.get_context(), scene);
   }
 
-  const uint32_t gpu_wavefront_steps_per_frame = std::clamp(_options.get_integral<uint32_t>("gpu-wavefront-steps-per-frame", 16u), 1u, 1024u);
+  uint32_t gpu_wavefront_steps_per_frame = _options.get_integral<uint32_t>("gpu-wavefront-steps-per-frame", kGPUWavefrontDefaultStepsPerFrame);
+  const uint32_t gpu_wavefront_settings_version = _options.get_integral<uint32_t>("gpu-wavefront-settings-version", 0u);
+  if (gpu_wavefront_settings_version < kGPUWavefrontSettingsVersion) {
+    if (gpu_wavefront_steps_per_frame == kGPUWavefrontLegacyStepsPerFrame) {
+      gpu_wavefront_steps_per_frame = kGPUWavefrontDefaultStepsPerFrame;
+      _options.set_integral("gpu-wavefront-steps-per-frame", gpu_wavefront_steps_per_frame, "GPU Wavefront Steps Per Frame");
+    }
+    _options.set_integral("gpu-wavefront-settings-version", kGPUWavefrontSettingsVersion, "GPU Wavefront Settings Version");
+  }
+  gpu_wavefront_steps_per_frame = std::clamp(gpu_wavefront_steps_per_frame, 1u, 1024u);
   ui.set_gpu_wavefront_steps_per_frame(gpu_wavefront_steps_per_frame);
   gpu_renderer.set_wavefront_steps_per_render(gpu_wavefront_steps_per_frame);
 

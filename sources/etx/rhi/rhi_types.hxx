@@ -59,6 +59,13 @@ using RHICreateBindlessResult = RHICreateResult<RHIBindlessHandle>;
 using RHICreateShaderResult = RHICreateResult<RHIShader>;
 using RHICreatePipelineResult = RHICreateResult<RHIPipeline>;
 
+struct RHICreatePipelineBatchEntry {
+  RHIResult result = RHIResult::Success;
+  RHIPipeline handle = {};
+  double elapsed_ms = 0.0;
+  bool cache_hit = false;
+};
+
 enum class RHIBackend : uint32_t {
   Vulkan = 0,
   Metal = 1,

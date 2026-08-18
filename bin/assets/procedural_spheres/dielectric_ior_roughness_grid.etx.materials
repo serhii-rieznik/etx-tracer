@@ -1,0 +1,285 @@
+newmtl et::camera
+class perspective
+viewport 1280 720
+origin 0.000000 4.700000 12.500000
+target 0.000000 1.600000 0.000000
+up 0.000000 1.000000 0.000000
+fov 36.000000
+clip-far 100.000000
+id camera
+active 1
+
+newmtl et::env
+color 0.040000 0.045000 0.055000
+
+newmtl et::dir
+color 5.000000 4.700000 4.250000
+direction -0.420000 0.660000 -0.620000
+angular_diameter 3.000000
+
+newmtl floor_mat
+material class diffuse
+Kd 0.330000 0.330000 0.350000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_110_rough_002
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.020000
+int_ior 1.100000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_150_rough_002
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.020000
+int_ior 1.500000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_177_rough_002
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.020000
+int_ior 1.770000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_240_rough_002
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.020000
+int_ior 2.400000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_110_rough_018
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.180000
+int_ior 1.100000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_150_rough_018
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.180000
+int_ior 1.500000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_177_rough_018
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.180000
+int_ior 1.770000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_240_rough_018
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.180000
+int_ior 2.400000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_110_rough_045
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.450000
+int_ior 1.100000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_150_rough_045
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.450000
+int_ior 1.500000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_177_rough_045
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.450000
+int_ior 1.770000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_240_rough_045
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.450000
+int_ior 2.400000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_110_rough_080
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.800000
+int_ior 1.100000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_150_rough_080
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.800000
+int_ior 1.500000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_177_rough_080
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.800000
+int_ior 1.770000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl dielectric_eta_240_rough_080
+material class dielectric
+Kd 0.940000 0.970000 1.000000
+Ks 1.000000 1.000000 1.000000
+Pr 0.800000
+int_ior 2.400000
+ext_ior 1.000000
+emitter color 0.000000 0.000000 0.000000
+
+newmtl et::plane
+id floor
+material floor_mat
+center 0.000000 -0.850000 0.000000
+size 10.500000 8.000000
+
+newmtl et::sphere
+id dielectric_eta_110_rough_002_sphere
+material dielectric_eta_110_rough_002
+center -3.000000 0.000000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_150_rough_002_sphere
+material dielectric_eta_150_rough_002
+center -1.000000 0.000000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_177_rough_002_sphere
+material dielectric_eta_177_rough_002
+center 1.000000 0.000000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_240_rough_002_sphere
+material dielectric_eta_240_rough_002
+center 3.000000 0.000000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_110_rough_018_sphere
+material dielectric_eta_110_rough_018
+center -3.000000 1.800000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_150_rough_018_sphere
+material dielectric_eta_150_rough_018
+center -1.000000 1.800000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_177_rough_018_sphere
+material dielectric_eta_177_rough_018
+center 1.000000 1.800000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_240_rough_018_sphere
+material dielectric_eta_240_rough_018
+center 3.000000 1.800000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_110_rough_045_sphere
+material dielectric_eta_110_rough_045
+center -3.000000 3.600000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_150_rough_045_sphere
+material dielectric_eta_150_rough_045
+center -1.000000 3.600000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_177_rough_045_sphere
+material dielectric_eta_177_rough_045
+center 1.000000 3.600000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_240_rough_045_sphere
+material dielectric_eta_240_rough_045
+center 3.000000 3.600000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_110_rough_080_sphere
+material dielectric_eta_110_rough_080
+center -3.000000 5.400000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_150_rough_080_sphere
+material dielectric_eta_150_rough_080
+center -1.000000 5.400000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_177_rough_080_sphere
+material dielectric_eta_177_rough_080
+center 1.000000 5.400000 0.000000
+radius 0.650000
+subdivisions 5
+
+newmtl et::sphere
+id dielectric_eta_240_rough_080_sphere
+material dielectric_eta_240_rough_080
+center 3.000000 5.400000 0.000000
+radius 0.650000
+subdivisions 5

@@ -1,0 +1,87 @@
+{
+  "blue_noise": true,
+  "geometry": "spectral_material_spheres.etx",
+  "integrator": {
+    "selected": "bdpt",
+    "settings": {
+      "bdpt": [
+        {
+          "class": 2,
+          "description": "Mode",
+          "id": "bdpt-mode",
+          "meta": 1,
+          "value": 3,
+          "value.max": 3,
+          "value.min": 0
+        }
+      ],
+      "debug": [
+        {
+          "class": 2,
+          "description": "Visualize",
+          "id": "mode",
+          "meta": 1,
+          "value": 0,
+          "value.max": 16,
+          "value.min": 0
+        }
+      ],
+      "vcm": [
+        {
+          "class": 5,
+          "description": "VCM Options",
+          "id": "vcm-opt",
+          "meta": 0,
+          "value": "VCM Options"
+        },
+        {
+          "class": 1,
+          "description": "Enable Merging",
+          "id": "vcm-merging",
+          "meta": 0,
+          "value": true
+        },
+        {
+          "class": 1,
+          "description": "Smooth Merging Kernel",
+          "id": "vcm-kernel",
+          "meta": 0,
+          "value": true
+        },
+        {
+          "class": 3,
+          "description": "Initial Radius",
+          "id": "vcm-initial_radius",
+          "meta": 0,
+          "value": 0.0,
+          "value.max": 10.0,
+          "value.min": 0.0
+        },
+        {
+          "class": 2,
+          "description": "Radius Decay",
+          "id": "vcm-radius_decay",
+          "meta": 0,
+          "value": 256,
+          "value.max": 65536,
+          "value.min": 1
+        }
+      ]
+    }
+  },
+  "light_sampling": "ris_from_distribution",
+  "materials": "spectral_material_spheres.etx.materials",
+  "max-path-length": 16,
+  "min-path-length": 1,
+  "multiple_importance_sampling": true,
+  "random-termination-start": 6,
+  "samples": 32,
+  "spectral": true,
+  "strategies": {
+    "connect_to_camera": true,
+    "connect_to_light": true,
+    "connect_vertices": true,
+    "direct_hit": true,
+    "merge_vertices": true
+  }
+}

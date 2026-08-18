@@ -12,9 +12,12 @@
 #endif
 
 #include <vulkan/vulkan.h>
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 namespace etx {
 
 namespace {
@@ -98,7 +101,7 @@ bool write_binary_file_atomic(const std::filesystem::path& path, const std::vect
   return true;
 }
 
-}
+}  // namespace
 
 static VkSampleCountFlagBits convert_sample_count_to_vk(uint32_t sample_count) {
   switch (sample_count) {
@@ -316,6 +319,7 @@ struct VKDevice::Impl {
   VkPipelineLayout bindless_layout = {};
   VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
   std::filesystem::path pipeline_cache_path = {};
+  bool pipeline_creation_cache_control_supported = false;
   uint32_t max_push_constants_size = 128;
 
   // Frame tracking for staging buffer synchronization
@@ -397,7 +401,8 @@ struct VKDevice::Impl {
   RHIResult create_vulkan_image_view(const RHITextureDesc& desc, VkImage image, VkImageView& out_view);
   RHIResult create_vulkan_sampler(const RHISamplerDesc& desc, VkSampler& out_sampler);
   RHIResult create_vulkan_graphics_pipeline(const RHIGraphicsPipelineDesc& desc, VkPipelineLayout layout, VkPipeline& out_pipeline);
-  RHIResult create_vulkan_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, VkPipeline& out_pipeline);
+  RHIResult create_vulkan_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, VkPipelineCache pipeline_cache_value, bool cache_only,
+    VkPipeline& out_pipeline);
   RHIResult execute_single_time_commands(std::function<void(VkCommandBuffer)> recorder);
 
   RHICreateResult<VkPipelineLayout> get_bindless_pipeline_layout();
@@ -813,9 +818,11 @@ bool VKDevice::Impl::initialize_device() {
   VkPhysicalDeviceDescriptorIndexingFeatures descriptor_indexing_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES};
   VkPhysicalDeviceDynamicRenderingFeatures dynamic_rendering_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES};
   VkPhysicalDeviceShaderDemoteToHelperInvocationFeatures demote_to_helper_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DEMOTE_TO_HELPER_INVOCATION_FEATURES};
+  VkPhysicalDevicePipelineCreationCacheControlFeatures pipeline_creation_cache_control_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES};
 
   VkPhysicalDeviceFeatures2 supported_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
-  supported_features.pNext = &descriptor_indexing_features;
+  supported_features.pNext = &pipeline_creation_cache_control_features;
+  pipeline_creation_cache_control_features.pNext = &descriptor_indexing_features;
   descriptor_indexing_features.pNext = &dynamic_rendering_features;
   dynamic_rendering_features.pNext = &demote_to_helper_features;
   demote_to_helper_features.pNext = &ray_query_features;
@@ -840,6 +847,7 @@ bool VKDevice::Impl::initialize_device() {
   }
 
   const bool shader_demote_supported = (demote_to_helper_features.shaderDemoteToHelperInvocation == VK_TRUE);
+  pipeline_creation_cache_control_supported = (pipeline_creation_cache_control_features.pipelineCreationCacheControl == VK_TRUE);
   buffer_device_address_supported = buffer_device_address_extension_available && (buffer_device_address_features.bufferDeviceAddress == VK_TRUE);
   ray_tracing_supported = buffer_device_address_supported && acceleration_structure_extension_available && deferred_host_operations_extension_available &&
                           ray_query_extension_available && (acceleration_structure_features.accelerationStructure == VK_TRUE) && (ray_query_features.rayQuery == VK_TRUE);
@@ -890,6 +898,10 @@ bool VKDevice::Impl::initialize_device() {
   if (shader_demote_supported) {
     demote_to_helper_features.pNext = feature_chain;
     feature_chain = &demote_to_helper_features;
+  }
+  if (pipeline_creation_cache_control_supported) {
+    pipeline_creation_cache_control_features.pNext = feature_chain;
+    feature_chain = &pipeline_creation_cache_control_features;
   }
   device_create_info.pNext = feature_chain;
   device_create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_create_infos.size());
@@ -1466,7 +1478,8 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   return RHIResult::Success;
 }
 
-RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, VkPipeline& out_pipeline) {
+RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, VkPipelineCache pipeline_cache_value, bool cache_only,
+  VkPipeline& out_pipeline) {
   VkShaderModuleCreateInfo comp_info = {
     .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
     .codeSize = desc.compute_shader.spirv_size,
@@ -1486,15 +1499,23 @@ RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelin
 
   VkComputePipelineCreateInfo pipeline_info = {
     .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+    .flags = (cache_only && pipeline_creation_cache_control_supported) ? VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT : 0u,
     .stage = shader_stage,
     .layout = layout,
     .basePipelineIndex = -1,
   };
 
-  const bool success = etx_vk_call(vkCreateComputePipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &out_pipeline)) == VK_SUCCESS;
+  const VkResult create_result = vkCreateComputePipelines(device, pipeline_cache_value, 1u, &pipeline_info, nullptr, &out_pipeline);
   vkDestroyShaderModule(device, comp_module, nullptr);
 
-  return success ? RHIResult::Success : RHIResult::ValidationError;
+  if (create_result == VK_PIPELINE_COMPILE_REQUIRED) {
+    return RHIResult::NotReady;
+  }
+  if (create_result != VK_SUCCESS) {
+    log::error("Vulkan: compute pipeline creation failed (%s)", vk_error_to_string(create_result));
+    return RHIResult::ValidationError;
+  }
+  return RHIResult::Success;
 }
 
 static VkFilter convert_sampler_filter(RHISamplerFilter filter) {
@@ -2332,7 +2353,7 @@ RHICreatePipelineResult VKDevice::create_compute_pipeline(const RHIComputePipeli
   }
 
   VkPipeline vk_pipeline = VK_NULL_HANDLE;
-  RHIResult pipeline_result = _impl->create_vulkan_compute_pipeline(desc, vk_layout.handle, vk_pipeline);
+  RHIResult pipeline_result = _impl->create_vulkan_compute_pipeline(desc, vk_layout.handle, _impl->pipeline_cache, false, vk_pipeline);
   if (pipeline_result != RHIResult::Success) {
     return {pipeline_result, {}};
   }
@@ -2350,6 +2371,136 @@ RHICreatePipelineResult VKDevice::create_compute_pipeline(const RHIComputePipeli
   _impl->compute_pipelines.set_handle_to_index(pipeline_handle, index);
 
   return {RHIResult::Success, pipeline_handle};
+}
+
+std::vector<RHICreatePipelineBatchEntry> VKDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency) {
+  std::vector<RHICreatePipelineBatchEntry> results(descs.size());
+  if (descs.empty()) {
+    return results;
+  }
+  if ((_impl->device == VK_NULL_HANDLE) || (_impl->bindless_manager == nullptr)) {
+    for (auto& result : results) {
+      result.result = RHIResult::InvalidArgument;
+    }
+    return results;
+  }
+
+  const auto vk_layout = _impl->get_bindless_pipeline_layout();
+  if (vk_layout.result != RHIResult::Success) {
+    for (auto& result : results) {
+      result.result = vk_layout.result;
+    }
+    return results;
+  }
+
+  std::vector<VkPipeline> vk_pipelines(descs.size(), VK_NULL_HANDLE);
+  std::vector<uint32_t> compile_indices = {};
+  compile_indices.reserve(descs.size());
+  for (uint32_t i = 0u; i < static_cast<uint32_t>(descs.size()); ++i) {
+    const auto begin = std::chrono::steady_clock::now();
+    RHIResult result = RHIResult::NotReady;
+    if (_impl->pipeline_creation_cache_control_supported) {
+      result = _impl->create_vulkan_compute_pipeline(descs[i], vk_layout.handle, _impl->pipeline_cache, true, vk_pipelines[i]);
+    }
+    if (result == RHIResult::Success) {
+      results[i].result = RHIResult::Success;
+      results[i].cache_hit = true;
+      results[i].elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+    } else if (result == RHIResult::NotReady) {
+      compile_indices.push_back(i);
+    } else {
+      results[i].result = result;
+      results[i].elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+    }
+  }
+
+  if (compile_indices.empty() == false) {
+    const uint32_t worker_count = std::min<uint32_t>(static_cast<uint32_t>(compile_indices.size()), std::max(1u, max_concurrency));
+    std::vector<VkPipelineCache> worker_pipeline_caches(worker_count, VK_NULL_HANDLE);
+    const VkPipelineCacheCreateInfo cache_create_info = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
+    };
+    bool worker_cache_creation_succeeded = true;
+    for (auto& worker_pipeline_cache : worker_pipeline_caches) {
+      const VkResult cache_result = vkCreatePipelineCache(_impl->device, &cache_create_info, nullptr, &worker_pipeline_cache);
+      if (cache_result != VK_SUCCESS) {
+        log::warning("Vulkan: worker pipeline cache creation failed (%s)", vk_error_to_string(cache_result));
+        worker_cache_creation_succeeded = false;
+        break;
+      }
+    }
+    if (worker_cache_creation_succeeded == false) {
+      for (const VkPipelineCache worker_pipeline_cache : worker_pipeline_caches) {
+        if (worker_pipeline_cache != VK_NULL_HANDLE) {
+          vkDestroyPipelineCache(_impl->device, worker_pipeline_cache, nullptr);
+        }
+      }
+      worker_pipeline_caches.clear();
+    }
+
+    std::atomic<uint32_t> next_compile_index = 0u;
+    const auto compile_worker = [&](uint32_t worker_index) {
+      const VkPipelineCache worker_pipeline_cache = worker_pipeline_caches.empty() ? VK_NULL_HANDLE : worker_pipeline_caches[worker_index];
+      while (true) {
+        const uint32_t work_index = next_compile_index.fetch_add(1u, std::memory_order_relaxed);
+        if (work_index >= static_cast<uint32_t>(compile_indices.size())) {
+          return;
+        }
+        const uint32_t pipeline_index = compile_indices[work_index];
+        const auto begin = std::chrono::steady_clock::now();
+        results[pipeline_index].result = _impl->create_vulkan_compute_pipeline(descs[pipeline_index], vk_layout.handle, worker_pipeline_cache, false, vk_pipelines[pipeline_index]);
+        results[pipeline_index].elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+      }
+    };
+
+    std::vector<std::thread> workers = {};
+    workers.reserve(worker_count - 1u);
+    for (uint32_t worker_index = 1u; worker_index < worker_count; ++worker_index) {
+      workers.emplace_back(compile_worker, worker_index);
+    }
+    compile_worker(0u);
+    for (auto& worker : workers) {
+      worker.join();
+    }
+
+    if ((worker_pipeline_caches.empty() == false) && (_impl->pipeline_cache != VK_NULL_HANDLE)) {
+      const VkResult merge_result =
+        vkMergePipelineCaches(_impl->device, _impl->pipeline_cache, static_cast<uint32_t>(worker_pipeline_caches.size()), worker_pipeline_caches.data());
+      if (merge_result != VK_SUCCESS) {
+        log::warning("Vulkan: worker pipeline cache merge failed (%s)", vk_error_to_string(merge_result));
+      }
+    }
+    if (worker_pipeline_caches.empty() == false) {
+      for (const VkPipelineCache worker_pipeline_cache : worker_pipeline_caches) {
+        vkDestroyPipelineCache(_impl->device, worker_pipeline_cache, nullptr);
+      }
+    }
+  }
+
+  for (uint32_t i = 0u; i < static_cast<uint32_t>(descs.size()); ++i) {
+    if ((results[i].result != RHIResult::Success) || (vk_pipelines[i] == VK_NULL_HANDLE)) {
+      if (vk_pipelines[i] != VK_NULL_HANDLE) {
+        vkDestroyPipeline(_impl->device, vk_pipelines[i], nullptr);
+      }
+      results[i].handle = {};
+      continue;
+    }
+
+    const uint32_t index = _impl->compute_pipelines.allocate_index();
+    const uint32_t generation = _impl->compute_pipelines.get_generation(index);
+    const RHIPipeline pipeline_handle = Handle::construct(0u, index, generation);
+    auto& pipeline_data = _impl->compute_pipelines.get_data(index);
+    pipeline_data.pipeline = vk_pipelines[i];
+    pipeline_data.handle = pipeline_handle;
+    _impl->compute_pipelines.set_handle_to_index(pipeline_handle, index);
+    results[i].handle = pipeline_handle;
+  }
+
+  return results;
+}
+
+void VKDevice::persist_pipeline_cache() {
+  _impl->save_pipeline_cache();
 }
 
 RHIResult VKDevice::destroy_buffer(RHIBindlessHandle buffer_handle) {

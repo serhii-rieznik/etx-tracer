@@ -1,6 +1,7 @@
 #include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/core/log.hxx>
+#include <etx/core/platform.hxx>
 
 #include <etx/render/host/film.hxx>
 #include <etx/render/host/openpbr_material_loader.hxx>
@@ -12,6 +13,7 @@
 #include <etx/render/shared/scene_medium.hxx>
 
 #include "ui.hxx"
+#include "platform_ui.hxx"
 #include <etx/engine/camera_controller.hxx>
 
 #include <imgui.h>
@@ -2451,8 +2453,23 @@ void UI::reload_scene() {
 }
 
 void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
-  if (ImGui::BeginMainMenuBar()) {
-    if (ImGui::BeginMenu("etx-tracer")) {
+#if defined(ETX_PLATFORM_WINDOWS)
+  constexpr float title_bar_height = 40.0f;
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const float title_bar_padding = std::max(style.FramePadding.y, 0.5f * (title_bar_height - ImGui::GetFontSize()));
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x, title_bar_padding));
+  const bool menu_bar_open = ImGui::BeginMainMenuBar();
+  ImGui::PopStyleVar();
+#else
+  const bool menu_bar_open = ImGui::BeginMainMenuBar();
+#endif
+
+  if (menu_bar_open) {
+#if defined(ETX_PLATFORM_WINDOWS)
+    ImGui::PushStyleVar(ImGuiStyleVar_MenuItemRounding, 6.0f);
+#endif
+
+    if (ImGui::BeginMenu("ETX Tracer")) {
       if (ImGui::MenuItem("CPU Raytracer", nullptr, _current_renderer_mode == RendererMode::CPURaytracing)) {
         execute_menu_command(MenuCommand::SelectCPURenderer);
       }
@@ -2599,9 +2616,88 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
       ImGui::EndMenu();
     }
 
+#if defined(ETX_PLATFORM_WINDOWS)
+    const ImVec2 menu_bar_position = ImGui::GetWindowPos();
+    const float menu_width = ImGui::GetCursorScreenPos().x - menu_bar_position.x + ImGui::GetStyle().ItemSpacing.x;
+    ImGui::PopStyleVar();
+    const float controls_left = build_title_bar_controls();
+    platform_ui().set_title_bar_layout(menu_width, controls_left, ImGui::GetWindowHeight(), ImGui::GetIO().DisplayFramebufferScale.x);
+#endif
+
     ImGui::EndMainMenuBar();
   }
 }
+
+#if defined(ETX_PLATFORM_WINDOWS)
+float UI::build_title_bar_controls() {
+  constexpr float control_width = 46.0f;
+  constexpr float control_rounding = 6.0f;
+  constexpr float glyph_half_size = 5.0f;
+  constexpr float glyph_thickness = 1.25f;
+  constexpr uint32_t control_count = 3u;
+
+  const ImVec2 window_position = ImGui::GetWindowPos();
+  const ImVec2 window_size = ImGui::GetWindowSize();
+  const float controls_left = std::max(0.0f, window_size.x - control_width * static_cast<float>(control_count));
+  const ImVec2 control_size(control_width, window_size.y);
+  const char* const control_ids[control_count] = {
+    "##title-bar-minimize",
+    "##title-bar-maximize",
+    "##title-bar-close",
+  };
+  const PlatformTitleBarCommand control_commands[control_count] = {
+    PlatformTitleBarCommand::Minimize,
+    PlatformTitleBarCommand::ToggleMaximize,
+    PlatformTitleBarCommand::Close,
+  };
+
+  ImGui::SetCursorScreenPos(ImVec2(window_position.x + controls_left, window_position.y));
+  for (uint32_t control_index = 0u; control_index < control_count; ++control_index) {
+    const bool pressed = ImGui::InvisibleButton(control_ids[control_index], control_size);
+    const bool hovered = ImGui::IsItemHovered();
+    const bool held = ImGui::IsItemActive();
+    const ImVec2 control_min = ImGui::GetItemRectMin();
+    const ImVec2 control_max = ImGui::GetItemRectMax();
+    const ImVec2 center(0.5f * (control_min.x + control_max.x), 0.5f * (control_min.y + control_max.y));
+    ImDrawList* const draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+
+    ImU32 background_color = ImGui::GetColorU32(ImGuiCol_MenuBarBg);
+    if (hovered || held) {
+      background_color = control_index == 2u ? IM_COL32(196, 43, 28, held ? 255 : 230) : ImGui::GetColorU32(held ? ImGuiCol_HeaderActive : ImGuiCol_HeaderHovered);
+      draw_list->AddRectFilled(control_min, control_max, background_color, control_rounding);
+    }
+
+    const ImU32 glyph_color = ImGui::GetColorU32(ImGuiCol_Text);
+    if (control_index == 0u) {
+      draw_list->AddLine(ImVec2(center.x - glyph_half_size, center.y + 3.0f), ImVec2(center.x + glyph_half_size, center.y + 3.0f), glyph_color, glyph_thickness);
+    } else if (control_index == 1u) {
+      if (platform_ui().window_maximized()) {
+        draw_list->AddRect(ImVec2(center.x - 3.0f, center.y - glyph_half_size), ImVec2(center.x + glyph_half_size, center.y + 3.0f), glyph_color, 0.0f, 0, glyph_thickness);
+        draw_list->AddRectFilled(ImVec2(center.x - glyph_half_size - 1.0f, center.y - 3.0f), ImVec2(center.x + 3.0f, center.y + glyph_half_size + 1.0f), background_color);
+        draw_list->AddRect(ImVec2(center.x - glyph_half_size, center.y - 3.0f), ImVec2(center.x + 3.0f, center.y + glyph_half_size), glyph_color, 0.0f, 0, glyph_thickness);
+      } else {
+        draw_list->AddRect(ImVec2(center.x - glyph_half_size, center.y - glyph_half_size), ImVec2(center.x + glyph_half_size, center.y + glyph_half_size), glyph_color, 0.0f, 0,
+          glyph_thickness);
+      }
+    } else {
+      draw_list->AddLine(ImVec2(center.x - glyph_half_size, center.y - glyph_half_size), ImVec2(center.x + glyph_half_size, center.y + glyph_half_size), glyph_color,
+        glyph_thickness);
+      draw_list->AddLine(ImVec2(center.x + glyph_half_size, center.y - glyph_half_size), ImVec2(center.x - glyph_half_size, center.y + glyph_half_size), glyph_color,
+        glyph_thickness);
+    }
+
+    if (pressed) {
+      platform_ui().execute_title_bar_command(control_commands[control_index]);
+    }
+
+    if ((control_index + 1u) < control_count) {
+      ImGui::SameLine(0.0f, 0.0f);
+    }
+  }
+
+  return controls_left;
+}
+#endif
 
 void UI::build_toolbar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##toolbar", ImGui::GetMainViewport(), ImGuiDir_Up, ctx.button_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {

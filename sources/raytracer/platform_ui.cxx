@@ -2,7 +2,7 @@
 
 #include <etx/core/platform.hxx>
 
-#if !defined(ETX_PLATFORM_APPLE)
+#if !defined(ETX_PLATFORM_APPLE) && !defined(ETX_PLATFORM_WINDOWS)
 
 namespace etx {
 

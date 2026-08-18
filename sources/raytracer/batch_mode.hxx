@@ -25,7 +25,7 @@ struct BatchRenderOptions {
   uint32_t crop_height = 0u;
   uint32_t strategy_flags = 0u;
   uint32_t bsdf_lut_samples = 512u;
-  uint32_t gpu_wavefront_steps_per_frame = 16u;
+  uint32_t gpu_wavefront_steps_per_frame = 256u;
   bool gpu_compile_only = false;
   bool full_comparison = false;
   bool cpu_comparison = false;

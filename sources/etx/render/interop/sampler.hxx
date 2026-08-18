@@ -6,6 +6,8 @@
 # include <cstring>
 #endif
 
+ETX_STATIC_CONST float kSamplerMaximumContinuationProbability = 0.95f;
+
 ETX_SHARED_INLINE uint32_t sampler_random_seed(uint32_t val0, uint32_t val1) {
   uint32_t v0 = val0;
   uint32_t v1 = val1;

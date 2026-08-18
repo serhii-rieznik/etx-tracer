@@ -263,6 +263,9 @@ struct UI {
   bool can_navigate_forward() const;
 
   void build_main_menu_bar(const std::vector<std::string>& recent_files);
+#if defined(_WIN32)
+  float build_title_bar_controls();
+#endif
   void build_toolbar(const BuildContext& ctx);
   void build_status_bar(const BuildContext& ctx);
   void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
@@ -287,7 +290,7 @@ struct UI {
   RendererPreparationStatus _current_renderer_status = {};
   RendererRuntimeStats _current_renderer_stats = {};
   RendererControlState _current_renderer_controls = {};
-  uint32_t _gpu_wavefront_steps_per_frame = 16u;
+  uint32_t _gpu_wavefront_steps_per_frame = 256u;
   bool _gpu_renderer_available = true;
   bool _embedded_toolbar_enabled = true;
 
