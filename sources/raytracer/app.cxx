@@ -351,6 +351,7 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.gpu_wavefront_steps_per_frame_changed = [this](uint32_t value) {
       submit_command({.type = ApplicationCommandType::SetGPUWavefrontSteps, .unsigned_value = value});
     };
+    ui.callbacks.gpu_kernel_timing_enabled_changed = [this](bool value) { gpu_renderer.set_kernel_timing_enabled(value); };
     ui.callbacks.exposure_changed = [this](float value) {
       submit_command({.type = ApplicationCommandType::SetExposure, .float_value = value});
     };
@@ -1230,6 +1231,7 @@ void RTApplication::sync_ui_renderer_state() {
   ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
   ui.set_current_renderer_stats(_active_renderer ? _active_renderer->runtime_stats() : RendererRuntimeStats{});
   ui.set_current_renderer_controls((_active_renderer && !_current_scene_file.empty()) ? _active_renderer->control_state() : RendererControlState{});
+  ui.set_gpu_kernel_timing_stats((_active_renderer == &gpu_renderer) ? gpu_renderer.kernel_timing_stats() : RendererKernelTimingStats{});
 }
 
 void RTApplication::process_application_commands() {

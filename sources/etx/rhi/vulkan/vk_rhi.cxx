@@ -1031,6 +1031,10 @@ bool VKContext::supports_timestamps() const {
   return _impl->device.supports_timestamps();
 }
 
+uint32_t VKContext::timestamp_query_capacity() const {
+  return supports_timestamps() ? VKCommandBuffer::kTimestampQueryCount : 0u;
+}
+
 double VKContext::timestamp_period_ns() const {
   return _impl->device.timestamp_period_ns();
 }

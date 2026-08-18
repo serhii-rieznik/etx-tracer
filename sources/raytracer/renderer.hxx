@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 struct sapp_event;
 
@@ -41,6 +42,22 @@ struct RendererRuntimeStats {
   uint32_t target_samples = 0u;
   double elapsed_seconds = 0.0;
   double estimated_remaining_seconds = -1.0;
+};
+
+struct RendererKernelTiming {
+  std::string name = {};
+  uint64_t dispatch_count = 0u;
+  double total_ms = 0.0;
+  double average_ms = 0.0;
+  double percentage = 0.0;
+};
+
+struct RendererKernelTimingStats {
+  std::vector<RendererKernelTiming> kernels = {};
+  uint64_t dropped_dispatch_count = 0u;
+  double total_ms = 0.0;
+  bool supported = false;
+  bool enabled = false;
 };
 
 enum class RendererRunState : uint32_t {

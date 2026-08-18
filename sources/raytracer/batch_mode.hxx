@@ -27,6 +27,7 @@ struct BatchRenderOptions {
   uint32_t bsdf_lut_samples = 512u;
   uint32_t gpu_wavefront_steps_per_frame = 256u;
   bool gpu_compile_only = false;
+  bool gpu_kernel_timings = false;
   bool full_comparison = false;
   bool cpu_comparison = false;
   bool strict_comparison = false;

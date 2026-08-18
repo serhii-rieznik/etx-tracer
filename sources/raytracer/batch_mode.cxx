@@ -400,6 +400,7 @@ const char* batch_usage_string() {
          "  --strict-comparison\n"
          "  --gpu-compile-only\n"
          "  --gpu-compile-stage <entry-point>\n"
+         "  --gpu-kernel-timings\n"
          "  --gpu-wavefront-steps-per-frame <count>\n"
          "  --reference <reference-image>\n"
          "  --compare <render>\n"
@@ -2508,6 +2509,7 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   }
   session.gpu_renderer.set_wavefront_steps_per_render(options.gpu_wavefront_steps_per_frame);
   session.gpu_renderer.set_batch_coarse_progress(true);
+  session.gpu_renderer.set_kernel_timing_enabled(options.gpu_kernel_timings);
   session.gpu_renderer.start();
 
   const uint32_t target_sample_count = max(1u, session.scene.data().options.samples);
@@ -2563,6 +2565,20 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   const double steady_state_frame_time_ms = (frame_index > 1u) ? ((total_frame_time_ms - first_frame_time_ms) / static_cast<double>(frame_index - 1u)) : first_frame_time_ms;
   log::info("GPU batch render timing: frames=%u total=%.2fms first=%.2fms avg=%.2fms steady=%.2fms", frame_index, render_wall_time_ms, first_frame_time_ms,
     average_frame_time_ms, steady_state_frame_time_ms);
+
+  if (options.gpu_kernel_timings) {
+    const RendererKernelTimingStats& timing_stats = session.gpu_renderer.kernel_timing_stats();
+    if (timing_stats.supported == false) {
+      log::warning("GPU kernel timestamps are not supported by the active backend");
+    } else {
+      log::info("GPU kernel timing summary: total=%.3fms dropped_dispatches=%llu", timing_stats.total_ms,
+        static_cast<unsigned long long>(timing_stats.dropped_dispatch_count));
+      for (const RendererKernelTiming& timing : timing_stats.kernels) {
+        log::info("GPU kernel timing: %-42s calls=%llu total=%.3fms avg=%.3fus share=%.1f%%", timing.name.c_str(),
+          static_cast<unsigned long long>(timing.dispatch_count), timing.total_ms, timing.average_ms * 1000.0, timing.percentage);
+      }
+    }
+  }
 
   image_size = session.gpu_renderer.output_size();
   const auto readback_begin = std::chrono::steady_clock::now();
@@ -3105,6 +3121,12 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     if (argument == "--gpu-compile-only") {
       batch_argument_seen = true;
       options.gpu_compile_only = true;
+      continue;
+    }
+
+    if (argument == "--gpu-kernel-timings") {
+      batch_argument_seen = true;
+      options.gpu_kernel_timings = true;
       continue;
     }
 

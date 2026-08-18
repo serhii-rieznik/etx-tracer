@@ -240,6 +240,7 @@ struct VKContext {
   void cmd_set_debug_name(RHICommandBuffer cmd, const char* name);
 
   bool supports_timestamps() const;
+  uint32_t timestamp_query_capacity() const;
   double timestamp_period_ns() const;
   RHIResult read_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count, uint64_t* out_values);
 
@@ -390,6 +391,8 @@ struct VKBindlessManager {
 };
 
 struct VKCommandBuffer {
+  static constexpr uint32_t kTimestampQueryCount = 2048u;
+
   VKCommandBuffer();
   ~VKCommandBuffer();
 
@@ -460,7 +463,6 @@ struct VKCommandBuffer {
   VKDevice* device = nullptr;
   VkCommandBuffer command_buffer = VK_NULL_HANDLE;
   VkQueryPool timestamp_query_pool = VK_NULL_HANDLE;
-  static constexpr uint32_t kTimestampQueryCount = 64u;
   bool _in_render_pass = false;
   bool _is_recording = false;
   bool _submitted = false;

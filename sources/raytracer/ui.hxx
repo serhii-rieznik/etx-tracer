@@ -89,6 +89,10 @@ struct UI {
     _current_renderer_controls = controls;
   }
 
+  void set_gpu_kernel_timing_stats(const RendererKernelTimingStats& stats) {
+    _gpu_kernel_timing_stats = stats;
+  }
+
   void set_gpu_wavefront_steps_per_frame(uint32_t value) {
     _gpu_wavefront_steps_per_frame = std::clamp(value, 1u, 1024u);
   }
@@ -202,6 +206,7 @@ struct UI {
     std::function<void()> clear_recent_files;
     std::function<void(uint32_t)> camera_activated;
     std::function<void(uint32_t)> gpu_wavefront_steps_per_frame_changed;
+    std::function<void(bool)> gpu_kernel_timing_enabled_changed;
     std::function<void(float)> exposure_changed;
     std::function<void(uint32_t)> view_layer_changed;
     std::function<void(uint32_t)> output_view_changed;
@@ -290,6 +295,7 @@ struct UI {
   RendererPreparationStatus _current_renderer_status = {};
   RendererRuntimeStats _current_renderer_stats = {};
   RendererControlState _current_renderer_controls = {};
+  RendererKernelTimingStats _gpu_kernel_timing_stats = {};
   uint32_t _gpu_wavefront_steps_per_frame = 256u;
   bool _gpu_renderer_available = true;
   bool _embedded_toolbar_enabled = true;

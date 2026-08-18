@@ -583,6 +583,10 @@ bool RHIContext::supports_timestamps() const {
   return dispatch_context(_backend, _impl, [](const auto* context) { return context->supports_timestamps(); });
 }
 
+uint32_t RHIContext::timestamp_query_capacity() const {
+  return dispatch_context(_backend, _impl, [](const auto* context) { return context->timestamp_query_capacity(); });
+}
+
 double RHIContext::timestamp_period_ns() const {
   return dispatch_context(_backend, _impl, [](const auto* context) { return context->timestamp_period_ns(); });
 }

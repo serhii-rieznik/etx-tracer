@@ -92,6 +92,10 @@ struct GPURaytracingRenderer : public Renderer {
   }
   void set_wavefront_steps_per_render(uint32_t value);
   void set_batch_coarse_progress(bool value);
+  void set_kernel_timing_enabled(bool value);
+  const RendererKernelTimingStats& kernel_timing_stats() const {
+    return _kernel_timing_stats;
+  }
   uint32_t wavefront_steps_per_render() const {
     return _wavefront_steps_per_render;
   }
@@ -201,6 +205,8 @@ struct GPURaytracingRenderer : public Renderer {
   void reset_render_timing();
   void reset_render_progress();
   void stop_render_timing();
+  void reset_kernel_timings();
+  void update_kernel_timing_stats();
   void set_preparation_failed(const std::string& message, const char* phase = "Failed");
   void set_preparation_ready(const char* message = nullptr);
   void set_preparation_state(RendererPreparationState state, const char* phase, const std::string& message = {}, uint32_t completed_steps = 0u, uint32_t total_steps = 0u);
@@ -361,6 +367,14 @@ struct GPURaytracingRenderer : public Renderer {
   RHIResourceState _output_texture_state = RHIResourceState::Undefined;
   RHIBackend _backend = RHIBackend::Metal;
 
+  struct KernelTimingAccumulator {
+    uint64_t dispatch_count = 0u;
+    double total_ms = 0.0;
+  };
+
+  KernelTimingAccumulator _kernel_timing_accumulators[static_cast<uint32_t>(PipelineStage::Count)] = {};
+  RendererKernelTimingStats _kernel_timing_stats = {};
+
   std::string _compile_stage_filter = {};
   std::string _runtime_failure_reason = {};
   std::string _preparation_phase = "Ready";
@@ -386,6 +400,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool _preview_pipeline_failed = false;
   bool _cleanup_wait_succeeded = false;
   bool _render_timing_active = false;
+  bool _kernel_timing_enabled = false;
   bool _scene_valid = false;
   RendererRunState _run_state = RendererRunState::Stopped;
   RendererPreparationState _preparation_state = RendererPreparationState::Ready;

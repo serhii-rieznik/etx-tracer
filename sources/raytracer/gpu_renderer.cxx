@@ -1436,6 +1436,8 @@ void GPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
   _cleanup_wait_succeeded = false;
   reset_runtime_failure();
   _backend = ctx.device().backend();
+  _kernel_timing_stats.supported = ctx.supports_timestamps() && (ctx.timestamp_query_capacity() >= 2u);
+  _kernel_timing_stats.enabled = _kernel_timing_enabled;
   const GPUIntegratorSelection integrator_selection = gpu_integrator_selection_from_scene(scene);
   _integrator_mode = static_cast<uint32_t>(integrator_selection.mode);
   _integrator_features = integrator_selection.features;
@@ -1479,6 +1481,55 @@ void GPURaytracingRenderer::update_camera(SceneRepresentation& scene, float dt) 
 
 void GPURaytracingRenderer::set_compile_stage_filter(const std::string& value) {
   _compile_stage_filter = value;
+}
+
+void GPURaytracingRenderer::set_kernel_timing_enabled(bool value) {
+  if (_kernel_timing_enabled == value) {
+    return;
+  }
+
+  _kernel_timing_enabled = value;
+  reset_kernel_timings();
+}
+
+void GPURaytracingRenderer::reset_kernel_timings() {
+  for (auto& timing : _kernel_timing_accumulators) {
+    timing = {};
+  }
+  _kernel_timing_stats.kernels.clear();
+  _kernel_timing_stats.dropped_dispatch_count = 0u;
+  _kernel_timing_stats.total_ms = 0.0;
+  _kernel_timing_stats.enabled = _kernel_timing_enabled;
+}
+
+void GPURaytracingRenderer::update_kernel_timing_stats() {
+  _kernel_timing_stats.kernels.clear();
+  _kernel_timing_stats.total_ms = 0.0;
+  for (const auto& timing : _kernel_timing_accumulators) {
+    _kernel_timing_stats.total_ms += timing.total_ms;
+  }
+
+  const uint32_t stage_count = static_cast<uint32_t>(PipelineStage::Count);
+  _kernel_timing_stats.kernels.reserve(stage_count);
+  for (uint32_t stage_index = 0u; stage_index < stage_count; ++stage_index) {
+    const KernelTimingAccumulator& timing = _kernel_timing_accumulators[stage_index];
+    if (timing.dispatch_count == 0u) {
+      continue;
+    }
+
+    const double percentage = (_kernel_timing_stats.total_ms > 0.0) ? ((timing.total_ms * 100.0) / _kernel_timing_stats.total_ms) : 0.0;
+    _kernel_timing_stats.kernels.push_back({
+      .name = pipeline_stage_to_string(static_cast<PipelineStage>(stage_index)),
+      .dispatch_count = timing.dispatch_count,
+      .total_ms = timing.total_ms,
+      .average_ms = timing.total_ms / static_cast<double>(timing.dispatch_count),
+      .percentage = percentage,
+    });
+  }
+
+  std::sort(_kernel_timing_stats.kernels.begin(), _kernel_timing_stats.kernels.end(), [](const RendererKernelTiming& lhs, const RendererKernelTiming& rhs) {
+    return lhs.total_ms > rhs.total_ms;
+  });
 }
 
 RendererPreparationStatus GPURaytracingRenderer::preparation_status() const {
@@ -1568,6 +1619,7 @@ void GPURaytracingRenderer::reset_render_progress() {
   _frame_index = 0u;
   _sample_index = 0u;
   reset_render_timing();
+  reset_kernel_timings();
   _wavefront_render_step = WavefrontRenderStep::InitSample;
   _wavefront_path_iteration = 0u;
   _wavefront_hard_iteration_cap = 0u;
@@ -3119,6 +3171,46 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_dispatch_and_submit");
     const auto dispatch_submit_begin = std::chrono::steady_clock::now();
+    struct KernelTimestampSpan {
+      PipelineStage stage = PipelineStage::PrepareSample;
+      uint32_t begin_query = 0u;
+      uint32_t end_query = 0u;
+    };
+    struct SubmittedCommand {
+      RHICommandBuffer command_buffer = {};
+      std::vector<KernelTimestampSpan> timestamp_spans = {};
+      uint32_t timestamp_query_count = 0u;
+    };
+
+    const bool capture_kernel_timings = _kernel_timing_enabled && _kernel_timing_stats.supported;
+    const uint32_t timestamp_query_capacity = capture_kernel_timings ? ctx.timestamp_query_capacity() : 0u;
+    const double timestamp_tick_to_ms = ctx.timestamp_period_ns() * 1.0e-6;
+    SubmittedCommand* active_submitted_command = nullptr;
+    const auto begin_kernel_timing = [&](RHICommandBuffer cmd, PipelineStage stage) {
+      if ((capture_kernel_timings == false) || (active_submitted_command == nullptr)) {
+        return ~0u;
+      }
+      if (active_submitted_command->timestamp_query_count > (timestamp_query_capacity - 2u)) {
+        _kernel_timing_stats.dropped_dispatch_count += 1u;
+        return ~0u;
+      }
+
+      const uint32_t begin_query = active_submitted_command->timestamp_query_count;
+      const uint32_t end_query = begin_query + 1u;
+      active_submitted_command->timestamp_query_count += 2u;
+      active_submitted_command->timestamp_spans.push_back({
+        .stage = stage,
+        .begin_query = begin_query,
+        .end_query = end_query,
+      });
+      ctx.cmd_write_timestamp(cmd, begin_query, RHITimestampStage::ComputeShader);
+      return end_query;
+    };
+    const auto end_kernel_timing = [&](RHICommandBuffer cmd, uint32_t end_query) {
+      if (end_query != ~0u) {
+        ctx.cmd_write_timestamp(cmd, end_query, RHITimestampStage::ComputeShader);
+      }
+    };
     const auto dispatch_stage_with_connect_light_length = [&](RHICommandBuffer cmd, PipelineStage stage, const RHIDispatchDesc& dispatch, uint32_t path_iteration,
                                                             uint32_t connect_light_vertex_length, uint32_t connect_light_vertex_count) {
       GPURTConstants stage_constants = constants;
@@ -3127,14 +3219,18 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       stage_constants.dispatch_item_count = connect_light_vertex_count;
       ctx.cmd_set_pipeline(cmd, _pipelines[static_cast<uint32_t>(stage)]);
       ctx.cmd_push_constants(cmd, &stage_constants, sizeof(stage_constants));
+      const uint32_t timing_end_query = begin_kernel_timing(cmd, stage);
       ctx.cmd_dispatch(cmd, dispatch);
+      end_kernel_timing(cmd, timing_end_query);
     };
     const auto dispatch_stage = [&](RHICommandBuffer cmd, PipelineStage stage, const RHIDispatchDesc& dispatch, uint32_t path_iteration) {
       GPURTConstants stage_constants = constants;
       stage_constants.path_iteration = path_iteration;
       ctx.cmd_set_pipeline(cmd, _pipelines[static_cast<uint32_t>(stage)]);
       ctx.cmd_push_constants(cmd, &stage_constants, sizeof(stage_constants));
+      const uint32_t timing_end_query = begin_kernel_timing(cmd, stage);
       ctx.cmd_dispatch(cmd, dispatch);
+      end_kernel_timing(cmd, timing_end_query);
     };
     const auto dispatch_stage_window = [&](RHICommandBuffer cmd, PipelineStage stage, uint32_t item_offset, uint32_t item_count, uint32_t path_iteration) {
       ctx.cmd_set_pipeline(cmd, _pipelines[static_cast<uint32_t>(stage)]);
@@ -3148,7 +3244,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         .group_count_z = 1u,
       };
       ctx.cmd_push_constants(cmd, &stage_constants, sizeof(stage_constants));
+      const uint32_t timing_end_query = begin_kernel_timing(cmd, stage);
       ctx.cmd_dispatch(cmd, chunk_dispatch);
+      end_kernel_timing(cmd, timing_end_query);
     };
     const auto barrier_wavefront_buffers = [&](RHICommandBuffer cmd) {
       const RHIBindlessHandle buffers[] = {
@@ -3191,31 +3289,61 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     const uint32_t scene_max_path_length = std::max(1u, scene.data().options.max_path_length);
     const GPUIntegratorMode integrator_mode = static_cast<GPUIntegratorMode>(_integrator_mode);
     const uint32_t wavefront_hard_iteration_cap = scene_max_path_length;
-    std::vector<RHICommandBuffer> submitted_commands = {};
+    std::vector<SubmittedCommand> submitted_commands = {};
     submitted_commands.reserve(8u);
     const auto record_and_submit = [&](const auto& record_commands) {
-      RHICommandBuffer cmd = ctx.get_command_buffer();
+      SubmittedCommand submitted_command = {};
+      submitted_command.command_buffer = ctx.get_command_buffer();
+      if (capture_kernel_timings) {
+        submitted_command.timestamp_spans.reserve(std::min(timestamp_query_capacity / 2u, 64u));
+      }
+      const RHICommandBuffer cmd = submitted_command.command_buffer;
       ctx.command_buffer_begin(cmd);
+      if (capture_kernel_timings) {
+        ctx.cmd_reset_timestamps(cmd, 0u, timestamp_query_capacity);
+        active_submitted_command = &submitted_command;
+      }
       record_commands(cmd);
+      active_submitted_command = nullptr;
       ctx.command_buffer_end(cmd);
       ctx.submit_command_buffer({cmd});
-      submitted_commands.push_back(cmd);
+      submitted_commands.push_back(std::move(submitted_command));
     };
     const auto wait_and_destroy_submitted_commands = [&](const char* stage_name) {
       RHIResult wait_result = RHIResult::Success;
-      for (const auto cmd : submitted_commands) {
-        const RHIResult command_wait_result = ctx.wait_for_command_buffer(cmd);
+      for (auto& submitted_command : submitted_commands) {
+        const RHIResult command_wait_result = ctx.wait_for_command_buffer(submitted_command.command_buffer);
         if ((wait_result == RHIResult::Success) && (command_wait_result != RHIResult::Success)) {
           wait_result = command_wait_result;
+        }
+        if ((command_wait_result == RHIResult::Success) && (submitted_command.timestamp_query_count > 0u)) {
+          std::vector<uint64_t> timestamp_values(submitted_command.timestamp_query_count, 0u);
+          const RHIResult timestamp_result =
+            ctx.read_timestamps(submitted_command.command_buffer, 0u, submitted_command.timestamp_query_count, timestamp_values.data());
+          if (timestamp_result == RHIResult::Success) {
+            for (const KernelTimestampSpan& span : submitted_command.timestamp_spans) {
+              const uint64_t begin_tick = timestamp_values[span.begin_query];
+              const uint64_t end_tick = timestamp_values[span.end_query];
+              const uint64_t elapsed_tick_count = (end_tick >= begin_tick) ? (end_tick - begin_tick) : 0u;
+              KernelTimingAccumulator& timing = _kernel_timing_accumulators[static_cast<uint32_t>(span.stage)];
+              timing.dispatch_count += 1u;
+              timing.total_ms += static_cast<double>(elapsed_tick_count) * timestamp_tick_to_ms;
+            }
+          } else {
+            log::warning("GPU RT: failed to read kernel timestamps after %s (%u)", stage_name, static_cast<uint32_t>(timestamp_result));
+          }
         }
       }
       if (wait_result != RHIResult::Success) {
         log::warning("GPU RT: command wait failed after %s (%u)", stage_name, static_cast<uint32_t>(wait_result));
       }
-      for (const auto cmd : submitted_commands) {
-        ctx.destroy_command_buffer(cmd);
+      for (const auto& submitted_command : submitted_commands) {
+        ctx.destroy_command_buffer(submitted_command.command_buffer);
       }
       submitted_commands.clear();
+      if (capture_kernel_timings) {
+        update_kernel_timing_stats();
+      }
       return wait_result;
     };
     const auto submit_stage_chunked = [&](PipelineStage stage, uint32_t item_count, uint32_t path_iteration, uint32_t chunk_size) {

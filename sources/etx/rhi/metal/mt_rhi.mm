@@ -2193,6 +2193,10 @@ bool MTContext::supports_timestamps() const {
   return false;
 }
 
+uint32_t MTContext::timestamp_query_capacity() const {
+  return 0u;
+}
+
 double MTContext::timestamp_period_ns() const {
   return 0.0;
 }

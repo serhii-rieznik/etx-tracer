@@ -85,6 +85,7 @@ struct MTContext {
 
   void cmd_set_debug_name(RHICommandBuffer cmd, const char* name);
   bool supports_timestamps() const;
+  uint32_t timestamp_query_capacity() const;
   double timestamp_period_ns() const;
   RHIResult read_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count, uint64_t* out_values);
 

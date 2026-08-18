@@ -1405,15 +1405,56 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   build_scene_objects_window(scene_rep, ctx);
   build_properties_window(scene_rep, scene_rep.camera(), ctx, data);
 
-  if (ctx.has_integrator && (_current_integrator->status().debug_info_count > 0) && (_current_integrator->status().debug_info != nullptr)) {
-    if (ImGui::Begin("Debug Info", nullptr, kWindowFlags)) {
-      auto debug_info = _current_integrator->status().debug_info;
-      for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
-        const char* value_buffer = format_string("%.3f", debug_info[i].value);
-        ImGui::LabelText(debug_info[i].title, "%s", value_buffer);
+  const bool has_integrator_debug_info = ctx.has_integrator && (_current_integrator->status().debug_info_count > 0) && (_current_integrator->status().debug_info != nullptr);
+  const bool show_gpu_kernel_timings = (_current_renderer_mode == RendererMode::GPURaytracing) && _gpu_kernel_timing_stats.enabled;
+  if (has_integrator_debug_info || show_gpu_kernel_timings) {
+    const bool debug_info_visible = ImGui::Begin("Debug Info", nullptr, kWindowFlags);
+    if (debug_info_visible) {
+      if (has_integrator_debug_info) {
+        const auto debug_info = _current_integrator->status().debug_info;
+        for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
+          const char* value_buffer = format_string("%.3f", debug_info[i].value);
+          ImGui::LabelText(debug_info[i].title, "%s", value_buffer);
+        }
       }
-      ImGui::End();
+
+      if (show_gpu_kernel_timings) {
+        if (has_integrator_debug_info) {
+          ImGui::Separator();
+        }
+        ImGui::Text("GPU kernel time: %.3f ms", _gpu_kernel_timing_stats.total_ms);
+        if (_gpu_kernel_timing_stats.dropped_dispatch_count > 0u) {
+          ImGui::Text("Unprofiled dispatches: %llu", static_cast<unsigned long long>(_gpu_kernel_timing_stats.dropped_dispatch_count));
+        }
+        if (_gpu_kernel_timing_stats.supported == false) {
+          ImGui::TextUnformatted("GPU timestamps are not supported by the active backend.");
+        } else if (_gpu_kernel_timing_stats.kernels.empty()) {
+          ImGui::TextUnformatted("Run the GPU renderer to collect kernel timings.");
+        } else if (ImGui::BeginTable("gpu_kernel_timings", 5, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+          ImGui::TableSetupColumn("Kernel");
+          ImGui::TableSetupColumn("Calls");
+          ImGui::TableSetupColumn("Total ms");
+          ImGui::TableSetupColumn("Avg us");
+          ImGui::TableSetupColumn("%");
+          ImGui::TableHeadersRow();
+          for (const RendererKernelTiming& timing : _gpu_kernel_timing_stats.kernels) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(timing.name.c_str());
+            ImGui::TableNextColumn();
+            ImGui::Text("%llu", static_cast<unsigned long long>(timing.dispatch_count));
+            ImGui::TableNextColumn();
+            ImGui::Text("%.3f", timing.total_ms);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.2f", timing.average_ms * 1000.0);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.1f", timing.percentage);
+          }
+          ImGui::EndTable();
+        }
+      }
     }
+    ImGui::End();
   }
 }
 
@@ -4237,6 +4278,16 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
       if (callbacks.gpu_wavefront_steps_per_frame_changed) {
         callbacks.gpu_wavefront_steps_per_frame_changed(_gpu_wavefront_steps_per_frame);
       }
+    }
+    bool kernel_timing_enabled = _gpu_kernel_timing_stats.enabled;
+    if (ImGui::Checkbox("Profile GPU Kernels", &kernel_timing_enabled)) {
+      _gpu_kernel_timing_stats.enabled = kernel_timing_enabled;
+      if (callbacks.gpu_kernel_timing_enabled_changed) {
+        callbacks.gpu_kernel_timing_enabled_changed(kernel_timing_enabled);
+      }
+    }
+    if (kernel_timing_enabled) {
+      ImGui::TextDisabled("Profiling adds timestamp-query overhead.");
     }
   }
 
