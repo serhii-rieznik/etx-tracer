@@ -57,6 +57,37 @@ uint64_t hash_triangle_indices(const std::vector<Triangle>& triangles) {
   return result;
 }
 
+uint64_t hash_hierarchy_structure(const SceneHierarchy& hierarchy) {
+  const size_t node_count = hierarchy.nodes.size();
+  uint64_t result = etx_hash64_continue(&node_count, sizeof(node_count), 0u);
+  for (const SceneNode& node : hierarchy.nodes) {
+    result = etx_hash64_continue(&node.parent_index, sizeof(node.parent_index), result);
+    result = etx_hash64_continue(&node.attachment_offset, sizeof(node.attachment_offset), result);
+    result = etx_hash64_continue(&node.attachment_count, sizeof(node.attachment_count), result);
+    result = etx_hash64_continue(&node.flags, sizeof(node.flags), result);
+  }
+  return result;
+}
+
+uint64_t hash_hierarchy_transforms(const SceneHierarchy& hierarchy) {
+  uint64_t result = 0u;
+  for (const SceneNode& node : hierarchy.nodes) {
+    result = etx_hash64_continue(&node.local_transform, sizeof(node.local_transform), result);
+  }
+  return result;
+}
+
+uint64_t hash_hierarchy_attachments(const SceneHierarchy& hierarchy) {
+  const size_t attachment_count = hierarchy.attachments.size();
+  uint64_t result = etx_hash64_continue(&attachment_count, sizeof(attachment_count), 0u);
+  for (const SceneAttachment& attachment : hierarchy.attachments) {
+    result = etx_hash64_continue(&attachment.type, sizeof(attachment.type), result);
+    result = etx_hash64_continue(&attachment.resource_index, sizeof(attachment.resource_index), result);
+    result = etx_hash64_continue(&attachment.flags, sizeof(attachment.flags), result);
+  }
+  return result;
+}
+
 }  // namespace
 
 SceneData::SceneData(TaskScheduler& s)
@@ -73,33 +104,43 @@ BoundingBox SceneData::compute_bounding_volumes() const {
     0.0f,
   };
 
-  std::vector<BoundingBox> thread_bounds(scheduler.max_thread_count(), bbox);
-
-  scheduler.execute(triangles.size(), [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
-    BoundingBox& local_bounds = thread_bounds[thread_id];
-    for (uint32_t i = begin; i < end; ++i) {
-      const auto& tri = triangles[i];
-      if (tri.i[0] < vertices.pos.size()) {
-        const float3& v = vertices.pos[tri.i[0]];
-        local_bounds.p_min = min(local_bounds.p_min, v);
-        local_bounds.p_max = max(local_bounds.p_max, v);
+  if (hierarchy.nodes.empty() == false) {
+    for (const ResolvedMeshInstance& instance : hierarchy.mesh_instances) {
+      if ((instance.flags & ResolvedMeshInstance::Enabled) == 0u) {
+        continue;
       }
-      if (tri.i[1] < vertices.pos.size()) {
-        const float3& v = vertices.pos[tri.i[1]];
-        local_bounds.p_min = min(local_bounds.p_min, v);
-        local_bounds.p_max = max(local_bounds.p_max, v);
-      }
-      if (tri.i[2] < vertices.pos.size()) {
-        const float3& v = vertices.pos[tri.i[2]];
-        local_bounds.p_min = min(local_bounds.p_min, v);
-        local_bounds.p_max = max(local_bounds.p_max, v);
-      }
+      bbox.p_min = min(bbox.p_min, instance.bbox_min);
+      bbox.p_max = max(bbox.p_max, instance.bbox_max);
     }
-  });
+  } else {
+    std::vector<BoundingBox> thread_bounds(scheduler.max_thread_count(), bbox);
 
-  for (const auto& tb : thread_bounds) {
-    bbox.p_min = min(bbox.p_min, tb.p_min);
-    bbox.p_max = max(bbox.p_max, tb.p_max);
+    scheduler.execute(triangles.size(), [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
+      BoundingBox& local_bounds = thread_bounds[thread_id];
+      for (uint32_t i = begin; i < end; ++i) {
+        const auto& tri = triangles[i];
+        if (tri.i[0] < vertices.pos.size()) {
+          const float3& v = vertices.pos[tri.i[0]];
+          local_bounds.p_min = min(local_bounds.p_min, v);
+          local_bounds.p_max = max(local_bounds.p_max, v);
+        }
+        if (tri.i[1] < vertices.pos.size()) {
+          const float3& v = vertices.pos[tri.i[1]];
+          local_bounds.p_min = min(local_bounds.p_min, v);
+          local_bounds.p_max = max(local_bounds.p_max, v);
+        }
+        if (tri.i[2] < vertices.pos.size()) {
+          const float3& v = vertices.pos[tri.i[2]];
+          local_bounds.p_min = min(local_bounds.p_min, v);
+          local_bounds.p_max = max(local_bounds.p_max, v);
+        }
+      }
+    });
+
+    for (const auto& thread_bounds_value : thread_bounds) {
+      bbox.p_min = min(bbox.p_min, thread_bounds_value.p_min);
+      bbox.p_max = max(bbox.p_max, thread_bounds_value.p_max);
+    }
   }
 
   const bool has_valid_bounds = (bbox.p_min.x <= bbox.p_max.x) && (bbox.p_min.y <= bbox.p_max.y) && (bbox.p_min.z <= bbox.p_max.z);
@@ -147,11 +188,14 @@ SceneHashes SceneData::compute_hashes() const {
   timed_hash(vertices.tex.data(), vertices.tex.size() * sizeof(float2), &result.vertices_tex_hash, vertices_tex_ms);
   timed_hash(triangles.data(), triangles.size() * sizeof(Triangle), &result.triangles_hash, triangles_ms);
   timed_hash(meshes.data(), meshes.size() * sizeof(Mesh), &result.meshes_hash, meshes_ms);
+  result.hierarchy_hash = hash_hierarchy_structure(hierarchy);
+  result.transforms_hash = hash_hierarchy_transforms(hierarchy);
+  result.attachments_hash = hash_hierarchy_attachments(hierarchy);
   timed_hash(materials.data(), materials.size() * sizeof(Material), &result.materials_hash, materials_ms);
   timed_hash(spectrum_values.data(), spectrum_values.size() * sizeof(SpectralDistribution), &result.spectra_hash, spectra_ms);
   timed_hash(emitter_profiles.data(), emitter_profiles.size() * sizeof(EmitterProfile), &result.emitter_profiles_hash, emitters_ms);
-  timed_hash(energy_compensation_interfaces.data(), energy_compensation_interfaces.size() * sizeof(Scene::EnergyCompensationInterface),
-    &result.energy_compensation_interfaces_hash, energy_compensation_ms);
+  timed_hash(energy_compensation_interfaces.data(), energy_compensation_interfaces.size() * sizeof(Scene::EnergyCompensationInterface), &result.energy_compensation_interfaces_hash,
+    energy_compensation_ms);
   timed_hash(&pixel_filter, sizeof(PixelFilter), &result.pixel_filter_hash, pixel_filter_ms);
   timed_hash(&defaults, sizeof(Scene::Defaults), &result.defaults_hash, defaults_ms);
   timed_hash(&options, sizeof(Scene::Options), &result.options_hash, options_ms);
@@ -181,8 +225,7 @@ SceneHashes SceneData::compute_hashes() const {
     "spectra=%.2fms emitters=%.2fms images=%.2fms mediums=%.2fms energy_compensation=%.2fms pixel_filter=%.2fms defaults=%.2fms options=%.2fms",
     elapsed_ms(total_begin, total_end), vertices_pos_ms, vertices_nrm_ms, vertices_tan_ms, vertices_btn_ms, vertices_tex_ms, triangles_ms, triangle_indices_ms, meshes_ms,
     materials_ms, spectra_ms, emitters_ms, images_ms, mediums_ms, energy_compensation_ms, pixel_filter_ms, defaults_ms, options_ms);
-  log::info(
-    "Scene hash recompute sizes: vertices=%zu triangles=%zu meshes=%zu materials=%zu spectra=%zu emitters=%zu images=%zu mediums=%zu energy_compensation=%zu",
+  log::info("Scene hash recompute sizes: vertices=%zu triangles=%zu meshes=%zu materials=%zu spectra=%zu emitters=%zu images=%zu mediums=%zu energy_compensation=%zu",
     vertices.pos.size(), triangles.size(), meshes.size(), materials.size(), spectrum_values.size(), emitter_profiles.size(), images_vector.size(), mediums_vector.size(),
     energy_compensation_interfaces.size());
 
@@ -206,6 +249,7 @@ void SceneData::clear(TaskScheduler& scheduler) {
   images_vector.clear();
   mediums_vector.clear();
   energy_compensation_interfaces.clear();
+  hierarchy.clear();
   spectrum_names.clear();
   material_mapping.clear();
   mesh_mapping.clear();
@@ -288,6 +332,15 @@ uint32_t SceneData::clone_material(const Material& src, const char* name) {
 }
 
 uint32_t SceneData::add_mesh(const char* name, uint32_t triangle_offset, uint32_t triangle_count, const float3& bbox_min, const float3& bbox_max) {
+  const uint32_t mesh_index = add_mesh_asset(name, triangle_offset, triangle_count, bbox_min, bbox_max);
+  const uint32_t node_index = hierarchy.add_node(name, kInvalidIndex, {});
+  ETX_CRITICAL(node_index != kInvalidIndex);
+  const SceneAttachment attachment = {SceneAttachment::Type::Mesh, mesh_index, 0u, 0u};
+  ETX_CRITICAL(hierarchy.add_attachment(node_index, attachment));
+  return mesh_index;
+}
+
+uint32_t SceneData::add_mesh_asset(const char* name, uint32_t triangle_offset, uint32_t triangle_count, const float3& bbox_min, const float3& bbox_max) {
   uint32_t index = static_cast<uint32_t>(meshes.size());
   auto& mesh = meshes.emplace_back();
   mesh.triangle_offset = triangle_offset;
@@ -297,6 +350,65 @@ uint32_t SceneData::add_mesh(const char* name, uint32_t triangle_offset, uint32_
   std::string mesh_name = name && name[0] ? name : ("mesh-" + std::to_string(index));
   mesh_mapping[mesh_name] = index;
   return index;
+}
+
+bool SceneData::resolve_hierarchy() {
+  if (hierarchy.resolve_mesh_instances(meshes) == false) {
+    return false;
+  }
+
+  std::vector<uint32_t> camera_attachment_nodes(cameras.size(), kInvalidIndex);
+  std::vector<uint32_t> medium_attachment_nodes(mediums.array_size(), kInvalidIndex);
+  for (uint32_t node_index : hierarchy.evaluation_order) {
+    const SceneNode& node = hierarchy.nodes[node_index];
+    const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+    if (attachment_end > hierarchy.attachments.size()) {
+      return false;
+    }
+
+    for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+      switch (attachment.type) {
+        case SceneAttachment::Type::Mesh:
+          if (attachment.resource_index >= meshes.size()) {
+            return false;
+          }
+          break;
+        case SceneAttachment::Type::Camera:
+          if (attachment.resource_index >= cameras.size()) {
+            return false;
+          }
+          if (hierarchy.effective_enabled[node_index] != 0u) {
+            if (camera_attachment_nodes[attachment.resource_index] != kInvalidIndex) {
+              log::error("Camera %u is attached to multiple enabled nodes (%u and %u)", attachment.resource_index, camera_attachment_nodes[attachment.resource_index], node_index);
+              return false;
+            }
+            camera_attachment_nodes[attachment.resource_index] = node_index;
+          }
+          break;
+        case SceneAttachment::Type::Emitter:
+          if (attachment.resource_index >= emitter_profiles.size()) {
+            return false;
+          }
+          break;
+        case SceneAttachment::Type::Medium:
+          if (attachment.resource_index >= mediums.array_size()) {
+            return false;
+          }
+          if (hierarchy.effective_enabled[node_index] != 0u) {
+            if (medium_attachment_nodes[attachment.resource_index] != kInvalidIndex) {
+              log::error("Medium %u is attached to multiple enabled nodes (%u and %u)", attachment.resource_index, medium_attachment_nodes[attachment.resource_index], node_index);
+              return false;
+            }
+            medium_attachment_nodes[attachment.resource_index] = node_index;
+          }
+          break;
+        default:
+          return false;
+      }
+    }
+  }
+  return true;
 }
 
 uint32_t SceneData::add_image(const char* path, uint32_t options, const float2& offset, const float2& scale) {

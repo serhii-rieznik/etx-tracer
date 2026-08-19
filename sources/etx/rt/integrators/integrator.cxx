@@ -66,6 +66,10 @@ struct IntegratorThreadImpl {
         log::error("Failed to ensure BSDF energy-compensation interfaces before CPU render commit");
       }
       scene_representation.data().images.load_images(raytracing.scheduler());
+      if (scene_representation.data().resolve_hierarchy() == false) {
+        log::error("Failed to resolve scene hierarchy before CPU render commit");
+        return;
+      }
       new_hashes = scene_representation.data().compute_hashes();
       changes = new_hashes.compare(current_scene_hashes);
       current_scene_hashes = new_hashes;

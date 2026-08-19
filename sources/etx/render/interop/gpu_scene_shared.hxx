@@ -90,6 +90,7 @@ struct ETX_ALIGNED GPUScene {
   uint32_t vertex_texcoords;
   uint32_t triangles;
   uint32_t meshes;
+  uint32_t instances;
   uint32_t emitter_profiles;
   uint32_t emitter_instances;
   uint32_t scene_globals;

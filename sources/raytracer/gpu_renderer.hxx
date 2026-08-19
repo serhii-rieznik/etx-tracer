@@ -221,6 +221,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool update_blue_noise_buffer(RHIContext& ctx, const SceneRepresentation& scene);
   void destroy_acceleration_structures(RHIContext& ctx);
   bool build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene);
+  bool refit_top_level_acceleration_structure(RHIContext& ctx, const SceneData& scene_data);
   bool upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer);
   bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
   bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t path_capacity, uint32_t active_path_capacity, bool allow_light_history_shrink);
@@ -256,6 +257,10 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _tlas = {};
   std::vector<RHIBindlessHandle> _blas;
   std::vector<RHIBindlessHandle> _blas_buffers;
+  std::vector<RHIAccelerationStructureInstance> _tlas_instance_staging;
+  RHIBindlessHandle _tlas_instance_buffer = {};
+  RHIBindlessHandle _as_scratch_buffer = {};
+  uint32_t _tlas_instance_count = 0u;
   RHIBindlessHandle _vertex_positions_buffer = {};
   RHIBindlessHandle _vertex_normals_buffer = {};
   RHIBindlessHandle _vertex_tangents_buffer = {};
@@ -263,6 +268,7 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _vertex_texcoords_buffer = {};
   RHIBindlessHandle _triangles_buffer = {};
   RHIBindlessHandle _meshes_buffer = {};
+  RHIBindlessHandle _instances_buffer = {};
   RHIBindlessHandle _emitter_profiles_buffer = {};
   RHIBindlessHandle _emitter_instances_buffer = {};
   RHIBindlessHandle _materials_buffer = {};
@@ -312,6 +318,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _vertex_texcoords_buffer_size = 0;
   uint64_t _triangles_buffer_size = 0;
   uint64_t _meshes_buffer_size = 0;
+  uint64_t _instances_buffer_size = 0;
   uint64_t _emitter_profiles_buffer_size = 0;
   uint64_t _emitter_instances_buffer_size = 0;
   uint64_t _materials_buffer_size = 0;

@@ -17,6 +17,7 @@ struct WavefrontEmitterSample {
   float2 image_uv;
   uint emitter_index;
   uint triangle_index;
+  uint instance_index;
   uint medium_index;
   uint is_delta;
   uint is_distant;
@@ -508,7 +509,7 @@ float3 wavefront_surface_shading_position(GPUWavefrontHit hit, float3 outgoing_d
   return offset_ray(hit.vertex.pos, hit.geo_normal * sign_value);
 }
 
-SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary, float3 ray_dir) {
+SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary, float3 ray_dir, uint instance_index) {
   SurfacePoint result = (SurfacePoint)0;
   result.barycentrics = barycentrics(bary);
 
@@ -549,7 +550,15 @@ SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary,
   surface_point_shared_interpolate_vertex(position_0, position_1, position_2, normal_0, normal_1, normal_2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2,
     texcoord_0, texcoord_1, texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
 
-  result.geo_normal = tri.geo_n;
+  const GPUSceneInstanceData instance = load_scene_instance(instance_index);
+  const float local_handedness = dot(cross(result.vertex.nrm, result.vertex.tan), result.vertex.btn) >= 0.0f ? 1.0f : -1.0f;
+  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
+  result.vertex.pos = scene_instance_transform_point(instance, result.vertex.pos);
+  result.vertex.nrm = scene_instance_transform_normal(instance, result.vertex.nrm) * orientation;
+  result.vertex.tan = normalize(scene_instance_transform_vector(instance, result.vertex.tan));
+  result.vertex.tan = normalize(result.vertex.tan - result.vertex.nrm * dot(result.vertex.tan, result.vertex.nrm));
+  result.vertex.btn = normalize(cross(result.vertex.nrm, result.vertex.tan)) * local_handedness;
+  result.geo_normal = scene_instance_transform_geometric_normal(instance, tri.geo_n);
   return result;
 }
 
@@ -558,6 +567,7 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
   result.medium_index = medium_index;
   result.triangle_index = kInvalidIndex;
   result.emitter_index = kInvalidIndex;
+  result.instance_index = kInvalidIndex;
   result.hit_t = ray.TMax;
   result.transmittance = spectral_response_make(spect, 1.0f);
 
@@ -583,7 +593,8 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
       continue;
     }
 
-    uint candidate_triangle_index = ray_query.CandidatePrimitiveIndex();
+    const uint candidate_instance_index = ray_query.CandidateInstanceID();
+    uint candidate_triangle_index = scene_instance_triangle_index(ray_query.CandidatePrimitiveIndex(), candidate_instance_index);
     if (candidate_triangle_index >= triangle_count) {
       continue;
     }
@@ -616,7 +627,8 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
     }
 
     bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
-    bool entering_surface = dot(tri.geo_n, ray.Direction) < 0.0f;
+    const float3 candidate_geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(candidate_instance_index), tri.geo_n);
+    bool entering_surface = dot(candidate_geo_normal, ray.Direction) < 0.0f;
     HitPolicyDecision hit_policy = hit_policy_evaluate(HitPolicyMode::SkipBoundaryWithMediumTransition, material_access.material_class, alpha_rejected, entering_surface,
       material_access.int_medium_index, material_access.ext_medium_index);
     if (hit_policy.action == HitPolicyAction::Ignore) {
@@ -648,11 +660,12 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
     return false;
   }
 
-  result.triangle_index = ray_query.CommittedPrimitiveIndex();
+  result.instance_index = ray_query.CommittedInstanceID();
+  result.triangle_index = scene_instance_triangle_index(ray_query.CommittedPrimitiveIndex(), result.instance_index);
   result.hit_t = ray_query.CommittedRayT();
   result.tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], result.triangle_index);
-  result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction);
-  result.emitter_index = result.tri.emitter_index;
+  result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction, result.instance_index);
+  result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
   try_load_material_full(result.tri.material_index, result.material);
   result.hit = 1u;
   return true;
@@ -678,6 +691,7 @@ bool wavefront_sample_emitter_to_point(uint light_sampling_mode, SpectralQuery s
 
   sample_value.emitter_index = emitter_index;
   sample_value.triangle_index = emitter_instance.triangle_index;
+  sample_value.instance_index = emitter_instance.instance_index;
   sample_value.medium_index = kInvalidIndex;
   sample_value.pdf_sample = pdf_sample;
 
@@ -685,6 +699,7 @@ bool wavefront_sample_emitter_to_point(uint light_sampling_mode, SpectralQuery s
     TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
     sample_value.barycentric = random_barycentric(float2(rnd01(seed), rnd01(seed)));
     Vertex vertex = wavefront_interpolate_vertex(tri, sample_value.barycentric);
+    vertex = scene_instance_transform_vertex(load_scene_instance(emitter_instance.instance_index), vertex);
     sample_value.origin = vertex.pos;
     sample_value.normal = normalize(vertex.nrm);
     sample_value.direction = normalize(sample_value.origin - from_point);
@@ -760,6 +775,7 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
 
   sample_value.emitter_index = emitter_index;
   sample_value.triangle_index = emitter_instance.triangle_index;
+  sample_value.instance_index = emitter_instance.instance_index;
   sample_value.medium_index = kInvalidIndex;
   sample_value.pdf_sample = pdf_sample;
 
@@ -767,6 +783,7 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
     TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
     sample_value.barycentric = random_barycentric(float2(rnd01(seed), rnd01(seed)));
     Vertex vertex = wavefront_interpolate_vertex(tri, sample_value.barycentric);
+    vertex = scene_instance_transform_vertex(load_scene_instance(emitter_instance.instance_index), vertex);
     sample_value.origin = vertex.pos;
     sample_value.normal = normalize(vertex.nrm);
     sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), sample_value.normal, 1.0f);
@@ -1097,12 +1114,14 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
   hit.flags = GPUWavefrontHitFlags::Valid;
   if (hit_found) {
     hit.vertex = trace_result.surface_point.vertex;
-    hit.geo_normal = trace_result.tri.geo_n;
+    hit.geo_normal = trace_result.surface_point.geo_normal;
     hit.hit_t = trace_result.hit_t;
     hit.triangle_index = trace_result.triangle_index;
+    hit.instance_index = trace_result.instance_index;
     hit.material_index = trace_result.tri.material_index;
     hit.emitter_index = trace_result.emitter_index;
   } else {
+    hit.instance_index = kInvalidIndex;
     hit.flags |= GPUWavefrontHitFlags::Miss;
   }
   wavefront_store_hit(hit_descriptor, path_index, hit);

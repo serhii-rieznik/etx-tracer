@@ -34,6 +34,11 @@ ETX_SHARED_INLINE MediumAccess medium_access_cpu_make(ETX_IN(Medium, medium), ui
   result.medium_class = static_cast<uint32_t>(medium.cls);
   result.absorption_spectrum_index = medium.absorption_index;
   result.scattering_spectrum_index = medium.scattering_index;
+  result.phase_function_g = medium.phase_function_g;
+  result.enable_explicit_connections = medium.enable_explicit_connections;
+  result.world_to_object = medium.world_to_object;
+  result.local_bounds_min = medium.local_bounds.p_min;
+  result.local_bounds_max = medium.local_bounds.p_max;
   return result;
 }
 
@@ -52,12 +57,16 @@ ETX_SHARED_INLINE bool medium_access_has_grid_data(ETX_IN(MediumAccessCPUContext
   return medium_access_has_grid_data(access);
 }
 
-ETX_SHARED_INLINE float medium_access_sample_density(ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(float3, local_coord)) {
+ETX_SHARED_INLINE float medium_access_sample_density(ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(float3, world_position)) {
   if (medium_access_can_load(context, access.medium_index) == false) {
     return 0.0f;
   }
 
   const Medium& medium = medium_access_cpu_medium(context, access.medium_index);
+  const float3 local_coord = medium_world_to_local(access.world_to_object, medium_access_local_bounds(access), world_position);
+  if (medium_local_coordinate_valid(local_coord) == false) {
+    return 0.0f;
+  }
   if ((medium.grid.type == MediumGridType::Texture3D) && (medium.grid.density_image_index != kInvalidIndex) && (medium.grid.density_image_index < context.scene->images.count)) {
     float3 uvw = {};
     if (medium_density_shared_texture_uvw(local_coord, medium.grid.dimensions, uvw) == false) {
@@ -72,7 +81,7 @@ ETX_SHARED_INLINE float medium_access_sample_density(ETX_IN(MediumAccessCPUConte
     }
   }
 
-  return medium.sample_density(local_coord, medium.bounds);
+  return medium.sample_density(local_coord, medium.local_bounds);
 }
 
 ETX_SHARED_INLINE bool medium_access_can_sample_spectrum(ETX_IN(MediumAccessCPUContext, context), uint32_t spectrum_index) {

@@ -73,7 +73,12 @@ void medium_access_gpu_load(MediumAccessGPUContext context, ByteAddressBuffer me
   access.absorption_spectrum_index = medium_blob.Load(medium_desc_offset + kMediumAbsorptionIndexOffset);
   access.scattering_spectrum_index = medium_blob.Load(medium_desc_offset + kMediumScatteringIndexOffset);
   access.phase_function_g = asfloat(medium_blob.Load(medium_desc_offset + kMediumPhaseFunctionGOffset));
-  access.enable_explicit_connections = medium_blob.Load(medium_desc_offset + kMediumEnableExplicitConnectionsOffset);
+  access.enable_explicit_connections = load_u16(medium_blob, medium_desc_offset + kMediumEnableExplicitConnectionsOffset);
+  access.world_to_object.rows[0] = asfloat(medium_blob.Load4(medium_desc_offset + kMediumWorldToObjectRow0Offset));
+  access.world_to_object.rows[1] = asfloat(medium_blob.Load4(medium_desc_offset + kMediumWorldToObjectRow1Offset));
+  access.world_to_object.rows[2] = asfloat(medium_blob.Load4(medium_desc_offset + kMediumWorldToObjectRow2Offset));
+  access.local_bounds_min = asfloat(medium_blob.Load3(medium_desc_offset + kMediumLocalBoundsMinOffset));
+  access.local_bounds_max = asfloat(medium_blob.Load3(medium_desc_offset + kMediumLocalBoundsMaxOffset));
 }
 
 bool medium_access_try_load(MediumAccessGPUContext context, uint medium_index, out MediumAccess access) {
@@ -100,7 +105,7 @@ bool medium_access_gpu_has_valid_density_image(MediumAccessGPUContext context, M
   }
 
   return (density_image_access.format == (uint)Image::Format::R32F) && (density_image_access.size.x == access.grid.dimensions.x) &&
-    (density_image_access.size.y == access.grid.dimensions.y) && (density_image_access.size.z == access.grid.dimensions.z);
+         (density_image_access.size.y == access.grid.dimensions.y) && (density_image_access.size.z == access.grid.dimensions.z);
 }
 
 bool medium_access_has_grid_data(MediumAccessGPUContext context, MediumAccess access) {
@@ -113,7 +118,7 @@ bool medium_access_has_grid_data(MediumAccessGPUContext context, MediumAccess ac
   }
 
   return medium_access_gpu_has_valid_density_image(context, access) ||
-    ((access.grid.density_data_offset != kInvalidIndex) && (access.density_payload_descriptor_index != kInvalidIndex));
+         ((access.grid.density_data_offset != kInvalidIndex) && (access.density_payload_descriptor_index != kInvalidIndex));
 }
 
 struct MediumTextureSampleContext {
@@ -155,12 +160,16 @@ float medium_access_sample_texture_3d(MediumAccessGPUContext context, MediumAcce
 
 float medium_access_sample_noise(MediumAccessGPUContext context, MediumAccess access, float3 local_coord) {
   (void)context;
-  return medium_density_shared_sample_noise(local_coord, access.bounds_min, access.bounds_max, access.grid.noise_type, access.grid.noise_scale, access.grid.noise_octaves,
-    access.grid.noise_lacunarity, access.grid.noise_persistence, access.grid.noise_seed, access.grid.noise_offset, access.grid.noise_enable_border_fade,
+  return medium_density_shared_sample_noise(local_coord, access.local_bounds_min, access.local_bounds_max, access.grid.noise_type, access.grid.noise_scale,
+    access.grid.noise_octaves, access.grid.noise_lacunarity, access.grid.noise_persistence, access.grid.noise_seed, access.grid.noise_offset, access.grid.noise_enable_border_fade,
     access.grid.noise_border_fade_distance);
 }
 
-float medium_access_sample_density(MediumAccessGPUContext context, MediumAccess access, float3 local_coord) {
+float medium_access_sample_density(MediumAccessGPUContext context, MediumAccess access, float3 world_position) {
+  float3 local_coord = medium_world_to_local(access.world_to_object, medium_access_local_bounds(access), world_position);
+  if (medium_local_coordinate_valid(local_coord) == false) {
+    return 0.0f;
+  }
   float value = 0.0f;
   if (access.grid.type == MediumGridType::NoiseFunction) {
     value = medium_access_sample_noise(context, access, local_coord);

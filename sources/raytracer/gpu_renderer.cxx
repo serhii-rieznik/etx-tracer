@@ -781,6 +781,7 @@ GPUScene make_invalid_gpu_scene() {
     .vertex_texcoords = kInvalidDescriptorIndex,
     .triangles = kInvalidDescriptorIndex,
     .meshes = kInvalidDescriptorIndex,
+    .instances = kInvalidDescriptorIndex,
     .emitter_profiles = kInvalidDescriptorIndex,
     .emitter_instances = kInvalidDescriptorIndex,
     .scene_globals = kInvalidDescriptorIndex,
@@ -1651,7 +1652,7 @@ RendererMemoryStats GPURaytracingRenderer::memory_stats() const {
   };
 
   const uint64_t geometry_bytes = _vertex_positions_buffer_size + _vertex_normals_buffer_size + _vertex_tangents_buffer_size + _vertex_bitangents_buffer_size +
-                                  _vertex_texcoords_buffer_size + _triangles_buffer_size + _meshes_buffer_size;
+                                  _vertex_texcoords_buffer_size + _triangles_buffer_size + _meshes_buffer_size + _instances_buffer_size;
   const uint64_t shading_bytes = _materials_buffer_size + _spectrums_buffer_size + _energy_compensation_interfaces_buffer_size + _emitter_profiles_buffer_size +
                                  _emitter_instances_buffer_size + _emitters_distribution_buffer_size;
   const uint64_t scene_constants_bytes = _scene_globals_buffer_size + _scene_options_buffer_size + _camera_buffer_size + _wavefront_resources_buffer_size;
@@ -2601,6 +2602,7 @@ void GPURaytracingRenderer::destroy_scene_buffers(RHIContext& ctx) {
   destroy_linear_scene_buffer(device, _vertex_texcoords_buffer, _vertex_texcoords_buffer_size, _gpu_scene.vertex_texcoords);
   destroy_linear_scene_buffer(device, _triangles_buffer, _triangles_buffer_size, _gpu_scene.triangles);
   destroy_linear_scene_buffer(device, _meshes_buffer, _meshes_buffer_size, _gpu_scene.meshes);
+  destroy_linear_scene_buffer(device, _instances_buffer, _instances_buffer_size, _gpu_scene.instances);
   destroy_linear_scene_buffer(device, _emitter_profiles_buffer, _emitter_profiles_buffer_size, _gpu_scene.emitter_profiles);
   destroy_linear_scene_buffer(device, _emitter_instances_buffer, _emitter_instances_buffer_size, _gpu_scene.emitter_instances);
   destroy_linear_scene_buffer(device, _materials_buffer, _materials_buffer_size, _gpu_scene.materials);
@@ -3224,6 +3226,9 @@ void GPURaytracingRenderer::destroy_acceleration_structures(RHIContext& ctx) {
     device.destroy_buffer(buf);
   }
   _blas_buffers.clear();
+  _tlas_instance_buffer = {};
+  _as_scratch_buffer = {};
+  _tlas_instance_count = 0u;
   _vertex_positions_buffer = {};
   _vertex_positions_buffer_size = 0u;
   _gpu_scene.vertex_positions = kInvalidDescriptorIndex;
@@ -3308,6 +3313,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_scene_hashes_and_changes");
     const auto scene_hash_begin = std::chrono::steady_clock::now();
     scene.data().images.load_images(scheduler);
+    if (scene.data().resolve_hierarchy() == false) {
+      set_runtime_failure("Failed to resolve scene hierarchy");
+      return;
+    }
     new_hashes = scene.data().compute_hashes();
     changes = new_hashes.compare(_current_scene_hashes);
     scene_changed = changes.any();
@@ -3359,7 +3368,21 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   } else if (needs_scene_data_reupload) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_scene_update");
     const auto partial_scene_update_begin = std::chrono::steady_clock::now();
-    const bool update_success = update_scene_data_partial(ctx, scene, changes);
+    bool update_success = true;
+    bool acceleration_structures_rebuilt = false;
+    if (changes[UpdateFlags::Transforms]) {
+      update_success = refit_top_level_acceleration_structure(ctx, scene.data());
+      if (update_success == false) {
+        destroy_wavefront_buffers(ctx);
+        destroy_scene_buffers(ctx);
+        destroy_acceleration_structures(ctx);
+        update_success = build_acceleration_structures(ctx, scene);
+        acceleration_structures_rebuilt = update_success;
+      }
+    }
+    if (update_success && (acceleration_structures_rebuilt == false)) {
+      update_success = update_scene_data_partial(ctx, scene, changes);
+    }
     const auto partial_scene_update_end = std::chrono::steady_clock::now();
     partial_scene_update_ms = elapsed_ms(partial_scene_update_begin, partial_scene_update_end);
     if (update_success == false) {
@@ -4437,6 +4460,63 @@ void GPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
   Renderer::on_scene_changed(scene);
 }
 
+bool GPURaytracingRenderer::refit_top_level_acceleration_structure(RHIContext& ctx, const SceneData& scene_data) {
+  if ((_tlas.valid() == false) || (_tlas_instance_buffer.valid() == false) || (_as_scratch_buffer.valid() == false)) {
+    return false;
+  }
+  if (scene_data.hierarchy.mesh_instances.size() != _tlas_instance_count) {
+    return false;
+  }
+
+  _tlas_instance_staging.clear();
+  _tlas_instance_staging.reserve(_tlas_instance_count);
+  auto& device = ctx.device();
+  for (uint32_t instance_index = 0u; instance_index < _tlas_instance_count; ++instance_index) {
+    const ResolvedMeshInstance& resolved = scene_data.hierarchy.mesh_instances[instance_index];
+    if (resolved.mesh_index >= _blas.size()) {
+      return false;
+    }
+    RHIAccelerationStructureInstance& instance = _tlas_instance_staging.emplace_back();
+    memcpy(instance.transform, resolved.object_to_world.rows, sizeof(instance.transform));
+    instance.instance_custom_index = instance_index;
+    instance.mask = (resolved.flags & ResolvedMeshInstance::Enabled) != 0u ? 0xffu : 0u;
+    instance.instance_shader_binding_table_record_offset = 0u;
+    instance.flags = 0u;
+    instance.acceleration_structure_reference = device.get_acceleration_structure_device_address(_blas[resolved.mesh_index]);
+  }
+
+  const uint64_t upload_size = _tlas_instance_staging.size() * sizeof(RHIAccelerationStructureInstance);
+  const RHIResult upload_result = device.update_buffer(_tlas_instance_buffer, _tlas_instance_staging.data(), upload_size);
+  if (upload_result != RHIResult::Success) {
+    log::error("GPU RT: failed to upload TLAS refit instances (%u)", static_cast<uint32_t>(upload_result));
+    return false;
+  }
+
+  RHIAccelerationStructureBuildDesc build_desc = {};
+  build_desc.as_handle = _tlas;
+  build_desc.type = RHIAccelerationStructureType::TopLevel;
+  build_desc.instance_count = _tlas_instance_count;
+  build_desc.instance_buffer = _tlas_instance_buffer;
+  build_desc.allow_update = true;
+  build_desc.update = true;
+
+  const RHICommandBuffer command_buffer = ctx.get_command_buffer();
+  if (command_buffer.valid() == false) {
+    return false;
+  }
+  ctx.command_buffer_begin(command_buffer);
+  ctx.cmd_build_acceleration_structure(command_buffer, build_desc, _as_scratch_buffer, 0u);
+  ctx.command_buffer_end(command_buffer);
+  ctx.submit_command_buffer({command_buffer});
+  const RHIResult wait_result = ctx.wait_for_command_buffer(command_buffer);
+  ctx.destroy_command_buffer(command_buffer);
+  if (wait_result != RHIResult::Success) {
+    log::error("GPU RT: TLAS refit failed (%u)", static_cast<uint32_t>(wait_result));
+    return false;
+  }
+  return true;
+}
+
 bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
   const auto total_begin = std::chrono::steady_clock::now();
@@ -4537,52 +4617,84 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     geometry_upload_ms = elapsed_ms(geometry_upload_begin, geometry_upload_end);
   }
 
-  RHIAccelerationStructureGeometry geometry = {};
-  geometry.is_opaque = true;
-  geometry.triangles.vertex_buffer = vb_res.handle;
-  geometry.triangles.vertex_count = static_cast<uint32_t>(s.vertices.pos.size());
-  geometry.triangles.vertex_stride = sizeof(float3);
-  geometry.triangles.vertex_format = RHIVertexFormat::Float3;
-  geometry.triangles.index_buffer = ib_res.handle;
-  geometry.triangles.index_count = static_cast<uint32_t>(indices.size());
-  geometry.triangles.index_type = RHIIndexType::UInt32;
-
-  RHIAccelerationStructureDesc blas_desc = {};
-  blas_desc.type = RHIAccelerationStructureType::BottomLevel;
-  blas_desc.geometry_count = 1;
-  blas_desc.geometries = &geometry;
+  std::vector<RHIAccelerationStructureGeometry> geometries(s.meshes.size());
+  std::vector<RHIAccelerationStructureBuildDesc> blas_build_descs;
+  blas_build_descs.reserve(s.meshes.size());
+  new_blas.reserve(s.meshes.size());
 
   const auto blas_create_begin = std::chrono::steady_clock::now();
-  auto blas_result = device.create_acceleration_structure(blas_desc);
+  for (uint32_t mesh_index = 0u; mesh_index < s.meshes.size(); ++mesh_index) {
+    const Mesh& mesh = s.meshes[mesh_index];
+    if ((mesh.triangle_count == 0u) || ((mesh.triangle_offset + mesh.triangle_count) > s.triangles.size())) {
+      log::error("GPU RT: mesh %u has an invalid triangle range", mesh_index);
+      cleanup_failed_build();
+      return false;
+    }
+
+    RHIAccelerationStructureGeometry& geometry = geometries[mesh_index];
+    geometry.is_opaque = true;
+    geometry.triangles.vertex_buffer = vb_res.handle;
+    geometry.triangles.vertex_count = static_cast<uint32_t>(s.vertices.pos.size());
+    geometry.triangles.vertex_stride = sizeof(float3);
+    geometry.triangles.vertex_format = RHIVertexFormat::Float3;
+    geometry.triangles.index_buffer = ib_res.handle;
+    geometry.triangles.index_buffer_offset = static_cast<uint64_t>(mesh.triangle_offset) * 3u * sizeof(uint32_t);
+    geometry.triangles.index_count = mesh.triangle_count * 3u;
+    geometry.triangles.index_type = RHIIndexType::UInt32;
+
+    RHIAccelerationStructureDesc blas_desc = {};
+    blas_desc.type = RHIAccelerationStructureType::BottomLevel;
+    blas_desc.geometry_count = 1u;
+    blas_desc.geometries = &geometry;
+    const RHICreateBindlessResult blas_result = device.create_acceleration_structure(blas_desc);
+    if ((blas_result.result != RHIResult::Success) || (blas_result.handle.valid() == false)) {
+      log::error("GPU RT: failed to create BLAS for mesh %u (%u)", mesh_index, static_cast<uint32_t>(blas_result.result));
+      cleanup_failed_build();
+      return false;
+    }
+    new_blas.push_back(blas_result.handle);
+
+    RHIAccelerationStructureBuildDesc& build_desc = blas_build_descs.emplace_back();
+    build_desc.as_handle = blas_result.handle;
+    build_desc.type = RHIAccelerationStructureType::BottomLevel;
+    build_desc.geometry_count = 1u;
+    build_desc.geometries = &geometry;
+  }
   const auto blas_create_end = std::chrono::steady_clock::now();
   blas_create_ms = elapsed_ms(blas_create_begin, blas_create_end);
-  if ((blas_result.result != RHIResult::Success) || (blas_result.handle.valid() == false)) {
-    log::error("GPU RT: failed to create BLAS (%u)", static_cast<uint32_t>(blas_result.result));
+
+  if (s.hierarchy.mesh_instances.empty()) {
+    log::error("GPU RT: scene hierarchy contains no renderable mesh instances");
     cleanup_failed_build();
     return false;
   }
-  new_blas.push_back(blas_result.handle);
 
-  RHIAccelerationStructureBuildDesc build_desc = {};
-  build_desc.as_handle = blas_result.handle;
-  build_desc.type = RHIAccelerationStructureType::BottomLevel;
-  build_desc.geometry_count = 1;
-  build_desc.geometries = &geometry;
+  std::vector<RHIAccelerationStructureInstance> rhi_instances;
+  rhi_instances.reserve(s.hierarchy.mesh_instances.size());
+  for (uint32_t instance_index = 0u; instance_index < s.hierarchy.mesh_instances.size(); ++instance_index) {
+    const ResolvedMeshInstance& resolved = s.hierarchy.mesh_instances[instance_index];
+    if (resolved.mesh_index >= new_blas.size()) {
+      log::error("GPU RT: instance %u references invalid mesh %u", instance_index, resolved.mesh_index);
+      cleanup_failed_build();
+      return false;
+    }
+    if (instance_index > 0x00ffffffu) {
+      log::error("GPU RT: TLAS instance count exceeds the 24-bit custom-index limit");
+      cleanup_failed_build();
+      return false;
+    }
 
-  // 2. Create TLAS
-  // Create Instance Buffer
-  RHIAccelerationStructureInstance instance = {};
-  instance.transform[0] = 1.0f;
-  instance.transform[5] = 1.0f;
-  instance.transform[10] = 1.0f;
-  instance.instance_custom_index = 0;
-  instance.mask = 0xFF;
-  instance.instance_shader_binding_table_record_offset = 0;
-  instance.flags = 0;  // VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR etc.
-  instance.acceleration_structure_reference = device.get_acceleration_structure_device_address(blas_result.handle);
+    RHIAccelerationStructureInstance& instance = rhi_instances.emplace_back();
+    memcpy(instance.transform, resolved.object_to_world.rows, sizeof(instance.transform));
+    instance.instance_custom_index = instance_index;
+    instance.mask = (resolved.flags & ResolvedMeshInstance::Enabled) != 0u ? 0xffu : 0u;
+    instance.instance_shader_binding_table_record_offset = 0u;
+    instance.flags = 0u;
+    instance.acceleration_structure_reference = device.get_acceleration_structure_device_address(new_blas[resolved.mesh_index]);
+  }
 
   RHIBufferDesc inst_buf_desc = {};
-  inst_buf_desc.size = sizeof(RHIAccelerationStructureInstance);
+  inst_buf_desc.size = rhi_instances.size() * sizeof(RHIAccelerationStructureInstance);
   inst_buf_desc.usage = RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::TransferDst;
   const auto tlas_instance_upload_begin = std::chrono::steady_clock::now();
   auto inst_res = device.create_buffer(inst_buf_desc);
@@ -4591,7 +4703,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     cleanup_failed_build();
     return false;
   }
-  const RHIResult inst_update_result = device.update_buffer(inst_res.handle, &instance, sizeof(instance));
+  const RHIResult inst_update_result = device.update_buffer(inst_res.handle, rhi_instances.data(), inst_buf_desc.size);
   if (inst_update_result != RHIResult::Success) {
     log::error("GPU RT: failed to upload TLAS instance buffer (%u)", static_cast<uint32_t>(inst_update_result));
     device.destroy_buffer(inst_res.handle);
@@ -4604,7 +4716,8 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
 
   RHIAccelerationStructureDesc tlas_desc = {};
   tlas_desc.type = RHIAccelerationStructureType::TopLevel;
-  tlas_desc.instance_count = 1;
+  tlas_desc.instance_count = static_cast<uint32_t>(rhi_instances.size());
+  tlas_desc.allow_update = true;
 
   const auto tlas_create_begin = std::chrono::steady_clock::now();
   auto tlas_result = device.create_acceleration_structure(tlas_desc);
@@ -4617,11 +4730,15 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   }
   new_tlas = tlas_result.handle;
 
-  const uint64_t blas_scratch_size = device.get_acceleration_structure_build_scratch_size(blas_result.handle);
-  if (blas_scratch_size == 0u) {
-    log::error("GPU RT: failed to query BLAS scratch size");
-    cleanup_failed_build();
-    return false;
+  uint64_t blas_scratch_size = 0u;
+  for (RHIBindlessHandle blas : new_blas) {
+    const uint64_t required_size = device.get_acceleration_structure_build_scratch_size(blas);
+    if (required_size == 0u) {
+      log::error("GPU RT: failed to query BLAS scratch size");
+      cleanup_failed_build();
+      return false;
+    }
+    blas_scratch_size = max(blas_scratch_size, required_size);
   }
 
   const uint64_t tlas_scratch_size = device.get_acceleration_structure_build_scratch_size(new_tlas);
@@ -4649,8 +4766,9 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   RHIAccelerationStructureBuildDesc tlas_build_desc = {};
   tlas_build_desc.as_handle = new_tlas;
   tlas_build_desc.type = RHIAccelerationStructureType::TopLevel;
-  tlas_build_desc.instance_count = 1;
+  tlas_build_desc.instance_count = static_cast<uint32_t>(rhi_instances.size());
   tlas_build_desc.instance_buffer = inst_res.handle;
+  tlas_build_desc.allow_update = true;
 
   auto cmd = ctx.get_command_buffer();
   if (cmd.valid() == false) {
@@ -4662,8 +4780,10 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_build_blas");
     ctx.command_buffer_begin(cmd);
-    ctx.cmd_build_acceleration_structure(cmd, build_desc, scratch_res.handle, 0);
-    ctx.cmd_buffer_barrier(cmd, scratch_res.handle, RHIResourceState::AccelerationStructure, RHIResourceState::AccelerationStructure);
+    for (const RHIAccelerationStructureBuildDesc& build_desc : blas_build_descs) {
+      ctx.cmd_build_acceleration_structure(cmd, build_desc, scratch_res.handle, 0u);
+      ctx.cmd_buffer_barrier(cmd, scratch_res.handle, RHIResourceState::AccelerationStructure, RHIResourceState::AccelerationStructure);
+    }
   }
 
   {
@@ -4687,19 +4807,21 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   }
   ctx.destroy_command_buffer(cmd);
 
-  for (uint32_t buffer_index = 1u; buffer_index < static_cast<uint32_t>(new_blas_buffers.size()); ++buffer_index) {
-    const RHIResult destroy_result = device.destroy_buffer(new_blas_buffers[buffer_index]);
-    if (destroy_result != RHIResult::Success) {
-      log::warning("GPU RT: failed to release transient acceleration-structure buffer (%u)", static_cast<uint32_t>(destroy_result));
-    }
+  const RHIResult index_destroy_result = device.destroy_buffer(ib_res.handle);
+  if (index_destroy_result != RHIResult::Success) {
+    log::warning("GPU RT: failed to release transient acceleration-structure index buffer (%u)", static_cast<uint32_t>(index_destroy_result));
   }
-  new_blas_buffers.resize(1u);
+  new_blas_buffers.erase(new_blas_buffers.begin() + 1u);
 
   _vertex_positions_buffer = new_vertex_positions_buffer;
   _vertex_positions_buffer_size = vb_desc.size;
   _blas = std::move(new_blas);
   _blas_buffers = std::move(new_blas_buffers);
+  _tlas_instance_staging = std::move(rhi_instances);
   _tlas = new_tlas;
+  _tlas_instance_buffer = inst_res.handle;
+  _as_scratch_buffer = scratch_res.handle;
+  _tlas_instance_count = static_cast<uint32_t>(rhi_instances.size());
   _gpu_scene.vertex_positions = get_bindless_descriptor_index(_vertex_positions_buffer);
 
   ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_scene_after_as_build");
@@ -4765,6 +4887,9 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentati
     upload_success =
       upload_or_update_linear_scene_buffer(device, data.meshes.data(), data.meshes.size(), scene_buffer_usage, _meshes_buffer, _meshes_buffer_size, _gpu_scene.meshes, "meshes") &&
       upload_success;
+    upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.instances.data(), packed_emitters.instances.size(), scene_buffer_usage, _instances_buffer,
+                       _instances_buffer_size, _gpu_scene.instances, "instances") &&
+                     upload_success;
     const auto geometry_buffers_end = std::chrono::steady_clock::now();
     geometry_buffers_ms = elapsed_ms(geometry_buffers_begin, geometry_buffers_end);
   }
@@ -4942,10 +5067,13 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
     }
   }
 
-  const bool packed_emitters_changed = changes[UpdateFlags::Triangles] || changes[UpdateFlags::Emitters] || changes[UpdateFlags::Materials] || changes[UpdateFlags::Spectra];
-  const bool scene_globals_changed = changes[UpdateFlags::Triangles] || changes[UpdateFlags::Meshes] || changes[UpdateFlags::Materials] || changes[UpdateFlags::Spectra] ||
+  const bool packed_emitters_changed = changes[UpdateFlags::VerticesPos] || changes[UpdateFlags::Triangles] || changes[UpdateFlags::Meshes] || changes[UpdateFlags::Hierarchy] ||
+                                       changes[UpdateFlags::Transforms] || changes[UpdateFlags::Attachments] || changes[UpdateFlags::Emitters] || changes[UpdateFlags::Materials] ||
+                                       changes[UpdateFlags::Spectra];
+  const bool scene_globals_changed = changes[UpdateFlags::VerticesPos] || changes[UpdateFlags::Triangles] || changes[UpdateFlags::Meshes] || changes[UpdateFlags::Hierarchy] ||
+                                     changes[UpdateFlags::Transforms] || changes[UpdateFlags::Attachments] || changes[UpdateFlags::Materials] || changes[UpdateFlags::Spectra] ||
                                      changes[UpdateFlags::Emitters] || changes[UpdateFlags::EnergyCompensationInterfaces] || changes[UpdateFlags::Defaults] ||
-                                     changes[UpdateFlags::Images] || changes[UpdateFlags::PixelFilter];
+                                     changes[UpdateFlags::Images] || changes[UpdateFlags::Mediums] || changes[UpdateFlags::PixelFilter];
 
   PackedEmitterData packed_emitters = {};
   if (packed_emitters_changed || scene_globals_changed) {
@@ -4962,6 +5090,10 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
     }
 
     if (packed_emitters_changed) {
+      upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.instances.data(), packed_emitters.instances.size(), scene_buffer_usage, _instances_buffer,
+                         _instances_buffer_size, _gpu_scene.instances, "instances") &&
+                       upload_success;
+
       upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_profiles.data(), packed_emitters.emitter_profiles.size(), scene_buffer_usage,
                          _emitter_profiles_buffer, _emitter_profiles_buffer_size, _gpu_scene.emitter_profiles, "emitter_profiles") &&
                        upload_success;

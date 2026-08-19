@@ -31,7 +31,7 @@ float wavefront_surface_shading_pdf_environment(float3 direction, bool target_is
 bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inout uint medium_index, inout uint seed, out TraceSurfaceResult result);
 bool wavefront_trace_path_state(RayDesc ray, SpectralQuery spect, SpectralResponse throughput, inout uint medium_index, inout uint seed, out TraceSurfaceResult result);
 bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, out TraceSurfaceResult result, out bool boundary_hit, out uint boundary_medium_index);
-SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary, float3 ray_dir);
+SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary, float3 ray_dir, uint instance_index);
 float3 wavefront_trace_surface_shading_position(TraceSurfaceResult surface_hit, float3 outgoing_direction);
 
 bool wavefront_subsurface_state_active(GPUWavefrontResources resources, bool from_camera, uint path_index, out GPUWavefrontSubsurfaceState state) {
@@ -86,7 +86,8 @@ bool wavefront_trace_transmittance_to_point(float3 origin, float3 target, Spectr
       continue;
     }
 
-    uint candidate_triangle_index = ray_query.CandidatePrimitiveIndex();
+    const uint candidate_instance_index = ray_query.CandidateInstanceID();
+    uint candidate_triangle_index = scene_instance_triangle_index(ray_query.CandidatePrimitiveIndex(), candidate_instance_index);
     if (candidate_triangle_index >= triangle_count) {
       continue;
     }
@@ -110,7 +111,8 @@ bool wavefront_trace_transmittance_to_point(float3 origin, float3 target, Spectr
     }
 
     bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
-    bool entering_surface = dot(tri.geo_n, ray.Direction) < 0.0f;
+    const float3 candidate_geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(candidate_instance_index), tri.geo_n);
+    bool entering_surface = dot(candidate_geo_normal, ray.Direction) < 0.0f;
     HitPolicyDecision hit_policy = hit_policy_evaluate(HitPolicyMode::MediumTransmittance, material_access.material_class, alpha_rejected, entering_surface,
       material_access.int_medium_index, material_access.ext_medium_index);
     if (hit_policy.action == HitPolicyAction::Ignore) {
@@ -244,7 +246,8 @@ bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, o
       continue;
     }
 
-    uint candidate_triangle_index = ray_query.CandidatePrimitiveIndex();
+    const uint candidate_instance_index = ray_query.CandidateInstanceID();
+    uint candidate_triangle_index = scene_instance_triangle_index(ray_query.CandidatePrimitiveIndex(), candidate_instance_index);
     if (candidate_triangle_index >= triangle_count) {
       continue;
     }
@@ -268,7 +271,8 @@ bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, o
     }
 
     bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
-    bool entering_surface = dot(tri.geo_n, ray.Direction) < 0.0f;
+    const float3 candidate_geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(candidate_instance_index), tri.geo_n);
+    bool entering_surface = dot(candidate_geo_normal, ray.Direction) < 0.0f;
     HitPolicyDecision hit_policy = hit_policy_evaluate(HitPolicyMode::KeepBoundaryHit, material_access.material_class, alpha_rejected, entering_surface,
       material_access.int_medium_index, material_access.ext_medium_index);
     if (hit_policy.action == HitPolicyAction::Ignore) {
@@ -282,24 +286,25 @@ bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, o
     return false;
   }
 
-  result.triangle_index = ray_query.CommittedPrimitiveIndex();
+  result.instance_index = ray_query.CommittedInstanceID();
+  result.triangle_index = scene_instance_triangle_index(ray_query.CommittedPrimitiveIndex(), result.instance_index);
   result.hit_t = ray_query.CommittedRayT();
   result.tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], result.triangle_index);
-  result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction);
-  result.emitter_index = result.tri.emitter_index;
+  result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction, result.instance_index);
+  result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
   try_load_material_full(result.tri.material_index, result.material);
   result.hit = 1u;
 
   boundary_hit = result.material.cls == MaterialClass::Boundary;
   if (boundary_hit) {
-    bool entering_surface = dot(result.tri.geo_n, ray.Direction) < 0.0f;
+    bool entering_surface = dot(result.surface_point.geo_normal, ray.Direction) < 0.0f;
     boundary_medium_index = entering_surface ? result.material.int_medium : result.material.ext_medium;
   }
 
   return true;
 }
 
-SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary, float3 ray_dir) {
+SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary, float3 ray_dir, uint instance_index) {
   SurfacePoint result = (SurfacePoint)0;
   result.barycentrics = barycentrics(bary);
 
@@ -339,7 +344,15 @@ SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary,
 
   surface_point_shared_interpolate_vertex(position_0, position_1, position_2, normal_0, normal_1, normal_2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2,
     texcoord_0, texcoord_1, texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
-  result.geo_normal = tri.geo_n;
+  const GPUSceneInstanceData instance = load_scene_instance(instance_index);
+  const float local_handedness = dot(cross(result.vertex.nrm, result.vertex.tan), result.vertex.btn) >= 0.0f ? 1.0f : -1.0f;
+  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
+  result.vertex.pos = scene_instance_transform_point(instance, result.vertex.pos);
+  result.vertex.nrm = scene_instance_transform_normal(instance, result.vertex.nrm) * orientation;
+  result.vertex.tan = normalize(scene_instance_transform_vector(instance, result.vertex.tan));
+  result.vertex.tan = normalize(result.vertex.tan - result.vertex.nrm * dot(result.vertex.tan, result.vertex.nrm));
+  result.vertex.btn = normalize(cross(result.vertex.nrm, result.vertex.tan)) * local_handedness;
+  result.geo_normal = scene_instance_transform_geometric_normal(instance, tri.geo_n);
   return result;
 }
 
@@ -359,7 +372,16 @@ float3 wavefront_trace_surface_shading_position(TraceSurfaceResult surface_hit, 
   float3 n1 = load_float3(normal_buffer, surface_hit.tri.i.y);
   float3 n2 = load_float3(normal_buffer, surface_hit.tri.i.z);
 
-  return scene_math_shared_shading_pos(p0, p1, p2, n0, n1, n2, surface_hit.tri.geo_n, surface_hit.surface_point.barycentrics, outgoing_direction);
+  const GPUSceneInstanceData instance = load_scene_instance(surface_hit.instance_index);
+  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
+  p0 = scene_instance_transform_point(instance, p0);
+  p1 = scene_instance_transform_point(instance, p1);
+  p2 = scene_instance_transform_point(instance, p2);
+  n0 = scene_instance_transform_normal(instance, n0) * orientation;
+  n1 = scene_instance_transform_normal(instance, n1) * orientation;
+  n2 = scene_instance_transform_normal(instance, n2) * orientation;
+  const float3 geo_normal = scene_instance_transform_geometric_normal(instance, surface_hit.tri.geo_n);
+  return scene_math_shared_shading_pos(p0, p1, p2, n0, n1, n2, geo_normal, surface_hit.surface_point.barycentrics, outgoing_direction);
 }
 
 bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inout uint medium_index, inout uint seed, out TraceSurfaceResult result) {
@@ -392,7 +414,8 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
       continue;
     }
 
-    uint candidate_triangle_index = ray_query.CandidatePrimitiveIndex();
+    const uint candidate_instance_index = ray_query.CandidateInstanceID();
+    uint candidate_triangle_index = scene_instance_triangle_index(ray_query.CandidatePrimitiveIndex(), candidate_instance_index);
     if (candidate_triangle_index >= triangle_count) {
       continue;
     }
@@ -425,7 +448,8 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
     }
 
     bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
-    bool entering_surface = dot(tri.geo_n, ray.Direction) < 0.0f;
+    const float3 candidate_geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(candidate_instance_index), tri.geo_n);
+    bool entering_surface = dot(candidate_geo_normal, ray.Direction) < 0.0f;
     HitPolicyDecision hit_policy = hit_policy_evaluate(HitPolicyMode::SkipBoundaryWithMediumTransition, material_access.material_class, alpha_rejected, entering_surface,
       material_access.int_medium_index, material_access.ext_medium_index);
     if (hit_policy.action == HitPolicyAction::Ignore) {
@@ -457,11 +481,12 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
     return false;
   }
 
-  result.triangle_index = ray_query.CommittedPrimitiveIndex();
+  result.instance_index = ray_query.CommittedInstanceID();
+  result.triangle_index = scene_instance_triangle_index(ray_query.CommittedPrimitiveIndex(), result.instance_index);
   result.hit_t = ray_query.CommittedRayT();
   result.tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], result.triangle_index);
-  result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction);
-  result.emitter_index = result.tri.emitter_index;
+  result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction, result.instance_index);
+  result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
   try_load_material_full(result.tri.material_index, result.material);
   result.hit = 1u;
   return true;
@@ -514,8 +539,8 @@ SpectralResponse wavefront_subsurface_trace_safe_mul(SpectralQuery spect, Spectr
   }
 
   return spectral_response_make(spect, float3(((a.integrated.x == 0.0f) || (b.integrated.x == 0.0f)) ? 0.0f : (a.integrated.x * b.integrated.x),
-                                        ((a.integrated.y == 0.0f) || (b.integrated.y == 0.0f)) ? 0.0f : (a.integrated.y * b.integrated.y),
-                                        ((a.integrated.z == 0.0f) || (b.integrated.z == 0.0f)) ? 0.0f : (a.integrated.z * b.integrated.z)));
+                                         ((a.integrated.y == 0.0f) || (b.integrated.y == 0.0f)) ? 0.0f : (a.integrated.y * b.integrated.y),
+                                         ((a.integrated.z == 0.0f) || (b.integrated.z == 0.0f)) ? 0.0f : (a.integrated.z * b.integrated.z)));
 }
 
 bool wavefront_trace_subsurface_material(RayDesc ray, uint material_index, inout uint seed, out TraceSurfaceResult result) {
@@ -543,7 +568,8 @@ bool wavefront_trace_subsurface_material(RayDesc ray, uint material_index, inout
       continue;
     }
 
-    uint candidate_triangle_index = ray_query.CandidatePrimitiveIndex();
+    const uint candidate_instance_index = ray_query.CandidateInstanceID();
+    uint candidate_triangle_index = scene_instance_triangle_index(ray_query.CandidatePrimitiveIndex(), candidate_instance_index);
     if (candidate_triangle_index >= triangle_count) {
       continue;
     }
@@ -574,10 +600,11 @@ bool wavefront_trace_subsurface_material(RayDesc ray, uint material_index, inout
     return false;
   }
 
-  result.triangle_index = ray_query.CommittedPrimitiveIndex();
+  result.instance_index = ray_query.CommittedInstanceID();
+  result.triangle_index = scene_instance_triangle_index(ray_query.CommittedPrimitiveIndex(), result.instance_index);
   result.hit_t = ray_query.CommittedRayT();
   result.tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], result.triangle_index);
-  result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction);
+  result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction, result.instance_index);
   result.emitter_index = kInvalidIndex;
   try_load_material_full(result.tri.material_index, result.material);
   result.hit = 1u;
@@ -764,9 +791,10 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
   hit.flags = GPUWavefrontHitFlags::Valid;
   if (hit_found) {
     hit.vertex = trace_result.surface_point.vertex;
-    hit.geo_normal = trace_result.tri.geo_n;
+    hit.geo_normal = trace_result.surface_point.geo_normal;
     hit.hit_t = trace_result.hit_t;
     hit.triangle_index = trace_result.triangle_index;
+    hit.instance_index = trace_result.instance_index;
     hit.material_index = trace_result.tri.material_index;
     hit.emitter_index = trace_result.emitter_index;
     hit.barycentric = trace_result.surface_point.barycentrics.yz;
@@ -777,6 +805,7 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
       }
     }
   } else {
+    hit.instance_index = kInvalidIndex;
     hit.flags |= GPUWavefrontHitFlags::Miss;
   }
   wavefront_store_hit(hit_descriptor, path_index, hit);

@@ -23,8 +23,8 @@ ETX_SHARED_INLINE float medium_shared_rnd(ETX_INOUT(MediumSharedContext, context
   return context.sampler->next();
 }
 
-ETX_SHARED_INLINE float medium_shared_density(ETX_INOUT(MediumSharedContext, context), ETX_IN(float3, local_pos)) {
-  return context.medium->sample_density(local_pos, context.medium->bounds);
+ETX_SHARED_INLINE float medium_shared_density(ETX_INOUT(MediumSharedContext, context), ETX_IN(float3, world_pos)) {
+  return context.medium->sample_density_world(world_pos);
 }
 
 ETX_SHARED_INLINE SpectralResponse medium_transmittance_shared_to_spectral_response(ETX_IN(::SpectralResponse, response)) {

@@ -25,6 +25,8 @@ struct ETX_ALIGNED Medium {
   float phase_function_g = 0.0f;
   uint16_t enable_explicit_connections = 1u;
   Class cls = Homogeneous;
+  AffineTransform world_to_object = {};
+  BoundingBox local_bounds = {};
 
   ArrayView<float> density_view;
   BufferHandle density_buffer = {};
@@ -63,6 +65,14 @@ struct ETX_ALIGNED Medium {
     DensityGrid density_grid = {};
     density_grid.density = density_view;
     return density_grid.sample(local_coord, bounds, grid);
+  }
+
+  ETX_SHARED_INLINE float sample_density_world(const float3& world_position) const {
+    const float3 local_coord = medium_world_to_local(world_to_object, local_bounds, world_position);
+    if (medium_local_coordinate_valid(local_coord) == false) {
+      return 0.0f;
+    }
+    return sample_density(local_coord, local_bounds);
   }
 };
 

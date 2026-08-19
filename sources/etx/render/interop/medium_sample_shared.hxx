@@ -163,19 +163,16 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ET
     uint32_t channel = medium_sample_shared_sample_spectrum_component(spect, albedo, throughput, medium_shared_rnd(context), pdf);
 
     ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE transmittance = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE(spect, 1.0f);
-    float t_world = 0.0f;
-    float segment_length = medium_intersection.t_max - medium_intersection.t_min;
+    float t_world = medium_intersection.t_min;
     const float rr_threshold = 0.1f;
     while (true) {
       t_world += -medium_shared_log(1.0f - medium_shared_rnd(context)) / max_sigma;
 
       float3 world_pos_at_t = pos + medium_intersection.world_dir_normalized * t_world;
-      float3 local_pos = medium_shared_bounds_to_local(world_pos_at_t, bounds_min, bounds_max);
-      float t_local_along_dir = dot(local_pos - medium_intersection.medium_pos, medium_intersection.medium_dir);
-      if (t_local_along_dir >= segment_length) {
+      if (t_world >= medium_intersection.t_max) {
         pdf = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL(pdf, transmittance);
         ETX_ZERO_INIT(ETX_MEDIUM_SAMPLE_SHARED_SAMPLE, result);
-        result.pos = pos + medium_intersection.world_dir_normalized * min(t_world, max_t);
+        result.pos = pos + medium_intersection.world_dir_normalized * max_t;
         result.sampled_medium_t = 0.0f;
         if (ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_IS_ZERO(pdf)) {
           result.weight = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE(spect, 0.0f);
@@ -185,7 +182,7 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ET
         return result;
       }
 
-      float density_value = medium_shared_density(context, local_pos);
+      float density_value = medium_shared_density(context, world_pos_at_t);
       ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE extinction_at_point = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MUL(extinction_value, density_value);
       float sigma_t_channel = medium_sample_shared_response_component(extinction_at_point, channel);
       if ((sigma_t_channel > 0.0f) && (medium_shared_rnd(context) < (sigma_t_channel / max_sigma))) {

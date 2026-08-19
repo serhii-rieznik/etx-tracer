@@ -117,7 +117,7 @@ float wavefront_emitter_sample_from_emitter_pdf(WavefrontEmitterSample sample_va
       return 0.0f;
     }
     exponent = scene_math_shared_collimation_to_exponent(emitter_material.emission_collimation);
-    emitter_normal = tri.geo_n;
+    emitter_normal = scene_instance_transform_geometric_normal(load_scene_instance(sample_value.instance_index), tri.geo_n);
   }
 
   float pdf_dir = pow(max(0.0f, dot(emitter_normal, w_o)), exponent) * kInvPi;

@@ -141,10 +141,12 @@ bool test_sphere_generation() {
   }
 
   const etx::Mesh& mesh = context.data.meshes[0];
-  if (check_condition(nearly_equal(mesh.bbox_min.x, -1.0f) && nearly_equal(mesh.bbox_min.y, 0.0f) && nearly_equal(mesh.bbox_min.z, 1.0f), "bbox minimum matches analytic sphere") == false) {
+  if (check_condition(nearly_equal(mesh.bbox_min.x, -1.0f) && nearly_equal(mesh.bbox_min.y, 0.0f) && nearly_equal(mesh.bbox_min.z, 1.0f), "bbox minimum matches analytic sphere") ==
+      false) {
     return false;
   }
-  if (check_condition(nearly_equal(mesh.bbox_max.x, 3.0f) && nearly_equal(mesh.bbox_max.y, 4.0f) && nearly_equal(mesh.bbox_max.z, 5.0f), "bbox maximum matches analytic sphere") == false) {
+  if (check_condition(nearly_equal(mesh.bbox_max.x, 3.0f) && nearly_equal(mesh.bbox_max.y, 4.0f) && nearly_equal(mesh.bbox_max.z, 5.0f), "bbox maximum matches analytic sphere") ==
+      false) {
     return false;
   }
 
@@ -180,10 +182,12 @@ bool test_plane_generation() {
   }
 
   const etx::Mesh& mesh = context.data.meshes[0];
-  if (check_condition(nearly_equal(mesh.bbox_min.x, -1.0f) && nearly_equal(mesh.bbox_min.y, 2.0f) && nearly_equal(mesh.bbox_min.z, 0.0f), "plane bbox minimum matches size") == false) {
+  if (check_condition(nearly_equal(mesh.bbox_min.x, -1.0f) && nearly_equal(mesh.bbox_min.y, 2.0f) && nearly_equal(mesh.bbox_min.z, 0.0f), "plane bbox minimum matches size") ==
+      false) {
     return false;
   }
-  if (check_condition(nearly_equal(mesh.bbox_max.x, 3.0f) && nearly_equal(mesh.bbox_max.y, 2.0f) && nearly_equal(mesh.bbox_max.z, 6.0f), "plane bbox maximum matches size") == false) {
+  if (check_condition(nearly_equal(mesh.bbox_max.x, 3.0f) && nearly_equal(mesh.bbox_max.y, 2.0f) && nearly_equal(mesh.bbox_max.z, 6.0f), "plane bbox maximum matches size") ==
+      false) {
     return false;
   }
 
@@ -561,6 +565,156 @@ bool test_directional_use_as_sun_parse() {
   return check_condition(directional.reference_emitter_index == atmosphere_index, "use_as_sun directional references atmosphere");
 }
 
+bool test_gltf_double_sided_material() {
+  const std::filesystem::path gltf_path = std::filesystem::path("build") / "double_sided_material.gltf";
+  const std::filesystem::path buffer_path = std::filesystem::path("build") / "double_sided_material.bin";
+  std::filesystem::create_directories(gltf_path.parent_path());
+
+  const std::array<float, 9u> positions = {
+    0.0f,
+    0.0f,
+    0.0f,
+    1.0f,
+    0.0f,
+    0.0f,
+    0.0f,
+    1.0f,
+    0.0f,
+  };
+  const std::array<uint16_t, 3u> indices = {0u, 1u, 2u};
+  std::ofstream buffer_file(buffer_path, std::ios::out | std::ios::binary | std::ios::trunc);
+  if (check_condition(buffer_file.is_open(), "glTF material test buffer opened") == false) {
+    return false;
+  }
+  buffer_file.write(reinterpret_cast<const char*>(positions.data()), static_cast<std::streamsize>(sizeof(positions)));
+  buffer_file.write(reinterpret_cast<const char*>(indices.data()), static_cast<std::streamsize>(sizeof(indices)));
+  buffer_file.close();
+
+  std::ofstream gltf_file(gltf_path, std::ios::out | std::ios::trunc);
+  if (check_condition(gltf_file.is_open(), "glTF material test scene opened") == false) {
+    std::filesystem::remove(buffer_path);
+    return false;
+  }
+  gltf_file << R"({
+  "asset": {"version": "2.0"},
+  "buffers": [{"uri": "double_sided_material.bin", "byteLength": 42}],
+  "bufferViews": [
+    {"buffer": 0, "byteOffset": 0, "byteLength": 36, "target": 34962},
+    {"buffer": 0, "byteOffset": 36, "byteLength": 6, "target": 34963}
+  ],
+  "accessors": [
+    {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]},
+    {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"}
+  ],
+  "materials": [{"name": "two-sided", "doubleSided": true}],
+  "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "material": 0}]}],
+  "nodes": [{"mesh": 0}],
+  "scenes": [{"nodes": [0]}],
+  "scene": 0
+})";
+  gltf_file.close();
+
+  TestContext context;
+  etx::SceneRepresentation scene(context.scheduler, context.ior_database);
+  const std::string gltf_path_string = gltf_path.string();
+  bool result = check_condition(scene.load_from_file(gltf_path_string.c_str(), etx::SceneRepresentation::LoadEverything, nullptr), "glTF material test scene loaded");
+  result &= check_condition(scene.data().triangles.size() == 1u, "glTF material test triangle loaded");
+  result &= check_condition(scene.data().gltf_material_mapping.count(0) == 1u, "glTF material index mapped");
+  if (scene.data().gltf_material_mapping.count(0) == 1u) {
+    const uint32_t material_index = scene.data().gltf_material_mapping.at(0);
+    result &= check_condition(scene.data().materials[material_index].two_sided == 1u, "glTF doubleSided maps to two_sided material flag");
+  }
+
+  std::filesystem::remove(gltf_path);
+  std::filesystem::remove(buffer_path);
+  return result;
+}
+
+bool test_native_scene_hierarchy_round_trip() {
+  const std::filesystem::path obj_path = std::filesystem::path("build") / "hierarchy_round_trip_source.obj";
+  const std::filesystem::path save_path = std::filesystem::path("build") / "hierarchy_round_trip.etx.json";
+  std::filesystem::create_directories(obj_path.parent_path());
+  std::ofstream obj_file(obj_path, std::ios::out | std::ios::trunc);
+  obj_file << "o triangle\n";
+  obj_file << "v 0 0 0\n";
+  obj_file << "v 1 0 0\n";
+  obj_file << "v 0 1 0\n";
+  obj_file << "f 1 2 3\n";
+  obj_file.close();
+
+  TestContext context;
+  etx::SceneRepresentation source(context.scheduler, context.ior_database);
+  const std::string obj_path_string = obj_path.string();
+  if (check_condition(source.load_from_file(obj_path_string.c_str(), etx::SceneRepresentation::LoadEverything, nullptr), "hierarchy source loaded") == false) {
+    return false;
+  }
+
+  etx::SceneHierarchy& hierarchy = source.data().hierarchy;
+  const etx::AffineTransform parent_transform = {
+    .rows =
+      {
+        float4{2.0f, 0.0f, 0.0f, 3.0f},
+        float4{0.0f, 3.0f, 0.0f, 4.0f},
+        float4{0.0f, 0.0f, -1.0f, 5.0f},
+      },
+  };
+  const uint32_t parent_index = hierarchy.add_node("round-trip-parent", kInvalidIndex, parent_transform);
+  if (check_condition((hierarchy.nodes.empty() == false) && hierarchy.set_parent(0u, parent_index), "hierarchy parent assigned") == false) {
+    return false;
+  }
+  if (check_condition(source.data().cameras.empty() == false, "default camera is available for hierarchy round trip") == false) {
+    return false;
+  }
+  const uint32_t first_camera_node = hierarchy.add_node("first-camera", parent_index, {});
+  hierarchy.add_attachment(first_camera_node, {etx::SceneAttachment::Type::Camera, 0u, 0u, 0u});
+  etx::SceneData::CameraInfo second_camera = source.data().cameras[0];
+  second_camera.id = "second-camera";
+  second_camera.active = false;
+  source.data().cameras.emplace_back(second_camera);
+  const uint32_t second_camera_node = hierarchy.add_node("second-camera", parent_index, {});
+  hierarchy.add_attachment(second_camera_node, {etx::SceneAttachment::Type::Camera, 1u, 0u, 0u});
+  if (check_condition(source.data().resolve_hierarchy(), "source hierarchy resolved") == false) {
+    return false;
+  }
+
+  const std::string saved_file = source.save_to_file(save_path.string().c_str());
+  if (check_condition(saved_file.empty() == false, "native hierarchy scene saved") == false) {
+    return false;
+  }
+
+  etx::SceneRepresentation loaded(context.scheduler, context.ior_database);
+  if (check_condition(loaded.load_from_file(saved_file.c_str(), etx::SceneRepresentation::LoadEverything, nullptr), "native hierarchy scene loaded") == false) {
+    return false;
+  }
+  const etx::SceneHierarchy& loaded_hierarchy = loaded.data().hierarchy;
+  if (check_condition(loaded_hierarchy.nodes.size() == hierarchy.nodes.size(), "hierarchy node count round trips") == false) {
+    return false;
+  }
+  if (check_condition(loaded_hierarchy.nodes[0].parent_index == parent_index, "hierarchy parent round trips") == false) {
+    return false;
+  }
+  if (check_condition(loaded.data().cameras.size() == 2u, "all hierarchy-attached cameras round trip") == false) {
+    return false;
+  }
+  if (check_condition(nearly_equal(loaded_hierarchy.nodes[parent_index].local_transform.rows[0].w, 3.0f) &&
+                        nearly_equal(loaded_hierarchy.nodes[parent_index].local_transform.rows[1].y, 3.0f) &&
+                        nearly_equal(loaded_hierarchy.nodes[parent_index].local_transform.rows[2].z, -1.0f),
+        "hierarchy affine transform round trips") == false) {
+    return false;
+  }
+  if (check_condition((loaded_hierarchy.mesh_instances.size() == 1u) && nearly_equal(loaded_hierarchy.mesh_instances[0].bbox_min.x, 3.0f) &&
+                        nearly_equal(loaded_hierarchy.mesh_instances[0].bbox_max.y, 7.0f),
+        "round-tripped instance resolves in world space") == false) {
+    return false;
+  }
+
+  std::filesystem::remove(obj_path);
+  std::filesystem::remove(std::filesystem::path(saved_file));
+  std::filesystem::remove(std::filesystem::path(saved_file).replace_extension(".materials"));
+  std::filesystem::remove(std::filesystem::path(saved_file).replace_extension(""));
+  return true;
+}
+
 }  // namespace
 
 int main() {
@@ -582,6 +736,8 @@ int main() {
     {"empty_scene_environment_emitter_packs", test_empty_scene_environment_emitter_packs},
     {"raw_obj_load_adds_default_camera_and_lighting", test_raw_obj_load_adds_default_camera_and_lighting},
     {"directional_use_as_sun_parse", test_directional_use_as_sun_parse},
+    {"gltf_double_sided_material", test_gltf_double_sided_material},
+    {"native_scene_hierarchy_round_trip", test_native_scene_hierarchy_round_trip},
   };
 
   uint32_t passed_count = 0u;

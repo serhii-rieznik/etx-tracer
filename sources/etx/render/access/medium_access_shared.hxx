@@ -11,12 +11,22 @@ struct ETX_ALIGNED MediumAccess {
   uint32_t scattering_spectrum_index ETX_INIT(kInvalidIndex);
   float phase_function_g ETX_INIT(0.0f);
   uint32_t enable_explicit_connections ETX_INIT(1u);
+  AffineTransform world_to_object ETX_INIT({});
+  float3 local_bounds_min ETX_INIT({});
+  float3 local_bounds_max ETX_INIT({});
 };
 
 ETX_SHARED_INLINE BoundingBox medium_access_bounds(ETX_IN(MediumAccess, access)) {
   BoundingBox result;
   result.p_min = access.bounds_min;
   result.p_max = access.bounds_max;
+  return result;
+}
+
+ETX_SHARED_INLINE BoundingBox medium_access_local_bounds(ETX_IN(MediumAccess, access)) {
+  BoundingBox result;
+  result.p_min = access.local_bounds_min;
+  result.p_max = access.local_bounds_max;
   return result;
 }
 

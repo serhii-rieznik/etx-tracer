@@ -229,13 +229,14 @@ SpectralResponse wavefront_evaluate_local_direct_hit_radiance(uint emitter_index
   }
 
   TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
+  const float3 geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(emitter_instance.instance_index), tri.geo_n);
   Material material = (Material)0;
   if (try_load_material_full(tri.material_index, material) == false) {
     return spectral_response_zero(spect);
   }
 
   float3 target_delta = target_position - source_position;
-  if (dot(tri.geo_n, target_delta) >= 0.0f) {
+  if (dot(geo_normal, target_delta) >= 0.0f) {
     return spectral_response_zero(spect);
   }
 
@@ -247,7 +248,7 @@ SpectralResponse wavefront_evaluate_local_direct_hit_radiance(uint emitter_index
   float3 dp = source_position - target_position;
   float distance_squared = dot(dp, dp);
   if (distance_squared > 0.0f) {
-    float cos_t = abs(dot(dp, tri.geo_n)) / sqrt(distance_squared);
+    float cos_t = abs(dot(dp, geo_normal)) / sqrt(distance_squared);
     float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
     float cos_tx = directly_visible ? cos_t : pow(cos_t, exponent);
     if (cos_tx > kEpsilon) {

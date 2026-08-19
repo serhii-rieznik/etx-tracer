@@ -43,6 +43,7 @@ struct MediumPoolImpl {
     medium.phase_function_g = g;
     medium.enable_explicit_connections = explicit_connections;
     medium.bounds = BoundingBox{{-1.0f, -1.0f, -1.0f}, 0.0f, {1.0f, 1.0f, 1.0f}, 0.0f};
+    medium.local_bounds = medium.bounds;
 
     if ((volume_file != nullptr) && (strlen(volume_file) > 0)) {
       float max_density = 0.0f;
@@ -268,6 +269,7 @@ uint32_t MediumPool::add_noise(Medium::Class cls, const std::string& id, NoiseFu
   medium.phase_function_g = anisotropy;
   medium.enable_explicit_connections = explicit_connections;
   medium.bounds = BoundingBox{{-1.0f, -1.0f, -1.0f}, 0.0f, {1.0f, 1.0f, 1.0f}, 0.0f};
+  medium.local_bounds = medium.bounds;
 
   medium.set_grid_type(DensityGrid::Type::NoiseFunction);
   medium.set_noise_type(noise_type);

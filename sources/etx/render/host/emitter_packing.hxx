@@ -8,6 +8,7 @@ struct PackedEmitterData {
   std::vector<Triangle> triangles = {};
   std::vector<EmitterProfile> emitter_profiles = {};
   std::vector<Emitter> emitter_instances = {};
+  std::vector<SceneInstance> instances = {};
   std::vector<uint32_t> active_emitter_indices = {};
   Scene::EnvironmentEmitters environment_emitters = {};
 };

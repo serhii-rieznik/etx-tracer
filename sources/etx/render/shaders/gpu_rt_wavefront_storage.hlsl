@@ -128,6 +128,7 @@ GPUWavefrontHit wavefront_load_hit(uint descriptor_index, uint index) {
   result.medium_index = buffer.Load(base_offset + kGPUWavefrontHitMediumIndexOffset);
   result.flags = buffer.Load(base_offset + kGPUWavefrontHitFlagsOffset);
   result.barycentric = wavefront_load_float2(buffer, base_offset + kGPUWavefrontHitBarycentricOffset);
+  result.instance_index = buffer.Load(base_offset + kGPUWavefrontHitInstanceIndexOffset);
   return result;
 }
 
@@ -170,6 +171,7 @@ GPUWavefrontPathVertex wavefront_load_path_vertex(uint descriptor_index, uint in
     result.pdf_ratio = asfloat(buffer.Load(base_offset + kGPUWavefrontLightPathVertexPdfRatioOffset));
     result.barycentric = wavefront_load_float2(buffer, base_offset + kGPUWavefrontLightPathVertexBarycentricOffset);
     result.reserved0 = buffer.Load(base_offset + kGPUWavefrontLightPathVertexPreviousVertexIndexOffset);
+    result.instance_index = buffer.Load(base_offset + kGPUWavefrontLightPathVertexInstanceIndexOffset);
     result.inline_medium_flags = packed_flags >> kGPUWavefrontLightPathVertexInlineMediumFlagsShift;
     return result;
   }
@@ -200,6 +202,7 @@ GPUWavefrontPathVertex wavefront_load_path_vertex(uint descriptor_index, uint in
   result.pdf_ratio = asfloat(buffer.Load(base_offset + kGPUWavefrontPathVertexPdfRatioOffset));
   result.barycentric = wavefront_load_float2(buffer, base_offset + kGPUWavefrontPathVertexBarycentricOffset);
   result.inline_medium_flags = buffer.Load(base_offset + kGPUWavefrontPathVertexInlineMediumFlagsOffset);
+  result.instance_index = buffer.Load(base_offset + kGPUWavefrontPathVertexInstanceIndexOffset);
   return result;
 }
 
@@ -231,6 +234,7 @@ void wavefront_store_path_vertex(uint descriptor_index, uint index, GPUWavefront
     buffer.Store(base_offset + kGPUWavefrontLightPathVertexPdfRatioOffset, asuint(vertex.pdf_ratio));
     wavefront_store_float2(buffer, base_offset + kGPUWavefrontLightPathVertexBarycentricOffset, vertex.barycentric);
     buffer.Store(base_offset + kGPUWavefrontLightPathVertexPreviousVertexIndexOffset, vertex.reserved0);
+    buffer.Store(base_offset + kGPUWavefrontLightPathVertexInstanceIndexOffset, vertex.instance_index);
     return;
   }
 
@@ -260,6 +264,7 @@ void wavefront_store_path_vertex(uint descriptor_index, uint index, GPUWavefront
   buffer.Store(base_offset + kGPUWavefrontPathVertexPdfRatioOffset, asuint(vertex.pdf_ratio));
   wavefront_store_float2(buffer, base_offset + kGPUWavefrontPathVertexBarycentricOffset, vertex.barycentric);
   buffer.Store(base_offset + kGPUWavefrontPathVertexInlineMediumFlagsOffset, vertex.inline_medium_flags);
+  buffer.Store(base_offset + kGPUWavefrontPathVertexInstanceIndexOffset, vertex.instance_index);
 }
 
 GPUWavefrontPathMeta wavefront_load_path_meta(uint descriptor_index, uint index) {
@@ -580,5 +585,14 @@ float3 wavefront_surface_shading_position(GPUWavefrontHit hit, float3 outgoing_d
   float3 n1 = load_float3(normal_buffer, tri.i.y);
   float3 n2 = load_float3(normal_buffer, tri.i.z);
   float3 bc = barycentrics(hit.barycentric);
-  return scene_math_shared_shading_pos(p0, p1, p2, n0, n1, n2, tri.geo_n, bc, outgoing_direction);
+  const GPUSceneInstanceData instance = load_scene_instance(hit.instance_index);
+  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
+  p0 = scene_instance_transform_point(instance, p0);
+  p1 = scene_instance_transform_point(instance, p1);
+  p2 = scene_instance_transform_point(instance, p2);
+  n0 = scene_instance_transform_normal(instance, n0) * orientation;
+  n1 = scene_instance_transform_normal(instance, n1) * orientation;
+  n2 = scene_instance_transform_normal(instance, n2) * orientation;
+  const float3 geo_normal = scene_instance_transform_geometric_normal(instance, tri.geo_n);
+  return scene_math_shared_shading_pos(p0, p1, p2, n0, n1, n2, geo_normal, bc, outgoing_direction);
 }

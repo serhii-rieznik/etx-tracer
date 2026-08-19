@@ -539,8 +539,8 @@ struct SceneSerializationImpl {
       return false;
     }
 
-    if (header->version != kBinaryGeometryVersion) {
-      log::error("Unsupported binary geometry version: %u (expected %u)", header->version, kBinaryGeometryVersion);
+    if ((header->version != kBinaryGeometryLegacyVersion) && (header->version != kBinaryGeometryVersion)) {
+      log::error("Unsupported binary geometry version: %u (supported %u-%u)", header->version, kBinaryGeometryLegacyVersion, kBinaryGeometryVersion);
       return false;
     }
 

@@ -59,6 +59,7 @@ static_assert(offsetof(GPUWavefrontHit, emitter_index) == kGPUWavefrontHitEmitte
 static_assert(offsetof(GPUWavefrontHit, medium_index) == kGPUWavefrontHitMediumIndexOffset, "GPUWavefrontHit::medium_index offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontHit, flags) == kGPUWavefrontHitFlagsOffset, "GPUWavefrontHit::flags offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontHit, barycentric) == kGPUWavefrontHitBarycentricOffset, "GPUWavefrontHit::barycentric offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontHit, instance_index) == kGPUWavefrontHitInstanceIndexOffset, "GPUWavefrontHit::instance_index offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontPathVertex>, "GPUWavefrontPathVertex must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontPathVertex>, "GPUWavefrontPathVertex must stay trivially copyable for GPU wavefront ABI");
@@ -102,6 +103,8 @@ static_assert(offsetof(GPUWavefrontPathVertex, pdf_history) == kGPUWavefrontPath
 static_assert(offsetof(GPUWavefrontPathVertex, pdf_ratio) == kGPUWavefrontPathVertexPdfRatioOffset, "GPUWavefrontPathVertex::pdf_ratio offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, barycentric) == kGPUWavefrontPathVertexBarycentricOffset,
   "GPUWavefrontPathVertex::barycentric offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathVertex, instance_index) == kGPUWavefrontPathVertexInstanceIndexOffset,
+  "GPUWavefrontPathVertex::instance_index offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontLightPathVertex>, "GPUWavefrontLightPathVertex must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontLightPathVertex>, "GPUWavefrontLightPathVertex must stay trivially copyable for GPU wavefront ABI");
@@ -151,6 +154,8 @@ static_assert(offsetof(GPUWavefrontLightPathVertex, barycentric) == kGPUWavefron
   "GPUWavefrontLightPathVertex::barycentric offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontLightPathVertex, previous_vertex_index) == kGPUWavefrontLightPathVertexPreviousVertexIndexOffset,
   "GPUWavefrontLightPathVertex::previous_vertex_index offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontLightPathVertex, instance_index) == kGPUWavefrontLightPathVertexInstanceIndexOffset,
+  "GPUWavefrontLightPathVertex::instance_index offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontFastLightEndpoint>, "GPUWavefrontFastLightEndpoint must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontFastLightEndpoint>, "GPUWavefrontFastLightEndpoint must stay trivially copyable for GPU wavefront ABI");
@@ -610,6 +615,16 @@ static_assert(offsetof(::Medium, phase_function_g) == kMediumPhaseFunctionGOffse
 static_assert(offsetof(::Medium, enable_explicit_connections) == kMediumEnableExplicitConnectionsOffset,
   "Medium::enable_explicit_connections offset changed; update GPU shader decode");
 static_assert(offsetof(::Medium, cls) == kMediumClassOffset, "Medium::cls offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, world_to_object) + offsetof(AffineTransform, rows)) == kMediumWorldToObjectRow0Offset,
+  "Medium::world_to_object.rows[0] offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, world_to_object) + offsetof(AffineTransform, rows) + sizeof(float4)) == kMediumWorldToObjectRow1Offset,
+  "Medium::world_to_object.rows[1] offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, world_to_object) + offsetof(AffineTransform, rows) + 2u * sizeof(float4)) == kMediumWorldToObjectRow2Offset,
+  "Medium::world_to_object.rows[2] offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, local_bounds) + offsetof(BoundingBox, p_min)) == kMediumLocalBoundsMinOffset,
+  "Medium::local_bounds.p_min offset changed; update GPU shader decode");
+static_assert((offsetof(::Medium, local_bounds) + offsetof(BoundingBox, p_max)) == kMediumLocalBoundsMaxOffset,
+  "Medium::local_bounds.p_max offset changed; update GPU shader decode");
 static_assert(::Medium::Homogeneous == Medium::Homogeneous, "Medium::Homogeneous changed; update GPU shader decode");
 static_assert(::Medium::Heterogeneous == Medium::Heterogeneous, "Medium::Heterogeneous changed; update GPU shader decode");
 static_assert(static_cast<uint32_t>(DensityGrid::Type::Texture3D) == MediumGridType::Texture3D, "DensityGrid::Type::Texture3D changed; update GPU shader decode");

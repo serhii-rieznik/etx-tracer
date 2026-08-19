@@ -767,7 +767,7 @@ static MTLPrimitiveAccelerationStructureDescriptor* create_metal_blas_descriptor
         return nil;
       }
       triangle_descriptor.indexBuffer = index_it->second.buffer;
-      triangle_descriptor.indexBufferOffset = 0u;
+      triangle_descriptor.indexBufferOffset = static_cast<NSUInteger>(src_geo.triangles.index_buffer_offset);
       triangle_descriptor.indexType = to_metal_index_type(src_geo.triangles.index_type);
       triangle_descriptor.triangleCount = static_cast<NSUInteger>(src_geo.triangles.index_count / 3u);
     } else {
@@ -784,9 +784,9 @@ static MTLPrimitiveAccelerationStructureDescriptor* create_metal_blas_descriptor
   return descriptor;
 }
 
-static MTLInstanceAccelerationStructureDescriptor* create_metal_tlas_sizing_descriptor(uint32_t instance_count) {
+static MTLInstanceAccelerationStructureDescriptor* create_metal_tlas_sizing_descriptor(uint32_t instance_count, bool allow_update) {
   MTLInstanceAccelerationStructureDescriptor* descriptor = [MTLInstanceAccelerationStructureDescriptor descriptor];
-  descriptor.usage = MTLAccelerationStructureUsageNone;
+  descriptor.usage = allow_update ? MTLAccelerationStructureUsageRefit : MTLAccelerationStructureUsageNone;
   descriptor.instanceCount = instance_count;
   if (@available(macOS 12.0, *)) {
     descriptor.instanceDescriptorType = MTLAccelerationStructureInstanceDescriptorTypeDefault;
@@ -3273,7 +3273,7 @@ RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAcceler
     if (desc.instance_count == 0u) {
       return {RHIResult::InvalidArgument, {}};
     }
-    descriptor = create_metal_tlas_sizing_descriptor(desc.instance_count);
+    descriptor = create_metal_tlas_sizing_descriptor(desc.instance_count, desc.allow_update);
   }
 
   if (descriptor == nil) {
@@ -3301,11 +3301,12 @@ RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAcceler
     return {register_result, {}};
   }
 
+  const uint64_t build_scratch_size = desc.allow_update ? std::max(static_cast<uint64_t>(size_info.buildScratchBufferSize), static_cast<uint64_t>(size_info.refitScratchBufferSize)) : static_cast<uint64_t>(size_info.buildScratchBufferSize);
   _impl->acceleration_structures.emplace(as_handle, MTAccelerationStructureData{
                                                       .acceleration_structure = acceleration_structure,
                                                       .desc = desc,
                                                       .allocated_size = static_cast<uint64_t>(size_info.accelerationStructureSize),
-                                                      .build_scratch_size = static_cast<uint64_t>(size_info.buildScratchBufferSize),
+                                                      .build_scratch_size = build_scratch_size,
                                                     });
   _impl->gpu_allocated_bytes += static_cast<uint64_t>(size_info.accelerationStructureSize);
   return {RHIResult::Success, as_handle};
@@ -3397,7 +3398,7 @@ void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
     [instance_buffer_it->second.buffer didModifyRange:NSMakeRange(0u, required_size)];
 
     MTLInstanceAccelerationStructureDescriptor* tlas_descriptor = [MTLInstanceAccelerationStructureDescriptor descriptor];
-    tlas_descriptor.usage = MTLAccelerationStructureUsageNone;
+    tlas_descriptor.usage = desc.allow_update ? MTLAccelerationStructureUsageRefit : MTLAccelerationStructureUsageNone;
     tlas_descriptor.instanceDescriptorBuffer = instance_buffer_it->second.buffer;
     tlas_descriptor.instanceDescriptorBufferOffset = 0u;
     tlas_descriptor.instanceDescriptorStride = descriptor_stride;
@@ -3422,8 +3423,13 @@ void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
     return;
   }
 
-  as_encoder.label = @"ETX build acceleration structure";
-  [as_encoder buildAccelerationStructure:as_it->second.acceleration_structure descriptor:descriptor scratchBuffer:scratch_it->second.buffer scratchBufferOffset:static_cast<NSUInteger>(scratch_offset)];
+  if (desc.update) {
+    as_encoder.label = @"ETX refit acceleration structure";
+    [as_encoder refitAccelerationStructure:as_it->second.acceleration_structure descriptor:descriptor destination:as_it->second.acceleration_structure scratchBuffer:scratch_it->second.buffer scratchBufferOffset:static_cast<NSUInteger>(scratch_offset)];
+  } else {
+    as_encoder.label = @"ETX build acceleration structure";
+    [as_encoder buildAccelerationStructure:as_it->second.acceleration_structure descriptor:descriptor scratchBuffer:scratch_it->second.buffer scratchBufferOffset:static_cast<NSUInteger>(scratch_offset)];
+  }
   [as_encoder endEncoding];
 }
 

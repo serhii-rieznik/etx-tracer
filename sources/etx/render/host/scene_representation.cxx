@@ -163,6 +163,7 @@ struct SceneRepresentationImpl {
   RHIContext* rhi = nullptr;
   scattering::GpuContext scattering_gpu = {};
   bool scattering_gpu_ready = false;
+  std::vector<BoundingBox> medium_local_bounds;
 
   const IORDatabase& ior_database;
   SceneRepresentation::IntegratorData integrator_data = {};
@@ -236,6 +237,7 @@ struct SceneRepresentationImpl {
 
   void cleanup() {
     data.clear(scheduler);
+    medium_local_bounds.clear();
     integrator_data = {};
 
     active_camera = {};
@@ -580,7 +582,7 @@ struct SceneRepresentationImpl {
     }
   }
 
-  void update_medium_bounds();
+  bool update_medium_bounds();
   void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
 
   void set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index);
@@ -761,6 +763,42 @@ void compute_camera_position_to_fit_scene(const SceneData& scene_data, const Cam
   out_target = center;
 }
 
+bool find_attachment_transform(SceneData& data, SceneAttachment::Type type, uint32_t resource_index, AffineTransform& object_to_world, AffineTransform& world_to_object) {
+  if (data.resolve_hierarchy() == false) {
+    return false;
+  }
+
+  for (uint32_t node_index : data.hierarchy.evaluation_order) {
+    const SceneNode& node = data.hierarchy.nodes[node_index];
+    if ((node_index >= data.hierarchy.effective_enabled.size()) || (data.hierarchy.effective_enabled[node_index] == 0u)) {
+      continue;
+    }
+    const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+    if (attachment_end > data.hierarchy.attachments.size()) {
+      return false;
+    }
+    for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = data.hierarchy.attachments[attachment_index];
+      if ((attachment.type != type) || (attachment.resource_index != resource_index)) {
+        continue;
+      }
+      float determinant = 0.0f;
+      object_to_world = data.hierarchy.world_transforms[node_index];
+      return invert_affine(object_to_world, world_to_object, determinant);
+    }
+  }
+  return false;
+}
+
+Camera transform_camera(const Camera& source, const AffineTransform& transform) {
+  Camera result = source;
+  const float3 position = transform_point(transform, source.position);
+  const float3 direction = normalize(transform_vector(transform, source.direction));
+  const float3 up = normalize(transform_vector(transform, source.up));
+  build_camera(result, position, direction, up, source.film_size, get_camera_fov(source));
+  return result;
+}
+
 ETX_PIMPL_IMPLEMENT(SceneRepresentation, Impl);
 
 SceneRepresentation::SceneRepresentation(TaskScheduler& s, const IORDatabase& db) {
@@ -848,6 +886,12 @@ void SceneRepresentation::update_active_camera() {
   });
   if (it != _private->data.cameras.end()) {
     _private->active_camera = it->cam;
+    const uint32_t camera_index = static_cast<uint32_t>(std::distance(_private->data.cameras.begin(), it));
+    AffineTransform object_to_world = {};
+    AffineTransform world_to_object = {};
+    if (find_attachment_transform(_private->data, SceneAttachment::Type::Camera, camera_index, object_to_world, world_to_object)) {
+      _private->active_camera = transform_camera(it->cam, object_to_world);
+    }
   }
 }
 
@@ -856,7 +900,12 @@ void SceneRepresentation::store_active_camera() {
     return e.active;
   });
   if (it != _private->data.cameras.end()) {
-    it->cam = _private->active_camera;
+    const uint32_t camera_index = static_cast<uint32_t>(std::distance(_private->data.cameras.begin(), it));
+    AffineTransform object_to_world = {};
+    AffineTransform world_to_object = {};
+    it->cam = find_attachment_transform(_private->data, SceneAttachment::Type::Camera, camera_index, object_to_world, world_to_object)
+                ? transform_camera(_private->active_camera, world_to_object)
+                : _private->active_camera;
   }
 }
 
@@ -1005,6 +1054,234 @@ inline void get_values(const std::vector<T>& a, T* ptr, uint64_t count) {
   }
 }
 
+const char* scene_attachment_type_name(SceneAttachment::Type type) {
+  switch (type) {
+    case SceneAttachment::Type::Mesh:
+      return "mesh";
+    case SceneAttachment::Type::Camera:
+      return "camera";
+    case SceneAttachment::Type::Emitter:
+      return "emitter";
+    case SceneAttachment::Type::Medium:
+      return "medium";
+    default:
+      return nullptr;
+  }
+}
+
+bool scene_attachment_type_from_name(const std::string& name, SceneAttachment::Type& result) {
+  if (name == "mesh") {
+    result = SceneAttachment::Type::Mesh;
+    return true;
+  }
+  if (name == "camera") {
+    result = SceneAttachment::Type::Camera;
+    return true;
+  }
+  if (name == "emitter") {
+    result = SceneAttachment::Type::Emitter;
+    return true;
+  }
+  if (name == "medium") {
+    result = SceneAttachment::Type::Medium;
+    return true;
+  }
+  return false;
+}
+
+void remap_emitter_attachments(SceneHierarchy& hierarchy, const std::vector<uint32_t>& old_to_new) {
+  for (uint32_t node_index = 0u; node_index < hierarchy.nodes.size(); ++node_index) {
+    uint32_t local_attachment_index = 0u;
+    while (local_attachment_index < hierarchy.nodes[node_index].attachment_count) {
+      const uint32_t attachment_index = hierarchy.nodes[node_index].attachment_offset + local_attachment_index;
+      const SceneAttachment attachment = hierarchy.attachments[attachment_index];
+      if (attachment.type != SceneAttachment::Type::Emitter) {
+        ++local_attachment_index;
+        continue;
+      }
+      if ((attachment.resource_index >= old_to_new.size()) || (old_to_new[attachment.resource_index] == kInvalidIndex)) {
+        hierarchy.remove_attachment(node_index, local_attachment_index);
+        continue;
+      }
+      const uint32_t new_index = old_to_new[attachment.resource_index];
+      if (new_index != attachment.resource_index) {
+        hierarchy.attachments[attachment_index].resource_index = new_index;
+      }
+      ++local_attachment_index;
+    }
+  }
+}
+
+void remap_emitter_references(std::vector<EmitterProfile>& profiles, const std::vector<uint32_t>& old_to_new) {
+  for (EmitterProfile& profile : profiles) {
+    if (profile.reference_emitter_index == kInvalidIndex) {
+      continue;
+    }
+    profile.reference_emitter_index = profile.reference_emitter_index < old_to_new.size() ? old_to_new[profile.reference_emitter_index] : kInvalidIndex;
+  }
+}
+
+nlohmann::json serialize_scene_hierarchy(const SceneHierarchy& hierarchy) {
+  nlohmann::json result = nlohmann::json::object();
+  result["version"] = 1u;
+  nlohmann::json nodes = nlohmann::json::array();
+  for (uint32_t node_index = 0u; node_index < hierarchy.nodes.size(); ++node_index) {
+    const SceneNode& node = hierarchy.nodes[node_index];
+    nlohmann::json node_json = nlohmann::json::object();
+    node_json["name"] = node_index < hierarchy.node_names.size() ? hierarchy.node_names[node_index] : ("node-" + std::to_string(node_index));
+    node_json["parent"] = node.parent_index == kInvalidIndex ? nlohmann::json(nullptr) : nlohmann::json(node.parent_index);
+    node_json["flags"] = node.flags;
+    nlohmann::json transform = nlohmann::json::array();
+    for (const float4& row : node.local_transform.rows) {
+      transform.push_back(row.x);
+      transform.push_back(row.y);
+      transform.push_back(row.z);
+      transform.push_back(row.w);
+    }
+    node_json["transform"] = std::move(transform);
+
+    nlohmann::json attachments = nlohmann::json::array();
+    const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+    if (attachment_end <= hierarchy.attachments.size()) {
+      for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+        const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+        const char* type_name = scene_attachment_type_name(attachment.type);
+        if (type_name == nullptr) {
+          continue;
+        }
+        attachments.push_back({{"type", type_name}, {"index", attachment.resource_index}, {"flags", attachment.flags}});
+      }
+    }
+    node_json["attachments"] = std::move(attachments);
+    nodes.push_back(std::move(node_json));
+  }
+  result["nodes"] = std::move(nodes);
+  return result;
+}
+
+bool deserialize_scene_hierarchy(const nlohmann::json& source, SceneData& data) {
+  if ((source.is_object() == false) || (source.contains("version") == false) || (source["version"].is_number_unsigned() == false) || (source["version"].get<uint64_t>() != 1u) ||
+      (source.contains("nodes") == false) || (source["nodes"].is_array() == false)) {
+    return false;
+  }
+
+  SceneHierarchy hierarchy;
+  const nlohmann::json& nodes = source["nodes"];
+  std::vector<uint32_t> parent_indices;
+  parent_indices.reserve(nodes.size());
+  for (uint32_t node_index = 0u; node_index < nodes.size(); ++node_index) {
+    const nlohmann::json& node_json = nodes[node_index];
+    if ((node_json.is_object() == false) || (node_json.contains("transform") == false) || (node_json["transform"].is_array() == false) || (node_json["transform"].size() != 12u)) {
+      return false;
+    }
+
+    AffineTransform transform = {};
+    for (uint32_t row = 0u; row < 3u; ++row) {
+      for (uint32_t column = 0u; column < 4u; ++column) {
+        const nlohmann::json& value = node_json["transform"][4u * row + column];
+        if (value.is_number() == false) {
+          return false;
+        }
+        const float component = value.get<float>();
+        if (std::isfinite(component) == false) {
+          return false;
+        }
+        (&transform.rows[row].x)[column] = component;
+      }
+    }
+    if ((node_json.contains("name") && (node_json["name"].is_string() == false)) || (node_json.contains("flags") && (node_json["flags"].is_number_unsigned() == false))) {
+      return false;
+    }
+    const std::string name = node_json.contains("name") ? node_json["name"].get<std::string>() : ("node-" + std::to_string(node_index));
+    const uint32_t new_node_index = hierarchy.add_node(name.c_str(), kInvalidIndex, transform);
+    if (new_node_index == kInvalidIndex) {
+      return false;
+    }
+    if (node_json.contains("flags")) {
+      const uint64_t flags = node_json["flags"].get<uint64_t>();
+      if (flags > kInvalidIndex) {
+        return false;
+      }
+      hierarchy.nodes[new_node_index].flags = static_cast<uint32_t>(flags);
+    }
+
+    uint32_t parent_index = kInvalidIndex;
+    if (node_json.contains("parent") && node_json["parent"].is_null() == false) {
+      if (node_json["parent"].is_number_unsigned() == false) {
+        return false;
+      }
+      const uint64_t parent_value = node_json["parent"].get<uint64_t>();
+      if (parent_value >= kInvalidIndex) {
+        return false;
+      }
+      parent_index = static_cast<uint32_t>(parent_value);
+    }
+    parent_indices.emplace_back(parent_index);
+  }
+
+  for (uint32_t node_index = 0u; node_index < nodes.size(); ++node_index) {
+    if (hierarchy.set_parent(node_index, parent_indices[node_index]) == false) {
+      return false;
+    }
+    const nlohmann::json& node_json = nodes[node_index];
+    if (node_json.contains("attachments") == false) {
+      continue;
+    }
+    if (node_json["attachments"].is_array() == false) {
+      return false;
+    }
+    for (const nlohmann::json& attachment_json : node_json["attachments"]) {
+      if ((attachment_json.is_object() == false) || (attachment_json.contains("type") == false) || (attachment_json["type"].is_string() == false) ||
+          (attachment_json.contains("index") == false) || (attachment_json["index"].is_number_unsigned() == false)) {
+        return false;
+      }
+      SceneAttachment attachment = {};
+      if (scene_attachment_type_from_name(attachment_json["type"].get<std::string>(), attachment.type) == false) {
+        return false;
+      }
+      const uint64_t resource_index = attachment_json["index"].get<uint64_t>();
+      if ((resource_index >= kInvalidIndex) || (attachment_json.contains("flags") && (attachment_json["flags"].is_number_unsigned() == false))) {
+        return false;
+      }
+      attachment.resource_index = static_cast<uint32_t>(resource_index);
+      if (attachment_json.contains("flags")) {
+        const uint64_t flags = attachment_json["flags"].get<uint64_t>();
+        if (flags > kInvalidIndex) {
+          return false;
+        }
+        attachment.flags = static_cast<uint32_t>(flags);
+      }
+      if (hierarchy.add_attachment(node_index, attachment) == false) {
+        return false;
+      }
+    }
+  }
+  if (hierarchy.rebuild_topology() == false) {
+    return false;
+  }
+  data.hierarchy = std::move(hierarchy);
+  return true;
+}
+
+void synthesize_identity_scene_hierarchy(SceneData& data) {
+  if (data.hierarchy.nodes.empty() == false) {
+    return;
+  }
+  std::vector<std::string> mesh_names(data.meshes.size());
+  for (const auto& mapping : data.mesh_mapping) {
+    if ((mapping.second >= data.meshes.size()) || ((mesh_names[mapping.second].empty() == false) && (mesh_names[mapping.second] <= mapping.first))) {
+      continue;
+    }
+    mesh_names[mapping.second] = mapping.first;
+  }
+  for (uint32_t mesh_index = 0u; mesh_index < data.meshes.size(); ++mesh_index) {
+    const std::string node_name = mesh_names[mesh_index].empty() ? ("mesh-" + std::to_string(mesh_index)) : mesh_names[mesh_index];
+    const uint32_t node_index = data.hierarchy.add_node(node_name.c_str(), kInvalidIndex, {});
+    const SceneAttachment attachment = {SceneAttachment::Type::Mesh, mesh_index, 0u, 0u};
+    ETX_CRITICAL(data.hierarchy.add_attachment(node_index, attachment));
+  }
+}
+
 bool SceneRepresentation::load_from_file(const char* filename, uint32_t options, IntegratorData* out_integrator) {
   IntegratorData parsed_integrator_data = {};
   IntegratorData* integrator_data = out_integrator;
@@ -1041,6 +1318,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   bool use_focal_len = false;
   bool force_tangents = false;
   bool spectral_scene = false;
+  nlohmann::json hierarchy_json;
 
   const bool raw_model_file = (strcmp(get_file_ext(filename), ".json") != 0);
 
@@ -1135,6 +1413,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = bool_value;
       } else if (json_get_bool(i, "blue_noise", bool_value)) {
         _private->data.options.properties[Scene::Properties::BlueNoise] = bool_value;
+      } else if ((key == "scene_hierarchy") && obj.is_object()) {
+        hierarchy_json = obj;
       } else if (json_get_string(i, "light_sampling", str_value)) {
         if (str_value == "uniform") {
           _private->data.options.light_sampling = Scene::LightSampling::Uniform;
@@ -1326,6 +1606,16 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
     return false;
   }
 
+  if (hierarchy_json.is_null() == false) {
+    _private->data.hierarchy.clear();
+    if (deserialize_scene_hierarchy(hierarchy_json, _private->data) == false) {
+      log::error("Failed to deserialize scene hierarchy from %s", filename);
+      return false;
+    }
+  } else {
+    synthesize_identity_scene_hierarchy(_private->data);
+  }
+
   const bool setup_camera = (options & SceneRepresentation::SetupCamera) != 0u;
   const bool create_default_camera_entry = ((raw_model_file && setup_camera) && _private->data.cameras.empty() && ((load_result & SceneLoadCameraInfo) == 0));
 
@@ -1359,55 +1649,108 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
     create_default_camera_entry);
 }
 
-void SceneRepresentationImpl::update_medium_bounds() {
-  if (data.triangles.empty() || data.vertices.pos.empty()) {
-    return;
+bool SceneRepresentationImpl::update_medium_bounds() {
+  std::unordered_map<uint32_t, std::pair<float3, float3>> medium_bounds_map;
+  std::vector<uint32_t> attached_nodes(data.mediums.array_size(), kInvalidIndex);
+  bool valid = true;
+
+  const size_t previous_local_bound_count = medium_local_bounds.size();
+  medium_local_bounds.resize(data.mediums.array_size());
+  for (size_t medium_index = previous_local_bound_count; medium_index < medium_local_bounds.size(); ++medium_index) {
+    medium_local_bounds[medium_index] = data.mediums.get(static_cast<uint32_t>(medium_index)).bounds;
   }
 
-  std::unordered_map<uint32_t, std::pair<float3, float3>> medium_bounds_map;
+  for (uint32_t medium_index = 0u; medium_index < data.mediums.array_size(); ++medium_index) {
+    Medium& medium = data.mediums.get(medium_index);
+    medium.bounds = medium_local_bounds[medium_index];
+    medium.local_bounds = medium_local_bounds[medium_index];
+    medium.world_to_object = {};
+  }
 
-  for (const auto& tri : data.triangles) {
-    if (tri.material_index >= data.materials.size()) {
+  auto add_bounds = [&](uint32_t medium_index, const float3& bounds_min, const float3& bounds_max) {
+    if ((medium_index == kInvalidIndex) || (medium_index >= data.mediums.array_size())) {
+      return;
+    }
+    auto existing = medium_bounds_map.find(medium_index);
+    if (existing == medium_bounds_map.end()) {
+      medium_bounds_map.emplace(medium_index, std::make_pair(bounds_min, bounds_max));
+      return;
+    }
+    existing->second.first = min(existing->second.first, bounds_min);
+    existing->second.second = max(existing->second.second, bounds_max);
+  };
+
+  for (const ResolvedMeshInstance& instance : data.hierarchy.mesh_instances) {
+    if (((instance.flags & ResolvedMeshInstance::Enabled) == 0u) || (instance.mesh_index >= data.meshes.size())) {
       continue;
     }
-
-    const auto& material = data.materials[tri.material_index];
-    const float3& v0 = data.vertices.pos[tri.i[0]];
-    const float3& v1 = data.vertices.pos[tri.i[1]];
-    const float3& v2 = data.vertices.pos[tri.i[2]];
-
-    float3 tri_min = min(min(v0, v1), v2);
-    float3 tri_max = max(max(v0, v1), v2);
-
-    if (material.int_medium != kInvalidIndex) {
-      auto& bounds = medium_bounds_map[material.int_medium];
-      if (bounds.first.x == kMaxFloat) {
-        bounds.first = tri_min;
-        bounds.second = tri_max;
-      } else {
-        bounds.first = min(bounds.first, tri_min);
-        bounds.second = max(bounds.second, tri_max);
-      }
+    const Mesh& mesh = data.meshes[instance.mesh_index];
+    const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
+    if (triangle_end > data.triangles.size()) {
+      continue;
     }
-
-    if (material.ext_medium != kInvalidIndex) {
-      auto& bounds = medium_bounds_map[material.ext_medium];
-      if (bounds.first.x == kMaxFloat) {
-        bounds.first = tri_min;
-        bounds.second = tri_max;
-      } else {
-        bounds.first = min(bounds.first, tri_min);
-        bounds.second = max(bounds.second, tri_max);
+    for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+      const Triangle& triangle = data.triangles[triangle_index];
+      if ((triangle.material_index >= data.materials.size()) || (triangle.i[0] >= data.vertices.pos.size()) || (triangle.i[1] >= data.vertices.pos.size()) ||
+          (triangle.i[2] >= data.vertices.pos.size())) {
+        continue;
       }
+      const Material& material = data.materials[triangle.material_index];
+      const float3 v0 = transform_point(instance.object_to_world, data.vertices.pos[triangle.i[0]]);
+      const float3 v1 = transform_point(instance.object_to_world, data.vertices.pos[triangle.i[1]]);
+      const float3 v2 = transform_point(instance.object_to_world, data.vertices.pos[triangle.i[2]]);
+      const float3 triangle_min = min(min(v0, v1), v2);
+      const float3 triangle_max = max(max(v0, v1), v2);
+      add_bounds(material.int_medium, triangle_min, triangle_max);
+      add_bounds(material.ext_medium, triangle_min, triangle_max);
+    }
+  }
+
+  for (uint32_t node_index : data.hierarchy.evaluation_order) {
+    const SceneNode& node = data.hierarchy.nodes[node_index];
+    const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+    if ((node_index >= data.hierarchy.effective_enabled.size()) || (data.hierarchy.effective_enabled[node_index] == 0u) || (attachment_end > data.hierarchy.attachments.size()) ||
+        (node_index >= data.hierarchy.world_transforms.size())) {
+      continue;
+    }
+    for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = data.hierarchy.attachments[attachment_index];
+      if ((attachment.type != SceneAttachment::Type::Medium) || (attachment.resource_index >= data.mediums.array_size())) {
+        continue;
+      }
+      if (attached_nodes[attachment.resource_index] != kInvalidIndex) {
+        log::error("Medium %u is attached to multiple enabled nodes (%u and %u); medium resources support one transform", attachment.resource_index,
+          attached_nodes[attachment.resource_index], node_index);
+        valid = false;
+        continue;
+      }
+
+      AffineTransform world_to_object = {};
+      float determinant = 0.0f;
+      if (invert_affine(data.hierarchy.world_transforms[node_index], world_to_object, determinant) == false) {
+        log::error("Medium %u is attached to node %u with a singular transform", attachment.resource_index, node_index);
+        valid = false;
+        continue;
+      }
+
+      attached_nodes[attachment.resource_index] = node_index;
+      Medium& medium = data.mediums.get(attachment.resource_index);
+      medium.world_to_object = world_to_object;
+      medium.local_bounds = medium_local_bounds[attachment.resource_index];
+      medium.bounds = transform_bounding_box(data.hierarchy.world_transforms[node_index], medium.local_bounds);
     }
   }
 
   for (const auto& [medium_index, bounds_pair] : medium_bounds_map) {
-    if (medium_index < data.mediums.array_size()) {
-      Medium& medium = data.mediums.get(medium_index);
-      medium.bounds = {bounds_pair.first, 0.0f, bounds_pair.second, 0.0f};
+    if ((medium_index >= data.mediums.array_size()) || (attached_nodes[medium_index] != kInvalidIndex)) {
+      continue;
     }
+    Medium& medium = data.mediums.get(medium_index);
+    medium.bounds = {bounds_pair.first, 0.0f, bounds_pair.second, 0.0f};
+    medium.local_bounds = medium.bounds;
   }
+
+  return valid;
 }
 
 void SceneRepresentationImpl::set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index) {
@@ -1522,6 +1865,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   js["spectral"] = impl->data.options.properties[Scene::Properties::Spectral];
   js["multiple_importance_sampling"] = impl->data.options.properties[Scene::Properties::MultipleImportanceSampling];
   js["blue_noise"] = impl->data.options.properties[Scene::Properties::BlueNoise];
+  js["scene_hierarchy"] = serialize_scene_hierarchy(impl->data.hierarchy);
 
   switch (impl->data.options.light_sampling) {
     case Scene::LightSampling::Uniform:
@@ -1681,11 +2025,13 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   materials_stream.setf(std::ios::fixed, std::ios::floatfield);
   materials_stream << std::setprecision(6);
 
-  const Camera& camera = impl->active_camera;
   const IORDatabase& database = impl->ior_database;
 
-  if (camera.film_size.x > 0u) {
-    float3 target = camera.position + camera.direction;
+  const auto write_camera = [&](const Camera& camera, const std::string& camera_id, bool active) {
+    if (camera.film_size.x == 0u) {
+      return;
+    }
+    const float3 target = camera.position + camera.direction;
     materials_stream << "newmtl et::camera\n";
     materials_stream << "class " << ((camera.cls == Camera::Class::Equirectangular) ? "eq" : "perspective") << "\n";
     materials_stream << "viewport " << camera.film_size.x << " " << camera.film_size.y << "\n";
@@ -1693,7 +2039,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "target " << target.x << " " << target.y << " " << target.z << "\n";
     materials_stream << "up " << camera.up.x << " " << camera.up.y << " " << camera.up.z << "\n";
     materials_stream << "fov " << get_camera_fov(camera) << "\n";
-    float fov_from_focal = focal_length_to_fov(get_camera_focal_length(camera)) * 180.0f / kPi;
+    const float fov_from_focal = focal_length_to_fov(get_camera_focal_length(camera)) * 180.0f / kPi;
     if (std::fabs(fov_from_focal - get_camera_fov(camera)) > 0.01f) {
       materials_stream << "focal-length " << get_camera_focal_length(camera) << "\n";
     }
@@ -1709,25 +2055,32 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if (camera.clip_far != 1000.0f) {
       materials_stream << "clip-far " << camera.clip_far << "\n";
     }
-    bool camera_medium_valid = (camera.medium_index != kInvalidIndex) && (medium_names.count(camera.medium_index) > 0);
+    const bool camera_medium_valid = (camera.medium_index != kInvalidIndex) && (medium_names.count(camera.medium_index) > 0);
     if (camera_medium_valid) {
       materials_stream << "ext_medium " << medium_names[camera.medium_index] << "\n";
     }
-    std::string camera_id = {};
-    for (const auto& stored : impl->data.cameras) {
-      if (stored.active) {
-        camera_id = stored.id;
-        break;
-      }
-    }
-    if (camera_id.empty() && (impl->data.cameras.empty() == false)) {
-      camera_id = impl->data.cameras.front().id;
-    }
     if (camera_id.empty() == false) {
       materials_stream << "id " << camera_id << "\n";
-      materials_stream << "active 1\n";
+      materials_stream << "active " << (active ? 1 : 0) << "\n";
     }
     materials_stream << "\n";
+  };
+
+  if (impl->data.cameras.empty()) {
+    write_camera(impl->active_camera, {}, true);
+  } else {
+    for (uint32_t camera_index = 0u; camera_index < impl->data.cameras.size(); ++camera_index) {
+      const SceneData::CameraInfo& entry = impl->data.cameras[camera_index];
+      const Camera* camera_to_save = &entry.cam;
+      if (entry.active) {
+        AffineTransform object_to_world = {};
+        AffineTransform world_to_object = {};
+        if (find_attachment_transform(impl->data, SceneAttachment::Type::Camera, camera_index, object_to_world, world_to_object) == false) {
+          camera_to_save = &impl->active_camera;
+        }
+      }
+      write_camera(*camera_to_save, entry.id, entry.active);
+    }
   }
 
   std::vector<uint32_t> atmosphere_emitter_indices;
@@ -2098,6 +2451,11 @@ void SceneRepresentationImpl::setup_atmosphere_references() {
 
 bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len,
   bool force_tangents, bool spectral_scene, bool create_default_camera_entry) {
+  if (data.resolve_hierarchy() == false) {
+    log::error("Failed to resolve scene hierarchy");
+    return false;
+  }
+
   auto& camera = active_camera;
   bool needs_camera_positioning = false;
   if (data.options.max_path_length > kMaximumPathLength) {
@@ -2128,6 +2486,12 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
       });
       const auto& selected = (it != data.cameras.end()) ? *it : data.cameras.front();
       camera = selected.cam;
+      const uint32_t camera_index = static_cast<uint32_t>(&selected - data.cameras.data());
+      AffineTransform object_to_world = {};
+      AffineTransform world_to_object = {};
+      if (find_attachment_transform(data, SceneAttachment::Type::Camera, camera_index, object_to_world, world_to_object)) {
+        camera = transform_camera(selected.cam, object_to_world);
+      }
     }
   }
 
@@ -2184,7 +2548,9 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
     }
   }
 
-  update_medium_bounds();
+  if (update_medium_bounds() == false) {
+    return false;
+  }
 
   if (needs_camera_positioning) {
     constexpr float3 kDefaultViewDirection = {1.0f, 1.0f, 1.0f};
@@ -2205,11 +2571,20 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
 }
 
 void SceneRepresentationImpl::create_area_emitters_from_materials() {
-  // Remove existing area emitter profiles, keeping only directional and environment emitters
-  auto new_profiles_end = std::remove_if(data.emitter_profiles.begin(), data.emitter_profiles.end(), [](const EmitterProfile& profile) {
-    return profile.cls == EmitterProfile::Class::Area;
-  });
-  data.emitter_profiles.erase(new_profiles_end, data.emitter_profiles.end());
+  std::vector<uint32_t> old_to_new(data.emitter_profiles.size(), kInvalidIndex);
+  std::vector<EmitterProfile> non_area_profiles;
+  non_area_profiles.reserve(data.emitter_profiles.size());
+  for (uint32_t old_index = 0u; old_index < data.emitter_profiles.size(); ++old_index) {
+    const EmitterProfile& profile = data.emitter_profiles[old_index];
+    if (profile.cls == EmitterProfile::Class::Area) {
+      continue;
+    }
+    old_to_new[old_index] = static_cast<uint32_t>(non_area_profiles.size());
+    non_area_profiles.emplace_back(profile);
+  }
+  remap_emitter_attachments(data.hierarchy, old_to_new);
+  remap_emitter_references(non_area_profiles, old_to_new);
+  data.emitter_profiles = std::move(non_area_profiles);
 
   // Clear triangle emitter references (now point to profiles, not instances)
   for (Triangle& tri : data.triangles) {
@@ -2263,20 +2638,19 @@ bool SceneRepresentationImpl::delete_emitter(uint32_t emitter_index) {
     return false;
   }
 
-  // Remove the emitter profile
-  data.emitter_profiles.erase(data.emitter_profiles.begin() + emitter_index);
-
-  for (auto& current_profile : data.emitter_profiles) {
-    if ((current_profile.cls != EmitterProfile::Class::Directional) || (current_profile.reference_emitter_index == kInvalidIndex)) {
+  std::vector<uint32_t> old_to_new(data.emitter_profiles.size(), kInvalidIndex);
+  std::vector<EmitterProfile> retained_profiles;
+  retained_profiles.reserve(data.emitter_profiles.size() - 1u);
+  for (uint32_t old_index = 0u; old_index < data.emitter_profiles.size(); ++old_index) {
+    if (old_index == emitter_index) {
       continue;
     }
-
-    if (current_profile.reference_emitter_index == emitter_index) {
-      current_profile.reference_emitter_index = kInvalidIndex;
-    } else if (current_profile.reference_emitter_index > emitter_index) {
-      current_profile.reference_emitter_index -= 1u;
-    }
+    old_to_new[old_index] = static_cast<uint32_t>(retained_profiles.size());
+    retained_profiles.emplace_back(data.emitter_profiles[old_index]);
   }
+  remap_emitter_attachments(data.hierarchy, old_to_new);
+  remap_emitter_references(retained_profiles, old_to_new);
+  data.emitter_profiles = std::move(retained_profiles);
 
   // Drop stale atmosphere/sun references after profile indices changed.
   setup_atmosphere_references();

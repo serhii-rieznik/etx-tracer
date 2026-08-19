@@ -200,6 +200,7 @@ struct ETX_ALIGNED VCMLightVertex {
     , nrm(i.nrm)
     , triangle_index(i.triangle_index)
     , material_index(i.material_index)
+    , instance_index(i.instance_index)
     , medium_index(s.medium_index)
     , is_medium(false)
     , contains_diffraction(s.contains_diffraction())
@@ -221,6 +222,7 @@ struct ETX_ALIGNED VCMLightVertex {
   float3 nrm = {};
   uint32_t triangle_index = kInvalidIndex;
   uint32_t material_index = kInvalidIndex;
+  uint32_t instance_index = kInvalidIndex;
   uint32_t medium_index = kInvalidIndex;
   bool is_medium = false;
   bool contains_diffraction = false;
@@ -229,7 +231,11 @@ struct ETX_ALIGNED VCMLightVertex {
   uint32_t path_index = 0;
 
   ETX_SHARED_INLINE Vertex vertex(const Scene& s) const {
-    return lerp_vertex(s, s.triangles[triangle_index], bc);
+    Vertex result = lerp_vertex(s, s.triangles[triangle_index], bc);
+    if (instance_index < s.instances.count) {
+      result = scene_instance_transform_vertex(s.instances[instance_index], result);
+    }
+    return result;
   }
 };
 
@@ -268,7 +274,8 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
   ETX_VALIDATE(state.throughput);
 
   if (path_source == PathSource::Light) {
-    state.throughput *= fix_shading_normal(tri.geo_n, intersection.nrm, intersection.w_i, bsdf_sample.w_o);
+    const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, intersection.instance_index);
+    state.throughput *= fix_shading_normal(geo_normal, intersection.nrm, intersection.w_i, bsdf_sample.w_o);
   }
 
   if (state.throughput.is_zero()) {
@@ -310,7 +317,7 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
   }
 
   state.ray.d = bsdf_sample.w_o;
-  state.ray.o = shading_pos(scene, tri, intersection.barycentric, bsdf_sample.w_o);
+  state.ray.o = shading_pos(scene, tri, intersection.barycentric, bsdf_sample.w_o, intersection.instance_index);
   state.ray.max_t = kMaxFloat;
   state.ray.min_t = kRayEpsilon;
   state.eta *= bsdf_sample.eta;
@@ -374,7 +381,7 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_emitter_state(uint32_t index, const 
 
   state.ray = {emitter_sample.origin, emitter_sample.direction};
   if (emitter_sample.triangle_index != kInvalidIndex) {
-    state.ray.o = shading_pos(scene, scene.triangles[emitter_sample.triangle_index], emitter_sample.barycentric, state.ray.d);
+    state.ray.o = shading_pos(scene, scene.triangles[emitter_sample.triangle_index], emitter_sample.barycentric, state.ray.d, emitter_sample.instance_index);
   }
 
   state.d_vcm = emitter_sample.is_distant ? 1.0f / emitter_sample.pdf_area : 1.0f / emitter_sample.pdf_dir;
@@ -494,10 +501,11 @@ ETX_SHARED_INLINE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSo
     return false;
 
   const auto& tri = scene.triangles[intersection.triangle_index];
-  uint32_t new_medium = (dot(tri.geo_n, state.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
+  const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, intersection.instance_index);
+  uint32_t new_medium = (dot(geo_normal, state.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
   state.path_distance += intersection.t;
   state.medium_index = new_medium;
-  state.ray.o = shading_pos(scene, tri, intersection.barycentric, state.ray.d);
+  state.ray.o = shading_pos(scene, tri, intersection.barycentric, state.ray.d, intersection.instance_index);
   state.ray.max_t = kMaxFloat;
   state.ray.min_t = kRayEpsilon;
   return true;
@@ -521,8 +529,8 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
     return {};
   }
 
-  const bool contains_diffraction = state.contains_diffraction() ||
-                                    ((camera_at_medium == false) && (scene.materials[isect->material_index].cls == MaterialClass::DiffractionGrating));
+  const bool contains_diffraction =
+    state.contains_diffraction() || ((camera_at_medium == false) && (scene.materials[isect->material_index].cls == MaterialClass::DiffractionGrating));
   if (vcm_contribution_enabled(state, contains_diffraction) == false) {
     return {};
   }
@@ -555,7 +563,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
     reverse_pdf = bsdf::reverse_pdf(data, w_o, mat, state.sampler);
 
     const auto& tri = scene.triangles[isect->triangle_index];
-    origin = shading_pos(scene, tri, isect->barycentric, w_o);
+    origin = shading_pos(scene, tri, isect->barycentric, w_o, isect->instance_index);
   } else {
     const auto& medium = scene.mediums[state.medium_index];
     float p = medium_phase_function(medium, state.ray.d, w_o);
@@ -589,7 +597,8 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
 
   if (camera_at_medium == false) {
     const auto& tri = scene.triangles[isect->triangle_index];
-    weight *= fix_shading_normal(tri.geo_n, isect->nrm, isect->w_i, w_o);
+    const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, isect->instance_index);
+    weight *= fix_shading_normal(geo_normal, isect->nrm, isect->w_i, w_o);
   }
 
   return tr * scatter * state.throughput * camera_sample.weight * weight;
@@ -686,8 +695,8 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, cons
   if ((options.connect_to_light() == false) || (state.total_path_depth + 1 > scene.options.max_path_length) || (state.total_path_depth + 1 < scene.options.min_path_length))
     return {state.spect, 0.0f};
 
-  const bool contains_diffraction = state.contains_diffraction() ||
-                                    ((camera_at_medium == false) && (scene.materials[isect->material_index].cls == MaterialClass::DiffractionGrating));
+  const bool contains_diffraction =
+    state.contains_diffraction() || ((camera_at_medium == false) && (scene.materials[isect->material_index].cls == MaterialClass::DiffractionGrating));
   if (vcm_contribution_enabled(state, contains_diffraction) == false)
     return {state.spect, 0.0f};
 
@@ -726,8 +735,8 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, cons
     scatter = connection_eval.bsdf;
     reverse_pdf = bsdf::reverse_pdf(connection_data, w_o, mat, state.sampler);
     const auto& tri = scene.triangles[isect->triangle_index];
-    origin = shading_pos(scene, tri, isect->barycentric, normalize(emitter_sample.origin - isect->pos));
-    camera_factor = fabsf(dot(w_o, tri.geo_n));
+    origin = shading_pos(scene, tri, isect->barycentric, normalize(emitter_sample.origin - isect->pos), isect->instance_index);
+    camera_factor = fabsf(dot(w_o, scene_triangle_world_geometric_normal(scene, tri, isect->instance_index)));
   }
 
   auto tr = vcm_transmittance(rt, scene, state, origin, emitter_sample.origin);
@@ -834,7 +843,8 @@ ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Scene& scene, const Spe
     ETX_VALIDATE(light_area_pdf);
     light_rev_pdf = bsdf::reverse_pdf(light_data, -w_o, light_mat, state.sampler);
     ETX_VALIDATE(light_rev_pdf);
-    light_scatter = light_bsdf.bsdf * fix_shading_normal(light_tri.geo_n, light_data.nrm, light_data.w_i, -w_o);
+    const float3 light_geo_normal = scene_triangle_world_geometric_normal(scene, light_tri, light_vertex.instance_index);
+    light_scatter = light_bsdf.bsdf * fix_shading_normal(light_geo_normal, light_data.nrm, light_data.w_i, -w_o);
   }
 
   float vmW_pair = (camera_at_medium || light_vertex.is_medium) ? 0.0f : vm_weight;
@@ -859,12 +869,9 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light_path(const Scene& scene,
   SpectralResponse result = {state.spect, 0.0f};
   for (uint64_t i = 0; i < light_path.count; ++i) {
     const auto& light_vertex = light_vertices[light_path.index + i];
-    const bool camera_vertex_diffraction = (camera_at_medium == false) &&
-                                           (scene.materials[isect->material_index].cls == MaterialClass::DiffractionGrating);
-    const bool light_vertex_diffraction = (light_vertex.is_medium == false) &&
-                                          (scene.materials[light_vertex.material_index].cls == MaterialClass::DiffractionGrating);
-    const bool contains_diffraction = state.contains_diffraction() || light_vertex.contains_diffraction ||
-                                      camera_vertex_diffraction || light_vertex_diffraction;
+    const bool camera_vertex_diffraction = (camera_at_medium == false) && (scene.materials[isect->material_index].cls == MaterialClass::DiffractionGrating);
+    const bool light_vertex_diffraction = (light_vertex.is_medium == false) && (scene.materials[light_vertex.material_index].cls == MaterialClass::DiffractionGrating);
+    const bool contains_diffraction = state.contains_diffraction() || light_vertex.contains_diffraction || camera_vertex_diffraction || light_vertex_diffraction;
     if (vcm_contribution_enabled(state, contains_diffraction) == false) {
       continue;
     }
@@ -877,8 +884,8 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light_path(const Scene& scene,
 
     float3 target_position = {};
     SpectralResponse value = {};
-    bool connected = vcm_connect_to_light_vertex(scene, state.spect, state, light_vertex, options, camera_at_medium, isect, medium_pos, iteration.vm_weight,
-      state.medium_index, target_position, value);
+    bool connected = vcm_connect_to_light_vertex(scene, state.spect, state, light_vertex, options, camera_at_medium, isect, medium_pos, iteration.vm_weight, state.medium_index,
+      target_position, value);
     if (connected) {
       if (camera_at_medium) {
         auto tr = vcm_transmittance(rt, scene, state, medium_pos, light_vertex.pos);
@@ -888,7 +895,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light_path(const Scene& scene,
         }
       } else {
         const auto& tri = scene.triangles[isect->triangle_index];
-        float3 p0 = shading_pos(scene, tri, isect->barycentric, normalize(target_position - isect->pos));
+        float3 p0 = shading_pos(scene, tri, isect->barycentric, normalize(target_position - isect->pos), isect->instance_index);
         auto tr = vcm_transmittance(rt, scene, state, p0, target_position);
         if (tr.is_zero() == false) {
           result += tr * value;
@@ -944,8 +951,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
       }
 
       const auto& light_throughput = throughputs[j];
-      const bool query_matches = (light_throughput.flags == state.spect.flags) &&
-                                 ((state.spect.spectral() == false) || (light_throughput.wavelength == state.spect.wavelength));
+      const bool query_matches = (light_throughput.flags == state.spect.flags) && ((state.spect.spectral() == false) || (light_throughput.wavelength == state.spect.wavelength));
       if (query_matches == false) {
         continue;
       }

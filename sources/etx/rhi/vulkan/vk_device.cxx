@@ -1776,6 +1776,9 @@ RHICreateBindlessResult VKDevice::create_acceleration_structure(const RHIAcceler
   VkAccelerationStructureBuildGeometryInfoKHR build_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
   build_info.type = (desc.type == RHIAccelerationStructureType::BottomLevel) ? VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR : VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
   build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+  if (desc.allow_update) {
+    build_info.flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+  }
 
   VkAccelerationStructureBuildSizesInfoKHR size_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
 
@@ -1851,7 +1854,7 @@ RHICreateBindlessResult VKDevice::create_acceleration_structure(const RHIAcceler
   as_data.acceleration_structure = vk_as;
   as_data.buffer = buffer_res.handle;
   as_data.desc = desc;
-  as_data.build_scratch_size = size_info.buildScratchSize;
+  as_data.build_scratch_size = desc.allow_update ? max(size_info.buildScratchSize, size_info.updateScratchSize) : size_info.buildScratchSize;
   _impl->acceleration_structures.set_handle_to_index(as_handle, index);
   _impl->as_to_buffer_map[as_handle] = buffer_res.handle;
 

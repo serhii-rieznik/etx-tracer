@@ -12,6 +12,7 @@
 #include <etx/render/host/buffer_pool.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
+#include <etx/render/host/scene_hierarchy.hxx>
 namespace etx {
 
 struct AtmosphereEmitterParameters {
@@ -29,6 +30,9 @@ struct UpdateFlags {
     VerticesBtn,
     VerticesTex,
     Meshes,
+    Hierarchy,
+    Transforms,
+    Attachments,
     Materials,
     Spectra,
     Emitters,
@@ -78,6 +82,9 @@ struct SceneHashes {
   uint64_t triangles_hash = 0;
   uint64_t triangle_indices_hash = 0;
   uint64_t meshes_hash = 0;
+  uint64_t hierarchy_hash = 0;
+  uint64_t transforms_hash = 0;
+  uint64_t attachments_hash = 0;
   uint64_t materials_hash = 0;
   uint64_t spectra_hash = 0;
   uint64_t emitter_profiles_hash = 0;
@@ -98,6 +105,9 @@ struct SceneHashes {
     result[UpdateFlags::VerticesTex] = (vertices_tex_hash != existing.vertices_tex_hash);
     result[UpdateFlags::Triangles] = (triangles_hash != existing.triangles_hash);
     result[UpdateFlags::Meshes] = (meshes_hash != existing.meshes_hash);
+    result[UpdateFlags::Hierarchy] = (hierarchy_hash != existing.hierarchy_hash);
+    result[UpdateFlags::Transforms] = (transforms_hash != existing.transforms_hash);
+    result[UpdateFlags::Attachments] = (attachments_hash != existing.attachments_hash);
     result[UpdateFlags::Materials] = (materials_hash != existing.materials_hash);
     result[UpdateFlags::Spectra] = (spectra_hash != existing.spectra_hash);
     result[UpdateFlags::Emitters] = (emitter_profiles_hash != existing.emitter_profiles_hash);
@@ -109,16 +119,18 @@ struct SceneHashes {
     result[UpdateFlags::Options] = (options_hash != existing.options_hash);
 
     result[UpdateFlags::AnyGeometry] = result[UpdateFlags::VerticesPos] || result[UpdateFlags::VerticesNrm] || result[UpdateFlags::VerticesTan] ||
-                                       result[UpdateFlags::VerticesBtn] || result[UpdateFlags::VerticesTex] || result[UpdateFlags::Triangles] || result[UpdateFlags::Meshes];
+                                       result[UpdateFlags::VerticesBtn] || result[UpdateFlags::VerticesTex] || result[UpdateFlags::Triangles] || result[UpdateFlags::Meshes] ||
+                                       result[UpdateFlags::Hierarchy] || result[UpdateFlags::Transforms] || result[UpdateFlags::Attachments];
 
-    result[UpdateFlags::AnyGeometryStructure] = result[UpdateFlags::VerticesPos] || (triangle_indices_hash != existing.triangle_indices_hash);
+    result[UpdateFlags::AnyGeometryStructure] =
+      result[UpdateFlags::VerticesPos] || (triangle_indices_hash != existing.triangle_indices_hash) || result[UpdateFlags::Hierarchy] || result[UpdateFlags::Attachments];
 
     result[UpdateFlags::AnyGeometryAttributes] =
       result[UpdateFlags::VerticesNrm] || result[UpdateFlags::VerticesTan] || result[UpdateFlags::VerticesBtn] || result[UpdateFlags::VerticesTex];
 
     result[UpdateFlags::AnyMaterials] = result[UpdateFlags::Materials] || result[UpdateFlags::Spectra];
 
-    result[UpdateFlags::EmbreeScene] = result[UpdateFlags::AnyGeometryStructure];
+    result[UpdateFlags::EmbreeScene] = result[UpdateFlags::AnyGeometryStructure] || result[UpdateFlags::Transforms];
 
     return result;
   }
@@ -149,6 +161,7 @@ struct SceneData {
   std::vector<Image> images_vector;
   std::vector<Medium> mediums_vector;
   std::vector<Scene::EnergyCompensationInterface> energy_compensation_interfaces;
+  SceneHierarchy hierarchy;
 
   BufferPool buffer_pool;
   ImagePool images;
@@ -190,6 +203,9 @@ struct SceneData {
   uint32_t clone_material(const Material& src, const char* name);
 
   uint32_t add_mesh(const char* name, uint32_t triangle_offset, uint32_t triangle_count, const float3& bbox_min, const float3& bbox_max);
+  uint32_t add_mesh_asset(const char* name, uint32_t triangle_offset, uint32_t triangle_count, const float3& bbox_min, const float3& bbox_max);
+
+  bool resolve_hierarchy();
 
   uint32_t add_image(const char* path, uint32_t options, const float2& offset, const float2& scale);
   uint32_t add_image(const float4* data, const uint2& dim, uint32_t options, const float2& offset, const float2& scale);

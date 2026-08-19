@@ -32,6 +32,28 @@ struct ETX_ALIGNED Mesh {
   uint32_t triangle_count ETX_INIT(0u);
 };
 
+struct ETX_ALIGNED AffineTransform {
+  float4 rows[3] ETX_INIT({
+    {1.0f, 0.0f, 0.0f, 0.0f},
+    {0.0f, 1.0f, 0.0f, 0.0f},
+    {0.0f, 0.0f, 1.0f, 0.0f},
+  });
+};
+
+struct ETX_ALIGNED SceneInstance {
+  enum : uint32_t {
+    Mirrored = 1u << 0u,
+    Enabled = 1u << 1u,
+  };
+
+  AffineTransform object_to_world ETX_INIT({});
+  AffineTransform world_to_object ETX_INIT({});
+  uint32_t mesh_index ETX_INIT(kInvalidIndex);
+  uint32_t flags ETX_INIT(0u);
+  uint32_t emitter_offset ETX_INIT(0u);
+  uint32_t emitter_count ETX_INIT(0u);
+};
+
 struct ETX_ALIGNED LocalFrame {
   enum : uint32_t {
     EnteringMaterial = 1u << 0u,
@@ -69,6 +91,7 @@ struct ETX_ALIGNED IntersectionBase {
   float2 barycentric ETX_INIT({});
   uint32_t triangle_index ETX_INIT(kInvalidIndex);
   float t ETX_INIT(kMaxFloat);
+  uint32_t instance_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED Intersection {
@@ -83,6 +106,7 @@ struct ETX_ALIGNED Intersection {
   float t ETX_INIT(0.0f);
   uint32_t material_index ETX_INIT(kInvalidIndex);
   uint32_t emitter_index ETX_INIT(kInvalidIndex);
+  uint32_t instance_index ETX_INIT(kInvalidIndex);
 
 #if (ETX_CPP)
   ETX_SHARED_INLINE operator Vertex() const {

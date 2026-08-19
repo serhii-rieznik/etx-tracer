@@ -478,6 +478,11 @@ void UI::validate_selections(SceneRepresentation& scene_rep) {
   }
 
   switch (_selection.kind) {
+    case SelectionKind::Node:
+      if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= scene_rep.data().hierarchy.nodes.size())) {
+        set_selection(SelectionKind::Rendering, 0, false);
+      }
+      break;
     case SelectionKind::Material:
       if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= _material_mapping.size())) {
         set_selection(SelectionKind::Rendering, 0, false);
@@ -3531,6 +3536,39 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
 
     ImGui::Separator();
 
+    SceneData& scene_data = scene_rep.data();
+    ImGui::Text("Nodes (%zu)", scene_data.hierarchy.nodes.size());
+    if (scene_data.hierarchy.nodes.empty()) {
+      ImGui::TextDisabled("None");
+    } else if (ImGui::BeginListBox("##nodes_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
+      std::vector<uint32_t> depths(scene_data.hierarchy.nodes.size(), 0u);
+      for (uint32_t node_index : scene_data.hierarchy.evaluation_order) {
+        const SceneNode& node = scene_data.hierarchy.nodes[node_index];
+        if (node.parent_index != kInvalidIndex) {
+          depths[node_index] = depths[node.parent_index] + 1u;
+        }
+        ImGui::PushID(static_cast<int>(node_index + 4096u));
+        const float indent = static_cast<float>(depths[node_index]) * ImGui::GetTreeNodeToLabelSpacing();
+        ImGui::Indent(indent);
+        const bool node_selected = (_selection.kind == SelectionKind::Node) && (_selection.index == static_cast<int32_t>(node_index));
+        const bool enabled = (node.flags & SceneNode::Enabled) != 0u;
+        if (enabled == false) {
+          ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        }
+        if (ImGui::Selectable(scene_data.hierarchy.node_names[node_index].c_str(), node_selected)) {
+          set_selection(SelectionKind::Node, static_cast<int32_t>(node_index));
+        }
+        if (enabled == false) {
+          ImGui::PopStyleColor();
+        }
+        ImGui::Unindent(indent);
+        ImGui::PopID();
+      }
+      ImGui::EndListBox();
+    }
+
+    ImGui::Separator();
+
     ImGui::Text("Cameras (%zu)", static_cast<size_t>(_camera_mapping.size()));
     if (_camera_mapping.empty()) {
       ImGui::TextDisabled("None");
@@ -3691,6 +3729,9 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
   std::string properties_title = "Properties";
 
   switch (_selection.kind) {
+    case SelectionKind::Node:
+      properties_title = "Node";
+      break;
     case SelectionKind::Material:
       if (selected_material_count() > 1u) {
         properties_title = "Materials";
@@ -3753,6 +3794,10 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
   std::string properties_window_name = properties_title + "###properties";
   ctx.with_window(UIProperties, properties_window_name.c_str(), [&]() {
     switch (_selection.kind) {
+      case SelectionKind::Node: {
+        build_node_selection_properties(scene_rep, ctx);
+        break;
+      }
       case SelectionKind::Material: {
         build_material_selection_properties(scene_rep, ctx, data);
         break;
@@ -3791,6 +3836,77 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
         break;
     }
   });
+}
+
+void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const BuildContext&) {
+  SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
+  if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= hierarchy.nodes.size())) {
+    ImGui::Text("Invalid node selection");
+    return;
+  }
+
+  const uint32_t node_index = static_cast<uint32_t>(_selection.index);
+  SceneNode& node = hierarchy.nodes[node_index];
+  update_name_buffer(SelectionKind::Node, _selection.index, hierarchy.node_names[node_index].c_str());
+  ImGui::AlignTextToFramePadding();
+  ImGui::Text("Name");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  const bool name_edit_active = ImGui::InputText("##node_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
+  if (ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter))) {
+    hierarchy.node_names[node_index] = _name_edit_buffer;
+  }
+
+  bool enabled = (node.flags & SceneNode::Enabled) != 0u;
+  if (ImGui::Checkbox("Enabled", &enabled)) {
+    if (hierarchy.set_enabled(node_index, enabled) && scene_rep.data().resolve_hierarchy()) {
+      scene_rep.update_medium_bounds();
+      scene_rep.update_active_camera();
+    }
+  }
+
+  std::vector<const char*> parent_names;
+  parent_names.reserve(hierarchy.nodes.size() + 1u);
+  parent_names.emplace_back("None");
+  for (const std::string& name : hierarchy.node_names) {
+    parent_names.emplace_back(name.c_str());
+  }
+  int32_t parent_selection = node.parent_index == kInvalidIndex ? 0 : static_cast<int32_t>(node.parent_index + 1u);
+  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  if (ImGui::Combo("Parent", &parent_selection, parent_names.data(), static_cast<int32_t>(parent_names.size()))) {
+    const uint32_t parent_index = parent_selection == 0 ? kInvalidIndex : static_cast<uint32_t>(parent_selection - 1);
+    if (hierarchy.set_parent(node_index, parent_index)) {
+      if (scene_rep.data().resolve_hierarchy()) {
+        scene_rep.update_medium_bounds();
+        scene_rep.update_active_camera();
+      }
+    }
+  }
+
+  ImGui::Spacing();
+  ImGui::Text("Local transform");
+  AffineTransform transform = node.local_transform;
+  bool transform_changed = false;
+  transform_changed = ImGui::DragFloat4("X##node_transform", &transform.rows[0].x, 0.01f) || transform_changed;
+  transform_changed = ImGui::DragFloat4("Y##node_transform", &transform.rows[1].x, 0.01f) || transform_changed;
+  transform_changed = ImGui::DragFloat4("Z##node_transform", &transform.rows[2].x, 0.01f) || transform_changed;
+  if (transform_changed) {
+    if (hierarchy.set_local_transform(node_index, transform) && scene_rep.data().resolve_hierarchy()) {
+      scene_rep.update_medium_bounds();
+      scene_rep.update_active_camera();
+    }
+  }
+
+  ImGui::Spacing();
+  ImGui::Text("Attachments: %u", node.attachment_count);
+  static constexpr const char* kAttachmentNames[] = {"Mesh", "Camera", "Emitter", "Medium"};
+  const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+  for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+    const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+    const uint32_t type_index = static_cast<uint32_t>(attachment.type);
+    const char* type_name = type_index < std::size(kAttachmentNames) ? kAttachmentNames[type_index] : "Unknown";
+    ImGui::BulletText("%s %u", type_name, attachment.resource_index);
+  }
 }
 
 bool UI::build_material_class_selector(Material& material) {

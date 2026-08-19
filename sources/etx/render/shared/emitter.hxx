@@ -79,7 +79,7 @@ struct Emitter {
   float spectrum_weight = 0.0f;
   float additional_weight = 0.0f;
   float triangle_area = 0.0f;
-  float pad0 = 0.0f;
+  uint32_t instance_index = kInvalidIndex;
   float pad1 = 0.0f;
 
   ETX_SHARED_INLINE bool is_distant() const {
@@ -113,6 +113,7 @@ struct ETX_ALIGNED EmitterSample {
   float2 image_uv = {};
   uint32_t emitter_index = kInvalidIndex;
   uint32_t triangle_index = kInvalidIndex;
+  uint32_t instance_index = kInvalidIndex;
   uint32_t medium_index = kInvalidIndex;
 
   bool is_delta = false;

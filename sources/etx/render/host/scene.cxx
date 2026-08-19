@@ -310,8 +310,9 @@ SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuer
     case EmitterProfile::Class::Area: {
       const auto& tri = scene.triangles[em_inst.triangle_index];
       const Material& material = scene.materials[tri.material_index];
+      const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
 
-      if (dot(tri.geo_n, query.target_position - query.source_position) >= 0.0f) {
+      if (dot(geo_normal, query.target_position - query.source_position) >= 0.0f) {
         return {spect, 0.0f};
       }
       pdf_area = emitter_pdf_area_local(em_inst);
@@ -319,7 +320,7 @@ SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuer
       float3 dp = query.source_position - query.target_position;
       float distance_squared = dot(dp, dp);
       if (distance_squared > 0.0f) {
-        float cos_t = fabsf(dot(dp, tri.geo_n)) / sqrtf(distance_squared);
+        float cos_t = fabsf(dot(dp, geo_normal)) / sqrtf(distance_squared);
         float exponent = collimation_to_exponent(material.emission_collimation);
         float cos_tx = query.directly_visible ? cos_t : powf(cos_t, exponent);
         if (cos_tx > kEpsilon) {
@@ -385,7 +386,7 @@ float emitter_sample_pdf(const Emitter& em_inst, ETX_IN(float3, in_direction)) {
   }
 }
 
-float2 emitter_environment_pdf(ETX_IN(float3, in_direction), bool target_is_surface, uint32_t target_triangle_index) {
+float2 emitter_environment_pdf(ETX_IN(float3, in_direction), bool target_is_surface, uint32_t target_triangle_index, uint32_t target_instance_index) {
   const auto& scene = scene_global_get();
   uint32_t environment_emitter_count = environment_emitter_shared_count();
   if (environment_emitter_count == 0u) {
@@ -408,7 +409,8 @@ float2 emitter_environment_pdf(ETX_IN(float3, in_direction), bool target_is_surf
       return {};
     }
 
-    w_o_dot_n = fabsf(dot(scene.triangles[target_triangle_index].geo_n, in_direction));
+    const Triangle& triangle = scene.triangles[target_triangle_index];
+    w_o_dot_n = fabsf(dot(scene_triangle_world_geometric_normal(scene, triangle, target_instance_index), in_direction));
   }
 
   float pdf_area = w_o_dot_n / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
@@ -455,14 +457,19 @@ EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spec
     case EmitterProfile::Class::Area: {
       const auto& tri = scene.triangles[em_inst.triangle_index];
       result.barycentric = random_barycentric(smp);
-      result.origin = lerp_pos(scene, tri, result.barycentric);
-      result.normal = lerp_normal(scene, tri, result.barycentric);
+      Vertex vertex = lerp_vertex(scene, tri, result.barycentric);
+      if (em_inst.instance_index < scene.instances.count) {
+        vertex = scene_instance_transform_vertex(scene.instances[em_inst.instance_index], vertex);
+      }
+      result.origin = vertex.pos;
+      result.normal = vertex.nrm;
       result.direction = normalize(result.origin - from_point);
+      result.instance_index = em_inst.instance_index;
 
       EmitterRadianceQuery q = {
         .source_position = from_point,
         .target_position = result.origin,
-        .uv = lerp_uv(scene, tri, result.barycentric),
+        .uv = vertex.tex,
       };
 
       result.value = emitter_get_radiance(em_inst, spect, q, result.pdf_area, result.pdf_dir, result.pdf_dir_out);
@@ -532,6 +539,9 @@ EmitterSample sample_emission_from_emitter(const Emitter& em_inst, const Spectra
       result.barycentric = random_barycentric(smp.next_2d());
 
       auto vertex = lerp_vertex(scene, tri, result.barycentric);
+      if (em_inst.instance_index < scene.instances.count) {
+        vertex = scene_instance_transform_vertex(scene.instances[em_inst.instance_index], vertex);
+      }
       result.origin = vertex.pos;
       result.normal = vertex.nrm;
       result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, vertex.tan, vertex.btn, collimation_to_exponent(material.emission_collimation));
@@ -605,6 +615,7 @@ EmitterSample sample_emission_from_emitter(const Emitter& em_inst, const Spectra
   }
 
   result.triangle_index = em_inst.triangle_index;
+  result.instance_index = em_inst.instance_index;
   result.medium_index = emitter_external_medium_index(em_inst);
   result.is_delta = em_inst.is_delta();
   result.is_distant = em_inst.is_distant();

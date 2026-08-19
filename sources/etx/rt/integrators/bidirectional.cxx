@@ -145,7 +145,7 @@ struct PathVertex {
 
   static float2 pdf_for_environment_emitter(SpectralQuery spect, const float3& w_i, const PathVertex& target_vertex) {
     (void)spect;
-    return ::etx::emitter_environment_pdf(w_i, target_vertex.is_surface_interaction(), target_vertex.intersection.triangle_index);
+    return ::etx::emitter_environment_pdf(w_i, target_vertex.is_surface_interaction(), target_vertex.intersection.triangle_index, target_vertex.intersection.instance_index);
   }
 
   static float convert_solid_angle_pdf_to_area(float pdf_dir, const PathVertex& from_vertex, const PathVertex& to_vertex) {
@@ -343,9 +343,7 @@ struct CPUBidirectionalImpl : public Task {
       }
 
       auto xyz = (result / (spect.sampling_pdf() * branch_pdf(spect))).to_rgb();
-      auto albedo = contribution_enabled(spect, gbuffer.contains_diffraction)
-                      ? (gbuffer.albedo / (spect.sampling_pdf() * branch_pdf(spect))).to_rgb()
-                      : float3{};
+      auto albedo = contribution_enabled(spect, gbuffer.contains_diffraction) ? (gbuffer.albedo / (spect.sampling_pdf() * branch_pdf(spect))).to_rgb() : float3{};
       film.submit(xyz, gbuffer.normal, albedo, pixel);
     }
   }
@@ -372,7 +370,8 @@ struct CPUBidirectionalImpl : public Task {
     curr.pdf.from_prev = em.pdf_area;
     if (curr.is_surface_interaction()) {
       const auto& tri = scene.triangles[curr.intersection.triangle_index];
-      curr.pdf.from_prev *= fabsf(dot(em.direction, tri.geo_n));
+      const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, curr.intersection.instance_index);
+      curr.pdf.from_prev *= fabsf(dot(em.direction, geo_normal));
       ETX_VALIDATE(curr.pdf.from_prev);
     }
   }
@@ -413,12 +412,16 @@ struct CPUBidirectionalImpl : public Task {
       // G term = abs(cos(dw, y_i.nrm) * cos(dw, z_i.nrm)) / dwl;
       // cosines already accounted in "bsdf", 1.0 / dwl multiplied below
       const Material* y_i_material = y_i.is_surface_interaction() ? &rt.scene().materials[y_i.intersection.material_index] : nullptr;
-      float3 y_i_geo_n = y_i.is_surface_interaction() ? rt.scene().triangles[y_i.intersection.triangle_index].geo_n : float3{};
+      float3 y_i_geo_n = y_i.is_surface_interaction()
+                           ? scene_triangle_world_geometric_normal(rt.scene(), rt.scene().triangles[y_i.intersection.triangle_index], y_i.intersection.instance_index)
+                           : float3{};
       auto bsdf_y = y_i.bsdf_in_direction(spect, PathSource::Light, dw, y_i_material, y_i_geo_n, smp).bsdf;
       ETX_VALIDATE(bsdf_y);
 
       const Material* z_i_material = z_i.is_surface_interaction() ? &rt.scene().materials[z_i.intersection.material_index] : nullptr;
-      float3 z_i_geo_n = z_i.is_surface_interaction() ? rt.scene().triangles[z_i.intersection.triangle_index].geo_n : float3{};
+      float3 z_i_geo_n = z_i.is_surface_interaction()
+                           ? scene_triangle_world_geometric_normal(rt.scene(), rt.scene().triangles[z_i.intersection.triangle_index], z_i.intersection.instance_index)
+                           : float3{};
       auto bsdf_z = z_i.bsdf_in_direction(spect, PathSource::Camera, -dw, z_i_material, z_i_geo_n, smp).bsdf;
       ETX_VALIDATE(bsdf_z);
 
@@ -545,8 +548,9 @@ struct CPUBidirectionalImpl : public Task {
     if (scene.materials[a_intersection.material_index].cls == MaterialClass::Boundary) {
       const auto& m = scene.materials[a_intersection.material_index];
       const auto& tri = scene.triangles[a_intersection.triangle_index];
-      payload.medium_index = (dot(tri.geo_n, ray.d) < 0.0f) ? m.int_medium : m.ext_medium;
-      ray.o = shading_pos(scene, tri, a_intersection.barycentric, ray.d);
+      const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, a_intersection.instance_index);
+      payload.medium_index = (dot(geo_normal, ray.d) < 0.0f) ? m.int_medium : m.ext_medium;
+      ray.o = shading_pos(scene, tri, a_intersection.barycentric, ray.d, a_intersection.instance_index);
       ray.min_t = kRayEpsilon;
       ray.max_t = kMaxFloat;
       return InteractionResult::Continue;
@@ -635,13 +639,14 @@ struct CPUBidirectionalImpl : public Task {
 
       const auto& tri = scene.triangles[a_intersection.triangle_index];
 
-      ray.o = shading_pos(scene, tri, curr.intersection.barycentric, bsdf_sample.w_o);
+      ray.o = shading_pos(scene, tri, curr.intersection.barycentric, bsdf_sample.w_o, curr.intersection.instance_index);
       ray.d = bsdf_sample.w_o;
       ray.min_t = kRayEpsilon;
       ray.max_t = kMaxFloat;
 
       if (payload.mode == PathSource::Light) {
-        payload.throughput *= fix_shading_normal(tri.geo_n, curr.intersection.nrm, curr.intersection.w_i, bsdf_sample.w_o);
+        const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, curr.intersection.instance_index);
+        payload.throughput *= fix_shading_normal(geo_normal, curr.intersection.nrm, curr.intersection.w_i, bsdf_sample.w_o);
         ETX_VALIDATE(payload.throughput);
       }
     } else {
@@ -928,6 +933,7 @@ struct CPUBidirectionalImpl : public Task {
     curr.intersection.nrm = emitter_sample.normal;
     curr.intersection.w_i = emitter_sample.direction;
     curr.intersection.emitter_index = emitter_sample.emitter_index;
+    curr.intersection.instance_index = emitter_sample.instance_index;
     curr.medium = {.index = emitter_sample.medium_index};
     curr.throughput = emitter_sample.value;
     curr.pdf.bsdf_sample_next = emitter_sample.pdf_dir;
@@ -1053,7 +1059,9 @@ struct CPUBidirectionalImpl : public Task {
     const auto& emitter_instance = scene.emitter_instances[sampled_light_vertex.intersection.emitter_index];
     float p_sample = PathVertex::emitter_sample_pdf(emitter_instance, emitter_sample.direction);
     ETX_VALIDATE(p_sample);
-    float3 z_curr_geo_n = z_curr.is_surface_interaction() ? scene.triangles[z_curr.intersection.triangle_index].geo_n : float3{};
+    float3 z_curr_geo_n = z_curr.is_surface_interaction()
+                            ? scene_triangle_world_geometric_normal(scene, scene.triangles[z_curr.intersection.triangle_index], z_curr.intersection.instance_index)
+                            : float3{};
     float from_emitter = PathVertex::pdf_from_emitter(spect, sampled_light_vertex, z_curr, z_curr_geo_n);
     ETX_VALIDATE(from_emitter);
     const Material* z_curr_material = z_curr.is_surface_interaction() ? &scene.materials[z_curr.intersection.material_index] : nullptr;
@@ -1237,7 +1245,9 @@ struct CPUBidirectionalImpl : public Task {
       } else {
         float p_sample = PathVertex::emitter_sample_pdf(emitter_instance, -z_curr.intersection.w_i);
         ETX_VALIDATE(p_sample);
-        float3 z_prev_geo_n = z_prev.is_surface_interaction() ? scene.triangles[z_prev.intersection.triangle_index].geo_n : float3{};
+        float3 z_prev_geo_n = z_prev.is_surface_interaction()
+                                ? scene_triangle_world_geometric_normal(scene, scene.triangles[z_prev.intersection.triangle_index], z_prev.intersection.instance_index)
+                                : float3{};
         float p_from = PathVertex::pdf_from_emitter(spect, z_curr, z_prev, z_prev_geo_n);
         ETX_VALIDATE(p_from);
         mis_weight = mis_weight_direct_hit(z_curr, z_prev, path_data, p_sample, p_from);
@@ -1334,7 +1344,9 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     const Material* z_curr_material = z_curr.is_surface_interaction() ? &rt.scene().materials[z_curr.intersection.material_index] : nullptr;
-    float3 z_curr_geo_n = z_curr.is_surface_interaction() ? rt.scene().triangles[z_curr.intersection.triangle_index].geo_n : float3{};
+    float3 z_curr_geo_n = z_curr.is_surface_interaction()
+                            ? scene_triangle_world_geometric_normal(rt.scene(), rt.scene().triangles[z_curr.intersection.triangle_index], z_curr.intersection.instance_index)
+                            : float3{};
     auto bsdf_eval = z_curr.bsdf_in_direction(spect, PathSource::Camera, emitter_sample.direction, z_curr_material, z_curr_geo_n, smp);
     if (bsdf_eval.bsdf.is_zero()) {
       return {spect, 0.0f};
@@ -1346,6 +1358,7 @@ struct CPUBidirectionalImpl : public Task {
     sampled_vertex.intersection.nrm = emitter_sample.normal;
     sampled_vertex.intersection.triangle_index = emitter_sample.triangle_index;
     sampled_vertex.intersection.emitter_index = emitter_sample.emitter_index;
+    sampled_vertex.intersection.instance_index = emitter_sample.instance_index;
 
     float sampling_pdf = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
     SpectralResponse emitter_throughput = emitter_sample.value / sampling_pdf;
@@ -1354,7 +1367,8 @@ struct CPUBidirectionalImpl : public Task {
     float3 shadow_origin = z_curr.intersection.pos;
     if (z_curr.is_surface_interaction()) {
       const auto& tri = scene.triangles[z_curr.intersection.triangle_index];
-      shadow_origin = shading_pos(scene, tri, z_curr.intersection.barycentric, normalize(sampled_vertex.intersection.pos - z_curr.intersection.pos));
+      shadow_origin =
+        shading_pos(scene, tri, z_curr.intersection.barycentric, normalize(sampled_vertex.intersection.pos - z_curr.intersection.pos), z_curr.intersection.instance_index);
     }
 
     SpectralResponse tr = rt.trace_transmittance(spect, scene, shadow_origin, sampled_vertex.intersection.pos, z_curr.medium, smp);
@@ -1392,7 +1406,9 @@ struct CPUBidirectionalImpl : public Task {
     sampled_vertex.intersection.w_i = camera_sample.direction;
 
     const Material* y_curr_material = y_curr.is_surface_interaction() ? &scene.materials[y_curr.intersection.material_index] : nullptr;
-    float3 y_curr_geo_n = y_curr.is_surface_interaction() ? scene.triangles[y_curr.intersection.triangle_index].geo_n : float3{};
+    float3 y_curr_geo_n = y_curr.is_surface_interaction()
+                            ? scene_triangle_world_geometric_normal(scene, scene.triangles[y_curr.intersection.triangle_index], y_curr.intersection.instance_index)
+                            : float3{};
     auto bsdf = y_curr.bsdf_in_direction(spect, PathSource::Light, camera_sample.direction, y_curr_material, y_curr_geo_n, smp).bsdf;
     if (bsdf.is_zero()) {
       return {spect, 0.0f};
@@ -1415,7 +1431,7 @@ struct CPUBidirectionalImpl : public Task {
     float3 origin = p0.intersection.pos;
     if (p0.is_surface_interaction()) {
       const auto& tri = scene.triangles[p0.intersection.triangle_index];
-      origin = shading_pos(scene, tri, p0.intersection.barycentric, normalize(p1 - p0.intersection.pos));
+      origin = shading_pos(scene, tri, p0.intersection.barycentric, normalize(p1 - p0.intersection.pos), p0.intersection.instance_index);
     }
     return rt.trace_transmittance(spect, scene, origin, p1, p0.medium, smp);
   }

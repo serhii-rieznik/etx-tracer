@@ -2,6 +2,7 @@
 
 #include "interop.hxx"
 #include "bounding_box.hxx"
+#include "math_shared.hxx"
 #include "spectrum.hxx"
 
 struct MediumGridType {
@@ -62,7 +63,29 @@ struct ETX_ALIGNED Medium {
   float phase_function_g ETX_INIT(0.0f);
   uint16_t enable_explicit_connections ETX_INIT(1u);
   Class cls ETX_INIT(Homogeneous);
+  AffineTransform world_to_object ETX_INIT({});
+  BoundingBox local_bounds ETX_INIT({});
 };
+
+ETX_SHARED_INLINE float3 medium_transform_point(ETX_IN(AffineTransform, transform), ETX_IN(float3, position)) {
+  return float3(transform.rows[0].x * position.x + transform.rows[0].y * position.y + transform.rows[0].z * position.z + transform.rows[0].w,
+    transform.rows[1].x * position.x + transform.rows[1].y * position.y + transform.rows[1].z * position.z + transform.rows[1].w,
+    transform.rows[2].x * position.x + transform.rows[2].y * position.y + transform.rows[2].z * position.z + transform.rows[2].w);
+}
+
+ETX_SHARED_INLINE float3 medium_world_to_local(ETX_IN(AffineTransform, world_to_object), ETX_IN(BoundingBox, local_bounds), ETX_IN(float3, world_position)) {
+  const float3 object_position = medium_transform_point(world_to_object, world_position);
+  const float3 size = local_bounds.p_max - local_bounds.p_min;
+  float3 result = float3(0.0f, 0.0f, 0.0f);
+  result.x = (size.x > kEpsilon) ? ((object_position.x - local_bounds.p_min.x) / size.x) : 0.0f;
+  result.y = (size.y > kEpsilon) ? ((object_position.y - local_bounds.p_min.y) / size.y) : 0.0f;
+  result.z = (size.z > kEpsilon) ? ((object_position.z - local_bounds.p_min.z) / size.z) : 0.0f;
+  return result;
+}
+
+ETX_SHARED_INLINE bool medium_local_coordinate_valid(ETX_IN(float3, local_coord)) {
+  return (local_coord.x >= 0.0f) && (local_coord.y >= 0.0f) && (local_coord.z >= 0.0f) && (local_coord.x < 1.0f) && (local_coord.y < 1.0f) && (local_coord.z < 1.0f);
+}
 
 struct ETX_ALIGNED MediumInstance {
   SpectralResponse extinction;

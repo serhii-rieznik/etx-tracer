@@ -68,6 +68,7 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
 
   sample_value.emitter_index = emitter_index;
   sample_value.triangle_index = emitter_instance.triangle_index;
+  sample_value.instance_index = emitter_instance.instance_index;
   sample_value.medium_index = emitter_access_external_medium_index(make_scene_emitter_access_gpu_context(), emitter_index);
   sample_value.pdf_sample = pdf_sample;
   float2 emitter_sample_rnd = float2(rnd01(seed), rnd01(seed));
@@ -76,6 +77,9 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
     TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
     sample_value.barycentric = random_barycentric(emitter_sample_rnd);
     Vertex vertex = wavefront_interpolate_vertex(tri, sample_value.barycentric);
+    const GPUSceneInstanceData scene_instance = load_scene_instance(emitter_instance.instance_index);
+    vertex = scene_instance_transform_vertex(scene_instance, vertex);
+    const float3 geo_normal = scene_instance_transform_geometric_normal(scene_instance, tri.geo_n);
     sample_value.origin = vertex.pos;
     sample_value.normal = vertex.nrm;
     sample_value.image_uv = vertex.tex;
@@ -101,12 +105,12 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
     }
 
     sample_value.value = evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, vertex.tex, spect);
-    if (dot(tri.geo_n, dp) >= 0.0f) {
+    if (dot(geo_normal, dp) >= 0.0f) {
       sample_value.value = spectral_response_zero(spect);
       return true;
     }
 
-    float cos_t = abs(dot(dp, tri.geo_n)) / sqrt(distance_squared);
+    float cos_t = abs(dot(dp, geo_normal)) / sqrt(distance_squared);
     float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
     float cos_tx = pow(cos_t, exponent);
     if (cos_tx > kEpsilon) {
@@ -200,6 +204,7 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
 
   sample_value.emitter_index = emitter_index;
   sample_value.triangle_index = emitter_instance.triangle_index;
+  sample_value.instance_index = emitter_instance.instance_index;
   sample_value.medium_index = emitter_access_external_medium_index(make_scene_emitter_access_gpu_context(), emitter_index);
   sample_value.pdf_sample = pdf_sample;
 
@@ -207,6 +212,7 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
     TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
     sample_value.barycentric = random_barycentric(float2(rnd01(seed), rnd01(seed)));
     Vertex vertex = wavefront_interpolate_vertex(tri, sample_value.barycentric);
+    vertex = scene_instance_transform_vertex(load_scene_instance(emitter_instance.instance_index), vertex);
     Material material = (Material)0;
     if (try_load_material_full(tri.material_index, material) == false) {
       return false;

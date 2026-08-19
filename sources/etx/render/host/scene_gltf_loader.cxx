@@ -18,6 +18,9 @@ struct GltfLoaderState {
   SceneData& data;
   Camera& active_camera;
   TaskScheduler& scheduler;
+  std::vector<std::vector<uint32_t>> mesh_assets;
+  std::vector<bool> mesh_loaded;
+  std::vector<uint32_t> node_mapping;
 };
 
 float4x4 build_gltf_node_transform(const tinygltf::Node& node) {
@@ -44,7 +47,7 @@ float4x4 build_gltf_node_transform(const tinygltf::Node& node) {
   return transform;
 }
 
-bool load_gltf_camera(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Camera& pcam, const float4x4& transform, GltfLoaderState& state) {
+bool load_gltf_camera(const tinygltf::Node& node, const tinygltf::Camera& pcam, uint32_t scene_node_index, GltfLoaderState& state) {
   auto& data = state.data;
   auto& active_camera = state.active_camera;
 
@@ -64,10 +67,9 @@ bool load_gltf_camera(const tinygltf::Node& node, const tinygltf::Model& model, 
   entry.id = camera_name;
   entry.active = (data.cameras.size() == 1);
 
-  auto position = to_float3(transform.col[3]);
-  auto forward = normalize(to_float3(transform.col[2]));
-  auto direction = -forward;
-  auto up = normalize(to_float3(transform.col[1]));
+  const float3 position = {};
+  const float3 direction = kWorldForward;
+  const float3 up = kWorldUp;
 
   uint2 film_size = active_camera.film_size;
   if (film_size.x == 0 || film_size.y == 0) {
@@ -119,16 +121,73 @@ bool load_gltf_camera(const tinygltf::Node& node, const tinygltf::Model& model, 
     active_camera = entry.cam;
   }
 
+  const uint32_t camera_index = static_cast<uint32_t>(data.cameras.size() - 1u);
+  const SceneAttachment attachment = {SceneAttachment::Type::Camera, camera_index, 0u, 0u};
+  if (data.hierarchy.add_attachment(scene_node_index, attachment) == false) {
+    data.cameras.pop_back();
+    return false;
+  }
+
   return true;
 }
 
-void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, const tinygltf::Mesh& mesh, const float4x4& transform, GltfLoaderState& state) {
+void load_gltf_light(const tinygltf::Node& node, const tinygltf::Model& model, uint32_t scene_node_index, GltfLoaderState& state) {
+  const auto extension = node.extensions.find("KHR_lights_punctual");
+  if ((extension == node.extensions.end()) || (extension->second.IsObject() == false) || (extension->second.Has("light") == false)) {
+    return;
+  }
+
+  const tinygltf::Value& light_reference = extension->second.Get("light");
+  if ((light_reference.IsInt() == false) && (light_reference.IsNumber() == false)) {
+    return;
+  }
+  const int32_t light_index = light_reference.GetNumberAsInt();
+  if ((light_index < 0) || (light_index >= model.lights.size())) {
+    log::warning("GLTF node `%s` references invalid light %d", node.name.c_str(), light_index);
+    return;
+  }
+
+  const tinygltf::Light& light = model.lights[light_index];
+  if (light.type != "directional") {
+    log::warning("GLTF %s light `%s` is not supported by the renderer and was skipped", light.type.c_str(), light.name.c_str());
+    return;
+  }
+
+  float3 color = {1.0f, 1.0f, 1.0f};
+  if (light.color.size() == 3u) {
+    color = {static_cast<float>(light.color[0]), static_cast<float>(light.color[1]), static_cast<float>(light.color[2])};
+  }
+  color *= static_cast<float>(light.intensity);
+
+  const uint32_t profile_index = static_cast<uint32_t>(state.data.emitter_profiles.size());
+  EmitterProfile& profile = state.data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
+  profile.emission.spectrum_index = state.data.add_spectrum(SpectralDistribution::rgb_luminance(color));
+  profile.emission.image_index = kInvalidIndex;
+  profile.directional.direction = -kWorldForward;  // glTF -Z is photon travel; the renderer stores the direction toward the light
+  profile.directional.angular_size = 0.0f;
+  const SceneAttachment attachment = {SceneAttachment::Type::Emitter, profile_index, 0u, 0u};
+  ETX_CRITICAL(state.data.hierarchy.add_attachment(scene_node_index, attachment));
+}
+
+void load_gltf_mesh(const tinygltf::Model& model, uint32_t gltf_mesh_index, uint32_t scene_node_index, GltfLoaderState& state) {
   auto& data = state.data;
   auto& triangles = data.triangles;
   auto& vertices = data.vertices;
+  const tinygltf::Mesh& mesh = model.meshes[gltf_mesh_index];
 
-  if (mesh.primitives.empty())
+  if (mesh.primitives.empty()) {
     return;
+  }
+
+  std::vector<uint32_t>& cached_assets = state.mesh_assets[gltf_mesh_index];
+  if (state.mesh_loaded[gltf_mesh_index]) {
+    for (uint32_t mesh_index : cached_assets) {
+      const SceneAttachment attachment = {SceneAttachment::Type::Mesh, mesh_index, 0u, 0u};
+      ETX_CRITICAL(data.hierarchy.add_attachment(scene_node_index, attachment));
+    }
+    return;
+  }
+  state.mesh_loaded[gltf_mesh_index] = true;
 
   for (size_t primitive_index = 0; primitive_index < mesh.primitives.size(); ++primitive_index) {
     const auto& primitive = mesh.primitives[primitive_index];
@@ -216,7 +275,7 @@ void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, co
       idx_buffer = model.buffers.data() + idx_buffer_view->buffer;
     }
 
-    ETX_ASSERT(idx_accessor->count % 3 == 0);
+    ETX_ASSERT((has_indices == false) || ((idx_accessor->count % 3) == 0));
     uint32_t expected_triangle_count = static_cast<uint32_t>(has_indices ? idx_accessor->count : pos_accessor.count) / 3u;
 
     uint32_t linear_index = 0;
@@ -231,17 +290,14 @@ void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, co
       for (uint32_t j = 0; j < 3; ++j, ++linear_index) {
         auto index = has_indices ? gltf_read_buffer_as_uint(*idx_buffer, *idx_accessor, *idx_buffer_view, 3u * tri_index + j) : linear_index;
 
-        auto p = gltf_read_buffer<float3>(pos_buffer, pos_accessor, pos_buffer_view, index);
-        auto pos = transform * float4{p.x, p.y, p.z, 1.0f};
+        const float3 pos = gltf_read_buffer<float3>(pos_buffer, pos_accessor, pos_buffer_view, index);
 
         float3 nrm = {0.0f, 1.0f, 0.0f};
         if (has_normals) {
-          auto n = gltf_read_buffer<float3>(*nrm_buffer, *nrm_accessor, *nrm_buffer_view, index);
-          auto t = transform * float4{n.x, n.y, n.z, 0.0f};
-          float3 transformed_nrm = float3{t.x, t.y, t.z};
-          float nrm_length_sq = dot(transformed_nrm, transformed_nrm);
+          const float3 source_nrm = gltf_read_buffer<float3>(*nrm_buffer, *nrm_accessor, *nrm_buffer_view, index);
+          float nrm_length_sq = dot(source_nrm, source_nrm);
           if (nrm_length_sq > kEpsilon) {
-            nrm = normalize(transformed_nrm);
+            nrm = normalize(source_nrm);
           } else {
             nrm = {0.0f, 1.0f, 0.0f};
             static uint32_t zero_normal_count = 0;
@@ -262,12 +318,11 @@ void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, co
 
         if (has_tangents) {
           auto gltf_tangent = gltf_read_buffer<float4>(*tan_buffer, *tan_accessor, *tan_buffer_view, index);
-          auto tt = transform * float4{gltf_tangent.x, gltf_tangent.y, gltf_tangent.z, 0.0f};
-          float3 transformed_tan = float3{tt.x, tt.y, tt.z};
-          float tan_length_sq = dot(transformed_tan, transformed_tan);
+          const float3 source_tan = {gltf_tangent.x, gltf_tangent.y, gltf_tangent.z};
+          float tan_length_sq = dot(source_tan, source_tan);
 
           if (tan_length_sq > kEpsilon) {
-            tan = normalize(transformed_tan);
+            tan = normalize(source_tan);
             tan = normalize(tan - dot(tan, nrm) * nrm);
             float tan_ortho_length_sq = dot(tan, tan);
             if (tan_ortho_length_sq > kEpsilon) {
@@ -287,7 +342,7 @@ void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, co
           btn = {0.0f, 0.0f, 0.0f};
         }
 
-        vertices.pos.emplace_back(float3{pos.x, pos.y, pos.z});
+        vertices.pos.emplace_back(pos);
         vertices.nrm.emplace_back(float3{nrm.x, nrm.y, nrm.z});
         vertices.tan.emplace_back(float3{tan.x, tan.y, tan.z});
         vertices.btn.emplace_back(float3{btn.x, btn.y, btn.z});
@@ -332,41 +387,20 @@ void load_gltf_mesh(const tinygltf::Node& node, const tinygltf::Model& model, co
     uint32_t triangle_count = triangle_end - triangle_start;
     if (triangle_count > 0) {
       std::string mesh_name;
-      if (node.name.empty() == false) {
-        mesh_name = node.name;
-        if (mesh.primitives.size() > 1) {
+      if (mesh.name.empty() == false) {
+        mesh_name = mesh.name;
+        if (mesh.primitives.size() > 1u) {
           mesh_name += "_" + std::to_string(primitive_index);
         }
-      } else if (mesh.name.empty() == false) {
-        mesh_name = mesh.name + "_" + std::to_string(primitive_index);
       } else {
-        mesh_name = "mesh_" + std::to_string(primitive_index);
+        mesh_name = "mesh_" + std::to_string(gltf_mesh_index) + "_" + std::to_string(primitive_index);
       }
-      data.add_mesh(mesh_name.c_str(), triangle_start, triangle_count, mesh_bbox_min, mesh_bbox_max);
+      const uint32_t mesh_index = data.add_mesh_asset(mesh_name.c_str(), triangle_start, triangle_count, mesh_bbox_min, mesh_bbox_max);
+      cached_assets.emplace_back(mesh_index);
+      const SceneAttachment attachment = {SceneAttachment::Type::Mesh, mesh_index, 0u, 0u};
+      ETX_CRITICAL(data.hierarchy.add_attachment(scene_node_index, attachment));
     }
   }
-}
-
-bool load_gltf_node(const tinygltf::Model& model, const tinygltf::Node& node, const float4x4& parent_transform, GltfLoaderState& state) {
-  auto current_transform = parent_transform * build_gltf_node_transform(node);
-
-  bool camera_found = false;
-
-  if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
-    load_gltf_mesh(node, model, model.meshes.at(node.mesh), current_transform, state);
-  }
-
-  if ((node.camera >= 0) && (node.camera < model.cameras.size())) {
-    camera_found = load_gltf_camera(node, model, model.cameras.at(node.camera), current_transform, state);
-  }
-
-  for (const auto& child : node.children) {
-    if (load_gltf_node(model, model.nodes[child], current_transform, state)) {
-      camera_found = true;
-    }
-  }
-
-  return camera_found;
 }
 
 void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
@@ -408,6 +442,7 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
     mtl.subsurface.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
     mtl.emission = {};
     mtl.emission_collimation = 0.0f;
+    mtl.two_sided = material.doubleSided ? 1u : 0u;
 
     float3 rgb = {1.0f, 1.0f, 1.0f};
     const auto& base_color = material.pbrMetallicRoughness.baseColorFactor;
@@ -781,17 +816,75 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
     }
   }
 
-  bool camera_loaded = false;
-  for (const auto& scene_ref : model.scenes) {
-    for (int32_t node_index : scene_ref.nodes) {
-      if ((node_index < 0) || (node_index >= model.nodes.size()))
-        continue;
+  state.mesh_assets.resize(model.meshes.size());
+  state.mesh_loaded.resize(model.meshes.size(), false);
+  state.node_mapping.assign(model.nodes.size(), kInvalidIndex);
 
-      const float4x4 identity = build_gltf_node_transform({});
-      const auto& node = model.nodes[node_index];
-      if (load_gltf_node(model, node, identity, state)) {
-        camera_loaded = true;
+  struct PendingNode {
+    uint32_t gltf_node_index = kInvalidIndex;
+    uint32_t parent_scene_node_index = kInvalidIndex;
+  };
+
+  std::vector<uint32_t> root_nodes;
+  if (model.scenes.empty() == false) {
+    const uint32_t scene_index = ((model.defaultScene >= 0) && (model.defaultScene < model.scenes.size())) ? static_cast<uint32_t>(model.defaultScene) : 0u;
+    for (int32_t node_index : model.scenes[scene_index].nodes) {
+      if ((node_index >= 0) && (node_index < model.nodes.size())) {
+        root_nodes.emplace_back(static_cast<uint32_t>(node_index));
       }
+    }
+  } else {
+    std::vector<bool> has_parent(model.nodes.size(), false);
+    for (const tinygltf::Node& node : model.nodes) {
+      for (int32_t child_index : node.children) {
+        if ((child_index >= 0) && (child_index < has_parent.size())) {
+          has_parent[child_index] = true;
+        }
+      }
+    }
+    for (uint32_t node_index = 0u; node_index < model.nodes.size(); ++node_index) {
+      if (has_parent[node_index] == false) {
+        root_nodes.emplace_back(node_index);
+      }
+    }
+  }
+
+  std::vector<PendingNode> pending_nodes;
+  pending_nodes.reserve(model.nodes.size());
+  for (auto root = root_nodes.rbegin(); root != root_nodes.rend(); ++root) {
+    pending_nodes.push_back({*root, kInvalidIndex});
+  }
+
+  bool camera_loaded = false;
+  while (pending_nodes.empty() == false) {
+    const PendingNode pending = pending_nodes.back();
+    pending_nodes.pop_back();
+    if (state.node_mapping[pending.gltf_node_index] != kInvalidIndex) {
+      log::warning("GLTF node %u is referenced more than once; keeping its first parent", pending.gltf_node_index);
+      continue;
+    }
+
+    const tinygltf::Node& node = model.nodes[pending.gltf_node_index];
+    const float4x4 local_transform = build_gltf_node_transform(node);
+    const std::string node_name = node.name.empty() == false ? node.name : ("gltf-node-" + std::to_string(pending.gltf_node_index));
+    const uint32_t scene_node_index = data.hierarchy.add_node(node_name.c_str(), pending.parent_scene_node_index, affine_from_matrix(local_transform));
+    ETX_CRITICAL(scene_node_index != kInvalidIndex);
+    state.node_mapping[pending.gltf_node_index] = scene_node_index;
+
+    if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
+      load_gltf_mesh(model, static_cast<uint32_t>(node.mesh), scene_node_index, state);
+    }
+    if ((node.camera >= 0) && (node.camera < model.cameras.size())) {
+      camera_loaded |= load_gltf_camera(node, model.cameras[node.camera], scene_node_index, state);
+    }
+    load_gltf_light(node, model, scene_node_index, state);
+
+    for (auto child = node.children.rbegin(); child != node.children.rend(); ++child) {
+      if ((*child < 0) || (*child >= model.nodes.size())) {
+        log::warning("GLTF node %u has invalid child index %d", pending.gltf_node_index, *child);
+        continue;
+      }
+      pending_nodes.push_back({static_cast<uint32_t>(*child), scene_node_index});
     }
   }
 

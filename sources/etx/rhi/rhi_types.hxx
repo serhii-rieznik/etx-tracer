@@ -467,6 +467,7 @@ struct RHIAccelerationStructureGeometryTriangles {
   uint32_t vertex_count = 0;
   RHIVertexFormat vertex_format = RHIVertexFormat::Float3;
   RHIBindlessHandle index_buffer = {};
+  uint64_t index_buffer_offset = 0u;
   uint32_t index_count = 0;
   RHIIndexType index_type = RHIIndexType::UInt32;
 };
@@ -490,6 +491,7 @@ struct RHIAccelerationStructureDesc {
   uint32_t geometry_count = 0;                                   // for BLAS
   const RHIAccelerationStructureGeometry* geometries = nullptr;  // for BLAS size calculation
   uint32_t instance_count = 0;                                   // for TLAS
+  bool allow_update = false;
 };
 
 struct RHIAccelerationStructureBuildDesc {
@@ -500,6 +502,7 @@ struct RHIAccelerationStructureBuildDesc {
   uint32_t instance_count = 0;
   RHIBindlessHandle instance_buffer = {};
   bool allow_update = false;
+  bool update = false;
 };
 
 static constexpr uint32_t kRHIMaxFrames = 3u;

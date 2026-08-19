@@ -110,6 +110,7 @@ struct ETX_ALIGNED GPUWavefrontHit {
   uint32_t medium_index ETX_INIT(kInvalidIndex);
   uint32_t flags ETX_INIT(0u);
   float2 barycentric ETX_INIT({});
+  uint32_t instance_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED GPUWavefrontPathVertex {
@@ -138,6 +139,7 @@ struct ETX_ALIGNED GPUWavefrontPathVertex {
   float pdf_ratio ETX_INIT(0.0f);
   float2 barycentric ETX_INIT({});
   uint32_t inline_medium_flags ETX_INIT(0u);
+  uint32_t instance_index ETX_INIT(kInvalidIndex);
   uint32_t reserved0 ETX_INIT(0u);
 };
 
@@ -165,6 +167,7 @@ struct ETX_ALIGNED GPUWavefrontLightPathVertex {
   float pdf_ratio ETX_INIT(0.0f);
   float2 barycentric ETX_INIT({});
   uint32_t previous_vertex_index ETX_INIT(kInvalidIndex);
+  uint32_t instance_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED GPUWavefrontFastLightEndpoint {

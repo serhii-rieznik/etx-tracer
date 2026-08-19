@@ -69,6 +69,28 @@ float3 rotate_yxz_deg(const float3& v, const float3& rot_deg) {
   return out;
 }
 
+AffineTransform tungsten_transform(const float3& translate, const float3& scale, const float3& rotation_deg) {
+  const float3 axis_x = rotate_yxz_deg({scale.x, 0.0f, 0.0f}, rotation_deg);
+  const float3 axis_y = rotate_yxz_deg({0.0f, scale.y, 0.0f}, rotation_deg);
+  const float3 axis_z = rotate_yxz_deg({0.0f, 0.0f, scale.z}, rotation_deg);
+  AffineTransform result = {};
+  result.rows[0] = {axis_x.x, axis_y.x, axis_z.x, translate.x};
+  result.rows[1] = {axis_x.y, axis_y.y, axis_z.y, translate.y};
+  result.rows[2] = {axis_x.z, axis_y.z, axis_z.z, translate.z};
+  return result;
+}
+
+void apply_transform_to_new_roots(SceneData& data, uint32_t first_node, const AffineTransform& transform) {
+  const uint32_t node_count = static_cast<uint32_t>(data.hierarchy.nodes.size());
+  for (uint32_t node_index = first_node; node_index < node_count; ++node_index) {
+    const SceneNode& node = data.hierarchy.nodes[node_index];
+    if ((node.parent_index != kInvalidIndex) && (node.parent_index >= first_node)) {
+      continue;
+    }
+    data.hierarchy.set_local_transform(node_index, multiply_affine(transform, node.local_transform));
+  }
+}
+
 uint32_t resolve_tungsten_texture(const nlohmann::json& v, SceneData& data, const char* base_dir) {
   if (v.is_string() == false)
     return kInvalidIndex;
@@ -168,8 +190,6 @@ bool add_builtin_disk(const float3& translate, const float3& scale, const float3
 bool add_builtin_sphere(const float3& translate, const float3& scale, const float3& rotation_deg, uint32_t material_index, SceneData& data, const char* name);
 bool load_wo3_mesh(const std::string& resolved, const float3& translate, const float3& scale, const float3& rotation_deg, uint32_t material_index, SceneData& data,
   bool recompute_normals);
-void transform_vertices(SceneData& data, uint32_t vertex_start, uint32_t vertex_end, const float3& rotation_deg, const float3& scale, const float3& translate);
-void recompute_mesh_bounds(SceneData& data, uint32_t mesh_start, uint32_t mesh_end);
 
 static const TungstenConductorIOR kTungstenConductors[] = {
   {"a-C", {2.9440999183f, 2.2271502925f, 1.9681668794f}, {0.8874329109f, 0.7993216383f, 0.8152862927f}},
@@ -271,14 +291,16 @@ PrimitiveLoadResult handle_infinite_sphere_cap(const nlohmann::json& prim, Scene
       rotation = json_to_float3(tr["rotation"], {});
   }
 
-  float3 direction = rotate_yxz_deg(float3{0.0f, 1.0f, 0.0f}, rotation);
-  direction = normalize(direction);
-
+  const uint32_t emitter_index = static_cast<uint32_t>(data.emitter_profiles.size());
   auto& d = data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
   d.emission.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_luminance({power, power, power}));
   d.emission.image_index = kInvalidIndex;
-  d.directional.direction = direction;
+  d.directional.direction = {0.0f, 1.0f, 0.0f};
   d.directional.angular_size = 2.0f * cap_angle * kPi / 180.0f;
+
+  const AffineTransform transform = tungsten_transform({}, {1.0f, 1.0f, 1.0f}, rotation);
+  const uint32_t node_index = data.hierarchy.add_node("infinite_sphere_cap", kInvalidIndex, transform);
+  data.hierarchy.add_attachment(node_index, {SceneAttachment::Type::Emitter, emitter_index, 0u, 0u});
 
   r.loaded = true;
   return r;
@@ -312,35 +334,30 @@ PrimitiveLoadResult handle_skydome(const nlohmann::json& prim, SceneData& data, 
   return r;
 }
 
-PrimitiveLoadResult handle_builtin_primitive(const std::string& type, const float3& translate, const float3& scale, const float3& rotation, uint32_t material_index,
-  SceneData& data) {
+PrimitiveLoadResult handle_builtin_primitive(const std::string& type, uint32_t material_index, SceneData& data) {
   PrimitiveLoadResult r = {};
   std::string mesh_name = type + "#" + std::to_string(data.meshes.size());
+  const float3 identity_scale = {1.0f, 1.0f, 1.0f};
   if (type == "quad") {
-    r.loaded = add_builtin_quad(translate, scale, rotation, material_index, data, mesh_name.c_str());
+    r.loaded = add_builtin_quad({}, identity_scale, {}, material_index, data, mesh_name.c_str());
   } else if (type == "cube") {
-    r.loaded = add_builtin_cube(translate, scale, rotation, material_index, data, mesh_name.c_str());
+    r.loaded = add_builtin_cube({}, identity_scale, {}, material_index, data, mesh_name.c_str());
   } else if (type == "disk") {
-    r.loaded = add_builtin_disk(translate, scale, rotation, material_index, data, mesh_name.c_str());
+    r.loaded = add_builtin_disk({}, identity_scale, {}, material_index, data, mesh_name.c_str());
   } else if (type == "sphere") {
-    r.loaded = add_builtin_sphere(translate, scale, rotation, material_index, data, mesh_name.c_str());
+    r.loaded = add_builtin_sphere({}, identity_scale, {}, material_index, data, mesh_name.c_str());
   } else if (type != "mesh") {
     log::warning("Unsupported Tungsten primitive type: %s", type.c_str());
   }
   return r;
 }
 
-PrimitiveLoadResult handle_mesh_primitive(const nlohmann::json& prim, const char* base_dir, const std::string& type, const float3& translate, const float3& scale,
-  const float3& rotation, uint32_t material_index, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera) {
+PrimitiveLoadResult handle_mesh_primitive(const nlohmann::json& prim, const char* base_dir, const std::string& type, uint32_t material_index, SceneData& data,
+  const IORDatabase& database, TaskScheduler& scheduler, Camera& active_camera) {
   PrimitiveLoadResult r = {};
 
   if (type != "mesh")
     return r;
-
-  uint32_t vertex_start = static_cast<uint32_t>(data.vertices.pos.size());
-  uint32_t triangle_start = static_cast<uint32_t>(data.triangles.size());
-  uint32_t mesh_start = static_cast<uint32_t>(data.meshes.size());
-  (void)triangle_start;
 
   std::string fname = prim.value("filename", "");
   if (fname.empty() && prim.contains("file"))
@@ -352,7 +369,6 @@ PrimitiveLoadResult handle_mesh_primitive(const nlohmann::json& prim, const char
   }
 
   const char* ext = get_ext(resolved);
-  bool loader_applied_transform = false;
   if (_stricmp(ext, ".obj") == 0) {
     uint32_t flags = load_from_obj_file(resolved.c_str(), "", data, database, scheduler);
     r.loaded = (flags & SceneLoadSucceeded) != 0u;
@@ -367,20 +383,9 @@ PrimitiveLoadResult handle_mesh_primitive(const nlohmann::json& prim, const char
     r.flags |= (flags & ~SceneLoadSucceeded);
   } else if (_stricmp(ext, ".wo3") == 0) {
     bool recompute_normals = prim.value("recompute_normals", false);
-    loader_applied_transform = true;
-    r.loaded = load_wo3_mesh(resolved, translate, scale, rotation, material_index, data, recompute_normals);
+    r.loaded = load_wo3_mesh(resolved, {}, {1.0f, 1.0f, 1.0f}, {}, material_index, data, recompute_normals);
   } else {
     log::warning("Unsupported Tungsten mesh format: %s", resolved.c_str());
-  }
-
-  if (r.loaded) {
-    uint32_t vertex_end = static_cast<uint32_t>(data.vertices.pos.size());
-    if (loader_applied_transform == false)
-      transform_vertices(data, vertex_start, vertex_end, rotation, scale, translate);
-
-    uint32_t mesh_end = static_cast<uint32_t>(data.meshes.size());
-    if (mesh_end > mesh_start)
-      recompute_mesh_bounds(data, mesh_start, mesh_end);
   }
 
   return r;
@@ -568,90 +573,26 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
   return mat_idx;
 }
 
-float triangle_area(const Triangle& t, const std::vector<float3>& pos) {
-  const float3& p0 = pos[t.i[0]];
-  const float3& p1 = pos[t.i[1]];
-  const float3& p2 = pos[t.i[2]];
-  return 0.5f * length(cross(p1 - p0, p2 - p0));
-}
-
-float triangles_area(const SceneData& data, uint32_t tri_start, uint32_t tri_end) {
-  float area = 0.0f;
-  uint32_t end = tri_end;
-  uint32_t count = static_cast<uint32_t>(data.triangles.size());
-  if (end > count)
-    end = count;
-  for (uint32_t i = tri_start; i < end; ++i)
-    area += triangle_area(data.triangles[i], data.vertices.pos);
-  return area;
-}
-
-void transform_vertices(SceneData& data, uint32_t vertex_start, uint32_t vertex_end, const float3& rotation_deg, const float3& scale, const float3& translate) {
-  if (vertex_end <= vertex_start)
-    return;
-
-  bool has_rotation = (rotation_deg.x != 0.0f) || (rotation_deg.y != 0.0f) || (rotation_deg.z != 0.0f);
-  bool has_scale = (scale.x != 1.0f) || (scale.y != 1.0f) || (scale.z != 1.0f);
-  bool has_translate = (translate.x != 0.0f) || (translate.y != 0.0f) || (translate.z != 0.0f);
-  if ((has_rotation == false) && (has_scale == false) && (has_translate == false))
-    return;
-
-  float3 inv_scale = {
-    scale.x != 0.0f ? (1.0f / scale.x) : 0.0f,
-    scale.y != 0.0f ? (1.0f / scale.y) : 0.0f,
-    scale.z != 0.0f ? (1.0f / scale.z) : 0.0f,
-  };
-
-  for (uint32_t i = vertex_start; i < vertex_end; ++i) {
-    float3 p = data.vertices.pos[i];
-    if (has_scale) {
-      p.x *= scale.x;
-      p.y *= scale.y;
-      p.z *= scale.z;
-    }
-    if (has_rotation)
-      p = rotate_yxz_deg(p, rotation_deg);
-    if (has_translate)
-      p += translate;
-    data.vertices.pos[i] = p;
-
-    float3 n = data.vertices.nrm[i];
-    if (has_scale) {
-      n *= inv_scale;
-    }
-    if (has_rotation)
-      n = rotate_yxz_deg(n, rotation_deg);
-    float ln = length(n);
-    if (ln > kEpsilon)
-      n /= ln;
-    data.vertices.nrm[i] = normalize(n);
-
-    float3 t = data.vertices.tan[i];
-    if (has_scale) {
-      t.x *= scale.x;
-      t.y *= scale.y;
-      t.z *= scale.z;
-    }
-    if (has_rotation)
-      t = rotate_yxz_deg(t, rotation_deg);
-    float lt = length(t);
-    if (lt > kEpsilon)
-      t /= lt;
-    data.vertices.tan[i] = normalize(t);
-
-    float3 b = data.vertices.btn[i];
-    if (has_scale) {
-      b.x *= scale.x;
-      b.y *= scale.y;
-      b.z *= scale.z;
-    }
-    if (has_rotation)
-      b = rotate_yxz_deg(b, rotation_deg);
-    float lb = length(b);
-    if (lb > kEpsilon)
-      b /= lb;
-    data.vertices.btn[i] = normalize(b);
+float transformed_meshes_area(SceneData& data, uint32_t mesh_start, uint32_t mesh_end) {
+  if (data.resolve_hierarchy() == false) {
+    return 0.0f;
   }
+  float area = 0.0f;
+  for (const ResolvedMeshInstance& instance : data.hierarchy.mesh_instances) {
+    if ((instance.mesh_index < mesh_start) || (instance.mesh_index >= mesh_end)) {
+      continue;
+    }
+    const Mesh& mesh = data.meshes[instance.mesh_index];
+    const uint32_t triangle_end = min(mesh.triangle_offset + mesh.triangle_count, static_cast<uint32_t>(data.triangles.size()));
+    for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+      const Triangle& triangle = data.triangles[triangle_index];
+      const float3 p0 = transform_point(instance.object_to_world, data.vertices.pos[triangle.i[0]]);
+      const float3 p1 = transform_point(instance.object_to_world, data.vertices.pos[triangle.i[1]]);
+      const float3 p2 = transform_point(instance.object_to_world, data.vertices.pos[triangle.i[2]]);
+      area += 0.5f * length(cross(p1 - p0, p2 - p0));
+    }
+  }
+  return area;
 }
 
 void reserve_mesh_vertices(SceneData& data, uint32_t extra_vertices) {
@@ -672,38 +613,6 @@ void reserve_mesh_triangles(SceneData& data, uint32_t extra_triangles) {
   size_t required = data.triangles.size() + static_cast<size_t>(extra_triangles);
   if (data.triangles.capacity() < required)
     data.triangles.reserve(required);
-}
-
-void recompute_mesh_bounds(SceneData& data, uint32_t mesh_start, uint32_t mesh_end) {
-  uint32_t mesh_count = static_cast<uint32_t>(data.meshes.size());
-  if (mesh_start >= mesh_count)
-    return;
-  if (mesh_end > mesh_count)
-    mesh_end = mesh_count;
-
-  for (uint32_t m = mesh_start; m < mesh_end; ++m) {
-    auto& mesh = data.meshes[m];
-    uint32_t tri_begin = mesh.triangle_offset;
-    uint32_t tri_end = tri_begin + mesh.triangle_count;
-    uint32_t tri_count = static_cast<uint32_t>(data.triangles.size());
-    if (tri_end > tri_count)
-      tri_end = tri_count;
-
-    float3 bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
-    float3 bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
-
-    for (uint32_t t = tri_begin; t < tri_end; ++t) {
-      const Triangle& tri = data.triangles[t];
-      for (uint32_t k = 0; k < 3; ++k) {
-        const float3& p = data.vertices.pos[tri.i[k]];
-        bbox_min = min(bbox_min, p);
-        bbox_max = max(bbox_max, p);
-      }
-    }
-
-    mesh.bbox_min = bbox_min;
-    mesh.bbox_max = bbox_max;
-  }
 }
 
 void set_emission_from_json(Material& mtl, const nlohmann::json& v, SceneData& data, const char* base_dir, float scale = 1.0f) {
@@ -1443,23 +1352,25 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
       }
     }
 
-    uint32_t tri_start = static_cast<uint32_t>(data.triangles.size());
+    const uint32_t mesh_start = static_cast<uint32_t>(data.meshes.size());
+    const uint32_t node_start = static_cast<uint32_t>(data.hierarchy.nodes.size());
     bool prim_loaded = false;
 
     PrimitiveLoadResult builtin_result = {};
     if (type != "mesh") {
-      builtin_result = handle_builtin_primitive(type, translate, scale, rotation, material_index, data);
+      builtin_result = handle_builtin_primitive(type, material_index, data);
       prim_loaded = builtin_result.loaded;
     }
 
-    PrimitiveLoadResult mesh_result = handle_mesh_primitive(prim, base_dir, type, translate, scale, rotation, material_index, data, database, scheduler, active_camera);
+    PrimitiveLoadResult mesh_result = handle_mesh_primitive(prim, base_dir, type, material_index, data, database, scheduler, active_camera);
     prim_loaded = prim_loaded || mesh_result.loaded;
     load_flags |= mesh_result.flags;
 
     if (prim_loaded) {
       primitives_loaded = true;
-      uint32_t tri_end = static_cast<uint32_t>(data.triangles.size());
-      float area = triangles_area(data, tri_start, tri_end);
+      apply_transform_to_new_roots(data, node_start, tungsten_transform(translate, scale, rotation));
+      const uint32_t mesh_end = static_cast<uint32_t>(data.meshes.size());
+      const float area = transformed_meshes_area(data, mesh_start, mesh_end);
       if (has_power) {
         if (area <= 0.0f) {
           log::warning("Tungsten emitter has zero area, skipping power");

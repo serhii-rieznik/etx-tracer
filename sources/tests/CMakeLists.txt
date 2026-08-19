@@ -6,14 +6,20 @@ add_executable(procedural_geometry
   procedural_geometry.cxx
 )
 
+add_executable(scene_hierarchy
+  scene_hierarchy.cxx
+)
+
 set(ETX_UNITY_STD_HEADER "${CMAKE_SOURCE_DIR}/sources/etx/std.hxx")
 
 if(MSVC)
   target_compile_options(bsdf_validation PRIVATE "/FI${ETX_UNITY_STD_HEADER}")
   target_compile_options(procedural_geometry PRIVATE "/FI${ETX_UNITY_STD_HEADER}")
+  target_compile_options(scene_hierarchy PRIVATE "/FI${ETX_UNITY_STD_HEADER}")
 else()
   target_compile_options(bsdf_validation PRIVATE "-include" "${ETX_UNITY_STD_HEADER}")
   target_compile_options(procedural_geometry PRIVATE "-include" "${ETX_UNITY_STD_HEADER}")
+  target_compile_options(scene_hierarchy PRIVATE "-include" "${ETX_UNITY_STD_HEADER}")
 endif()
 
 target_link_libraries(bsdf_validation
@@ -24,12 +30,21 @@ target_link_libraries(procedural_geometry
   PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
 )
 
+target_link_libraries(scene_hierarchy
+  PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
+)
+
 target_include_directories(bsdf_validation
   PRIVATE "${CMAKE_SOURCE_DIR}/sources"
   PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render"
 )
 
 target_include_directories(procedural_geometry
+  PRIVATE "${CMAKE_SOURCE_DIR}/sources"
+  PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render"
+)
+
+target_include_directories(scene_hierarchy
   PRIVATE "${CMAKE_SOURCE_DIR}/sources"
   PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render"
 )
@@ -50,8 +65,16 @@ set_target_properties(procedural_geometry PROPERTIES
   FOLDER "tests"
 )
 
+set_target_properties(scene_hierarchy PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${root_folder}/bin"
+  RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${root_folder}/bin"
+  RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${root_folder}/bin"
+  FOLDER "tests"
+)
+
 if(APPLE)
-  foreach(test_target bsdf_validation procedural_geometry)
+  foreach(test_target bsdf_validation procedural_geometry scene_hierarchy)
     target_link_libraries(${test_target} PRIVATE
       "-framework Foundation"
       "-framework QuartzCore"
@@ -112,4 +135,5 @@ endif()
 if(MSVC)
   target_link_options(bsdf_validation PRIVATE "/NODEFAULTLIB:LIBCMT")
   target_link_options(procedural_geometry PRIVATE "/NODEFAULTLIB:LIBCMT")
+  target_link_options(scene_hierarchy PRIVATE "/NODEFAULTLIB:LIBCMT")
 endif()

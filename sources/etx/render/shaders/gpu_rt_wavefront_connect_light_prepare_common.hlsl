@@ -141,8 +141,16 @@ float3 wavefront_connect_light_shadow_origin(GPUWavefrontPathVertex vertex, floa
   float3 n0 = load_float3(normal_buffer, tri.i.x);
   float3 n1 = load_float3(normal_buffer, tri.i.y);
   float3 n2 = load_float3(normal_buffer, tri.i.z);
-
-  return scene_math_shared_shading_pos(p0, p1, p2, n0, n1, n2, tri.geo_n, barycentrics(vertex.barycentric), outgoing_direction);
+  const GPUSceneInstanceData instance = load_scene_instance(vertex.instance_index);
+  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
+  p0 = scene_instance_transform_point(instance, p0);
+  p1 = scene_instance_transform_point(instance, p1);
+  p2 = scene_instance_transform_point(instance, p2);
+  n0 = scene_instance_transform_normal(instance, n0) * orientation;
+  n1 = scene_instance_transform_normal(instance, n1) * orientation;
+  n2 = scene_instance_transform_normal(instance, n2) * orientation;
+  const float3 geo_normal = scene_instance_transform_geometric_normal(instance, tri.geo_n);
+  return scene_math_shared_shading_pos(p0, p1, p2, n0, n1, n2, geo_normal, barycentrics(vertex.barycentric), outgoing_direction);
 }
 
 float wavefront_connect_light_weight(WavefrontConnectLightPrepareInput input_value, float z_curr_pdf, float z_prev_pdf, float y_curr_pdf, float y_prev_pdf) {

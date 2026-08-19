@@ -225,6 +225,7 @@ struct UI {
 
   enum class SelectionKind : uint32_t {
     None,
+    Node,
     Material,
     Medium,
     Mesh,
@@ -285,6 +286,7 @@ struct UI {
   bool build_material_class_selector(Material& material, bool mixed);
 
   void build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
+  void build_node_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_atmosphere_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);

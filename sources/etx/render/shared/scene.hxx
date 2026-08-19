@@ -75,6 +75,7 @@ struct ETX_ALIGNED Scene {
   ArrayView<Triangle> triangles ETX_EMPTY_INIT;
   ArrayView<Material> materials ETX_EMPTY_INIT;
   ArrayView<Mesh> meshes ETX_EMPTY_INIT;
+  ArrayView<SceneInstance> instances ETX_EMPTY_INIT;
   ArrayView<EmitterProfile> emitter_profiles ETX_EMPTY_INIT;
   ArrayView<Emitter> emitter_instances ETX_EMPTY_INIT;
   ArrayView<Image> images ETX_EMPTY_INIT;
@@ -310,6 +311,106 @@ ETX_SHARED_INLINE float3 orient_normals_to_hemisphere(float3 n_s, const float3& 
   return n_s;
 }
 
+ETX_SHARED_INLINE float3 scene_instance_transform_point(ETX_IN(AffineTransform, transform), float3 point) {
+  return float3(dot(float3(transform.rows[0].x, transform.rows[0].y, transform.rows[0].z), point) + transform.rows[0].w,
+    dot(float3(transform.rows[1].x, transform.rows[1].y, transform.rows[1].z), point) + transform.rows[1].w,
+    dot(float3(transform.rows[2].x, transform.rows[2].y, transform.rows[2].z), point) + transform.rows[2].w);
+}
+
+ETX_SHARED_INLINE float3 scene_instance_transform_vector(ETX_IN(AffineTransform, transform), float3 vector) {
+  return float3(dot(float3(transform.rows[0].x, transform.rows[0].y, transform.rows[0].z), vector),
+    dot(float3(transform.rows[1].x, transform.rows[1].y, transform.rows[1].z), vector), dot(float3(transform.rows[2].x, transform.rows[2].y, transform.rows[2].z), vector));
+}
+
+ETX_SHARED_INLINE float3 scene_instance_transform_normal(ETX_IN(AffineTransform, world_to_object), float3 normal) {
+  return normalize(float3(world_to_object.rows[0].x * normal.x + world_to_object.rows[1].x * normal.y + world_to_object.rows[2].x * normal.z,
+    world_to_object.rows[0].y * normal.x + world_to_object.rows[1].y * normal.y + world_to_object.rows[2].y * normal.z,
+    world_to_object.rows[0].z * normal.x + world_to_object.rows[1].z * normal.y + world_to_object.rows[2].z * normal.z));
+}
+
+ETX_SHARED_INLINE Vertex scene_instance_transform_vertex(const SceneInstance& instance, Vertex vertex) {
+  const float local_handedness = dot(cross(vertex.nrm, vertex.tan), vertex.btn) >= 0.0f ? 1.0f : -1.0f;
+  const float orientation = ((instance.flags & SceneInstance::Mirrored) != 0u) ? -1.0f : 1.0f;
+  vertex.pos = scene_instance_transform_point(instance.object_to_world, vertex.pos);
+  vertex.nrm = scene_instance_transform_normal(instance.world_to_object, vertex.nrm) * orientation;
+  vertex.tan = normalize(scene_instance_transform_vector(instance.object_to_world, vertex.tan));
+  vertex.tan = orthonormalize(vertex.nrm, vertex.tan);
+  vertex.btn = normalize(cross(vertex.nrm, vertex.tan)) * local_handedness;
+  return vertex;
+}
+
+ETX_SHARED_INLINE uint32_t scene_instance_emitter_index(const Scene& scene, uint32_t instance_index, uint32_t triangle_index) {
+  if ((instance_index == kInvalidIndex) || (instance_index >= scene.instances.count)) {
+    return kInvalidIndex;
+  }
+
+  const SceneInstance& instance = scene.instances[instance_index];
+  uint32_t begin = instance.emitter_offset;
+  uint32_t end = begin + instance.emitter_count;
+  if (end > scene.emitter_instances.count) {
+    return kInvalidIndex;
+  }
+
+  while (begin < end) {
+    const uint32_t middle = begin + (end - begin) / 2u;
+    const uint32_t candidate_triangle = scene.emitter_instances[middle].triangle_index;
+    if (candidate_triangle < triangle_index) {
+      begin = middle + 1u;
+    } else {
+      end = middle;
+    }
+  }
+  if ((begin < scene.emitter_instances.count) && (scene.emitter_instances[begin].triangle_index == triangle_index)) {
+    return begin;
+  }
+  return kInvalidIndex;
+}
+
+ETX_SHARED_INLINE float3 scene_triangle_world_position(const Scene& scene, const Triangle& triangle, uint32_t vertex_index, uint32_t instance_index) {
+  const float3 position = scene.vertices.pos[triangle.i[vertex_index]];
+  if ((instance_index == kInvalidIndex) || (instance_index >= scene.instances.count)) {
+    return position;
+  }
+  return scene_instance_transform_point(scene.instances[instance_index].object_to_world, position);
+}
+
+ETX_SHARED_INLINE float3 scene_triangle_world_normal(const Scene& scene, const Triangle& triangle, uint32_t vertex_index, uint32_t instance_index) {
+  const float3 normal = scene.vertices.nrm[triangle.i[vertex_index]];
+  if ((instance_index == kInvalidIndex) || (instance_index >= scene.instances.count)) {
+    return normal;
+  }
+  const SceneInstance& instance = scene.instances[instance_index];
+  const float orientation = ((instance.flags & SceneInstance::Mirrored) != 0u) ? -1.0f : 1.0f;
+  return scene_instance_transform_normal(instance.world_to_object, normal) * orientation;
+}
+
+ETX_SHARED_INLINE float3 scene_triangle_world_geometric_normal(const Scene& scene, const Triangle& triangle, uint32_t instance_index) {
+  if ((instance_index == kInvalidIndex) || (instance_index >= scene.instances.count)) {
+    return triangle.geo_n;
+  }
+  const SceneInstance& instance = scene.instances[instance_index];
+  const float orientation = ((instance.flags & SceneInstance::Mirrored) != 0u) ? -1.0f : 1.0f;
+  return scene_instance_transform_normal(instance.world_to_object, triangle.geo_n) * orientation;
+}
+
+ETX_SHARED_INLINE float3 shading_pos(const Scene& scene, const Triangle& triangle, const float3& bc, const float3& w_o, uint32_t instance_index) {
+  const float3 g0 = scene_triangle_world_position(scene, triangle, 0u, instance_index);
+  const float3 g1 = scene_triangle_world_position(scene, triangle, 1u, instance_index);
+  const float3 g2 = scene_triangle_world_position(scene, triangle, 2u, instance_index);
+  const float3 n0 = scene_triangle_world_normal(scene, triangle, 0u, instance_index);
+  const float3 n1 = scene_triangle_world_normal(scene, triangle, 1u, instance_index);
+  const float3 n2 = scene_triangle_world_normal(scene, triangle, 2u, instance_index);
+  const float3 geo_pos = g0 * bc.x + g1 * bc.y + g2 * bc.z;
+  const float3 sh_normal = normalize(n0 * bc.x + n1 * bc.y + n2 * bc.z);
+  const float direction = (dot(sh_normal, w_o) >= 0.0f) ? +1.0f : -1.0f;
+  const float3 p0 = shading_pos_project(geo_pos, g0, direction * n0);
+  const float3 p1 = shading_pos_project(geo_pos, g1, direction * n1);
+  const float3 p2 = shading_pos_project(geo_pos, g2, direction * n2);
+  const float3 sh_pos = p0 * bc.x + p1 * bc.y + p2 * bc.z;
+  const bool convex = dot(sh_pos - geo_pos, sh_normal) * direction > 0.0f;
+  return offset_ray(convex ? sh_pos : geo_pos, scene_triangle_world_geometric_normal(scene, triangle, instance_index) * direction);
+}
+
 ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) {
   float3 bc = barycentrics(base.barycentric);
   const auto& tri = scene.triangles[base.triangle_index];
@@ -320,17 +421,32 @@ ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float
   result_intersection.w_i = w_i;
   result_intersection.t = base.t;
   result_intersection.material_index = tri.material_index;
-  result_intersection.emitter_index = tri.emitter_index;
+  result_intersection.emitter_index = scene_instance_emitter_index(scene, base.instance_index, base.triangle_index);
+  result_intersection.instance_index = base.instance_index;
+
+  float3 world_geo_n = tri.geo_n;
+  if ((base.instance_index != kInvalidIndex) && (base.instance_index < scene.instances.count)) {
+    const SceneInstance& instance = scene.instances[base.instance_index];
+    result_intersection.pos = scene_instance_transform_point(instance.object_to_world, result_intersection.pos);
+    const float local_handedness = dot(cross(result_intersection.nrm, result_intersection.tan), result_intersection.btn) >= 0.0f ? 1.0f : -1.0f;
+    const float orientation = (instance.flags & SceneInstance::Mirrored) != 0u ? -1.0f : 1.0f;
+    result_intersection.nrm = scene_instance_transform_normal(instance.world_to_object, result_intersection.nrm) * orientation;
+    world_geo_n = scene_triangle_world_geometric_normal(scene, tri, base.instance_index);
+    result_intersection.tan = normalize(scene_instance_transform_vector(instance.object_to_world, result_intersection.tan));
+    result_intersection.tan = orthonormalize(result_intersection.nrm, result_intersection.tan);
+    result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan)) * local_handedness;
+  }
 
   const auto& mat = scene.materials[result_intersection.material_index];
   if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_image_index < scene.images.count) && (mat.normal_scale > kEpsilon)) {
+    const float frame_handedness = dot(cross(result_intersection.nrm, result_intersection.tan), result_intersection.btn) >= 0.0f ? 1.0f : -1.0f;
     auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
     result_intersection.nrm = normalize(result_intersection.tan * sampled_normal.x + result_intersection.btn * sampled_normal.y + result_intersection.nrm * sampled_normal.z);
-    result_intersection.nrm = orient_normals_to_hemisphere(result_intersection.nrm, tri.geo_n, w_i);
+    result_intersection.nrm = orient_normals_to_hemisphere(result_intersection.nrm, world_geo_n, w_i);
     ETX_ASSERT(is_valid_vector(result_intersection.nrm));
     result_intersection.tan = orthonormalize(result_intersection.nrm, result_intersection.tan);
     ETX_ASSERT(is_valid_vector(result_intersection.tan));
-    result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan));
+    result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan)) * frame_handedness;
     ETX_ASSERT(is_valid_vector(result_intersection.btn));
   }
 

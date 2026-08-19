@@ -96,7 +96,8 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
     SpectralResponse distant_emission = gpu_evaluate_distant_emission_spectral_all(path_ray.Direction, spectral_query);
     accumulated = spectral_response_add(accumulated, spectral_response_mul(throughput, distant_emission));
   } else if (spectral_response_is_zero(throughput) == false) {
-    bool local_emission_visible = dot(surface_hit.tri.geo_n, path_ray.Direction) < 0.0f;
+    const float3 world_geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(surface_hit.instance_index), surface_hit.tri.geo_n);
+    bool local_emission_visible = dot(world_geo_normal, path_ray.Direction) < 0.0f;
     if ((surface_hit.emitter_index != kInvalidIndex) && local_emission_visible) {
       SpectralResponse local_emission = gpu_evaluate_local_emission_spectral(surface_hit.emitter_index, surface_hit.surface_point.vertex.tex, spectral_query);
       accumulated = spectral_response_add(accumulated, spectral_response_mul(throughput, local_emission));

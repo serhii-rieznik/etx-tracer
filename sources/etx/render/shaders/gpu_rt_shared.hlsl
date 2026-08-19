@@ -145,6 +145,98 @@ TriangleData load_triangle(ByteAddressBuffer buffer, uint triangle_index) {
   return result;
 }
 
+struct GPUSceneInstanceData {
+  float4 object_to_world[3];
+  float4 world_to_object[3];
+  uint mesh_index;
+  uint flags;
+  uint emitter_offset;
+  uint emitter_count;
+};
+
+GPUSceneInstanceData load_scene_instance(uint instance_index) {
+  ByteAddressBuffer buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.instances)];
+  const uint base_offset = instance_index * kSceneInstanceStride;
+  GPUSceneInstanceData result;
+  result.object_to_world[0] = asfloat(buffer.Load4(base_offset + kSceneInstanceObjectToWorldRow0Offset));
+  result.object_to_world[1] = asfloat(buffer.Load4(base_offset + kSceneInstanceObjectToWorldRow1Offset));
+  result.object_to_world[2] = asfloat(buffer.Load4(base_offset + kSceneInstanceObjectToWorldRow2Offset));
+  result.world_to_object[0] = asfloat(buffer.Load4(base_offset + kSceneInstanceWorldToObjectRow0Offset));
+  result.world_to_object[1] = asfloat(buffer.Load4(base_offset + kSceneInstanceWorldToObjectRow1Offset));
+  result.world_to_object[2] = asfloat(buffer.Load4(base_offset + kSceneInstanceWorldToObjectRow2Offset));
+  uint4 metadata = buffer.Load4(base_offset + kSceneInstanceMeshIndexOffset);
+  result.mesh_index = metadata.x;
+  result.flags = metadata.y;
+  result.emitter_offset = metadata.z;
+  result.emitter_count = metadata.w;
+  return result;
+}
+
+uint scene_instance_emitter_index(uint triangle_index, uint instance_index) {
+  if ((constants.scene.instances == kInvalidIndex) || (constants.scene.emitter_instances == kInvalidIndex)) {
+    return kInvalidIndex;
+  }
+
+  const GPUSceneInstanceData instance = load_scene_instance(instance_index);
+  ByteAddressBuffer emitter_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_instances)];
+  uint begin = instance.emitter_offset;
+  uint end = begin + instance.emitter_count;
+  while (begin < end) {
+    const uint middle = begin + (end - begin) / 2u;
+    const uint candidate_triangle = emitter_buffer.Load(middle * kEmitterStride + kEmitterTriangleIndexOffset);
+    if (candidate_triangle < triangle_index) {
+      begin = middle + 1u;
+    } else {
+      end = middle;
+    }
+  }
+  if ((begin < (instance.emitter_offset + instance.emitter_count)) && (emitter_buffer.Load(begin * kEmitterStride + kEmitterTriangleIndexOffset) == triangle_index)) {
+    return begin;
+  }
+  return kInvalidIndex;
+}
+
+uint scene_instance_triangle_index(uint primitive_index, uint instance_index) {
+  if ((constants.scene.instances == kInvalidIndex) || (constants.scene.meshes == kInvalidIndex)) {
+    return primitive_index;
+  }
+  const GPUSceneInstanceData instance = load_scene_instance(instance_index);
+  ByteAddressBuffer mesh_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.meshes)];
+  const uint triangle_offset = mesh_buffer.Load(instance.mesh_index * 32u + 12u);
+  return triangle_offset + primitive_index;
+}
+
+float3 scene_instance_transform_point(GPUSceneInstanceData instance, float3 position) {
+  return float3(dot(instance.object_to_world[0].xyz, position) + instance.object_to_world[0].w, dot(instance.object_to_world[1].xyz, position) + instance.object_to_world[1].w,
+    dot(instance.object_to_world[2].xyz, position) + instance.object_to_world[2].w);
+}
+
+float3 scene_instance_transform_vector(GPUSceneInstanceData instance, float3 vector) {
+  return float3(dot(instance.object_to_world[0].xyz, vector), dot(instance.object_to_world[1].xyz, vector), dot(instance.object_to_world[2].xyz, vector));
+}
+
+float3 scene_instance_transform_normal(GPUSceneInstanceData instance, float3 normal) {
+  return normalize(float3(dot(float3(instance.world_to_object[0].x, instance.world_to_object[1].x, instance.world_to_object[2].x), normal),
+    dot(float3(instance.world_to_object[0].y, instance.world_to_object[1].y, instance.world_to_object[2].y), normal),
+    dot(float3(instance.world_to_object[0].z, instance.world_to_object[1].z, instance.world_to_object[2].z), normal)));
+}
+
+float3 scene_instance_transform_geometric_normal(GPUSceneInstanceData instance, float3 normal) {
+  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
+  return scene_instance_transform_normal(instance, normal) * orientation;
+}
+
+Vertex scene_instance_transform_vertex(GPUSceneInstanceData instance, Vertex vertex) {
+  const float local_handedness = dot(cross(vertex.nrm, vertex.tan), vertex.btn) >= 0.0f ? 1.0f : -1.0f;
+  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
+  vertex.pos = scene_instance_transform_point(instance, vertex.pos);
+  vertex.nrm = scene_instance_transform_normal(instance, vertex.nrm) * orientation;
+  vertex.tan = normalize(scene_instance_transform_vector(instance, vertex.tan));
+  vertex.tan = normalize(vertex.tan - vertex.nrm * dot(vertex.tan, vertex.nrm));
+  vertex.btn = normalize(cross(vertex.nrm, vertex.tan)) * local_handedness;
+  return vertex;
+}
+
 #include <access/material_access_gpu.hxx>
 
 BSDFResourceContext make_scene_bsdf_resource_gpu_context() {
@@ -266,8 +358,8 @@ float medium_shared_rnd(inout MediumSharedContext context) {
   return rnd01(context.seed);
 }
 
-float medium_shared_density(inout MediumSharedContext context, float3 local_pos) {
-  return medium_access_sample_density(context.access_context, context.medium_access, local_pos);
+float medium_shared_density(inout MediumSharedContext context, float3 world_pos) {
+  return medium_access_sample_density(context.access_context, context.medium_access, world_pos);
 }
 
 #include <interop/medium_transmittance_shared.hxx>
@@ -571,6 +663,7 @@ struct TraceSurfaceResult {
   uint medium_index;
   uint triangle_index;
   uint emitter_index;
+  uint instance_index;
   float hit_t;
   TriangleData tri;
   SurfacePoint surface_point;
@@ -579,7 +672,7 @@ struct TraceSurfaceResult {
 };
 
 SurfacePoint load_surface_point(ByteAddressBuffer position_buffer, ByteAddressBuffer normal_buffer, ByteAddressBuffer tangent_buffer, ByteAddressBuffer bitangent_buffer,
-  ByteAddressBuffer texcoord_buffer, bool has_surface_frame, bool has_texcoords, TriangleData tri, float2 bary, float3 ray_dir) {
+  ByteAddressBuffer texcoord_buffer, bool has_surface_frame, bool has_texcoords, TriangleData tri, float2 bary, float3 ray_dir, uint instance_index) {
   SurfacePoint result;
   result.barycentrics = barycentrics(bary);
 
@@ -617,9 +710,17 @@ SurfacePoint load_surface_point(ByteAddressBuffer position_buffer, ByteAddressBu
 
   surface_point_shared_interpolate_vertex(p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1, texcoord_2,
     result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
-  result.vertex.nrm = scene_math_shared_orient_normals_to_hemisphere(result.vertex.nrm, tri.geo_n, ray_dir);
-
-  result.geo_normal = surface_point_shared_orient_geo_normal(tri.geo_n, ray_dir);
+  const GPUSceneInstanceData instance = load_scene_instance(instance_index);
+  const float local_handedness = dot(cross(result.vertex.nrm, result.vertex.tan), result.vertex.btn) >= 0.0f ? 1.0f : -1.0f;
+  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
+  result.vertex.pos = scene_instance_transform_point(instance, result.vertex.pos);
+  result.vertex.nrm = scene_instance_transform_normal(instance, result.vertex.nrm) * orientation;
+  result.vertex.tan = normalize(scene_instance_transform_vector(instance, result.vertex.tan));
+  result.vertex.tan = normalize(result.vertex.tan - result.vertex.nrm * dot(result.vertex.tan, result.vertex.nrm));
+  result.vertex.btn = normalize(cross(result.vertex.nrm, result.vertex.tan)) * local_handedness;
+  const float3 world_geo_normal = scene_instance_transform_geometric_normal(instance, tri.geo_n);
+  result.vertex.nrm = scene_math_shared_orient_normals_to_hemisphere(result.vertex.nrm, world_geo_normal, ray_dir);
+  result.geo_normal = surface_point_shared_orient_geo_normal(world_geo_normal, ray_dir);
 
   return result;
 }
@@ -859,6 +960,7 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
   result.medium_index = medium_index;
   result.triangle_index = kInvalidIndex;
   result.emitter_index = kInvalidIndex;
+  result.instance_index = kInvalidIndex;
   result.hit_t = ray.TMax;
   result.tri = (TriangleData)0;
   result.surface_point = (SurfacePoint)0;
@@ -889,7 +991,8 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
       continue;
     }
 
-    uint candidate_triangle_index = q.CandidatePrimitiveIndex();
+    const uint candidate_instance_index = q.CandidateInstanceID();
+    uint candidate_triangle_index = scene_instance_triangle_index(q.CandidatePrimitiveIndex(), candidate_instance_index);
     if (candidate_triangle_index >= triangle_count) {
       continue;
     }
@@ -923,7 +1026,8 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
     }
 
     bool alpha_rejected = alpha_test_pass(tri.material_index, candidate_uv, seed);
-    bool entering_surface = dot(tri.geo_n, ray.Direction) < 0.0f;
+    const float3 candidate_geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(candidate_instance_index), tri.geo_n);
+    bool entering_surface = dot(candidate_geo_normal, ray.Direction) < 0.0f;
     HitPolicyDecision hit_policy = hit_policy_evaluate(HitPolicyMode::SkipBoundaryWithMediumTransition, material_access.material_class, alpha_rejected, entering_surface,
       material_access.int_medium_index, material_access.ext_medium_index);
     if (hit_policy.action == HitPolicyAction::Ignore) {
@@ -973,13 +1077,14 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
   ByteAddressBuffer bitangent_buffer = bindless_buffers[NonUniformResourceIndex(bitangent_buffer_index)];
   ByteAddressBuffer texcoord_buffer = bindless_buffers[NonUniformResourceIndex(texcoord_buffer_index)];
 
-  result.triangle_index = q.CommittedPrimitiveIndex();
+  result.instance_index = q.CommittedInstanceID();
+  result.triangle_index = scene_instance_triangle_index(q.CommittedPrimitiveIndex(), result.instance_index);
   result.hit_t = q.CommittedRayT();
   result.tri = load_triangle(triangle_buffer, result.triangle_index);
   float2 bary = q.CommittedTriangleBarycentrics();
   result.surface_point = load_surface_point(position_buffer, normal_buffer, tangent_buffer, bitangent_buffer, texcoord_buffer, has_surface_frame_buffers, has_texcoords, result.tri,
-    bary, ray.Direction);
-  result.emitter_index = result.tri.emitter_index;
+    bary, ray.Direction, result.instance_index);
+  result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
   try_load_material_full(result.tri.material_index, result.material);
   result.hit = 1u;
   return true;
@@ -1018,8 +1123,16 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
   float3 n0 = load_float3(normal_buffer, surface_hit.tri.i.x);
   float3 n1 = load_float3(normal_buffer, surface_hit.tri.i.y);
   float3 n2 = load_float3(normal_buffer, surface_hit.tri.i.z);
-  return scene_math_shared_shading_pos(
-    p0, p1, p2, n0, n1, n2, surface_hit.tri.geo_n, surface_hit.surface_point.barycentrics, outgoing_direction);
+  const GPUSceneInstanceData instance = load_scene_instance(surface_hit.instance_index);
+  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
+  p0 = scene_instance_transform_point(instance, p0);
+  p1 = scene_instance_transform_point(instance, p1);
+  p2 = scene_instance_transform_point(instance, p2);
+  n0 = scene_instance_transform_normal(instance, n0) * orientation;
+  n1 = scene_instance_transform_normal(instance, n1) * orientation;
+  n2 = scene_instance_transform_normal(instance, n2) * orientation;
+  const float3 geo_normal = scene_instance_transform_geometric_normal(instance, surface_hit.tri.geo_n);
+  return scene_math_shared_shading_pos(p0, p1, p2, n0, n1, n2, geo_normal, surface_hit.surface_point.barycentrics, outgoing_direction);
 }
 
 [noinline] BSDFEval gpu_evaluate_material_bsdf(

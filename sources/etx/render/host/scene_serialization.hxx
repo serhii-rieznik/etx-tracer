@@ -16,7 +16,8 @@ struct IORDatabase;
 struct TaskScheduler;
 
 static constexpr uint32_t kBinaryGeometryMagic = ('B' << 24) | ('x' << 16) | ('t' << 8) | ('E' << 0);
-static constexpr uint32_t kBinaryGeometryVersion = 1u;
+static constexpr uint32_t kBinaryGeometryLegacyVersion = 1u;
+static constexpr uint32_t kBinaryGeometryVersion = 2u;
 
 #pragma pack(push, 1)
 struct MappingEntry {

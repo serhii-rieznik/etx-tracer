@@ -76,6 +76,8 @@ ETX_SHARED_INLINE ::Medium make_gpu_medium_descriptor(const Medium& medium, Pack
   result.phase_function_g = medium.phase_function_g;
   result.enable_explicit_connections = medium.enable_explicit_connections;
   result.cls = medium.cls;
+  result.world_to_object = medium.world_to_object;
+  result.local_bounds = medium.local_bounds;
   return result;
 }
 

@@ -188,6 +188,13 @@ static_assert((offsetof(Medium, bounds) + offsetof(BoundingBox, p_max)) == kMedi
 static_assert(offsetof(Medium, absorption_index) == kMediumAbsorptionIndexOffset, "Medium::absorption_index offset changed");
 static_assert(offsetof(Medium, scattering_index) == kMediumScatteringIndexOffset, "Medium::scattering_index offset changed");
 static_assert(offsetof(Medium, cls) == kMediumClassOffset, "Medium::cls offset changed");
+static_assert((offsetof(Medium, world_to_object) + offsetof(AffineTransform, rows)) == kMediumWorldToObjectRow0Offset, "Medium::world_to_object.rows[0] offset changed");
+static_assert((offsetof(Medium, world_to_object) + offsetof(AffineTransform, rows) + sizeof(float4)) == kMediumWorldToObjectRow1Offset,
+  "Medium::world_to_object.rows[1] offset changed");
+static_assert((offsetof(Medium, world_to_object) + offsetof(AffineTransform, rows) + 2u * sizeof(float4)) == kMediumWorldToObjectRow2Offset,
+  "Medium::world_to_object.rows[2] offset changed");
+static_assert((offsetof(Medium, local_bounds) + offsetof(BoundingBox, p_min)) == kMediumLocalBoundsMinOffset, "Medium::local_bounds.p_min offset changed");
+static_assert((offsetof(Medium, local_bounds) + offsetof(BoundingBox, p_max)) == kMediumLocalBoundsMaxOffset, "Medium::local_bounds.p_max offset changed");
 
 static_assert(std::is_standard_layout_v<GPUSceneGlobals>, "GPUSceneGlobals must stay standard layout for C++/HLSL interop");
 static_assert(std::is_standard_layout_v<GPUSceneOptions>, "GPUSceneOptions must stay standard layout for C++/HLSL interop");
@@ -204,6 +211,24 @@ static_assert(sizeof(GPUSceneOptions) == 48, "GPUSceneOptions size changed; upda
 static_assert(sizeof(GPUImageBlobHeader) == 16, "GPUImageBlobHeader size changed; update shared ABI");
 static_assert(sizeof(GPUMediumBlobHeader) == 16, "GPUMediumBlobHeader size changed; update shared ABI");
 static_assert(sizeof(GPUScene) == 80, "GPUScene size changed; update shared ABI");
+static_assert(offsetof(GPUScene, vertex_positions) == 0u, "GPUScene::vertex_positions offset changed");
+static_assert(offsetof(GPUScene, vertex_normals) == 4u, "GPUScene::vertex_normals offset changed");
+static_assert(offsetof(GPUScene, vertex_tangents) == 8u, "GPUScene::vertex_tangents offset changed");
+static_assert(offsetof(GPUScene, vertex_bitangents) == 12u, "GPUScene::vertex_bitangents offset changed");
+static_assert(offsetof(GPUScene, vertex_texcoords) == 16u, "GPUScene::vertex_texcoords offset changed");
+static_assert(offsetof(GPUScene, triangles) == 20u, "GPUScene::triangles offset changed");
+static_assert(offsetof(GPUScene, meshes) == 24u, "GPUScene::meshes offset changed");
+static_assert(offsetof(GPUScene, instances) == 28u, "GPUScene::instances offset changed");
+static_assert(offsetof(GPUScene, emitter_profiles) == 32u, "GPUScene::emitter_profiles offset changed");
+static_assert(offsetof(GPUScene, emitter_instances) == 36u, "GPUScene::emitter_instances offset changed");
+static_assert(offsetof(GPUScene, scene_globals) == 40u, "GPUScene::scene_globals offset changed");
+static_assert(offsetof(GPUScene, materials) == 44u, "GPUScene::materials offset changed");
+static_assert(offsetof(GPUScene, spectrums) == 48u, "GPUScene::spectrums offset changed");
+static_assert(offsetof(GPUScene, images) == 52u, "GPUScene::images offset changed");
+static_assert(offsetof(GPUScene, mediums) == 56u, "GPUScene::mediums offset changed");
+static_assert(offsetof(GPUScene, emitters_distribution) == 60u, "GPUScene::emitters_distribution offset changed");
+static_assert(offsetof(GPUScene, scene_options) == 64u, "GPUScene::scene_options offset changed");
+static_assert(offsetof(GPUScene, energy_compensation_interfaces) == 68u, "GPUScene::energy_compensation_interfaces offset changed");
 static_assert(offsetof(GPUSceneGlobals, vertex_count) == kSceneGlobalsVertexCountOffset, "GPUSceneGlobals::vertex_count offset changed");
 static_assert(offsetof(GPUSceneGlobals, triangle_count) == kSceneGlobalsTriangleCountOffset, "GPUSceneGlobals::triangle_count offset changed");
 static_assert(offsetof(GPUSceneGlobals, emitter_profile_count) == kSceneGlobalsEmitterProfileCountOffset, "GPUSceneGlobals::emitter_profile_count offset changed");
@@ -234,12 +259,38 @@ static_assert(offsetof(GPUMediumBlobHeader, mediums_offset) == kMediumBlobHeader
 static_assert(offsetof(GPUMediumBlobHeader, data_chunk_count) == kMediumBlobHeaderDataChunkCountOffset, "GPUMediumBlobHeader::data_chunk_count offset changed");
 static_assert(offsetof(GPUMediumBlobHeader, data_chunk_indices_offset) == kMediumBlobHeaderDataChunkIndicesOffset, "GPUMediumBlobHeader::data_chunk_indices_offset offset changed");
 
+static_assert(std::is_standard_layout_v<SceneInstance>, "SceneInstance must stay standard layout for C++/HLSL interop");
+static_assert(std::is_trivially_copyable_v<SceneInstance>, "SceneInstance must stay trivially copyable for C++/HLSL interop");
+static_assert(alignof(SceneInstance) == 16, "SceneInstance alignment must match HLSL packing");
+static_assert(sizeof(SceneInstance) == kSceneInstanceStride, "SceneInstance size changed; update shared ABI");
+static_assert((offsetof(SceneInstance, object_to_world) + offsetof(AffineTransform, rows)) == kSceneInstanceObjectToWorldRow0Offset,
+  "SceneInstance::object_to_world.rows[0] offset changed");
+static_assert((offsetof(SceneInstance, object_to_world) + offsetof(AffineTransform, rows) + sizeof(float4)) == kSceneInstanceObjectToWorldRow1Offset,
+  "SceneInstance::object_to_world.rows[1] offset changed");
+static_assert((offsetof(SceneInstance, object_to_world) + offsetof(AffineTransform, rows) + 2u * sizeof(float4)) == kSceneInstanceObjectToWorldRow2Offset,
+  "SceneInstance::object_to_world.rows[2] offset changed");
+static_assert((offsetof(SceneInstance, world_to_object) + offsetof(AffineTransform, rows)) == kSceneInstanceWorldToObjectRow0Offset,
+  "SceneInstance::world_to_object.rows[0] offset changed");
+static_assert((offsetof(SceneInstance, world_to_object) + offsetof(AffineTransform, rows) + sizeof(float4)) == kSceneInstanceWorldToObjectRow1Offset,
+  "SceneInstance::world_to_object.rows[1] offset changed");
+static_assert((offsetof(SceneInstance, world_to_object) + offsetof(AffineTransform, rows) + 2u * sizeof(float4)) == kSceneInstanceWorldToObjectRow2Offset,
+  "SceneInstance::world_to_object.rows[2] offset changed");
+static_assert(offsetof(SceneInstance, mesh_index) == kSceneInstanceMeshIndexOffset, "SceneInstance::mesh_index offset changed");
+static_assert(offsetof(SceneInstance, flags) == kSceneInstanceFlagsOffset, "SceneInstance::flags offset changed");
+static_assert(offsetof(SceneInstance, emitter_offset) == kSceneInstanceEmitterOffsetOffset, "SceneInstance::emitter_offset offset changed");
+static_assert(offsetof(SceneInstance, emitter_count) == kSceneInstanceEmitterCountOffset, "SceneInstance::emitter_count offset changed");
+
 static_assert(std::is_standard_layout_v<etx::EmitterProfile>, "EmitterProfile must stay standard layout for C++/HLSL interop");
 static_assert(std::is_standard_layout_v<etx::Emitter>, "Emitter must stay standard layout for C++/HLSL interop");
 static_assert(alignof(etx::EmitterProfile) == 16, "EmitterProfile alignment must match HLSL packing");
 static_assert(sizeof(etx::Emitter) == kEmitterStride, "Emitter size changed; update shared ABI");
 static_assert(offsetof(etx::Emitter, cls) == kEmitterClassOffset, "Emitter::cls offset changed");
 static_assert(offsetof(etx::Emitter, profile) == kEmitterProfileOffset, "Emitter::profile offset changed");
+static_assert(offsetof(etx::Emitter, triangle_index) == kEmitterTriangleIndexOffset, "Emitter::triangle_index offset changed");
+static_assert(offsetof(etx::Emitter, spectrum_weight) == kEmitterSpectrumWeightOffset, "Emitter::spectrum_weight offset changed");
+static_assert(offsetof(etx::Emitter, additional_weight) == kEmitterAdditionalWeightOffset, "Emitter::additional_weight offset changed");
+static_assert(offsetof(etx::Emitter, triangle_area) == kEmitterTriangleAreaOffset, "Emitter::triangle_area offset changed");
+static_assert(offsetof(etx::Emitter, instance_index) == kEmitterInstanceIndexOffset, "Emitter::instance_index offset changed");
 static_assert(sizeof(etx::EmitterProfile) == kEmitterProfileStride, "EmitterProfile size changed; update shared ABI");
 static_assert(offsetof(etx::EmitterProfile, emission) == kEmitterProfileEmissionSpectrumIndexOffset, "EmitterProfile::emission offset changed");
 static_assert((offsetof(etx::EmitterProfile, emission) + offsetof(SpectralImage, image_index)) == kEmitterProfileEmissionImageIndexOffset,

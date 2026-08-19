@@ -75,7 +75,56 @@ PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
 
   {
     ETX_PROFILER_NAMED_SCOPE("pack_emitters_non_area");
-    for (uint32_t profile_index = 0u; profile_index < static_cast<uint32_t>(result.emitter_profiles.size()); ++profile_index) {
+    std::vector<bool> attached_profiles(result.emitter_profiles.size(), false);
+    for (uint32_t node_index : scene_data.hierarchy.evaluation_order) {
+      const SceneNode& node = scene_data.hierarchy.nodes[node_index];
+      const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+      if ((attachment_end > scene_data.hierarchy.attachments.size()) || (node_index >= scene_data.hierarchy.world_transforms.size())) {
+        continue;
+      }
+      for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+        const SceneAttachment& attachment = scene_data.hierarchy.attachments[attachment_index];
+        if ((attachment.type != SceneAttachment::Type::Emitter) || (attachment.resource_index >= attached_profiles.size())) {
+          continue;
+        }
+        attached_profiles[attachment.resource_index] = true;
+        if ((node_index >= scene_data.hierarchy.effective_enabled.size()) || (scene_data.hierarchy.effective_enabled[node_index] == 0u)) {
+          continue;
+        }
+        const EmitterProfile& source_profile = result.emitter_profiles[attachment.resource_index];
+        if (source_profile.cls == EmitterProfile::Class::Area) {
+          continue;
+        }
+
+        EmitterProfile profile = source_profile;
+        if (profile.cls == EmitterProfile::Class::Directional) {
+          const float3 transformed_direction = transform_vector(scene_data.hierarchy.world_transforms[node_index], profile.directional.direction);
+          if (dot(transformed_direction, transformed_direction) <= kEpsilon) {
+            log::warning("Directional emitter %u has a degenerate node transform and was skipped", attachment.resource_index);
+            continue;
+          }
+          profile.directional.direction = normalize(transformed_direction);
+        }
+        const uint32_t packed_profile_index = static_cast<uint32_t>(result.emitter_profiles.size());
+        result.emitter_profiles.push_back(profile);
+
+        Emitter emitter(profile.cls);
+        emitter.profile = packed_profile_index;
+        emitter.triangle_index = kInvalidIndex;
+        if (profile.emission.spectrum_index != kInvalidIndex) {
+          emitter.spectrum_weight = safe_spectrum_luminance(scene_data, profile.emission.spectrum_index);
+        }
+        emitter.additional_weight = ((profile.cls == EmitterProfile::Class::Directional) || (profile.cls == EmitterProfile::Class::Environment))
+                                      ? (kPi * bounding_sphere_radius * bounding_sphere_radius)
+                                      : (4.0f * kPi);
+        result.emitter_instances.push_back(emitter);
+      }
+    }
+
+    for (uint32_t profile_index = 0u; profile_index < static_cast<uint32_t>(attached_profiles.size()); ++profile_index) {
+      if (attached_profiles[profile_index]) {
+        continue;
+      }
       const auto& profile = result.emitter_profiles[profile_index];
       if (profile.cls == EmitterProfile::Class::Area) {
         continue;
@@ -96,41 +145,64 @@ PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
 
   {
     ETX_PROFILER_NAMED_SCOPE("pack_emitters_area");
-    for (uint32_t triangle_index = 0u; triangle_index < static_cast<uint32_t>(scene_data.triangles.size()); ++triangle_index) {
-      const Triangle& triangle = scene_data.triangles[triangle_index];
-      if (triangle.emitter_index == kInvalidIndex) {
+    result.instances.reserve(scene_data.hierarchy.mesh_instances.size());
+    for (uint32_t instance_index = 0u; instance_index < static_cast<uint32_t>(scene_data.hierarchy.mesh_instances.size()); ++instance_index) {
+      const ResolvedMeshInstance& resolved = scene_data.hierarchy.mesh_instances[instance_index];
+      SceneInstance& instance = result.instances.emplace_back();
+      instance.object_to_world = resolved.object_to_world;
+      instance.world_to_object = resolved.world_to_object;
+      instance.mesh_index = resolved.mesh_index;
+      instance.flags = resolved.flags;
+      instance.emitter_offset = static_cast<uint32_t>(result.emitter_instances.size());
+
+      if ((resolved.flags & ResolvedMeshInstance::Enabled) == 0u) {
         continue;
       }
-      if (triangle.emitter_index >= static_cast<uint32_t>(result.emitter_profiles.size())) {
+
+      if (resolved.mesh_index >= scene_data.meshes.size()) {
         continue;
       }
 
-      const auto& profile = result.emitter_profiles[triangle.emitter_index];
-      if (profile.cls != EmitterProfile::Class::Area) {
+      const Mesh& mesh = scene_data.meshes[resolved.mesh_index];
+      const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
+      if (triangle_end > scene_data.triangles.size()) {
         continue;
       }
 
-      Emitter emitter(EmitterProfile::Class::Area);
-      emitter.profile = triangle.emitter_index;
-      emitter.triangle_index = triangle_index;
-
-      if ((triangle.material_index < static_cast<uint32_t>(scene_data.materials.size())) && triangle_has_valid_positions(scene_data, triangle)) {
-        const auto& material = scene_data.materials[triangle.material_index];
-
-        if (profile.emission.spectrum_index != kInvalidIndex) {
-          emitter.spectrum_weight = safe_spectrum_luminance(scene_data, profile.emission.spectrum_index);
+      for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+        const Triangle& triangle = scene_data.triangles[triangle_index];
+        if ((triangle.emitter_index == kInvalidIndex) || (triangle.emitter_index >= static_cast<uint32_t>(result.emitter_profiles.size()))) {
+          continue;
         }
 
-        const float3& v0 = scene_data.vertices.pos[triangle.i[0]];
-        const float3& v1 = scene_data.vertices.pos[triangle.i[1]];
-        const float3& v2 = scene_data.vertices.pos[triangle.i[2]];
-        const float triangle_area = 0.5f * length(cross(v1 - v0, v2 - v0));
-        emitter.triangle_area = triangle_area;
-        emitter.additional_weight = (material.two_sided ? 2.0f : 1.0f) * triangle_area * kPi;
+        const auto& profile = result.emitter_profiles[triangle.emitter_index];
+        if (profile.cls != EmitterProfile::Class::Area) {
+          continue;
+        }
+
+        Emitter emitter(EmitterProfile::Class::Area);
+        emitter.profile = triangle.emitter_index;
+        emitter.triangle_index = triangle_index;
+        emitter.instance_index = instance_index;
+
+        if ((triangle.material_index < static_cast<uint32_t>(scene_data.materials.size())) && triangle_has_valid_positions(scene_data, triangle)) {
+          const auto& material = scene_data.materials[triangle.material_index];
+          if (profile.emission.spectrum_index != kInvalidIndex) {
+            emitter.spectrum_weight = safe_spectrum_luminance(scene_data, profile.emission.spectrum_index);
+          }
+
+          const float3 v0 = transform_point(resolved.object_to_world, scene_data.vertices.pos[triangle.i[0]]);
+          const float3 v1 = transform_point(resolved.object_to_world, scene_data.vertices.pos[triangle.i[1]]);
+          const float3 v2 = transform_point(resolved.object_to_world, scene_data.vertices.pos[triangle.i[2]]);
+          const float triangle_area = 0.5f * length(cross(v1 - v0, v2 - v0));
+          emitter.triangle_area = triangle_area;
+          emitter.additional_weight = (material.two_sided ? 2.0f : 1.0f) * triangle_area * kPi;
+        }
+
+        result.emitter_instances.push_back(emitter);
       }
 
-      result.emitter_instances.push_back(emitter);
-      result.triangles[triangle_index].emitter_index = static_cast<uint32_t>(result.emitter_instances.size() - 1u);
+      instance.emitter_count = static_cast<uint32_t>(result.emitter_instances.size()) - instance.emitter_offset;
     }
   }
 

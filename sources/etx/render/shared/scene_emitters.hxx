@@ -31,7 +31,7 @@ float emitter_discrete_pdf(const Emitter& emitter);
 
 float emitter_sample_pdf(const Emitter& em_inst, ETX_IN(float3, in_direction));
 
-float2 emitter_environment_pdf(ETX_IN(float3, in_direction), bool target_is_surface, uint32_t target_triangle_index);
+float2 emitter_environment_pdf(ETX_IN(float3, in_direction), bool target_is_surface, uint32_t target_triangle_index, uint32_t target_instance_index);
 
 ETX_SHARED_INLINE float emitter_ris_candidate_weight(const EmitterSample& emitter_sample, const EmitterSampleQuery& query) {
   float radiance_weight = emitter_sample.value.luminance();

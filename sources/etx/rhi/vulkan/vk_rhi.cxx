@@ -2937,7 +2937,11 @@ void VKCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
   VkAccelerationStructureBuildGeometryInfoKHR build_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
   build_info.type = (desc.type == RHIAccelerationStructureType::BottomLevel) ? VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR : VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
   build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-  build_info.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+  if (desc.allow_update) {
+    build_info.flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+  }
+  build_info.mode = desc.update ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+  build_info.srcAccelerationStructure = desc.update ? as_data.acceleration_structure : VK_NULL_HANDLE;
   build_info.dstAccelerationStructure = as_data.acceleration_structure;
   build_info.scratchData.deviceAddress = device->get_buffer_device_address(scratch_buffer) + scratch_offset;
 
@@ -2977,7 +2981,7 @@ void VKCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
       vk_geo.geometry.triangles.vertexStride = src_geo.triangles.vertex_stride;
       vk_geo.geometry.triangles.maxVertex = src_geo.triangles.vertex_count;
       vk_geo.geometry.triangles.indexType = (src_geo.triangles.index_type == RHIIndexType::UInt32) ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
-      vk_geo.geometry.triangles.indexData.deviceAddress = device->get_buffer_device_address(src_geo.triangles.index_buffer);
+      vk_geo.geometry.triangles.indexData.deviceAddress = device->get_buffer_device_address(src_geo.triangles.index_buffer) + src_geo.triangles.index_buffer_offset;
 
       ranges[i].primitiveCount = src_geo.triangles.index_count / 3;
       ranges[i].primitiveOffset = 0;

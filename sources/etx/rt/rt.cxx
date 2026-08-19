@@ -3,12 +3,33 @@
 #include <etx/rt/rt.hxx>
 
 #include <etx/render/host/film.hxx>
+#include <etx/render/host/emitter_packing.hxx>
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/shared/sampler.hxx>
 
 #include <embree4/rtcore.h>
 
 namespace etx {
+namespace {
+
+uint32_t embree_hit_instance_index(const RTCFilterFunctionNArguments* args) {
+  return RTCHitN_instID(args->hit, args->N, 0u, 0u);
+}
+
+uint32_t embree_hit_triangle_index(const Scene& scene, const RTCFilterFunctionNArguments* args) {
+  const uint32_t primitive_index = RTCHitN_primID(args->hit, args->N, 0u);
+  const uint32_t instance_index = embree_hit_instance_index(args);
+  if ((instance_index == RTC_INVALID_GEOMETRY_ID) || (instance_index >= scene.instances.count)) {
+    return primitive_index;
+  }
+  const SceneInstance& instance = scene.instances[instance_index];
+  if (instance.mesh_index >= scene.meshes.count) {
+    return kInvalidIndex;
+  }
+  return scene.meshes[instance.mesh_index].triangle_offset + primitive_index;
+}
+
+}  // namespace
 
 struct RaytracingImpl {
   TaskScheduler& scheduler;
@@ -17,6 +38,8 @@ struct RaytracingImpl {
   Scene scene = {};
   RTCDevice rt_device = {};
   RTCScene rt_scene = {};
+  std::vector<RTCScene> mesh_scenes = {};
+  std::vector<RTCGeometry> instance_geometries = {};
 
   struct InternalSceneData {
     Camera camera = {};
@@ -25,6 +48,7 @@ struct RaytracingImpl {
     std::vector<EmitterProfile> emitter_profiles = {};
     std::vector<Emitter> emitter_instances = {};
     std::vector<Triangle> triangles = {};
+    std::vector<SceneInstance> instances = {};
   } internal_data;
 
   RaytracingImpl(TaskScheduler& s, Film& f)
@@ -60,9 +84,11 @@ struct RaytracingImpl {
       update_scene_options(scene_data);
     }
 
-    if (update_flags[UpdateFlags::AnyGeometryStructure] || update_flags[UpdateFlags::EmbreeScene]) {
+    if (update_flags[UpdateFlags::AnyGeometryStructure]) {
       release_host_scene();
       build_host_scene(scene);
+    } else if (update_flags[UpdateFlags::Transforms]) {
+      update_host_scene_transforms(scene);
     }
     film.allocate(internal_data.camera.film_size);
     scene.options.properties[Scene::Properties::Committed] = true;
@@ -91,6 +117,7 @@ struct RaytracingImpl {
     scene.vertices.tex = {scene_data.vertices.tex.data(), scene_data.vertices.tex.size()};
     scene.triangles = {internal_data.triangles.data(), internal_data.triangles.size()};
     scene.meshes = {scene_data.meshes.data(), scene_data.meshes.size()};
+    scene.instances = {internal_data.instances.data(), internal_data.instances.size()};
     scene.materials = {scene_data.materials.data(), scene_data.materials.size()};
     scene.mediums = {scene_data.mediums.as_array(), scene_data.mediums.array_size()};
     scene.energy_compensation_interfaces = {scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
@@ -102,139 +129,34 @@ struct RaytracingImpl {
 
   void update_scene_data(const SceneData& scene_data, const UpdateFlags& update_flags) {
     ETX_PROFILER_SCOPE();
-    if (update_flags[UpdateFlags::Triangles] || update_flags[UpdateFlags::Emitters]) {
-      ETX_PROFILER_NAMED_SCOPE("update_triangles_and_emitters");
-      update_triangles_internal(scene_data);
-      update_emitters_internal(scene_data);
+    const bool packed_emitters_changed = update_flags[UpdateFlags::VerticesPos] || update_flags[UpdateFlags::Triangles] || update_flags[UpdateFlags::Meshes] ||
+                                         update_flags[UpdateFlags::Hierarchy] || update_flags[UpdateFlags::Transforms] || update_flags[UpdateFlags::Attachments] ||
+                                         update_flags[UpdateFlags::Materials] || update_flags[UpdateFlags::Spectra] || update_flags[UpdateFlags::Emitters];
+    if (packed_emitters_changed) {
+      ETX_PROFILER_NAMED_SCOPE("update_instances_triangles_and_emitters");
+      PackedEmitterData packed_emitters = build_packed_emitters(scene_data);
+      internal_data.emitters_distribution_storage = build_packed_emitter_distribution(packed_emitters);
+      internal_data.emitter_profiles = std::move(packed_emitters.emitter_profiles);
+      internal_data.emitter_instances = std::move(packed_emitters.emitter_instances);
+      internal_data.triangles = std::move(packed_emitters.triangles);
+      internal_data.instances = std::move(packed_emitters.instances);
+      scene.environment_emitters = packed_emitters.environment_emitters;
+
+      if (internal_data.emitters_distribution_storage.empty()) {
+        internal_data.emitters_distribution = {};
+      } else {
+        const uint32_t distribution_count = static_cast<uint32_t>(internal_data.emitters_distribution_storage.size() - 1u);
+        internal_data.emitters_distribution = Distribution::build(internal_data.emitters_distribution_storage.data(), distribution_count);
+      }
+      scene.emitters_distribution = internal_data.emitters_distribution;
     }
 
-    if (update_flags[UpdateFlags::VerticesPos] || update_flags[UpdateFlags::Triangles] || scene.bounding_sphere_radius == 0.0f) {
+    if (update_flags[UpdateFlags::VerticesPos] || update_flags[UpdateFlags::Triangles] || update_flags[UpdateFlags::Transforms] || update_flags[UpdateFlags::Hierarchy] ||
+        update_flags[UpdateFlags::Attachments] || scene.bounding_sphere_radius == 0.0f) {
       compute_scene_bounding_volumes(scene_data);
     }
 
-    if (update_flags[UpdateFlags::Emitters] || update_flags[UpdateFlags::AnyMaterials] || update_flags[UpdateFlags::Triangles]) {
-      ETX_PROFILER_NAMED_SCOPE("build_emitters_distribution");
-      build_emitters_distribution(scene_data);
-    }
-
     update_all_scene_views(scene_data);
-  }
-
-  void build_emitters_distribution(const SceneData& scene_data) {
-    ETX_PROFILER_SCOPE();
-    const auto bbox = scene_data.compute_bounding_volumes();
-    const float3 bounding_sphere_center = 0.5f * (bbox.p_min + bbox.p_max);
-    const float bounding_sphere_radius = length(bbox.p_max - bounding_sphere_center);
-
-    scene.environment_emitters.count = 0u;
-
-    for (uint32_t i = 0u; i < static_cast<uint32_t>(internal_data.emitter_profiles.size()); ++i) {
-      auto& profile = internal_data.emitter_profiles[i];
-      if (profile.cls == EmitterProfile::Class::Directional) {
-        profile.directional.equivalent_disk_size = 2.0f * std::tan(profile.directional.angular_size * 0.5f);
-        profile.directional.angular_size_cosine = std::cos(profile.directional.angular_size * 0.5f);
-      }
-    }
-
-    std::vector<uint32_t> active_emitter_indices = {};
-    active_emitter_indices.reserve(internal_data.emitter_instances.size());
-
-    for (uint32_t i = 0u; i < static_cast<uint32_t>(internal_data.emitter_instances.size()); ++i) {
-      auto& emitter = internal_data.emitter_instances[i];
-      const auto& profile = internal_data.emitter_profiles[emitter.profile];
-
-      const float spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? scene_data.spectrum_values[profile.emission.spectrum_index].luminance() : 0.0f;
-      emitter.spectrum_weight = spectrum_weight;
-
-      if ((profile.cls == EmitterProfile::Class::Directional) || (profile.cls == EmitterProfile::Class::Environment)) {
-        const float additional_weight = kPi * bounding_sphere_radius * bounding_sphere_radius;
-        emitter.additional_weight = additional_weight;
-      }
-
-      const float total_weight = emitter.spectrum_weight * emitter.additional_weight;
-      if (total_weight > 0.0f) {
-        active_emitter_indices.push_back(i);
-      }
-    }
-
-    for (uint32_t emitter_idx : active_emitter_indices) {
-      const auto& emitter = internal_data.emitter_instances[emitter_idx];
-      if ((emitter.cls == EmitterProfile::Class::Directional) || (emitter.cls == EmitterProfile::Class::Environment)) {
-        if (scene.environment_emitters.count < SceneLimits::MaxEnvironmentEmitters) {
-          scene.environment_emitters.emitters[scene.environment_emitters.count++] = emitter_idx;
-        }
-      }
-    }
-
-    const uint32_t active_count = static_cast<uint32_t>(active_emitter_indices.size());
-    internal_data.emitters_distribution_storage.resize(static_cast<size_t>(active_count) + 1u);
-
-    auto* entries = internal_data.emitters_distribution_storage.data();
-    for (uint32_t i = 0u; i < active_count; ++i) {
-      const uint32_t emitter_idx = active_emitter_indices[i];
-      const auto& emitter = internal_data.emitter_instances[emitter_idx];
-      const float total_weight = emitter.spectrum_weight * emitter.additional_weight;
-      entries[i] = {total_weight, 0.0f, 0.0f, emitter_idx};
-    }
-
-    internal_data.emitters_distribution = Distribution::build(entries, active_count);
-
-    scene.emitters_distribution = internal_data.emitters_distribution;
-
-    log::info("Built emitters distribution for %u emitters (%u active)", static_cast<uint32_t>(internal_data.emitter_instances.size()), active_count);
-  }
-
-  void update_triangles_internal(const SceneData& scene_data) {
-    internal_data.triangles = scene_data.triangles;
-    for (auto& tri : internal_data.triangles) {
-      tri.emitter_index = kInvalidIndex;
-    }
-  }
-
-  void update_emitters_internal(const SceneData& scene_data) {
-    internal_data.emitter_instances.clear();
-    internal_data.emitter_profiles.clear();
-
-    internal_data.emitter_profiles = scene_data.emitter_profiles;
-
-    for (uint32_t i = 0u; i < static_cast<uint32_t>(scene_data.emitter_profiles.size()); ++i) {
-      const auto& profile = scene_data.emitter_profiles[i];
-      if (profile.cls != EmitterProfile::Class::Area) {
-        Emitter& emitter = internal_data.emitter_instances.emplace_back(profile.cls);
-        emitter.profile = i;
-        emitter.triangle_index = kInvalidIndex;
-        emitter.spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? scene_data.spectrum_values[profile.emission.spectrum_index].luminance() : 0.0f;
-        emitter.additional_weight = (profile.cls == EmitterProfile::Class::Directional) ? kPi : (4.0f * kPi);
-      }
-    }
-
-    for (size_t tri_index = 0u; tri_index < scene_data.triangles.size(); ++tri_index) {
-      const Triangle& tri = scene_data.triangles[tri_index];
-      if ((tri.emitter_index != kInvalidIndex) && (tri.emitter_index < scene_data.emitter_profiles.size())) {
-        const auto& profile = scene_data.emitter_profiles[tri.emitter_index];
-        if (profile.cls == EmitterProfile::Class::Area) {
-          Emitter& emitter = internal_data.emitter_instances.emplace_back(EmitterProfile::Class::Area);
-          emitter.profile = tri.emitter_index;
-          emitter.triangle_index = static_cast<uint32_t>(tri_index);
-
-          if (tri.material_index < scene_data.materials.size()) {
-            const Material& mtl = scene_data.materials[tri.material_index];
-            const float spectrum_weight = (profile.emission.spectrum_index != kInvalidIndex) ? scene_data.spectrum_values[profile.emission.spectrum_index].luminance() : 0.0f;
-
-            const float3& v0 = scene_data.vertices.pos[tri.i[0]];
-            const float3& v1 = scene_data.vertices.pos[tri.i[1]];
-            const float3& v2 = scene_data.vertices.pos[tri.i[2]];
-            const float triangle_area = 0.5f * length(cross(v1 - v0, v2 - v0));
-
-            emitter.triangle_area = triangle_area;
-            emitter.spectrum_weight = spectrum_weight;
-            emitter.additional_weight = (mtl.two_sided ? 2.0f : 1.0f) * triangle_area * kPi;
-          }
-
-          internal_data.triangles[tri_index].emitter_index = static_cast<uint32_t>(internal_data.emitter_instances.size() - 1u);
-        }
-      }
-    }
   }
 
   void build_host_scene(const Scene& s) {
@@ -247,26 +169,81 @@ struct RaytracingImpl {
       nullptr);
 
     rt_scene = rtcNewScene(rt_device);
+    mesh_scenes.assign(s.meshes.count, nullptr);
+    instance_geometries.assign(s.instances.count, nullptr);
+    for (uint32_t mesh_index = 0u; mesh_index < s.meshes.count; ++mesh_index) {
+      const Mesh& mesh = s.meshes[mesh_index];
+      if ((mesh.triangle_count == 0u) || ((mesh.triangle_offset + mesh.triangle_count) > s.triangles.count)) {
+        continue;
+      }
 
-    auto geometry = rtcNewGeometry(rt_device, RTCGeometryType::RTC_GEOMETRY_TYPE_TRIANGLE);
+      RTCScene mesh_scene = rtcNewScene(rt_device);
+      RTCGeometry geometry = rtcNewGeometry(rt_device, RTCGeometryType::RTC_GEOMETRY_TYPE_TRIANGLE);
+      rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_VERTEX, 0, RTCFormat::RTC_FORMAT_FLOAT3, s.vertices.pos.a, 0, sizeof(float3), s.vertices.pos.count);
+      rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_INDEX, 0, RTCFormat::RTC_FORMAT_UINT3, s.triangles.a, mesh.triangle_offset * sizeof(Triangle),
+        sizeof(Triangle), mesh.triangle_count);
+      rtcCommitGeometry(geometry);
+      rtcAttachGeometry(mesh_scene, geometry);
+      rtcReleaseGeometry(geometry);
+      rtcCommitScene(mesh_scene);
+      mesh_scenes[mesh_index] = mesh_scene;
+    }
 
-    rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_VERTEX, 0, RTCFormat::RTC_FORMAT_FLOAT3,  //
-      s.vertices.pos.a, 0, sizeof(float3), s.vertices.pos.count);
+    for (uint32_t instance_index = 0u; instance_index < s.instances.count; ++instance_index) {
+      const SceneInstance& instance = s.instances[instance_index];
+      if ((instance.mesh_index >= mesh_scenes.size()) || (mesh_scenes[instance.mesh_index] == nullptr)) {
+        continue;
+      }
+      RTCGeometry geometry = rtcNewGeometry(rt_device, RTCGeometryType::RTC_GEOMETRY_TYPE_INSTANCE);
+      rtcSetGeometryInstancedScene(geometry, mesh_scenes[instance.mesh_index]);
+      rtcSetGeometryTransform(geometry, 0u, RTCFormat::RTC_FORMAT_FLOAT3X4_ROW_MAJOR, instance.object_to_world.rows);
+      rtcSetGeometryMask(geometry, (instance.flags & SceneInstance::Enabled) != 0u ? 0xffffffffu : 0u);
+      rtcCommitGeometry(geometry);
+      rtcAttachGeometryByID(rt_scene, geometry, instance_index);
+      instance_geometries[instance_index] = geometry;
+    }
+    rtcCommitScene(rt_scene);
+  }
 
-    rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_INDEX, 0, RTCFormat::RTC_FORMAT_UINT3,  //
-      s.triangles.a, 0, sizeof(Triangle), s.triangles.count);
+  void update_host_scene_transforms(const Scene& s) {
+    ETX_PROFILER_SCOPE();
+    if ((rt_scene == nullptr) || (instance_geometries.size() != s.instances.count)) {
+      release_host_scene();
+      build_host_scene(s);
+      return;
+    }
 
-    rtcCommitGeometry(geometry);
-    rtcAttachGeometry(rt_scene, geometry);
-    rtcReleaseGeometry(geometry);
+    for (uint32_t instance_index = 0u; instance_index < s.instances.count; ++instance_index) {
+      RTCGeometry geometry = instance_geometries[instance_index];
+      if (geometry == nullptr) {
+        release_host_scene();
+        build_host_scene(s);
+        return;
+      }
+      rtcSetGeometryTransform(geometry, 0u, RTCFormat::RTC_FORMAT_FLOAT3X4_ROW_MAJOR, s.instances[instance_index].object_to_world.rows);
+      rtcSetGeometryMask(geometry, (s.instances[instance_index].flags & SceneInstance::Enabled) != 0u ? 0xffffffffu : 0u);
+      rtcCommitGeometry(geometry);
+    }
     rtcCommitScene(rt_scene);
   }
 
   void release_host_scene() {
+    for (RTCGeometry geometry : instance_geometries) {
+      if (geometry != nullptr) {
+        rtcReleaseGeometry(geometry);
+      }
+    }
+    instance_geometries.clear();
     if (rt_scene) {
       rtcReleaseScene(rt_scene);
       rt_scene = {};
     }
+    for (RTCScene mesh_scene : mesh_scenes) {
+      if (mesh_scene != nullptr) {
+        rtcReleaseScene(mesh_scene);
+      }
+    }
+    mesh_scenes.clear();
   }
 
   template <class T>
@@ -284,7 +261,7 @@ struct RaytracingImpl {
     rtcInitIntersectArguments(&args);
 
     args.context = context;
-    args.feature_mask = static_cast<RTCFeatureFlags>(RTC_FEATURE_FLAG_TRIANGLE | RTC_FEATURE_FLAG_FILTER_FUNCTION_IN_ARGUMENTS);
+    args.feature_mask = static_cast<RTCFeatureFlags>(RTC_FEATURE_FLAG_TRIANGLE | RTC_FEATURE_FLAG_INSTANCE | RTC_FEATURE_FLAG_FILTER_FUNCTION_IN_ARGUMENTS);
     args.flags = RTC_RAY_QUERY_FLAG_INVOKE_ARGUMENT_FILTER;
     args.filter = filter_funtion;
 
@@ -338,12 +315,17 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
     const Scene* scene;
     Sampler* smp;
     uint32_t m_id;
-  } context = {{}, {{}, kInvalidIndex, 0.0f}, &scene, &smp, material_id};
+  } context = {{}, {{}, kInvalidIndex, 0.0f, kInvalidIndex}, &scene, &smp, material_id};
 
   auto filter_funtion = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
 
-    const uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+    const uint32_t triangle_index = embree_hit_triangle_index(*ctx->scene, args);
+    const uint32_t instance_index = embree_hit_instance_index(args);
+    if (triangle_index >= ctx->scene->triangles.count) {
+      *args->valid = 0;
+      return;
+    }
     const auto& tri = ctx->scene->triangles[triangle_index];
 
     if ((ctx->m_id != kInvalidIndex) && (tri.material_index != ctx->m_id)) {
@@ -365,7 +347,7 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
       return;
     }
 
-    ctx->i = {{u, v}, triangle_index, RTCRayN_tfar(args->ray, args->N, 0)};
+    ctx->i = {{u, v}, triangle_index, RTCRayN_tfar(args->ray, args->N, 0), instance_index};
   };
 
   ETX_ASSERT(_private != nullptr);
@@ -384,12 +366,17 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
     IntersectionBase i;
     const Scene* scene;
     Sampler* smp;
-  } context = {{}, {{}, kInvalidIndex, 0.0f}, &scene, &smp};
+  } context = {{}, {{}, kInvalidIndex, 0.0f, kInvalidIndex}, &scene, &smp};
 
   auto filter_funtion = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
 
-    const uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+    const uint32_t triangle_index = embree_hit_triangle_index(*ctx->scene, args);
+    const uint32_t instance_index = embree_hit_instance_index(args);
+    if (triangle_index >= ctx->scene->triangles.count) {
+      *args->valid = 0;
+      return;
+    }
     const auto& tri = ctx->scene->triangles[triangle_index];
     const auto& mat = ctx->scene->materials[tri.material_index];
     if (mat.cls == MaterialClass::Void) {
@@ -405,7 +392,7 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
       return;
     }
 
-    ctx->i = {{u, v}, triangle_index, RTCRayN_tfar(args->ray, args->N, 0)};
+    ctx->i = {{u, v}, triangle_index, RTCRayN_tfar(args->ray, args->N, 0), instance_index};
   };
 
   ETX_ASSERT(_private != nullptr);
@@ -425,6 +412,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
   constexpr uint32_t kIntersectionBufferSize = 63;
   struct IntermediateIntersection {
     uint32_t primitive_id;
+    uint32_t instance_index;
     float u;
     float v;
     float t;
@@ -440,7 +428,12 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
 
   auto filter_function = [](const struct RTCFilterFunctionNArguments* args) {
     auto ctx = reinterpret_cast<IntersectionContextExt*>(args->context);
-    uint32_t triangle_index = RTCHitN_primID(args->hit, args->N, 0);
+    uint32_t triangle_index = embree_hit_triangle_index(ctx->scene, args);
+    if (triangle_index >= ctx->scene.triangles.count) {
+      ctx->occlusion_found = 1u;
+      *args->valid = -1;
+      return;
+    }
     const auto u = RTCHitN_u(args->hit, args->N, 0);
     const auto v = RTCHitN_v(args->hit, args->N, 0);
     const auto& tri = ctx->scene.triangles[triangle_index];
@@ -462,6 +455,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
 
     ctx->intersections[ctx->intersection_count++] = {
       .primitive_id = triangle_index,
+      .instance_index = embree_hit_instance_index(args),
       .u = u,
       .v = v,
       .t = RTCRayN_tfar(args->ray, args->N, 0),
@@ -495,7 +489,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
       }
     }
   }
-  context.intersections[context.intersection_count++] = {kInvalidIndex, 0.0f, 0.0f, t_max};
+  context.intersections[context.intersection_count++] = {kInvalidIndex, kInvalidIndex, 0.0f, 0.0f, t_max};
 
   float current_t = 0.0f;
   float3 origin = p0;
@@ -521,12 +515,15 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
 
     const auto& tri = scene.triangles[intersection.primitive_id];
     const auto& mat = scene.materials[tri.material_index];
-    const bool entering_surface = dot(tri.geo_n, direction) < 0.0f;
+    const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, intersection.instance_index);
+    const bool entering_surface = dot(geo_normal, direction) < 0.0f;
     current_medium = {
       .index = entering_surface ? mat.int_medium : mat.ext_medium,
     };
     current_t = intersection.t;
-    origin = lerp_pos(scene, tri, barycentrics({intersection.u, intersection.v}));
+    const float3 bc = barycentrics({intersection.u, intersection.v});
+    origin = scene_triangle_world_position(scene, tri, 0u, intersection.instance_index) * bc.x + scene_triangle_world_position(scene, tri, 1u, intersection.instance_index) * bc.y +
+             scene_triangle_world_position(scene, tri, 2u, intersection.instance_index) * bc.z;
   }
 
   return result;

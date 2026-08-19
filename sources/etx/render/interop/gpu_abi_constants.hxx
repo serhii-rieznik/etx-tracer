@@ -94,6 +94,19 @@ ETX_STATIC_CONST uint32_t kEmitterTriangleIndexOffset = 8u;
 ETX_STATIC_CONST uint32_t kEmitterSpectrumWeightOffset = 12u;
 ETX_STATIC_CONST uint32_t kEmitterAdditionalWeightOffset = 16u;
 ETX_STATIC_CONST uint32_t kEmitterTriangleAreaOffset = 20u;
+ETX_STATIC_CONST uint32_t kEmitterInstanceIndexOffset = 24u;
+
+ETX_STATIC_CONST uint32_t kSceneInstanceStride = 112u;
+ETX_STATIC_CONST uint32_t kSceneInstanceObjectToWorldRow0Offset = 0u;
+ETX_STATIC_CONST uint32_t kSceneInstanceObjectToWorldRow1Offset = 16u;
+ETX_STATIC_CONST uint32_t kSceneInstanceObjectToWorldRow2Offset = 32u;
+ETX_STATIC_CONST uint32_t kSceneInstanceWorldToObjectRow0Offset = 48u;
+ETX_STATIC_CONST uint32_t kSceneInstanceWorldToObjectRow1Offset = 64u;
+ETX_STATIC_CONST uint32_t kSceneInstanceWorldToObjectRow2Offset = 80u;
+ETX_STATIC_CONST uint32_t kSceneInstanceMeshIndexOffset = 96u;
+ETX_STATIC_CONST uint32_t kSceneInstanceFlagsOffset = 100u;
+ETX_STATIC_CONST uint32_t kSceneInstanceEmitterOffsetOffset = 104u;
+ETX_STATIC_CONST uint32_t kSceneInstanceEmitterCountOffset = 108u;
 
 ETX_STATIC_CONST uint32_t kEmitterProfileStride = 96u;
 ETX_STATIC_CONST uint32_t kEmitterProfileEmissionSpectrumIndexOffset = 0u;
@@ -160,7 +173,7 @@ ETX_STATIC_CONST uint32_t kMediumBlobHeaderMediumsOffset = 4u;
 ETX_STATIC_CONST uint32_t kMediumBlobHeaderDataChunkCountOffset = 8u;
 ETX_STATIC_CONST uint32_t kMediumBlobHeaderDataChunkIndicesOffset = 12u;
 
-ETX_STATIC_CONST uint32_t kMediumStride = 144u;
+ETX_STATIC_CONST uint32_t kMediumStride = 224u;
 ETX_STATIC_CONST uint32_t kMediumGridDimensionsOffset = 0u;
 ETX_STATIC_CONST uint32_t kMediumGridTypeOffset = 12u;
 ETX_STATIC_CONST uint32_t kMediumGridNoiseTypeOffset = 16u;
@@ -185,6 +198,11 @@ ETX_STATIC_CONST uint32_t kMediumScatteringIndexOffset = 132u;
 ETX_STATIC_CONST uint32_t kMediumPhaseFunctionGOffset = 136u;
 ETX_STATIC_CONST uint32_t kMediumEnableExplicitConnectionsOffset = 140u;
 ETX_STATIC_CONST uint32_t kMediumClassOffset = 142u;
+ETX_STATIC_CONST uint32_t kMediumWorldToObjectRow0Offset = 144u;
+ETX_STATIC_CONST uint32_t kMediumWorldToObjectRow1Offset = 160u;
+ETX_STATIC_CONST uint32_t kMediumWorldToObjectRow2Offset = 176u;
+ETX_STATIC_CONST uint32_t kMediumLocalBoundsMinOffset = 192u;
+ETX_STATIC_CONST uint32_t kMediumLocalBoundsMaxOffset = 208u;
 
 ETX_STATIC_CONST uint32_t kSceneOptionsMinPathLengthOffset = 0u;
 ETX_STATIC_CONST uint32_t kSceneOptionsMaxPathLengthOffset = 4u;

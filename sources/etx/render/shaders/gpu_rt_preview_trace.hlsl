@@ -65,10 +65,11 @@ float3 preview_hit_color(float3 normal, float hit_t, float3 miss_color, Camera c
 
   if (ray_query.CommittedStatus() == COMMITTED_TRIANGLE_HIT) {
     SceneGPUSharedGlobals scene_globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
-    uint triangle_index = ray_query.CommittedPrimitiveIndex();
+    const uint instance_index = ray_query.CommittedInstanceID();
+    uint triangle_index = scene_instance_triangle_index(ray_query.CommittedPrimitiveIndex(), instance_index);
     if (triangle_index < scene_globals_data.triangle_count) {
       TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], triangle_index);
-      float3 normal = normalize(tri.geo_n);
+      float3 normal = scene_instance_transform_geometric_normal(load_scene_instance(instance_index), tri.geo_n);
       if (dot(normal, ray.Direction) > 0.0f) {
         normal = -normal;
       }
