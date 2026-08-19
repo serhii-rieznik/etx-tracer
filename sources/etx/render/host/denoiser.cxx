@@ -84,6 +84,12 @@ void Denoiser::shutdown() {
   oidnReleaseDevice(_private->device);
 }
 
+void Denoiser::release_buffers() {
+  _private->release_buffers();
+  _private->size = {};
+  _private->data_size = 0u;
+}
+
 void Denoiser::allocate_buffers(float3* albedo, float3* normal, const uint2& size) {
   TimeMeasure tm;
   uint64_t data_size = sizeof(float3) * size.x * size.y;

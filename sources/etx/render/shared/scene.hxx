@@ -18,6 +18,8 @@
 
 namespace etx {
 
+constexpr uint32_t kMaximumPathLength = 8192u;
+
 struct ETX_ALIGNED Scene {
   enum class LightSampling : uint32_t {
     Uniform,
@@ -51,7 +53,7 @@ struct ETX_ALIGNED Scene {
 
   struct Options {
     uint32_t min_path_length = 0u;
-    uint32_t max_path_length = 65535u;
+    uint32_t max_path_length = kMaximumPathLength;
     uint32_t samples = 256u;
     uint32_t random_path_termination = 6u;
     uint32_t random_seed = 0u;

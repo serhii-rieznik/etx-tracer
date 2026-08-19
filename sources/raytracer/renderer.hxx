@@ -28,20 +28,87 @@ enum class RendererPreparationState : uint32_t {
   Failed,
 };
 
+enum class RendererPreparationStepState : uint32_t {
+  QueuedForShaderCompilation,
+  CompilingSpirV,
+  QueuedForDriver,
+  CheckingCache,
+  DriverCompiling,
+  Complete,
+  Failed,
+};
+
+struct RendererPreparationStepStatus {
+  std::string name = {};
+  std::string detail = {};
+  RendererPreparationStepState state = RendererPreparationStepState::QueuedForShaderCompilation;
+  uint64_t spirv_size_bytes = 0u;
+  double elapsed_ms = 0.0;
+  bool cache_hit = false;
+};
+
 struct RendererPreparationStatus {
   RendererPreparationState state = RendererPreparationState::Ready;
   std::string phase = "Ready";
   std::string message = {};
   uint32_t completed_steps = 0u;
   uint32_t total_steps = 0u;
+  uint32_t worker_count = 0u;
+  double elapsed_seconds = 0.0;
+  bool cancelable = false;
+  std::vector<RendererPreparationStepStatus> steps = {};
 };
 
-struct RendererRuntimeStats {
-  bool valid = false;
-  uint32_t completed_samples = 0u;
-  uint32_t target_samples = 0u;
+enum class RendererStatusState : uint32_t {
+  Unavailable,
+  Idle,
+  Preparing,
+  Running,
+  Finishing,
+  Completed,
+  Failed,
+};
+
+enum class RendererProgressKind : uint32_t {
+  None,
+  Samples,
+  Steps,
+};
+
+struct RendererStatus {
+  RendererMode mode = RendererMode::CPURaytracing;
+  RendererStatusState state = RendererStatusState::Unavailable;
+  RendererProgressKind progress_kind = RendererProgressKind::None;
+  uint32_t completed_units = 0u;
+  uint32_t total_units = 0u;
   double elapsed_seconds = 0.0;
-  double estimated_remaining_seconds = -1.0;
+  double remaining_seconds = 0.0;
+  bool elapsed_available = false;
+  bool remaining_available = false;
+};
+
+enum class RendererMemoryLocation : uint32_t {
+  CPU,
+  GPUDevice,
+  GPUHostVisible,
+};
+
+struct RendererMemoryEntry {
+  std::string category = {};
+  std::string name = {};
+  RendererMemoryLocation location = RendererMemoryLocation::CPU;
+  uint64_t bytes = 0u;
+  uint32_t allocation_count = 0u;
+};
+
+struct RendererMemoryStats {
+  std::vector<RendererMemoryEntry> entries = {};
+  uint32_t wavefront_path_capacity = 0u;
+  uint32_t light_vertex_capacity = 0u;
+  uint32_t light_vertex_count = 0u;
+  uint32_t tile_index = 0u;
+  uint32_t tile_count = 0u;
+  uint32_t max_path_length = 0u;
 };
 
 struct RendererKernelTiming {
@@ -60,15 +127,7 @@ struct RendererKernelTimingStats {
   bool enabled = false;
 };
 
-enum class RendererRunState : uint32_t {
-  Stopped,
-  Running,
-  Finishing,
-  Completed,
-};
-
 struct RendererControlState {
-  RendererRunState state = RendererRunState::Stopped;
   bool can_run = false;
   bool can_finish = false;
   bool can_stop = false;
@@ -157,7 +216,11 @@ struct Renderer {
     return {};
   }
 
-  virtual RendererRuntimeStats runtime_stats() const {
+  virtual RendererStatus status() const {
+    return {.mode = mode()};
+  }
+
+  virtual RendererMemoryStats memory_stats() const {
     return {};
   }
 

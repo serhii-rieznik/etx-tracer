@@ -15,6 +15,8 @@
 
 # include <sokol_app.h>
 
+# include "windows/resource.h"
+
 # include <algorithm>
 # include <cmath>
 
@@ -151,6 +153,23 @@ void PlatformUI::prepare_application() {
 }
 
 void PlatformUI::show_startup() {
+  const HWND window = reinterpret_cast<HWND>(const_cast<void*>(sapp_win32_get_hwnd()));
+  if (window == nullptr) {
+    return;
+  }
+
+  const HINSTANCE instance = GetModuleHandleW(nullptr);
+  const HICON large_icon = reinterpret_cast<HICON>(
+    LoadImageW(instance, MAKEINTRESOURCEW(IDI_ETX_TRACER), IMAGE_ICON, GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), LR_DEFAULTCOLOR | LR_SHARED));
+  const HICON small_icon = reinterpret_cast<HICON>(
+    LoadImageW(instance, MAKEINTRESOURCEW(IDI_ETX_TRACER), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR | LR_SHARED));
+
+  if (large_icon != nullptr) {
+    SendMessageW(window, WM_SETICON, ICON_BIG, reinterpret_cast<LPARAM>(large_icon));
+  }
+  if (small_icon != nullptr) {
+    SendMessageW(window, WM_SETICON, ICON_SMALL, reinterpret_cast<LPARAM>(small_icon));
+  }
 }
 
 void PlatformUI::finish_startup(bool succeeded) {

@@ -88,6 +88,7 @@ static_assert(offsetof(GPURTConstants, render_window_width) == 44, "GPURTConstan
 static_assert(offsetof(GPURTConstants, render_window_height) == 48, "GPURTConstants::render_window_height offset changed");
 static_assert(offsetof(GPURTConstants, dispatch_item_offset) == 52, "GPURTConstants::dispatch_item_offset offset changed");
 static_assert(offsetof(GPURTConstants, dispatch_item_count) == 56, "GPURTConstants::dispatch_item_count offset changed");
+static_assert(offsetof(GPURTConstants, work_queue_index) == 60, "GPURTConstants::work_queue_index offset changed");
 static_assert(offsetof(GPURTConstants, scene) == 64, "GPURTConstants::scene offset changed");
 
 static_assert(std::is_standard_layout_v<SpectralImage>, "SpectralImage must stay standard layout for C++/HLSL interop");

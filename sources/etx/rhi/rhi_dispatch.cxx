@@ -124,7 +124,9 @@ static decltype(auto) dispatch_context(RHIBackend backend, const void* impl, Fn&
 }
 
 RHICreateResult<RHISemaphore> RHIDevice::create_semaphore() {
-  return dispatch_device(_backend, _impl, [](auto* device) { return device->create_semaphore(); });
+  return dispatch_device(_backend, _impl, [](auto* device) {
+    return device->create_semaphore();
+  });
 }
 
 RHIResult RHIDevice::destroy_semaphore(RHISemaphore semaphore) {
@@ -134,19 +136,27 @@ RHIResult RHIDevice::destroy_semaphore(RHISemaphore semaphore) {
   if (_impl == nullptr) {
     return RHIResult::Success;
   }
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->destroy_semaphore(semaphore); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->destroy_semaphore(semaphore);
+  });
 }
 
 RHICreateBindlessResult RHIDevice::create_buffer(const RHIBufferDesc& desc) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->create_buffer(desc); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->create_buffer(desc);
+  });
 }
 
 RHIResult RHIDevice::update_buffer(RHIBindlessHandle buffer, const void* data, uint64_t size, uint64_t offset) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->update_buffer(buffer, data, size, offset); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->update_buffer(buffer, data, size, offset);
+  });
 }
 
 RHIResult RHIDevice::read_buffer(RHIBindlessHandle buffer, void* data, uint64_t size, uint64_t offset) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->read_buffer(buffer, data, size, offset); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->read_buffer(buffer, data, size, offset);
+  });
 }
 
 RHIResult RHIDevice::destroy_buffer(RHIBindlessHandle buffer) {
@@ -156,7 +166,9 @@ RHIResult RHIDevice::destroy_buffer(RHIBindlessHandle buffer) {
   if (_impl == nullptr) {
     return RHIResult::Success;
   }
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->destroy_buffer(buffer); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->destroy_buffer(buffer);
+  });
 }
 
 bool RHIDevice::upload_or_update_chunked_buffer(const RHIChunkedBufferUploadData& data, RHIBufferUsage usage, RHIChunkedBufferState& state, const char* buffer_name) {
@@ -262,11 +274,15 @@ void RHIDevice::destroy_chunked_buffer(RHIChunkedBufferState& state) {
 }
 
 RHICreateBindlessResult RHIDevice::create_texture(const RHITextureDesc& desc) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->create_texture(desc); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->create_texture(desc);
+  });
 }
 
 RHIResult RHIDevice::update_texture(RHIBindlessHandle texture, const void* data, uint32_t mip_level, uint32_t array_layer) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->update_texture(texture, data, mip_level, array_layer); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->update_texture(texture, data, mip_level, array_layer);
+  });
 }
 
 RHIResult RHIDevice::destroy_texture(RHIBindlessHandle texture) {
@@ -276,11 +292,15 @@ RHIResult RHIDevice::destroy_texture(RHIBindlessHandle texture) {
   if (_impl == nullptr) {
     return RHIResult::Success;
   }
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->destroy_texture(texture); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->destroy_texture(texture);
+  });
 }
 
 RHICreateBindlessResult RHIDevice::create_sampler(const RHISamplerDesc& desc) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->create_sampler(desc); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->create_sampler(desc);
+  });
 }
 
 RHIResult RHIDevice::destroy_sampler(RHIBindlessHandle sampler) {
@@ -290,11 +310,15 @@ RHIResult RHIDevice::destroy_sampler(RHIBindlessHandle sampler) {
   if (_impl == nullptr) {
     return RHIResult::Success;
   }
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->destroy_sampler(sampler); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->destroy_sampler(sampler);
+  });
 }
 
 RHICreateBindlessResult RHIDevice::create_acceleration_structure(const RHIAccelerationStructureDesc& desc) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->create_acceleration_structure(desc); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->create_acceleration_structure(desc);
+  });
 }
 
 RHIResult RHIDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle) {
@@ -304,39 +328,58 @@ RHIResult RHIDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle)
   if (_impl == nullptr) {
     return RHIResult::Success;
   }
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->destroy_acceleration_structure(as_handle); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->destroy_acceleration_structure(as_handle);
+  });
 }
 
 uint64_t RHIDevice::get_acceleration_structure_device_address(RHIBindlessHandle as_handle) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->get_acceleration_structure_device_address(as_handle); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->get_acceleration_structure_device_address(as_handle);
+  });
 }
 
 uint64_t RHIDevice::get_acceleration_structure_build_scratch_size(RHIBindlessHandle as_handle) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->get_acceleration_structure_build_scratch_size(as_handle); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->get_acceleration_structure_build_scratch_size(as_handle);
+  });
 }
 
 RHICreatePipelineResult RHIDevice::create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->create_graphics_pipeline(desc); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->create_graphics_pipeline(desc);
+  });
 }
 
 RHICreatePipelineResult RHIDevice::create_compute_pipeline(const RHIComputePipelineDesc& desc) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->create_compute_pipeline(desc); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->create_compute_pipeline(desc);
+  });
 }
 
-std::vector<RHICreatePipelineBatchEntry> RHIDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->create_compute_pipelines(descs, max_concurrency); });
+std::vector<RHICreatePipelineBatchEntry> RHIDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency,
+  const RHIPipelineBatchProgressCallback& progress_callback) {
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->create_compute_pipelines(descs, max_concurrency, progress_callback);
+  });
 }
 
 void RHIDevice::persist_pipeline_cache() {
-  dispatch_device(_backend, _impl, [](auto* device) { device->persist_pipeline_cache(); });
+  dispatch_device(_backend, _impl, [](auto* device) {
+    device->persist_pipeline_cache();
+  });
 }
 
 RHIResult RHIDevice::reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->reload_graphics_pipeline(pipeline, new_desc); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->reload_graphics_pipeline(pipeline, new_desc);
+  });
 }
 
 RHIResult RHIDevice::reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc) {
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->reload_compute_pipeline(pipeline, new_desc); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->reload_compute_pipeline(pipeline, new_desc);
+  });
 }
 
 RHIResult RHIDevice::destroy_pipeline(RHIPipeline pipeline) {
@@ -346,11 +389,15 @@ RHIResult RHIDevice::destroy_pipeline(RHIPipeline pipeline) {
   if (_impl == nullptr) {
     return RHIResult::Success;
   }
-  return dispatch_device(_backend, _impl, [&](auto* device) { return device->destroy_pipeline(pipeline); });
+  return dispatch_device(_backend, _impl, [&](auto* device) {
+    return device->destroy_pipeline(pipeline);
+  });
 }
 
 RHIMemoryStats RHIDevice::get_memory_statistics() const {
-  return dispatch_device(_backend, _impl, [](const auto* device) { return device->get_memory_statistics(); });
+  return dispatch_device(_backend, _impl, [](const auto* device) {
+    return device->get_memory_statistics();
+  });
 }
 
 void RHIContext::destroy_backend() {
@@ -387,87 +434,129 @@ void RHIContext::move_from(RHIContext&& other) {
 }
 
 void RHIContext::create_swapchain(const void* native_window, uint32_t width, uint32_t height) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->create_swapchain(native_window, width, height); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->create_swapchain(native_window, width, height);
+  });
 }
 
 void RHIContext::initialize_headless() {
-  dispatch_context(_backend, _impl, [](auto* context) { context->initialize_for_headless(); });
+  dispatch_context(_backend, _impl, [](auto* context) {
+    context->initialize_for_headless();
+  });
 }
 
 bool RHIContext::has_swapchain() const {
-  return dispatch_context(_backend, _impl, [](const auto* context) { return context->has_swapchain(); });
+  return dispatch_context(_backend, _impl, [](const auto* context) {
+    return context->has_swapchain();
+  });
 }
 
 void RHIContext::destroy_swapchain() {
-  dispatch_context(_backend, _impl, [](auto* context) { context->destroy_swapchain(); });
+  dispatch_context(_backend, _impl, [](auto* context) {
+    context->destroy_swapchain();
+  });
 }
 
 void RHIContext::resize_swapchain(uint32_t width, uint32_t height) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->resize_swapchain(width, height); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->resize_swapchain(width, height);
+  });
 }
 
 RHITexture RHIContext::get_current_swapchain_texture() {
-  return dispatch_context(_backend, _impl, [](auto* context) { return context->get_current_swapchain_texture(); });
+  return dispatch_context(_backend, _impl, [](auto* context) {
+    return context->get_current_swapchain_texture();
+  });
 }
 
 RHITextureFormat RHIContext::get_swapchain_format() const {
-  return dispatch_context(_backend, _impl, [](const auto* context) { return context->get_swapchain_format(); });
+  return dispatch_context(_backend, _impl, [](const auto* context) {
+    return context->get_swapchain_format();
+  });
 }
 
 RHIExtent2D RHIContext::get_swapchain_extent() const {
-  return dispatch_context(_backend, _impl, [](const auto* context) { return context->get_swapchain_extent_rhi(); });
+  return dispatch_context(_backend, _impl, [](const auto* context) {
+    return context->get_swapchain_extent_rhi();
+  });
 }
 
 void RHIContext::begin_frame() {
-  dispatch_context(_backend, _impl, [](auto* context) { context->begin_frame(); });
+  dispatch_context(_backend, _impl, [](auto* context) {
+    context->begin_frame();
+  });
 }
 
 void RHIContext::end_frame() {
-  dispatch_context(_backend, _impl, [](auto* context) { context->end_frame(); });
+  dispatch_context(_backend, _impl, [](auto* context) {
+    context->end_frame();
+  });
 }
 
 void RHIContext::present() {
-  dispatch_context(_backend, _impl, [](auto* context) { context->present(); });
+  dispatch_context(_backend, _impl, [](auto* context) {
+    context->present();
+  });
 }
 
 RHIResult RHIContext::wait_idle() {
-  return dispatch_context(_backend, _impl, [](auto* context) { return context->wait_idle(); });
+  return dispatch_context(_backend, _impl, [](auto* context) {
+    return context->wait_idle();
+  });
 }
 
 RHIResult RHIContext::wait_for_command_buffer(RHICommandBuffer cmd) {
-  return dispatch_context(_backend, _impl, [&](auto* context) { return context->wait_for_command_buffer(cmd); });
+  return dispatch_context(_backend, _impl, [&](auto* context) {
+    return context->wait_for_command_buffer(cmd);
+  });
 }
 
 RHISemaphore RHIContext::get_image_acquired_semaphore() {
-  return dispatch_context(_backend, _impl, [](auto* context) { return context->get_image_acquired_semaphore(); });
+  return dispatch_context(_backend, _impl, [](auto* context) {
+    return context->get_image_acquired_semaphore();
+  });
 }
 
 RHISemaphore RHIContext::get_render_complete_semaphore() {
-  return dispatch_context(_backend, _impl, [](auto* context) { return context->get_render_complete_semaphore(); });
+  return dispatch_context(_backend, _impl, [](auto* context) {
+    return context->get_render_complete_semaphore();
+  });
 }
 
 uint32_t RHIContext::get_current_frame_index() const {
-  return dispatch_context(_backend, _impl, [](const auto* context) { return context->get_current_frame_index(); });
+  return dispatch_context(_backend, _impl, [](const auto* context) {
+    return context->get_current_frame_index();
+  });
 }
 
 uint32_t RHIContext::get_sampler_index(RHISamplerType type) const {
-  return dispatch_context(_backend, _impl, [&](const auto* context) { return context->get_sampler_index(type); });
+  return dispatch_context(_backend, _impl, [&](const auto* context) {
+    return context->get_sampler_index(type);
+  });
 }
 
 RHICapabilities RHIContext::capabilities() const {
-  return dispatch_context(_backend, _impl, [](const auto* context) { return context->capabilities(); });
+  return dispatch_context(_backend, _impl, [](const auto* context) {
+    return context->capabilities();
+  });
 }
 
 RHICommandBuffer RHIContext::get_command_buffer() {
-  return dispatch_context(_backend, _impl, [](auto* context) { return context->get_command_buffer(); });
+  return dispatch_context(_backend, _impl, [](auto* context) {
+    return context->get_command_buffer();
+  });
 }
 
 void RHIContext::destroy_command_buffer(RHICommandBuffer cmd) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->destroy_command_buffer(cmd); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->destroy_command_buffer(cmd);
+  });
 }
 
 void RHIContext::submit_command_buffer(const RHISubmitInfo& info) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->submit_command_buffer(info); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->submit_command_buffer(info);
+  });
 }
 
 void RHIContext::submit_frame_command_buffer(RHICommandBuffer cmd) {
@@ -481,27 +570,45 @@ void RHIContext::submit_frame_command_buffer(RHICommandBuffer cmd) {
 }
 
 void RHIContext::program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->program_command_buffer(cmd, std::move(func)); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->program_command_buffer(cmd, std::move(func));
+  });
 }
 
 void RHIContext::command_buffer_begin(RHICommandBuffer cmd) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->command_buffer_begin(cmd); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->command_buffer_begin(cmd);
+  });
 }
 
 void RHIContext::command_buffer_end(RHICommandBuffer cmd) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->command_buffer_end(cmd); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->command_buffer_end(cmd);
+  });
 }
 
 void RHIContext::command_buffer_reset(RHICommandBuffer cmd) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->command_buffer_reset(cmd); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->command_buffer_reset(cmd);
+  });
+}
+
+void RHIContext::cmd_compute_barrier(RHICommandBuffer cmd) {
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_compute_barrier(cmd);
+  });
 }
 
 void RHIContext::cmd_buffer_barrier(RHICommandBuffer cmd, RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_buffer_barrier(cmd, buffer, old_state, new_state); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_buffer_barrier(cmd, buffer, old_state, new_state);
+  });
 }
 
 void RHIContext::cmd_texture_barrier(RHICommandBuffer cmd, RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_texture_barrier(cmd, texture, old_state, new_state); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_texture_barrier(cmd, texture, old_state, new_state);
+  });
 }
 
 void RHIContext::cmd_begin_render_pass(RHICommandBuffer cmd, uint32_t color_attachment_count, RHIBindlessHandle* color_attachments, const float* clear_colors,
@@ -512,87 +619,135 @@ void RHIContext::cmd_begin_render_pass(RHICommandBuffer cmd, uint32_t color_atta
 }
 
 void RHIContext::cmd_end_render_pass(RHICommandBuffer cmd) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_end_render_pass(cmd); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_end_render_pass(cmd);
+  });
 }
 
 void RHIContext::cmd_set_viewport(RHICommandBuffer cmd, const RHIViewport& viewport) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_set_viewport(cmd, viewport); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_set_viewport(cmd, viewport);
+  });
 }
 
 void RHIContext::cmd_set_scissor(RHICommandBuffer cmd, const RHIRect& scissor) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_set_scissor(cmd, scissor); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_set_scissor(cmd, scissor);
+  });
 }
 
 void RHIContext::cmd_set_pipeline(RHICommandBuffer cmd, RHIPipeline pipeline) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_set_pipeline(cmd, pipeline); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_set_pipeline(cmd, pipeline);
+  });
 }
 
 void RHIContext::cmd_push_constants(RHICommandBuffer cmd, const void* data, uint32_t size, uint32_t offset) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_push_constants(cmd, data, size, offset); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_push_constants(cmd, data, size, offset);
+  });
 }
 
 void RHIContext::cmd_draw(RHICommandBuffer cmd, const RHIDrawDesc& desc) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_draw(cmd, desc); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_draw(cmd, desc);
+  });
 }
 
 void RHIContext::cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_draw_indexed(cmd, desc, index_buffer); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_draw_indexed(cmd, desc, index_buffer);
+  });
 }
 
 void RHIContext::cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_dispatch(cmd, desc); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_dispatch(cmd, desc);
+  });
+}
+
+void RHIContext::cmd_dispatch_indirect(RHICommandBuffer cmd, RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset) {
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_dispatch_indirect(cmd, argument_buffer, argument_buffer_offset);
+  });
 }
 
 void RHIContext::cmd_reset_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_reset_timestamps(cmd, first_query, query_count); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_reset_timestamps(cmd, first_query, query_count);
+  });
 }
 
 void RHIContext::cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index, RHITimestampStage stage) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_write_timestamp(cmd, query_index, stage); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_write_timestamp(cmd, query_index, stage);
+  });
 }
 
 void RHIContext::cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_build_acceleration_structure(cmd, desc, scratch_buffer, scratch_offset); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_build_acceleration_structure(cmd, desc, scratch_buffer, scratch_offset);
+  });
 }
 
 void RHIContext::cmd_copy_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint64_t size, uint64_t src_offset, uint64_t dst_offset) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_copy_buffer(cmd, src, dst, size, src_offset, dst_offset); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_copy_buffer(cmd, src, dst, size, src_offset, dst_offset);
+  });
 }
 
 void RHIContext::cmd_copy_buffer_to_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_copy_buffer_to_texture(cmd, src, dst, width, height, mip_level); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_copy_buffer_to_texture(cmd, src, dst, width, height, mip_level);
+  });
 }
 
 void RHIContext::cmd_copy_texture_to_buffer(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height, uint32_t mip_level) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_copy_texture_to_buffer(cmd, src, dst, width, height, mip_level); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_copy_texture_to_buffer(cmd, src, dst, width, height, mip_level);
+  });
 }
 
 void RHIContext::cmd_resolve_texture(RHICommandBuffer cmd, RHIBindlessHandle src, RHIBindlessHandle dst, uint32_t width, uint32_t height) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_resolve_texture(cmd, src, dst, width, height); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_resolve_texture(cmd, src, dst, width, height);
+  });
 }
 
 void RHIContext::cmd_generate_mipmaps(RHICommandBuffer cmd, RHIBindlessHandle texture) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_generate_mipmaps(cmd, texture); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_generate_mipmaps(cmd, texture);
+  });
 }
 
 void RHIContext::cmd_set_debug_name(RHICommandBuffer cmd, const char* name) {
-  dispatch_context(_backend, _impl, [&](auto* context) { context->cmd_set_debug_name(cmd, name); });
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_set_debug_name(cmd, name);
+  });
 }
 
 bool RHIContext::supports_timestamps() const {
-  return dispatch_context(_backend, _impl, [](const auto* context) { return context->supports_timestamps(); });
+  return dispatch_context(_backend, _impl, [](const auto* context) {
+    return context->supports_timestamps();
+  });
 }
 
 uint32_t RHIContext::timestamp_query_capacity() const {
-  return dispatch_context(_backend, _impl, [](const auto* context) { return context->timestamp_query_capacity(); });
+  return dispatch_context(_backend, _impl, [](const auto* context) {
+    return context->timestamp_query_capacity();
+  });
 }
 
 double RHIContext::timestamp_period_ns() const {
-  return dispatch_context(_backend, _impl, [](const auto* context) { return context->timestamp_period_ns(); });
+  return dispatch_context(_backend, _impl, [](const auto* context) {
+    return context->timestamp_period_ns();
+  });
 }
 
 RHIResult RHIContext::read_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count, uint64_t* out_values) {
-  return dispatch_context(_backend, _impl, [&](auto* context) { return context->read_timestamps(cmd, first_query, query_count, out_values); });
+  return dispatch_context(_backend, _impl, [&](auto* context) {
+    return context->read_timestamps(cmd, first_query, query_count, out_values);
+  });
 }
 
 }  // namespace etx

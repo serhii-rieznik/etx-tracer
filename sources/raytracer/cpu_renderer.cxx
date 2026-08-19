@@ -25,6 +25,10 @@ void CPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     _integrator_thread.request_scene_check();
   }
   _integrator_thread.update();
+  const Integrator* integrator = current_integrator();
+  if (_render_timing_active && (integrator != nullptr) && (integrator->state() == Integrator::State::Stopped)) {
+    stop_render_timing();
+  }
 
   const auto film_layer_data = _raytracing.film().layer(frame_data.view_parameters.view_layer, _raytracing.scene().options.radiance_clamp);
   update_image(ctx, film_layer_data);
@@ -32,6 +36,7 @@ void CPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
 
 void CPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _integrator_thread.stop(Integrator::Stop::Immediate);
+  stop_render_timing();
   _camera_controller.reset();
 
   ctx.device().destroy_texture(_output_texture);
@@ -41,24 +46,44 @@ bool CPURaytracingRenderer::is_running() const {
   return _integrator_thread.running();
 }
 
-RendererRuntimeStats CPURaytracingRenderer::runtime_stats() const {
+RendererStatus CPURaytracingRenderer::status() const {
+  RendererStatus result = {
+    .mode = RendererMode::CPURaytracing,
+  };
   const Integrator* integrator = current_integrator();
-  if ((integrator == nullptr) || !integrator->can_run()) {
-    return {};
+  if ((integrator == nullptr) || (integrator->can_run() == false)) {
+    return result;
   }
 
   const Integrator::Status& status = _integrator_thread.status();
-  RendererRuntimeStats result = {
-    .valid = true,
-    .completed_samples = status.completed_iterations,
-    .target_samples = std::max(1u, _raytracing.scene().options.samples),
-    .elapsed_seconds = status.total_time,
-  };
-  if ((status.completed_iterations > 0u) && (result.completed_samples < result.target_samples)) {
-    const double seconds_per_sample = status.total_time / static_cast<double>(status.completed_iterations);
-    result.estimated_remaining_seconds = seconds_per_sample * static_cast<double>(result.target_samples - result.completed_samples);
-  } else if (result.completed_samples >= result.target_samples) {
-    result.estimated_remaining_seconds = 0.0;
+  result.progress_kind = RendererProgressKind::Samples;
+  result.completed_units = status.completed_iterations;
+  result.total_units = std::max(1u, _raytracing.scene().options.samples);
+
+  switch (integrator->state()) {
+    case Integrator::State::Running:
+      result.state = RendererStatusState::Running;
+      break;
+    case Integrator::State::WaitingForCompletion:
+      result.state = RendererStatusState::Finishing;
+      break;
+    default:
+      result.state = (result.completed_units >= result.total_units) ? RendererStatusState::Completed : RendererStatusState::Idle;
+      break;
+  }
+
+  result.elapsed_seconds = _last_render_elapsed_seconds;
+  if (_render_timing_active) {
+    result.elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - _render_started_at).count();
+  }
+  result.elapsed_available = _render_timing_active || (result.elapsed_seconds > 0.0);
+  if ((result.elapsed_seconds > 0.0) && (result.completed_units > 0u) && (result.completed_units < result.total_units)) {
+    const double seconds_per_sample = result.elapsed_seconds / static_cast<double>(result.completed_units);
+    result.remaining_seconds = seconds_per_sample * static_cast<double>(result.total_units - result.completed_units);
+    result.remaining_available = true;
+  } else if (result.completed_units >= result.total_units) {
+    result.remaining_seconds = 0.0;
+    result.remaining_available = true;
   }
   return result;
 }
@@ -72,30 +97,29 @@ RendererControlState CPURaytracingRenderer::control_state() const {
   RendererControlState result = {};
   switch (integrator->state()) {
     case Integrator::State::Running:
-      result.state = RendererRunState::Running;
+      result.can_finish = true;
+      result.can_stop = true;
+      result.can_restart = true;
       break;
     case Integrator::State::WaitingForCompletion:
-      result.state = RendererRunState::Finishing;
+      result.can_stop = true;
       break;
     default:
-      result.state = RendererRunState::Stopped;
+      result.can_run = true;
       break;
   }
-
-  result.can_run = result.state == RendererRunState::Stopped;
-  result.can_finish = result.state == RendererRunState::Running;
-  result.can_stop = result.state != RendererRunState::Stopped;
-  result.can_restart = result.state == RendererRunState::Running;
   return result;
 }
 
 void CPURaytracingRenderer::start() {
   _raytracing.film().clear(Film::ClearEverything);
+  start_render_timing();
   _integrator_thread.run();
 }
 
 void CPURaytracingRenderer::stop() {
   _integrator_thread.stop(Integrator::Stop::Immediate);
+  stop_render_timing();
 }
 
 void CPURaytracingRenderer::finish() {
@@ -103,21 +127,25 @@ void CPURaytracingRenderer::finish() {
 }
 
 void CPURaytracingRenderer::restart() {
+  start_render_timing();
   _integrator_thread.restart();
 }
 
 void CPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
   _raytracing.film().set_pixel_size(8u);
+  start_render_timing();
   _integrator_thread.restart();
 }
 
 void CPURaytracingRenderer::on_camera_become_steady(SceneRepresentation& scene) {
   _raytracing.film().set_pixel_size(1u);
+  start_render_timing();
   _integrator_thread.restart();
 }
 
 void CPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
   Renderer::on_scene_changed(scene);
+  start_render_timing();
 }
 
 Integrator* CPURaytracingRenderer::current_integrator() const {
@@ -126,6 +154,7 @@ Integrator* CPURaytracingRenderer::current_integrator() const {
 
 void CPURaytracingRenderer::set_integrator(Integrator* i) {
   _integrator_thread.set_integrator(i);
+  reset_render_timing();
 }
 
 Integrator** CPURaytracingRenderer::integrator_list() {
@@ -134,6 +163,25 @@ Integrator** CPURaytracingRenderer::integrator_list() {
 
 uint64_t CPURaytracingRenderer::integrator_count() const {
   return std::size(_integrator_array);
+}
+
+void CPURaytracingRenderer::start_render_timing() {
+  _render_started_at = std::chrono::steady_clock::now();
+  _last_render_elapsed_seconds = 0.0;
+  _render_timing_active = true;
+}
+
+void CPURaytracingRenderer::stop_render_timing() {
+  if (_render_timing_active) {
+    _last_render_elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - _render_started_at).count();
+    _render_timing_active = false;
+  }
+}
+
+void CPURaytracingRenderer::reset_render_timing() {
+  _render_started_at = {};
+  _last_render_elapsed_seconds = 0.0;
+  _render_timing_active = false;
 }
 
 void CPURaytracingRenderer::update_image(RHIContext& ctx, const float4* camera) {

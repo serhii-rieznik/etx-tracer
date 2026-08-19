@@ -142,6 +142,21 @@ void Film::allocate(const uint2& dim) {
   clear(ClearEverything);
 }
 
+void Film::release() {
+  _private->denoiser.release_buffers();
+  for (auto& buffer : _private->storage_buffers) {
+    std::vector<float3>().swap(buffer);
+  }
+  std::vector<float4>().swap(_private->output_data);
+  std::vector<InternalData>().swap(_private->internal_data);
+  _private->dimensions = {};
+  _private->render_window_origin = {};
+  _private->render_window_size = {};
+  _private->last_noise_level = {};
+  _private->active_pixels = 0u;
+  _private->max_sample_count = 0u;
+}
+
 void Film::reset_render_window() {
   _private->render_window_origin = {};
   _private->render_window_size = _private->dimensions;
@@ -529,6 +544,18 @@ uint32_t Film::current_pixel_count() const {
 
 uint32_t Film::active_pixel_count() const {
   return _private->active_pixels.load();
+}
+
+Film::MemoryStats Film::memory_stats() const {
+  MemoryStats result = {};
+  result.accumulation_bytes = _private->storage_buffers[StorageAccumulation].capacity() * sizeof(float3);
+  result.adaptive_bytes = _private->storage_buffers[StorageAdaptive].capacity() * sizeof(float3);
+  result.normals_bytes = _private->storage_buffers[StorageNormals].capacity() * sizeof(float3);
+  result.albedo_bytes = _private->storage_buffers[StorageAlbedo].capacity() * sizeof(float3);
+  result.denoised_bytes = _private->storage_buffers[StorageDenoised].capacity() * sizeof(float3);
+  result.output_bytes = _private->output_data.capacity() * sizeof(float4);
+  result.internal_bytes = _private->internal_data.capacity() * sizeof(InternalData);
+  return result;
 }
 
 bool Film::active_pixel(uint32_t index, uint2& location) const {

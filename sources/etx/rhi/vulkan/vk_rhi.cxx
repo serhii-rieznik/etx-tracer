@@ -32,7 +32,7 @@ Result objc_send(id object, const char* selector_name, Args... args) {
     }
   }
 
-  return ((Result (*)(id, SEL, Args...))objc_msgSend)(object, sel_registerName(selector_name), args...);
+  return ((Result(*)(id, SEL, Args...))objc_msgSend)(object, sel_registerName(selector_name), args...);
 }
 
 bool objc_is_kind_of(id object, const char* class_name) {
@@ -902,6 +902,13 @@ void VKContext::command_buffer_reset(RHICommandBuffer cmd_handle) {
     cmd->reset();
 }
 
+void VKContext::cmd_compute_barrier(RHICommandBuffer cmd_handle) {
+  VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
+  if (cmd) {
+    cmd->compute_barrier();
+  }
+}
+
 void VKContext::cmd_buffer_barrier(RHICommandBuffer cmd_handle, RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state) {
   VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
   if (cmd)
@@ -967,6 +974,12 @@ void VKContext::cmd_dispatch(RHICommandBuffer cmd_handle, const RHIDispatchDesc&
   VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
   if (cmd)
     cmd->dispatch(desc);
+}
+
+void VKContext::cmd_dispatch_indirect(RHICommandBuffer cmd_handle, RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset) {
+  VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
+  if (cmd)
+    cmd->dispatch_indirect(argument_buffer, argument_buffer_offset);
 }
 
 void VKContext::cmd_reset_timestamps(RHICommandBuffer cmd_handle, uint32_t first_query, uint32_t query_count) {
@@ -1267,6 +1280,23 @@ void VKCommandBuffer::set_submit_fence(VkFence fence) {
   _submit_fence = fence;
 }
 
+void VKCommandBuffer::compute_barrier() {
+  if (command_buffer == VK_NULL_HANDLE) {
+    log::error("Cannot set compute barrier: command buffer not initialized");
+    return;
+  }
+
+  if (_is_recording == false) {
+    log::error("Cannot set compute barrier: command buffer is not recording");
+    return;
+  }
+
+  VkMemoryBarrier barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+  barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+}
+
 void VKCommandBuffer::buffer_barrier(RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state) {
   if (command_buffer == VK_NULL_HANDLE) {
     log::error("Cannot set buffer barrier: command buffer not initialized");
@@ -1312,6 +1342,10 @@ void VKCommandBuffer::buffer_barrier(RHIBindlessHandle buffer, RHIResourceState 
       src_access |= VK_ACCESS_SHADER_READ_BIT;
       src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
       break;
+    case RHIResourceState::IndirectArgument:
+      src_access |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+      src_stage = VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+      break;
     default:
       break;
   }
@@ -1332,6 +1366,10 @@ void VKCommandBuffer::buffer_barrier(RHIBindlessHandle buffer, RHIResourceState 
     case RHIResourceState::ShaderReadOnly:
       dst_access |= VK_ACCESS_SHADER_READ_BIT;
       dst_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+      break;
+    case RHIResourceState::IndirectArgument:
+      dst_access |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+      dst_stage = VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
       break;
     default:
       break;
@@ -2050,6 +2088,46 @@ void VKCommandBuffer::dispatch(const RHIDispatchDesc& desc) {
   }
 
   vkCmdDispatch(command_buffer, desc.group_count_x, desc.group_count_y, desc.group_count_z);
+}
+
+void VKCommandBuffer::dispatch_indirect(RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset) {
+  if (command_buffer == VK_NULL_HANDLE) {
+    log::error("Cannot dispatch compute indirectly: command buffer not initialized");
+    return;
+  }
+
+  if (_is_recording == false) {
+    log::error("Cannot dispatch compute indirectly: command buffer is not recording");
+    return;
+  }
+
+  if (current_pipeline.invalid()) {
+    log::error("No pipeline set for indirect compute dispatch");
+    return;
+  }
+
+  const VKPipelineData* compute_pipeline_data = device->get_compute_pipeline_data(current_pipeline);
+  if (compute_pipeline_data == nullptr) {
+    log::error("Failed to find compute pipeline: %llu", current_pipeline.value);
+    return;
+  }
+
+  const VkPipeline vk_pipeline = compute_pipeline_data->pipeline;
+  const VkBuffer vk_argument_buffer = device->get_vk_buffer_from_bindless(argument_buffer);
+  if ((vk_pipeline == VK_NULL_HANDLE) || (vk_argument_buffer == VK_NULL_HANDLE)) {
+    log::error("Invalid Vulkan pipeline or indirect argument buffer");
+    return;
+  }
+
+  vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pipeline);
+
+  const VkDescriptorSet bindless_set = context->get_bindless_manager()->get_descriptor_set();
+  if (bindless_set != VK_NULL_HANDLE) {
+    const VkPipelineLayout vk_pipeline_layout = device->get_bindless_pipeline_layout();
+    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pipeline_layout, 0, 1, &bindless_set, 0, nullptr);
+  }
+
+  vkCmdDispatchIndirect(command_buffer, vk_argument_buffer, argument_buffer_offset);
 }
 
 void VKCommandBuffer::reset_timestamps(uint32_t first_query, uint32_t query_count) {

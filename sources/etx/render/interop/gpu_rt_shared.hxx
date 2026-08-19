@@ -19,6 +19,6 @@ struct ETX_ALIGNED GPURTConstants {
   uint32_t render_window_height;
   uint32_t dispatch_item_offset;
   uint32_t dispatch_item_count;
-  uint32_t pad2;
+  uint32_t work_queue_index;
   GPUScene scene;
 };

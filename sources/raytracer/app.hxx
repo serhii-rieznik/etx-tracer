@@ -98,7 +98,6 @@ struct RTApplication {
   void on_camera_activated(uint32_t camera_index);
   void on_reload_shaders_selected();
   void on_cancel_renderer_preparation_selected();
-  void on_gpu_wavefront_steps_per_frame_changed(uint32_t value);
 
  private:
   void add_to_recent(const std::string&);

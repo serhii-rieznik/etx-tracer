@@ -52,6 +52,7 @@ enum class MenuCommand : uint32_t {
   DecreaseExposure,
   ToggleSceneObjects,
   ToggleProperties,
+  ToggleMemoryDiagnostics,
 };
 
 struct UI {
@@ -77,12 +78,17 @@ struct UI {
     _current_renderer_mode = mode;
   }
 
-  void set_current_renderer_status(const RendererPreparationStatus& status) {
+  void set_current_renderer_preparation(const RendererPreparationStatus& preparation) {
+    _current_renderer_preparation = preparation;
+  }
+
+  void set_current_renderer_status(const RendererStatus& status) {
     _current_renderer_status = status;
   }
 
-  void set_current_renderer_stats(const RendererRuntimeStats& stats) {
-    _current_renderer_stats = stats;
+  void set_memory_stats(const RHIMemoryStats& rhi_stats, const RendererMemoryStats& renderer_stats) {
+    _rhi_memory_stats = rhi_stats;
+    _renderer_memory_stats = renderer_stats;
   }
 
   void set_current_renderer_controls(const RendererControlState& controls) {
@@ -93,12 +99,10 @@ struct UI {
     _gpu_kernel_timing_stats = stats;
   }
 
-  void set_gpu_wavefront_steps_per_frame(uint32_t value) {
+  void set_gpu_wavefront_schedule(uint32_t value, double last_batch_ms, bool automatic) {
     _gpu_wavefront_steps_per_frame = std::clamp(value, 1u, 1024u);
-  }
-
-  uint32_t gpu_wavefront_steps_per_frame() const {
-    return _gpu_wavefront_steps_per_frame;
+    _gpu_wavefront_last_batch_ms = last_batch_ms;
+    _gpu_wavefront_automatic = automatic;
   }
 
   void set_gpu_renderer_available(bool value) {
@@ -205,7 +209,6 @@ struct UI {
     std::function<void(Integrator::Type)> integrator_selected;
     std::function<void()> clear_recent_files;
     std::function<void(uint32_t)> camera_activated;
-    std::function<void(uint32_t)> gpu_wavefront_steps_per_frame_changed;
     std::function<void(bool)> gpu_kernel_timing_enabled_changed;
     std::function<void(float)> exposure_changed;
     std::function<void(uint32_t)> view_layer_changed;
@@ -273,6 +276,8 @@ struct UI {
 #endif
   void build_toolbar(const BuildContext& ctx);
   void build_status_bar(const BuildContext& ctx);
+  void build_renderer_preparation_modal();
+  void build_memory_diagnostics(SceneRepresentation& scene_rep, const Film& film);
   void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx, const FrameData& data);
 
@@ -292,11 +297,15 @@ struct UI {
  private:
   Integrator* _current_integrator = nullptr;
   RendererMode _current_renderer_mode = RendererMode::CPURaytracing;
-  RendererPreparationStatus _current_renderer_status = {};
-  RendererRuntimeStats _current_renderer_stats = {};
+  RendererPreparationStatus _current_renderer_preparation = {};
+  RendererStatus _current_renderer_status = {};
   RendererControlState _current_renderer_controls = {};
   RendererKernelTimingStats _gpu_kernel_timing_stats = {};
+  RHIMemoryStats _rhi_memory_stats = {};
+  RendererMemoryStats _renderer_memory_stats = {};
   uint32_t _gpu_wavefront_steps_per_frame = 256u;
+  double _gpu_wavefront_last_batch_ms = 0.0;
+  bool _gpu_wavefront_automatic = false;
   bool _gpu_renderer_available = true;
   bool _embedded_toolbar_enabled = true;
 
@@ -348,6 +357,7 @@ struct UI {
   enum UISetup : uint32_t {
     UIObjects = 1u << 0u,
     UIProperties = 1u << 1u,
+    UIMemoryDiagnostics = 1u << 2u,
 
     UIDefaults = UIObjects | UIProperties,
   };

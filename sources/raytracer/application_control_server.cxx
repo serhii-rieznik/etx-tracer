@@ -848,13 +848,13 @@ const char* renderer_mode_name(RendererMode mode) {
   }
 }
 
-const char* run_state_name(RendererRunState state) {
+const char* run_state_name(RendererStatusState state) {
   switch (state) {
-    case RendererRunState::Running:
+    case RendererStatusState::Running:
       return "running";
-    case RendererRunState::Finishing:
+    case RendererStatusState::Finishing:
       return "finishing";
-    case RendererRunState::Completed:
+    case RendererStatusState::Completed:
       return "completed";
     default:
       return "stopped";
@@ -866,6 +866,11 @@ Json state_json(const ApplicationStateSnapshot& state) {
   for (const ApplicationIntegratorInfo& integrator : state.integrators) {
     integrators.push_back({{"value", integrator.value}, {"id", integrator.id}, {"name", integrator.name}, {"enabled", integrator.enabled}});
   }
+  const bool runtime_valid = state.status.progress_kind == RendererProgressKind::Samples;
+  const uint32_t completed_samples = runtime_valid ? state.status.completed_units : 0u;
+  const uint32_t target_samples = runtime_valid ? state.status.total_units : 0u;
+  const double elapsed_seconds = state.status.elapsed_available ? state.status.elapsed_seconds : 0.0;
+  const double estimated_remaining_seconds = state.status.remaining_available ? state.status.remaining_seconds : -1.0;
   return {
     {"revision", state.revision},
     {"initialized", state.initialized},
@@ -879,13 +884,13 @@ Json state_json(const ApplicationStateSnapshot& state) {
     {"integrator", state.integrator_name},
     {"integrator_value", static_cast<uint32_t>(state.integrator_type)},
     {"integrators", std::move(integrators)},
-    {"run_state", run_state_name(state.controls.state)},
+    {"run_state", run_state_name(state.status.state)},
     {"controls",
       {{"can_run", state.controls.can_run}, {"can_finish", state.controls.can_finish}, {"can_stop", state.controls.can_stop}, {"can_restart", state.controls.can_restart}}},
     {"preparation", {{"state", static_cast<uint32_t>(state.preparation.state)}, {"phase", state.preparation.phase}, {"message", state.preparation.message},
                       {"completed_steps", state.preparation.completed_steps}, {"total_steps", state.preparation.total_steps}}},
-    {"runtime", {{"valid", state.runtime.valid}, {"completed_samples", state.runtime.completed_samples}, {"target_samples", state.runtime.target_samples},
-                  {"elapsed_seconds", state.runtime.elapsed_seconds}, {"estimated_remaining_seconds", state.runtime.estimated_remaining_seconds}}},
+    {"runtime", {{"valid", runtime_valid}, {"completed_samples", completed_samples}, {"target_samples", target_samples}, {"elapsed_seconds", elapsed_seconds},
+                  {"estimated_remaining_seconds", estimated_remaining_seconds}}},
     {"view", {{"exposure", state.view.exposure}, {"view_layer", state.view.view_layer}, {"output_view", state.view.view_image}, {"display_transform", state.view.view_option}}},
   };
 }
@@ -967,9 +972,6 @@ bool parse_command(const Json& json, ApplicationCommand& command, std::string& e
       command.unsigned_value = unsigned_value();
     } else if (type == "set_display_transform") {
       command.type = ApplicationCommandType::SetDisplayTransform;
-      command.unsigned_value = unsigned_value();
-    } else if (type == "set_gpu_wavefront_steps") {
-      command.type = ApplicationCommandType::SetGPUWavefrontSteps;
       command.unsigned_value = unsigned_value();
     } else if (type == "quit")
       command.type = ApplicationCommandType::Quit;

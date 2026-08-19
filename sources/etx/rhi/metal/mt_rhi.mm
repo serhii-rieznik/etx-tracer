@@ -278,10 +278,7 @@ MTLAccelerationStructureInstanceOptions to_metal_instance_options(uint32_t flags
 }
 
 MTLPackedFloat4x3 to_metal_transform(const float transform[12]) {
-  return MTLPackedFloat4x3(
-    MTLPackedFloat3Make(transform[0], transform[4], transform[8]),
-    MTLPackedFloat3Make(transform[1], transform[5], transform[9]),
-    MTLPackedFloat3Make(transform[2], transform[6], transform[10]),
+  return MTLPackedFloat4x3(MTLPackedFloat3Make(transform[0], transform[4], transform[8]), MTLPackedFloat3Make(transform[1], transform[5], transform[9]), MTLPackedFloat3Make(transform[2], transform[6], transform[10]),
     MTLPackedFloat3Make(transform[3], transform[7], transform[11]));
 }
 
@@ -426,14 +423,12 @@ void log_metal_command_buffer_error_details(id<MTLCommandBuffer> command_buffer)
   }
 
   NSError* error = command_buffer.error;
-  log::error("Metal command buffer failed: label='%s', status=%s", safe_nsstring(command_buffer.label, "<unnamed>"),
-    metal_command_buffer_status_name(command_buffer.status));
+  log::error("Metal command buffer failed: label='%s', status=%s", safe_nsstring(command_buffer.label, "<unnamed>"), metal_command_buffer_status_name(command_buffer.status));
   if (error == nil) {
     return;
   }
 
-  log::error("Metal command buffer error: domain=%s, code=%ld (%s), description=%s", safe_nsstring(error.domain), static_cast<long>(error.code),
-    metal_command_buffer_error_name(error.code), safe_nsstring(error.localizedDescription));
+  log::error("Metal command buffer error: domain=%s, code=%ld (%s), description=%s", safe_nsstring(error.domain), static_cast<long>(error.code), metal_command_buffer_error_name(error.code), safe_nsstring(error.localizedDescription));
   if (error.localizedFailureReason != nil) {
     log::error("Metal command buffer failure reason: %s", safe_nsstring(error.localizedFailureReason));
   }
@@ -444,8 +439,7 @@ void log_metal_command_buffer_error_details(id<MTLCommandBuffer> command_buffer)
   if (@available(macOS 11.0, *)) {
     NSArray<id<MTLCommandBufferEncoderInfo>>* encoder_infos = error.userInfo[MTLCommandBufferEncoderInfoErrorKey];
     for (id<MTLCommandBufferEncoderInfo> encoder_info in encoder_infos) {
-      log::error("Metal encoder status: label='%s', state=%s", safe_nsstring(encoder_info.label, "<unnamed>"),
-        metal_command_encoder_error_state_name(encoder_info.errorState));
+      log::error("Metal encoder status: label='%s', state=%s", safe_nsstring(encoder_info.label, "<unnamed>"), metal_command_encoder_error_state_name(encoder_info.errorState));
       for (NSString* signpost in encoder_info.debugSignposts) {
         log::error("Metal encoder signpost: %s", safe_nsstring(signpost));
       }
@@ -605,17 +599,10 @@ struct MTPipelineStageData {
   id<MTLFunction> function = nil;
   std::array<id<MTLArgumentEncoder>, kMetalBindlessBindingCount> bindless_argument_encoders = {};
   std::array<id<MTLBuffer>, kMetalBindlessBindingCount> bindless_argument_buffers = {};
-  std::array<uint32_t, kMetalBindlessBindingCount> bindless_buffer_indices = {
-    kInvalidMetalBufferIndex, kInvalidMetalBufferIndex, kInvalidMetalBufferIndex, kInvalidMetalBufferIndex, kInvalidMetalBufferIndex, kInvalidMetalBufferIndex};
+  std::array<uint32_t, kMetalBindlessBindingCount> bindless_buffer_indices = {kInvalidMetalBufferIndex, kInvalidMetalBufferIndex, kInvalidMetalBufferIndex, kInvalidMetalBufferIndex, kInvalidMetalBufferIndex, kInvalidMetalBufferIndex};
   std::array<uint64_t, kMetalBindlessBindingCount> encoded_revisions = {};
   std::array<bool, kMetalBindlessBindingCount> uses_bindless_binding = {};
-  std::array<MTLBindingAccess, kMetalBindlessBindingCount> bindless_binding_access = {
-    MTLBindingAccessReadOnly,
-    MTLBindingAccessReadOnly,
-    MTLBindingAccessReadOnly,
-    MTLBindingAccessReadWrite,
-    MTLBindingAccessReadOnly,
-    MTLBindingAccessReadWrite};
+  std::array<MTLBindingAccess, kMetalBindlessBindingCount> bindless_binding_access = {MTLBindingAccessReadOnly, MTLBindingAccessReadOnly, MTLBindingAccessReadOnly, MTLBindingAccessReadWrite, MTLBindingAccessReadOnly, MTLBindingAccessReadWrite};
   bool uses_push_constants = false;
   uint32_t push_constants_buffer_index = kInvalidMetalBufferIndex;
 };
@@ -709,11 +696,7 @@ class MTContext::Impl {
   RHISemaphore image_acquired = {};
   RHISemaphore render_complete = {};
   RHIBindlessHandle swapchain_texture = {};
-  std::array<uint32_t, static_cast<size_t>(RHISamplerType::Count)> predefined_sampler_indices = {
-    kRHIBindlessDescriptorIndexMask,
-    kRHIBindlessDescriptorIndexMask,
-    kRHIBindlessDescriptorIndexMask,
-    kRHIBindlessDescriptorIndexMask,
+  std::array<uint32_t, static_cast<size_t>(RHISamplerType::Count)> predefined_sampler_indices = {kRHIBindlessDescriptorIndexMask, kRHIBindlessDescriptorIndexMask, kRHIBindlessDescriptorIndexMask, kRHIBindlessDescriptorIndexMask,
     kRHIBindlessDescriptorIndexMask};
   std::vector<MTInflightSubmission> inflight_command_buffers = {};
   uint32_t width = 0;
@@ -741,8 +724,7 @@ static void reset_command_buffer_state(MTCommandBuffer::Impl* impl) {
   impl->current_depth_final_state = RHIResourceState::Undefined;
 }
 
-static MTLPrimitiveAccelerationStructureDescriptor* create_metal_blas_descriptor(const RHIAccelerationStructureGeometry* geometries, uint32_t geometry_count,
-  MTDevice::Impl* device, std::string* out_error = nullptr) {
+static MTLPrimitiveAccelerationStructureDescriptor* create_metal_blas_descriptor(const RHIAccelerationStructureGeometry* geometries, uint32_t geometry_count, MTDevice::Impl* device, std::string* out_error = nullptr) {
   if ((device == nullptr) || (geometries == nullptr) || (geometry_count == 0u)) {
     if (out_error != nullptr) {
       *out_error = "Invalid BLAS geometry description.";
@@ -951,8 +933,7 @@ static void initialize_pipeline_binary_archive(MTDevice::Impl* device) {
 }
 
 static void flush_pipeline_binary_archive(MTDevice::Impl* device, const char* reason) {
-  if ((device == nullptr) || (device->pipeline_binary_archive == nil) || (device->pipeline_binary_archive_pending_writes == 0u) ||
-      (device->pipeline_binary_archive_path.empty())) {
+  if ((device == nullptr) || (device->pipeline_binary_archive == nil) || (device->pipeline_binary_archive_pending_writes == 0u) || (device->pipeline_binary_archive_path.empty())) {
     return;
   }
 
@@ -970,9 +951,8 @@ static void flush_pipeline_binary_archive(MTDevice::Impl* device, const char* re
     }
 
     device->pipeline_binary_archive_serialized_writes += device->pipeline_binary_archive_pending_writes;
-    log::info("Metal RHI: serialized pipeline archive (%s), pending=%llu total=%llu path=%s", reason,
-      static_cast<unsigned long long>(device->pipeline_binary_archive_pending_writes), static_cast<unsigned long long>(device->pipeline_binary_archive_serialized_writes),
-      device->pipeline_binary_archive_path.string().c_str());
+    log::info("Metal RHI: serialized pipeline archive (%s), pending=%llu total=%llu path=%s", reason, static_cast<unsigned long long>(device->pipeline_binary_archive_pending_writes),
+      static_cast<unsigned long long>(device->pipeline_binary_archive_serialized_writes), device->pipeline_binary_archive_path.string().c_str());
     device->pipeline_binary_archive_pending_writes = 0u;
   }
 }
@@ -983,7 +963,7 @@ static void append_compute_pipeline_to_binary_archive(MTDevice::Impl* device, MT
   }
 
   if (@available(macOS 11.0, *)) {
-    descriptor.binaryArchives = @[device->pipeline_binary_archive];
+    descriptor.binaryArchives = @[ device->pipeline_binary_archive ];
     if (device->pipeline_binary_archive_append_enabled == false) {
       return;
     }
@@ -1002,7 +982,7 @@ static void append_render_pipeline_to_binary_archive(MTDevice::Impl* device, MTL
   }
 
   if (@available(macOS 11.0, *)) {
-    descriptor.binaryArchives = @[device->pipeline_binary_archive];
+    descriptor.binaryArchives = @[ device->pipeline_binary_archive ];
     if (device->pipeline_binary_archive_append_enabled == false) {
       return;
     }
@@ -1118,8 +1098,7 @@ static bool compile_metal_source_to_metallib(const std::string& source_text, uin
 
   int exit_code = 0;
   std::string command_output = {};
-  const std::string metal_command =
-    "xcrun metal -c " + shell_quote(source_path.string()) + " -o " + shell_quote(air_path.string()) + " 2>&1";
+  const std::string metal_command = "xcrun metal -c " + shell_quote(source_path.string()) + " -o " + shell_quote(air_path.string()) + " 2>&1";
   if (run_shell_command_capture_output(metal_command, exit_code, command_output) == false) {
     out_error = "metal compiler failed (" + std::to_string(exit_code) + "): " + command_output;
     std::filesystem::remove(source_path, ec);
@@ -1127,8 +1106,7 @@ static bool compile_metal_source_to_metallib(const std::string& source_text, uin
     return false;
   }
 
-  const std::string metallib_command =
-    "xcrun metallib " + shell_quote(air_path.string()) + " -o " + shell_quote(metallib_path.string()) + " 2>&1";
+  const std::string metallib_command = "xcrun metallib " + shell_quote(air_path.string()) + " -o " + shell_quote(metallib_path.string()) + " 2>&1";
   if (run_shell_command_capture_output(metallib_command, exit_code, command_output) == false) {
     out_error = "metallib failed (" + std::to_string(exit_code) + "): " + command_output;
     std::filesystem::remove(source_path, ec);
@@ -1267,8 +1245,7 @@ static NSUInteger bindless_argument_array_length(const MTBindlessManager::Impl* 
   }
 }
 
-static id<MTLArgumentEncoder> create_bindless_argument_encoder(id<MTLDevice> device, const MTBindlessManager::Impl* bindless, uint32_t binding_index,
-  MTLBindingAccess binding_access) {
+static id<MTLArgumentEncoder> create_bindless_argument_encoder(id<MTLDevice> device, const MTBindlessManager::Impl* bindless, uint32_t binding_index, MTLBindingAccess binding_access) {
   if ((device == nil) || (bindless == nullptr)) {
     return nil;
   }
@@ -1309,7 +1286,7 @@ static id<MTLArgumentEncoder> create_bindless_argument_encoder(id<MTLDevice> dev
       return nil;
   }
 
-  return [device newArgumentEncoderWithArguments:@[descriptor]];
+  return [device newArgumentEncoderWithArguments:@[ descriptor ]];
 }
 
 static void encode_stage_bindless_resources(MTPipelineStageData& stage, MTBindlessManager::Impl* bindless, MTDevice::Impl* device) {
@@ -1357,8 +1334,7 @@ static void encode_stage_bindless_resources(MTPipelineStageData& stage, MTBindle
         RHIBindlessHandle handle = make_bindless_handle(RHIResourceType::Texture, bindless->texture_entries[i].generation, i);
         auto texture_it = device->textures.find(handle);
         if (texture_it != device->textures.end()) {
-          const bool allow_binding =
-            (binding_index == kMetalBindlessTextureBinding) ? texture_is_bindless_2d_compatible(texture_it->second, false) : texture_is_bindless_2d_compatible(texture_it->second, true);
+          const bool allow_binding = (binding_index == kMetalBindlessTextureBinding) ? texture_is_bindless_2d_compatible(texture_it->second, false) : texture_is_bindless_2d_compatible(texture_it->second, true);
           if (allow_binding) {
             texture = texture_it->second.texture;
           }
@@ -1417,8 +1393,7 @@ static void encode_stage_bindless_resources(MTPipelineStageData& stage, MTBindle
   }
 }
 
-static void declare_compute_stage_bindless_resources(id<MTLComputeCommandEncoder> encoder, const MTPipelineStageData& stage, MTBindlessManager::Impl* bindless,
-  MTDevice::Impl* device) {
+static void declare_compute_stage_bindless_resources(id<MTLComputeCommandEncoder> encoder, const MTPipelineStageData& stage, MTBindlessManager::Impl* bindless, MTDevice::Impl* device) {
   if ((encoder == nil) || (bindless == nullptr) || (device == nullptr)) {
     return;
   }
@@ -1459,8 +1434,7 @@ static void declare_compute_stage_bindless_resources(id<MTLComputeCommandEncoder
       if (texture_it == device->textures.end()) {
         continue;
       }
-      const bool allow_binding =
-        (binding_index == kMetalBindlessTextureBinding) ? texture_is_bindless_2d_compatible(texture_it->second, false) : texture_is_bindless_2d_compatible(texture_it->second, true);
+      const bool allow_binding = (binding_index == kMetalBindlessTextureBinding) ? texture_is_bindless_2d_compatible(texture_it->second, false) : texture_is_bindless_2d_compatible(texture_it->second, true);
       if (allow_binding) {
         [encoder useResource:texture_it->second.texture usage:usage_mask];
       }
@@ -1469,8 +1443,7 @@ static void declare_compute_stage_bindless_resources(id<MTLComputeCommandEncoder
 
   constexpr MTLResourceUsage kSampledTextureUsage = MTLResourceUsageRead | MTLResourceUsageSample;
   const MTLBindingAccess storage_texture_access = stage.bindless_binding_access[kMetalBindlessStorageTextureBinding];
-  const MTLResourceUsage storage_texture_usage =
-    (storage_texture_access == MTLBindingAccessWriteOnly) ? MTLResourceUsageWrite : (MTLResourceUsageRead | MTLResourceUsageWrite);
+  const MTLResourceUsage storage_texture_usage = (storage_texture_access == MTLBindingAccessWriteOnly) ? MTLResourceUsageWrite : (MTLResourceUsageRead | MTLResourceUsageWrite);
 
   declare_buffer_entries(kMetalBindlessBufferBinding, MTLResourceUsageRead);
   declare_buffer_entries(kMetalBindlessRWBufferBinding, MTLResourceUsageRead | MTLResourceUsageWrite);
@@ -1491,8 +1464,7 @@ static void declare_compute_stage_bindless_resources(id<MTLComputeCommandEncoder
   }
 }
 
-static void declare_render_stage_bindless_resources(id<MTLRenderCommandEncoder> encoder, const MTPipelineStageData& stage, MTBindlessManager::Impl* bindless,
-  MTDevice::Impl* device, MTLRenderStages stages) {
+static void declare_render_stage_bindless_resources(id<MTLRenderCommandEncoder> encoder, const MTPipelineStageData& stage, MTBindlessManager::Impl* bindless, MTDevice::Impl* device, MTLRenderStages stages) {
   if ((encoder == nil) || (bindless == nullptr) || (device == nullptr)) {
     return;
   }
@@ -1544,8 +1516,7 @@ static void declare_render_stage_bindless_resources(id<MTLRenderCommandEncoder> 
       if (texture_it == device->textures.end()) {
         continue;
       }
-      const bool allow_binding =
-        (binding_index == kMetalBindlessTextureBinding) ? texture_is_bindless_2d_compatible(texture_it->second, false) : texture_is_bindless_2d_compatible(texture_it->second, true);
+      const bool allow_binding = (binding_index == kMetalBindlessTextureBinding) ? texture_is_bindless_2d_compatible(texture_it->second, false) : texture_is_bindless_2d_compatible(texture_it->second, true);
       if (allow_binding) {
         declare_resource(texture_it->second.texture, usage_mask);
       }
@@ -1573,8 +1544,7 @@ static void declare_render_stage_bindless_resources(id<MTLRenderCommandEncoder> 
   }
 }
 
-static bool create_stage_resources(MTDevice::Impl* device, const MTBindlessManager::Impl* bindless, const RHIShaderDesc& shader_desc, MTPipelineStageData& out_stage,
-  std::string& out_error) {
+static bool create_stage_resources(MTDevice::Impl* device, const MTBindlessManager::Impl* bindless, const RHIShaderDesc& shader_desc, MTPipelineStageData& out_stage, std::string& out_error) {
   if ((device == nullptr) || (device->metal_device == nil)) {
     out_error = "Metal device is unavailable.";
     return false;
@@ -1586,8 +1556,7 @@ static bool create_stage_resources(MTDevice::Impl* device, const MTBindlessManag
     return false;
   }
 
-  if (([source_text rangeOfString:@"ETX_METAL_UNSUPPORTED_OVERLAPPING_BINDLESS"].location != NSNotFound) ||
-      ([source_text rangeOfString:@"Overlapping binding:"].location != NSNotFound)) {
+  if (([source_text rangeOfString:@"ETX_METAL_UNSUPPORTED_OVERLAPPING_BINDLESS"].location != NSNotFound) || ([source_text rangeOfString:@"Overlapping binding:"].location != NSNotFound)) {
     out_error =
       "Metal shader translation produced overlapping bindless descriptor layouts. "
       "The current Metal RHI cannot safely encode mixed bindless resource classes yet.";
@@ -1625,8 +1594,7 @@ static bool create_stage_resources(MTDevice::Impl* device, const MTBindlessManag
 
     id<MTLArgumentEncoder> encoder = create_bindless_argument_encoder(device->metal_device, bindless, binding_index, out_stage.bindless_binding_access[binding_index]);
     if (encoder == nil) {
-      out_error = "Failed to create Metal argument encoder for bindless binding " + std::to_string(binding_index) + " at buffer slot " + std::to_string(metal_buffer_index) +
-                  ".";
+      out_error = "Failed to create Metal argument encoder for bindless binding " + std::to_string(binding_index) + " at buffer slot " + std::to_string(metal_buffer_index) + ".";
       return false;
     }
 
@@ -1634,8 +1602,7 @@ static bool create_stage_resources(MTDevice::Impl* device, const MTBindlessManag
     const NSUInteger encoded_length = std::max<NSUInteger>(encoder.encodedLength, 1u);
     out_stage.bindless_argument_buffers[binding_index] = [device->metal_device newBufferWithLength:encoded_length options:MTLResourceStorageModeShared];
     if (out_stage.bindless_argument_buffers[binding_index] == nil) {
-      out_error = "Failed to allocate Metal bindless argument buffer for binding " + std::to_string(binding_index) + " at buffer slot " +
-                  std::to_string(metal_buffer_index) + ".";
+      out_error = "Failed to allocate Metal bindless argument buffer for binding " + std::to_string(binding_index) + " at buffer slot " + std::to_string(metal_buffer_index) + ".";
       return false;
     }
   }
@@ -1855,9 +1822,8 @@ RHITexture MTContext::get_current_swapchain_texture() {
   id<MTLTexture> drawable_texture = _impl->current_drawable.texture;
   if (_impl->swapchain_texture.valid() == false) {
     RHIBindlessHandle handle = {};
-    const auto reg_result =
-      _impl->bindless_manager.register_texture((__bridge void*)drawable_texture, RHIResourceType::Texture, handle,
-        static_cast<uint32_t>(RHITextureUsage::ColorAttachment) | static_cast<uint32_t>(RHITextureUsage::TransferSrc) | static_cast<uint32_t>(RHITextureUsage::TransferDst));
+    const auto reg_result = _impl->bindless_manager.register_texture((__bridge void*)drawable_texture, RHIResourceType::Texture, handle,
+      static_cast<uint32_t>(RHITextureUsage::ColorAttachment) | static_cast<uint32_t>(RHITextureUsage::TransferSrc) | static_cast<uint32_t>(RHITextureUsage::TransferDst));
     if (reg_result != RHIResult::Success) {
       log::error("Metal RHI: failed to register swapchain texture");
       return {};
@@ -2027,6 +1993,12 @@ void MTContext::command_buffer_reset(RHICommandBuffer cmd) {
   }
 }
 
+void MTContext::cmd_compute_barrier(RHICommandBuffer cmd) {
+  if (MTCommandBuffer* command_buffer = _impl->find_command_buffer(cmd)) {
+    command_buffer->compute_barrier();
+  }
+}
+
 void MTContext::cmd_buffer_barrier(RHICommandBuffer cmd, RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state) {
   if (MTCommandBuffer* command_buffer = _impl->find_command_buffer(cmd)) {
     command_buffer->buffer_barrier(buffer, old_state, new_state);
@@ -2039,8 +2011,8 @@ void MTContext::cmd_texture_barrier(RHICommandBuffer cmd, RHIBindlessHandle text
   }
 }
 
-void MTContext::cmd_begin_render_pass(RHICommandBuffer cmd, uint32_t color_attachment_count, RHIBindlessHandle* color_attachments, const float* clear_colors,
-  RHIBindlessHandle depth_attachment, const RHIResourceState* color_final_states, RHIResourceState depth_final_state) {
+void MTContext::cmd_begin_render_pass(RHICommandBuffer cmd, uint32_t color_attachment_count, RHIBindlessHandle* color_attachments, const float* clear_colors, RHIBindlessHandle depth_attachment, const RHIResourceState* color_final_states,
+  RHIResourceState depth_final_state) {
   if (MTCommandBuffer* command_buffer = _impl->find_command_buffer(cmd)) {
     command_buffer->begin_render_pass(color_attachment_count, color_attachments, clear_colors, depth_attachment, color_final_states, depth_final_state);
   }
@@ -2091,6 +2063,12 @@ void MTContext::cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc&
 void MTContext::cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc) {
   if (MTCommandBuffer* command_buffer = _impl->find_command_buffer(cmd)) {
     command_buffer->dispatch(desc);
+  }
+}
+
+void MTContext::cmd_dispatch_indirect(RHICommandBuffer cmd, RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset) {
+  if (MTCommandBuffer* command_buffer = _impl->find_command_buffer(cmd)) {
+    command_buffer->dispatch_indirect(argument_buffer, argument_buffer_offset);
   }
 }
 
@@ -2314,8 +2292,7 @@ RHICreateBindlessResult MTDevice::create_texture(const RHITextureDesc& desc) {
   }
 
   RHIBindlessHandle handle = {};
-  const RHIResult reg_result =
-    _impl->bindless_manager->register_texture((__bridge void*)texture, RHIResourceType::Texture, handle, static_cast<uint32_t>(desc.usage), (__bridge void*)texture);
+  const RHIResult reg_result = _impl->bindless_manager->register_texture((__bridge void*)texture, RHIResourceType::Texture, handle, static_cast<uint32_t>(desc.usage), (__bridge void*)texture);
   if (reg_result != RHIResult::Success) {
     [texture release];
     return {reg_result, {}};
@@ -2363,8 +2340,7 @@ RHICreatePipelineResult MTDevice::create_graphics_pipeline(const RHIGraphicsPipe
   if (_impl->metal_device == nil) {
     return {RHIResult::InvalidArgument, {}};
   }
-  if ((desc.vertex_shader.backend != RHIBackend::Metal) || (desc.fragment_shader.backend != RHIBackend::Metal) ||
-      (desc.vertex_shader.format != RHIShaderBinaryFormat::MetalSource) || (desc.fragment_shader.format != RHIShaderBinaryFormat::MetalSource)) {
+  if ((desc.vertex_shader.backend != RHIBackend::Metal) || (desc.fragment_shader.backend != RHIBackend::Metal) || (desc.vertex_shader.format != RHIShaderBinaryFormat::MetalSource) || (desc.fragment_shader.format != RHIShaderBinaryFormat::MetalSource)) {
     return {RHIResult::InvalidArgument, {}};
   }
 
@@ -2415,8 +2391,7 @@ RHICreatePipelineResult MTDevice::create_graphics_pipeline(const RHIGraphicsPipe
       const auto& binding = desc.vertex_bindings[i];
       vertex_desc.layouts[binding.binding].stride = binding.stride;
       vertex_desc.layouts[binding.binding].stepRate = 1;
-      vertex_desc.layouts[binding.binding].stepFunction =
-        (binding.input_rate == RHIVertexInputRate::Instance) ? MTLVertexStepFunctionPerInstance : MTLVertexStepFunctionPerVertex;
+      vertex_desc.layouts[binding.binding].stepFunction = (binding.input_rate == RHIVertexInputRate::Instance) ? MTLVertexStepFunctionPerInstance : MTLVertexStepFunctionPerVertex;
     }
     pipeline_desc.vertexDescriptor = vertex_desc;
   }
@@ -2480,10 +2455,14 @@ RHICreatePipelineResult MTDevice::create_compute_pipeline(const RHIComputePipeli
   return {RHIResult::Success, handle};
 }
 
-std::vector<RHICreatePipelineBatchEntry> MTDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency) {
+std::vector<RHICreatePipelineBatchEntry> MTDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency, const RHIPipelineBatchProgressCallback& progress_callback) {
   (void)max_concurrency;
   std::vector<RHICreatePipelineBatchEntry> results(descs.size());
   for (size_t i = 0u; i < descs.size(); ++i) {
+    results[i].state = RHIPipelineBatchProgressState::DriverCompiling;
+    if (progress_callback) {
+      progress_callback(static_cast<uint32_t>(i), results[i]);
+    }
     const auto begin = std::chrono::steady_clock::now();
     const RHICreatePipelineResult result = create_compute_pipeline(descs[i]);
     const auto end = std::chrono::steady_clock::now();
@@ -2492,7 +2471,11 @@ std::vector<RHICreatePipelineBatchEntry> MTDevice::create_compute_pipelines(cons
       .handle = result.handle,
       .elapsed_ms = std::chrono::duration<double, std::milli>(end - begin).count(),
       .cache_hit = false,
+      .state = RHIPipelineBatchProgressState::Complete,
     };
+    if (progress_callback) {
+      progress_callback(static_cast<uint32_t>(i), results[i]);
+    }
   }
   return results;
 }
@@ -2832,6 +2815,14 @@ void MTCommandBuffer::detach_submitted() {
   reset_command_buffer_state(_impl);
 }
 
+void MTCommandBuffer::compute_barrier() {
+  if (@available(macOS 10.14, *)) {
+    if (_impl->compute_encoder != nil) {
+      [_impl->compute_encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
+    }
+  }
+}
+
 void MTCommandBuffer::buffer_barrier(RHIBuffer buffer, RHIResourceState old_state, RHIResourceState new_state) {
   (void)old_state;
   auto* owner = static_cast<MTContext::Impl*>(_impl->owner);
@@ -2865,8 +2856,7 @@ void MTCommandBuffer::texture_barrier(RHITexture texture, RHIResourceState old_s
   }
 }
 
-void MTCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHITexture* color_attachments, const float* clear_colors, RHITexture depth_attachment,
-  const RHIResourceState* color_final_states, RHIResourceState depth_final_state) {
+void MTCommandBuffer::begin_render_pass(uint32_t color_attachment_count, RHITexture* color_attachments, const float* clear_colors, RHITexture depth_attachment, const RHIResourceState* color_final_states, RHIResourceState depth_final_state) {
   [_impl->compute_encoder endEncoding];
   _impl->compute_encoder = nil;
   [_impl->blit_encoder endEncoding];
@@ -3019,14 +3009,10 @@ void MTCommandBuffer::draw(const RHIDrawDesc& desc) {
   }
   for (uint32_t binding_index = 0; binding_index < kMetalBindlessBindingCount; ++binding_index) {
     if (pipeline.vertex_stage.bindless_argument_buffers[binding_index] != nil) {
-      [_impl->render_encoder setVertexBuffer:pipeline.vertex_stage.bindless_argument_buffers[binding_index]
-                                     offset:0
-                                    atIndex:pipeline.vertex_stage.bindless_buffer_indices[binding_index]];
+      [_impl->render_encoder setVertexBuffer:pipeline.vertex_stage.bindless_argument_buffers[binding_index] offset:0 atIndex:pipeline.vertex_stage.bindless_buffer_indices[binding_index]];
     }
     if (pipeline.fragment_stage.bindless_argument_buffers[binding_index] != nil) {
-      [_impl->render_encoder setFragmentBuffer:pipeline.fragment_stage.bindless_argument_buffers[binding_index]
-                                       offset:0
-                                      atIndex:pipeline.fragment_stage.bindless_buffer_indices[binding_index]];
+      [_impl->render_encoder setFragmentBuffer:pipeline.fragment_stage.bindless_argument_buffers[binding_index] offset:0 atIndex:pipeline.fragment_stage.bindless_buffer_indices[binding_index]];
     }
   }
   if ((_impl->push_constants_size > 0u) && pipeline.vertex_stage.uses_push_constants) {
@@ -3042,8 +3028,7 @@ void MTCommandBuffer::draw_indexed(const RHIIndexedDrawDesc& desc, RHIBuffer ind
   auto* owner = static_cast<MTContext::Impl*>(_impl->owner);
   auto pipeline_it = owner->device._impl->pipelines.find(_impl->current_pipeline);
   auto index_it = owner->device._impl->buffers.find(index_buffer);
-  if ((pipeline_it == owner->device._impl->pipelines.end()) || (index_it == owner->device._impl->buffers.end()) || (pipeline_it->second.is_compute) ||
-      (_impl->render_encoder == nil)) {
+  if ((pipeline_it == owner->device._impl->pipelines.end()) || (index_it == owner->device._impl->buffers.end()) || (pipeline_it->second.is_compute) || (_impl->render_encoder == nil)) {
     return;
   }
 
@@ -3068,14 +3053,10 @@ void MTCommandBuffer::draw_indexed(const RHIIndexedDrawDesc& desc, RHIBuffer ind
   }
   for (uint32_t binding_index = 0; binding_index < kMetalBindlessBindingCount; ++binding_index) {
     if (pipeline.vertex_stage.bindless_argument_buffers[binding_index] != nil) {
-      [_impl->render_encoder setVertexBuffer:pipeline.vertex_stage.bindless_argument_buffers[binding_index]
-                                     offset:0
-                                    atIndex:pipeline.vertex_stage.bindless_buffer_indices[binding_index]];
+      [_impl->render_encoder setVertexBuffer:pipeline.vertex_stage.bindless_argument_buffers[binding_index] offset:0 atIndex:pipeline.vertex_stage.bindless_buffer_indices[binding_index]];
     }
     if (pipeline.fragment_stage.bindless_argument_buffers[binding_index] != nil) {
-      [_impl->render_encoder setFragmentBuffer:pipeline.fragment_stage.bindless_argument_buffers[binding_index]
-                                       offset:0
-                                      atIndex:pipeline.fragment_stage.bindless_buffer_indices[binding_index]];
+      [_impl->render_encoder setFragmentBuffer:pipeline.fragment_stage.bindless_argument_buffers[binding_index] offset:0 atIndex:pipeline.fragment_stage.bindless_buffer_indices[binding_index]];
     }
   }
   if ((_impl->push_constants_size > 0u) && pipeline.vertex_stage.uses_push_constants) {
@@ -3085,13 +3066,13 @@ void MTCommandBuffer::draw_indexed(const RHIIndexedDrawDesc& desc, RHIBuffer ind
     [_impl->render_encoder setFragmentBytes:_impl->push_constants.data() length:_impl->push_constants_size atIndex:pipeline.fragment_stage.push_constants_buffer_index];
   }
   [_impl->render_encoder drawIndexedPrimitives:pipeline.primitive
-                                     indexCount:desc.index_count
-                                      indexType:to_metal_index_type(desc.index_type)
-                                    indexBuffer:index_it->second.buffer
-                              indexBufferOffset:static_cast<NSUInteger>(desc.first_index * ((desc.index_type == RHIIndexType::UInt32) ? 4u : 2u))
-                                  instanceCount:desc.instance_count
-                                     baseVertex:static_cast<NSInteger>(desc.vertex_offset)
-                                   baseInstance:desc.first_instance];
+                                    indexCount:desc.index_count
+                                     indexType:to_metal_index_type(desc.index_type)
+                                   indexBuffer:index_it->second.buffer
+                             indexBufferOffset:static_cast<NSUInteger>(desc.first_index * ((desc.index_type == RHIIndexType::UInt32) ? 4u : 2u))
+                                 instanceCount:desc.instance_count
+                                    baseVertex:static_cast<NSInteger>(desc.vertex_offset)
+                                  baseInstance:desc.first_instance];
 }
 
 void MTCommandBuffer::dispatch(const RHIDispatchDesc& desc) {
@@ -3120,9 +3101,7 @@ void MTCommandBuffer::dispatch(const RHIDispatchDesc& desc) {
   [_impl->compute_encoder setComputePipelineState:pipeline.compute_pipeline];
   for (uint32_t binding_index = 0; binding_index < kMetalBindlessBindingCount; ++binding_index) {
     if (pipeline.compute_stage.bindless_argument_buffers[binding_index] != nil) {
-      [_impl->compute_encoder setBuffer:pipeline.compute_stage.bindless_argument_buffers[binding_index]
-                                  offset:0
-                                 atIndex:pipeline.compute_stage.bindless_buffer_indices[binding_index]];
+      [_impl->compute_encoder setBuffer:pipeline.compute_stage.bindless_argument_buffers[binding_index] offset:0 atIndex:pipeline.compute_stage.bindless_buffer_indices[binding_index]];
     }
   }
   if ((_impl->push_constants_size > 0u) && pipeline.compute_stage.uses_push_constants) {
@@ -3133,6 +3112,45 @@ void MTCommandBuffer::dispatch(const RHIDispatchDesc& desc) {
   const MTLSize threads_per_group = MTLSizeMake(std::max<uint32_t>(shader.local_size_x, 1u), std::max<uint32_t>(shader.local_size_y, 1u), std::max<uint32_t>(shader.local_size_z, 1u));
   const MTLSize threadgroups = MTLSizeMake(desc.group_count_x, desc.group_count_y, desc.group_count_z);
   [_impl->compute_encoder dispatchThreadgroups:threadgroups threadsPerThreadgroup:threads_per_group];
+}
+
+void MTCommandBuffer::dispatch_indirect(RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset) {
+  auto* owner = static_cast<MTContext::Impl*>(_impl->owner);
+  auto pipeline_it = owner->device._impl->pipelines.find(_impl->current_pipeline);
+  auto buffer_it = owner->device._impl->buffers.find(argument_buffer);
+  if ((pipeline_it == owner->device._impl->pipelines.end()) || (pipeline_it->second.is_compute == false) || (buffer_it == owner->device._impl->buffers.end()) || (buffer_it->second.buffer == nil) || (_impl->command_buffer == nil)) {
+    return;
+  }
+
+  [_impl->render_encoder endEncoding];
+  _impl->render_encoder = nil;
+  [_impl->blit_encoder endEncoding];
+  _impl->blit_encoder = nil;
+  if (_impl->compute_encoder == nil) {
+    _impl->compute_encoder = [_impl->command_buffer computeCommandEncoder];
+  }
+
+  auto& pipeline = pipeline_it->second;
+  if (pipeline.debug_name.empty() == false) {
+    _impl->compute_encoder.label = [NSString stringWithFormat:@"ETX indirect compute dispatch: %s", pipeline.debug_name.c_str()];
+  } else {
+    _impl->compute_encoder.label = @"ETX indirect compute dispatch";
+  }
+  encode_stage_bindless_resources(pipeline.compute_stage, owner->bindless_manager._impl, owner->device._impl);
+  declare_compute_stage_bindless_resources(_impl->compute_encoder, pipeline.compute_stage, owner->bindless_manager._impl, owner->device._impl);
+  [_impl->compute_encoder setComputePipelineState:pipeline.compute_pipeline];
+  for (uint32_t binding_index = 0; binding_index < kMetalBindlessBindingCount; ++binding_index) {
+    if (pipeline.compute_stage.bindless_argument_buffers[binding_index] != nil) {
+      [_impl->compute_encoder setBuffer:pipeline.compute_stage.bindless_argument_buffers[binding_index] offset:0 atIndex:pipeline.compute_stage.bindless_buffer_indices[binding_index]];
+    }
+  }
+  if ((_impl->push_constants_size > 0u) && pipeline.compute_stage.uses_push_constants) {
+    [_impl->compute_encoder setBytes:_impl->push_constants.data() length:_impl->push_constants_size atIndex:pipeline.compute_stage.push_constants_buffer_index];
+  }
+
+  const auto& shader = pipeline.compute_desc.compute_shader;
+  const MTLSize threads_per_group = MTLSizeMake(std::max<uint32_t>(shader.local_size_x, 1u), std::max<uint32_t>(shader.local_size_y, 1u), std::max<uint32_t>(shader.local_size_z, 1u));
+  [_impl->compute_encoder dispatchThreadgroupsWithIndirectBuffer:buffer_it->second.buffer indirectBufferOffset:static_cast<NSUInteger>(argument_buffer_offset) threadsPerThreadgroup:threads_per_group];
 }
 
 void MTCommandBuffer::copy_buffer(RHIBuffer src, RHIBuffer dst, uint64_t size, uint64_t src_offset, uint64_t dst_offset) {
@@ -3150,11 +3168,7 @@ void MTCommandBuffer::copy_buffer(RHIBuffer src, RHIBuffer dst, uint64_t size, u
     _impl->blit_encoder = [_impl->command_buffer blitCommandEncoder];
     _impl->blit_encoder.label = @"ETX copy buffer";
   }
-  [_impl->blit_encoder copyFromBuffer:src_it->second.buffer
-                         sourceOffset:src_offset
-                             toBuffer:dst_it->second.buffer
-                    destinationOffset:dst_offset
-                                 size:size];
+  [_impl->blit_encoder copyFromBuffer:src_it->second.buffer sourceOffset:src_offset toBuffer:dst_it->second.buffer destinationOffset:dst_offset size:size];
 }
 
 void MTCommandBuffer::copy_buffer_to_texture(RHIBuffer src, RHITexture dst, uint32_t width, uint32_t height, uint32_t mip_level) {
@@ -3281,20 +3295,18 @@ RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAcceler
   }
 
   RHIBindlessHandle as_handle = {};
-  const RHIResult register_result =
-    _impl->bindless_manager->register_acceleration_structure((__bridge const void*)acceleration_structure, size_info.accelerationStructureSize, as_handle);
+  const RHIResult register_result = _impl->bindless_manager->register_acceleration_structure((__bridge const void*)acceleration_structure, size_info.accelerationStructureSize, as_handle);
   if (register_result != RHIResult::Success) {
     [acceleration_structure release];
     return {register_result, {}};
   }
 
-  _impl->acceleration_structures.emplace(as_handle,
-    MTAccelerationStructureData{
-      .acceleration_structure = acceleration_structure,
-      .desc = desc,
-      .allocated_size = static_cast<uint64_t>(size_info.accelerationStructureSize),
-      .build_scratch_size = static_cast<uint64_t>(size_info.buildScratchBufferSize),
-    });
+  _impl->acceleration_structures.emplace(as_handle, MTAccelerationStructureData{
+                                                      .acceleration_structure = acceleration_structure,
+                                                      .desc = desc,
+                                                      .allocated_size = static_cast<uint64_t>(size_info.accelerationStructureSize),
+                                                      .build_scratch_size = static_cast<uint64_t>(size_info.buildScratchBufferSize),
+                                                    });
   _impl->gpu_allocated_bytes += static_cast<uint64_t>(size_info.accelerationStructureSize);
   return {RHIResult::Success, as_handle};
 }
@@ -3411,10 +3423,7 @@ void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
   }
 
   as_encoder.label = @"ETX build acceleration structure";
-  [as_encoder buildAccelerationStructure:as_it->second.acceleration_structure
-                              descriptor:descriptor
-                           scratchBuffer:scratch_it->second.buffer
-                     scratchBufferOffset:static_cast<NSUInteger>(scratch_offset)];
+  [as_encoder buildAccelerationStructure:as_it->second.acceleration_structure descriptor:descriptor scratchBuffer:scratch_it->second.buffer scratchBufferOffset:static_cast<NSUInteger>(scratch_offset)];
   [as_encoder endEncoding];
 }
 

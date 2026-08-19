@@ -122,6 +122,187 @@ std::string duration_string(double seconds) {
   return std::string(buffer);
 }
 
+const char* renderer_mode_status_name(RendererMode mode) {
+  switch (mode) {
+    case RendererMode::Rasterization:
+      return "Rasterization";
+    case RendererMode::GPURaytracing:
+      return "GPU Raytracing";
+    default:
+      return "CPU Raytracing";
+  }
+}
+
+const char* renderer_status_state_name(RendererStatusState state) {
+  switch (state) {
+    case RendererStatusState::Idle:
+      return "Idle";
+    case RendererStatusState::Preparing:
+      return "Preparing";
+    case RendererStatusState::Running:
+      return "Running";
+    case RendererStatusState::Finishing:
+      return "Finishing";
+    case RendererStatusState::Completed:
+      return "Completed";
+    case RendererStatusState::Failed:
+      return "Failed";
+    default:
+      return "Unavailable";
+  }
+}
+
+const char* renderer_progress_unit_name(RendererProgressKind kind) {
+  switch (kind) {
+    case RendererProgressKind::Samples:
+      return "spp";
+    case RendererProgressKind::Steps:
+      return "steps";
+    default:
+      return "";
+  }
+}
+
+std::string compact_duration_string(double seconds) {
+  if (seconds < 0.0) {
+    return "-";
+  }
+  char buffer[32] = {};
+  if (seconds < 1.0) {
+    snprintf(buffer, sizeof(buffer), "%.0f ms", seconds * 1000.0);
+    return buffer;
+  }
+  if (seconds < 10.0) {
+    snprintf(buffer, sizeof(buffer), "%.1f s", seconds);
+    return buffer;
+  }
+  return duration_string(seconds);
+}
+
+std::string memory_size_string(uint64_t bytes) {
+  constexpr double kKiB = 1024.0;
+  constexpr double kMiB = 1024.0 * kKiB;
+  constexpr double kGiB = 1024.0 * kMiB;
+  char buffer[64] = {};
+  if (bytes >= static_cast<uint64_t>(kGiB)) {
+    snprintf(buffer, sizeof(buffer), "%.2f GiB", static_cast<double>(bytes) / kGiB);
+  } else if (bytes >= static_cast<uint64_t>(kMiB)) {
+    snprintf(buffer, sizeof(buffer), "%.2f MiB", static_cast<double>(bytes) / kMiB);
+  } else if (bytes >= static_cast<uint64_t>(kKiB)) {
+    snprintf(buffer, sizeof(buffer), "%.2f KiB", static_cast<double>(bytes) / kKiB);
+  } else {
+    snprintf(buffer, sizeof(buffer), "%llu B", static_cast<unsigned long long>(bytes));
+  }
+  return std::string(buffer);
+}
+
+const char* renderer_memory_location_name(RendererMemoryLocation location) {
+  switch (location) {
+    case RendererMemoryLocation::CPU:
+      return "CPU";
+    case RendererMemoryLocation::GPUDevice:
+      return "GPU device";
+    case RendererMemoryLocation::GPUHostVisible:
+      return "GPU host-visible";
+  }
+  return "Unknown";
+}
+
+struct MemorySummaryRow {
+  std::string label;
+  uint64_t bytes = 0u;
+};
+
+void draw_item_tooltip(const char* text, ImGuiHoveredFlags flags) {
+  if ((text == nullptr) || (text[0] == '\0') || (ImGui::IsItemHovered(flags) == false)) {
+    return;
+  }
+
+  ImGui::BeginTooltip();
+  ImGui::PushTextWrapPos(ImGui::GetFontSize() * 34.0f);
+  ImGui::TextUnformatted(text);
+  ImGui::PopTextWrapPos();
+  ImGui::EndTooltip();
+}
+
+void draw_memory_summary_table(const char* id, std::vector<MemorySummaryRow> rows) {
+  constexpr ImGuiTableFlags flags =
+    ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable;
+  if (ImGui::BeginTable(id, 2, flags) == false) {
+    return;
+  }
+
+  ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch, 0.0f, 0u);
+  ImGui::TableSetupColumn("Memory", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending, 130.0f, 1u);
+  ImGui::TableHeadersRow();
+
+  const ImGuiTableSortSpecs* sort_specs = ImGui::TableGetSortSpecs();
+  if ((sort_specs != nullptr) && (sort_specs->SpecsCount > 0)) {
+    const ImGuiTableColumnSortSpecs& spec = sort_specs->Specs[0];
+    std::stable_sort(rows.begin(), rows.end(), [&spec](const MemorySummaryRow& lhs, const MemorySummaryRow& rhs) {
+      int comparison = 0;
+      if (spec.ColumnUserID == 0u) {
+        comparison = lhs.label.compare(rhs.label);
+      } else if (lhs.bytes != rhs.bytes) {
+        comparison = (lhs.bytes < rhs.bytes) ? -1 : 1;
+      }
+      return (spec.SortDirection == ImGuiSortDirection_Ascending) ? (comparison < 0) : (comparison > 0);
+    });
+  }
+
+  for (const MemorySummaryRow& row : rows) {
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted(row.label.c_str());
+    draw_item_tooltip(row.label.c_str(), ImGuiHoveredFlags_DelayNormal);
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted(memory_size_string(row.bytes).c_str());
+  }
+  ImGui::EndTable();
+}
+
+struct MemoryAllocationRow {
+  std::string category;
+  std::string allocation;
+  std::string location;
+  uint32_t count = 0u;
+  uint64_t bytes = 0u;
+  bool count_available = true;
+};
+
+void sort_memory_allocation_rows(std::vector<MemoryAllocationRow>& rows, const ImGuiTableSortSpecs* sort_specs) {
+  if ((sort_specs == nullptr) || (sort_specs->SpecsCount == 0)) {
+    return;
+  }
+
+  const ImGuiTableColumnSortSpecs& spec = sort_specs->Specs[0];
+  std::stable_sort(rows.begin(), rows.end(), [&spec](const MemoryAllocationRow& lhs, const MemoryAllocationRow& rhs) {
+    int comparison = 0;
+    switch (spec.ColumnUserID) {
+      case 0u:
+        comparison = lhs.category.compare(rhs.category);
+        break;
+      case 1u:
+        comparison = lhs.allocation.compare(rhs.allocation);
+        break;
+      case 2u:
+        comparison = lhs.location.compare(rhs.location);
+        break;
+      case 3u:
+        if (lhs.count != rhs.count) {
+          comparison = (lhs.count < rhs.count) ? -1 : 1;
+        }
+        break;
+      case 4u:
+        if (lhs.bytes != rhs.bytes) {
+          comparison = (lhs.bytes < rhs.bytes) ? -1 : 1;
+        }
+        break;
+    }
+    return (spec.SortDirection == ImGuiSortDirection_Ascending) ? (comparison < 0) : (comparison > 0);
+  });
+}
+
 const char* material_class_display_name(const Material::Class cls) {
   switch (cls) {
     case MaterialClass::Diffuse:
@@ -1313,7 +1494,7 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
   return changed;
 }
 
-constexpr uint32_t kWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
+constexpr uint32_t kCompactWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
 
 void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ETX_PROFILER_SCOPE();
@@ -1347,7 +1528,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
     float char_width = ImGui::CalcTextSize("W").x;
     float target_width = char_width * 30.0f + ImGui::GetStyle().WindowPadding.x * 2.0f;
     ImGui::SetNextWindowSize(ImVec2(target_width, 0.0f), ImGuiCond_Always);
-    if (ImGui::Begin(title, nullptr, kWindowFlags | ImGuiWindowFlags_NoResize)) {
+    if (ImGui::Begin(title, nullptr, kCompactWindowFlags)) {
       body();
     }
     ImGui::End();
@@ -1404,11 +1585,16 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   build_status_bar(ctx);
   build_scene_objects_window(scene_rep, ctx);
   build_properties_window(scene_rep, scene_rep.camera(), ctx, data);
+  build_memory_diagnostics(scene_rep, data.film);
+  build_renderer_preparation_modal();
 
   const bool has_integrator_debug_info = ctx.has_integrator && (_current_integrator->status().debug_info_count > 0) && (_current_integrator->status().debug_info != nullptr);
   const bool show_gpu_kernel_timings = (_current_renderer_mode == RendererMode::GPURaytracing) && _gpu_kernel_timing_stats.enabled;
   if (has_integrator_debug_info || show_gpu_kernel_timings) {
-    const bool debug_info_visible = ImGui::Begin("Debug Info", nullptr, kWindowFlags);
+    if (show_gpu_kernel_timings) {
+      ImGui::SetNextWindowSize(ImVec2(720.0f, 440.0f), ImGuiCond_FirstUseEver);
+    }
+    const bool debug_info_visible = ImGui::Begin("Debug Info");
     if (debug_info_visible) {
       if (has_integrator_debug_info) {
         const auto debug_info = _current_integrator->status().debug_info;
@@ -1422,15 +1608,18 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
         if (has_integrator_debug_info) {
           ImGui::Separator();
         }
-        ImGui::Text("GPU kernel time: %.3f ms", _gpu_kernel_timing_stats.total_ms);
+        ImGui::Text("GPU: %.3f ms", _gpu_kernel_timing_stats.total_ms);
         if (_gpu_kernel_timing_stats.dropped_dispatch_count > 0u) {
-          ImGui::Text("Unprofiled dispatches: %llu", static_cast<unsigned long long>(_gpu_kernel_timing_stats.dropped_dispatch_count));
+          ImGui::Text("Unprofiled: %llu", static_cast<unsigned long long>(_gpu_kernel_timing_stats.dropped_dispatch_count));
         }
         if (_gpu_kernel_timing_stats.supported == false) {
-          ImGui::TextUnformatted("GPU timestamps are not supported by the active backend.");
+          ImGui::TextUnformatted("GPU timing unavailable");
+          draw_item_tooltip("The active backend does not support GPU timestamps.", ImGuiHoveredFlags_DelayNormal);
         } else if (_gpu_kernel_timing_stats.kernels.empty()) {
-          ImGui::TextUnformatted("Run the GPU renderer to collect kernel timings.");
-        } else if (ImGui::BeginTable("gpu_kernel_timings", 5, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+          ImGui::TextUnformatted("No GPU timing data");
+          draw_item_tooltip("Run the GPU renderer to collect kernel timings.", ImGuiHoveredFlags_DelayNormal);
+        } else if (ImGui::BeginTable("gpu_kernel_timings", 5,
+                     ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
           ImGui::TableSetupColumn("Kernel");
           ImGui::TableSetupColumn("Calls");
           ImGui::TableSetupColumn("Total ms");
@@ -1441,6 +1630,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(timing.name.c_str());
+            draw_item_tooltip(timing.name.c_str(), ImGuiHoveredFlags_DelayNormal);
             ImGui::TableNextColumn();
             ImGui::Text("%llu", static_cast<unsigned long long>(timing.dispatch_count));
             ImGui::TableNextColumn();
@@ -1524,7 +1714,8 @@ bool UI::handle_event(const sapp_event* e) {
     case SAPP_KEYCODE_5:
     case SAPP_KEYCODE_6: {
       _view_options.view_image = static_cast<uint32_t>(e->key_code - SAPP_KEYCODE_1);
-      if (callbacks.output_view_changed) callbacks.output_view_changed(_view_options.view_image);
+      if (callbacks.output_view_changed)
+        callbacks.output_view_changed(_view_options.view_image);
       break;
     }
     case SAPP_KEYCODE_KP_DIVIDE: {
@@ -1643,17 +1834,22 @@ void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std:
       break;
     case MenuCommand::IncreaseExposure:
       increase_exposure(_view_options);
-      if (callbacks.exposure_changed) callbacks.exposure_changed(_view_options.exposure);
+      if (callbacks.exposure_changed)
+        callbacks.exposure_changed(_view_options.exposure);
       break;
     case MenuCommand::DecreaseExposure:
       decrease_exposure(_view_options);
-      if (callbacks.exposure_changed) callbacks.exposure_changed(_view_options.exposure);
+      if (callbacks.exposure_changed)
+        callbacks.exposure_changed(_view_options.exposure);
       break;
     case MenuCommand::ToggleSceneObjects:
       _ui_setup ^= UIObjects;
       break;
     case MenuCommand::ToggleProperties:
       _ui_setup ^= UIProperties;
+      break;
+    case MenuCommand::ToggleMemoryDiagnostics:
+      _ui_setup ^= UIMemoryDiagnostics;
       break;
   }
 }
@@ -2274,15 +2470,13 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           ImGui::Spacing();
         }
 
-        if (_medium_mapping.empty()) {
-          ImGui::TextDisabled("No mediums available");
-        } else {
+        if (_medium_mapping.empty() == false) {
           const float avail = ImGui::GetContentRegionAvail().x;
           const float spacing = ImGui::GetStyle().ItemSpacing.x;
           float combo_width = (avail - spacing) * 0.5f;
           combo_width = max(combo_width, 0.0f);
 
-          ImGui::TextDisabled("Internal / External Medium");
+          ImGui::Text("Inside / Outside");
           ImGui::SetNextItemWidth(combo_width);
           const bool int_medium_changed = mixed_control(material_values_mixed([](const Material& value) {
             return value.int_medium;
@@ -2406,7 +2600,8 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
       ImGui::Text("Density grid (3D Texture)");
       ImGui::Text("%u x %u x %u", m.grid.dimensions.x, m.grid.dimensions.y, m.grid.dimensions.z);
       ImGui::Text("Bounds");
-      ImGui::Text("min (%.3f, %.3f, %.3f)  max (%.3f, %.3f, %.3f)", m.bounds.p_min.x, m.bounds.p_min.y, m.bounds.p_min.z, m.bounds.p_max.x, m.bounds.p_max.y, m.bounds.p_max.z);
+      ImGui::Text("Min: %.3f %.3f %.3f", m.bounds.p_min.x, m.bounds.p_min.y, m.bounds.p_min.z);
+      ImGui::Text("Max: %.3f %.3f %.3f", m.bounds.p_max.x, m.bounds.p_max.y, m.bounds.p_max.z);
     } else if (m.grid_type_enum() == DensityGrid::Type::NoiseFunction) {
       ImGui::Text("Density grid (Noise Function)");
       ImGui::Text("Noise Type");
@@ -2654,6 +2849,7 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
       };
       ui_toggle("Scene Objects", UIObjects, MenuCommand::ToggleSceneObjects);
       ui_toggle("Properties", UIProperties, MenuCommand::ToggleProperties);
+      ui_toggle("Memory Diagnostics", UIMemoryDiagnostics, MenuCommand::ToggleMemoryDiagnostics);
       ImGui::EndMenu();
     }
 
@@ -2755,10 +2951,10 @@ void UI::build_toolbar(const BuildContext& ctx) {
       };
 
       const char* labels[4] = {
-        (controls.state == RendererRunState::Running) ? "> Running <" : "  Launch  ",
-        (controls.state == RendererRunState::Finishing) ? "> Finishing <" : "  Finish  ",
+        (_current_renderer_status.state == RendererStatusState::Running) ? "> Running <" : "  Launch  ",
+        (_current_renderer_status.state == RendererStatusState::Finishing) ? "> Finishing <" : "  Finish  ",
         " Terminate ",
-        (controls.state == RendererRunState::Running) ? " Restart " : "  Restart  ",
+        (_current_renderer_status.state == RendererStatusState::Running) ? " Restart " : "  Restart  ",
       };
 
       ImGui::SameLine(0.0f, ctx.wpadding.x);
@@ -2811,7 +3007,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
       ImGui::PopStyleColor(4);
 
       if (cpu_mode) {
-        const bool can_denoise = controls.can_run && _current_renderer_stats.valid && (_current_renderer_stats.completed_samples > 0u);
+        const bool can_denoise = controls.can_run && (_current_renderer_status.progress_kind == RendererProgressKind::Samples) && (_current_renderer_status.completed_units > 0u);
         ImGui::SameLine(0.0f, ctx.wpadding.x);
         ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
 
@@ -2829,7 +3025,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
     }
 
     if (gpu_mode) {
-      const RendererPreparationStatus status = _current_renderer_status;
+      const RendererPreparationStatus status = _current_renderer_preparation;
       const char* label = "  Ready  ";
       ImVec4 status_color = kToolbarLaunchColor;
       if (status.state == RendererPreparationState::Preparing) {
@@ -2858,7 +3054,7 @@ void UI::build_toolbar(const BuildContext& ctx) {
       if (status.state != RendererPreparationState::Preparing) {
         ImGui::BeginDisabled();
       }
-      if (ImGui::Button("  Cancel  ", {0.0f, ctx.button_size})) {
+      if (ImGui::Button("  Cancel to CPU  ", {0.0f, ctx.button_size})) {
         if (callbacks.cancel_renderer_preparation_selected) {
           callbacks.cancel_renderer_preparation_selected();
         }
@@ -2880,7 +3076,8 @@ void UI::build_toolbar(const BuildContext& ctx) {
         if (ImGui::Selectable(Film::layer_name(i), &selected)) {
           if (selected) {
             _view_options.view_layer = i;
-            if (callbacks.view_layer_changed) callbacks.view_layer_changed(i);
+            if (callbacks.view_layer_changed)
+              callbacks.view_layer_changed(i);
           }
         }
       }
@@ -2897,7 +3094,8 @@ void UI::build_toolbar(const BuildContext& ctx) {
         bool selected = i == uint32_t(_view_options.view_image);
         if (ImGui::Selectable(output_view_to_string(i).c_str(), &selected)) {
           _view_options.view_image = i;
-          if (callbacks.output_view_changed) callbacks.output_view_changed(i);
+          if (callbacks.output_view_changed)
+            callbacks.output_view_changed(i);
         }
       }
       ImGui::EndCombo();
@@ -2913,7 +3111,8 @@ void UI::build_toolbar(const BuildContext& ctx) {
         bool selected = i == uint32_t(_view_options.view_option);
         if (ImGui::Selectable(view_option_to_string(i).c_str(), &selected)) {
           _view_options.view_option = i;
-          if (callbacks.display_transform_changed) callbacks.display_transform_changed(i);
+          if (callbacks.display_transform_changed)
+            callbacks.display_transform_changed(i);
         }
       }
       ImGui::EndCombo();
@@ -2927,61 +3126,327 @@ void UI::build_toolbar(const BuildContext& ctx) {
 
 void UI::build_status_bar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, ctx.text_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
-    if (_current_renderer_mode == RendererMode::CPURaytracing) {
-      constexpr const char* status_str[] = {
-        "Stopped",
-        "Running",
-        "Completing",
-      };
-
-      auto status = _current_integrator ? _current_integrator->status() : Integrator::Status{};
-      auto state = _current_integrator ? _current_integrator->state() : Integrator::State::Stopped;
-
-      double average_time = status.completed_iterations > 0 ? status.total_time / status.completed_iterations : 0.0;
-
-      const char* buffer = format_string("%-4d | %s | %.3fms last, %.3fms avg, %.3fs total | %.1f FPS", status.completed_iterations, status_str[uint32_t(state)],
-        status.last_iteration_time * 1000.0, average_time * 1000.0f, status.total_time, _current_fps);
-
-      ImGui::Text("%s", buffer);
-    } else {
-      const RendererPreparationStatus status = _current_renderer_status;
-      const char* state_str = "Ready";
-      if (status.state == RendererPreparationState::Preparing) {
-        state_str = "Preparing";
-      } else if (status.state == RendererPreparationState::Failed) {
-        state_str = "Failed";
-      }
-
-      std::string progress = {};
-      if (status.total_steps > 0u) {
-        progress = format_string("%u/%u", status.completed_steps, status.total_steps);
+    const RendererStatus& status = _current_renderer_status;
+    std::string core_status = format_string("%s  |  %s", renderer_mode_status_name(status.mode), renderer_status_state_name(status.state));
+    if (status.progress_kind != RendererProgressKind::None) {
+      const char* unit = renderer_progress_unit_name(status.progress_kind);
+      if (status.total_units > 0u) {
+        core_status += format_string("  |  %u / %u %s", status.completed_units, status.total_units, unit);
       } else {
-        progress = "-";
+        core_status += format_string("  |  %u %s", status.completed_units, unit);
       }
+    }
 
-      const RendererRuntimeStats stats = _current_renderer_stats;
-      const bool gpu_stats_available = (_current_renderer_mode == RendererMode::GPURaytracing) && stats.valid;
-      const char* buffer = nullptr;
-      if (gpu_stats_available) {
-        const std::string sample_progress =
-          (stats.target_samples > 0u) ? (std::to_string(stats.completed_samples) + "/" + std::to_string(stats.target_samples)) : std::to_string(stats.completed_samples);
-        const std::string elapsed = duration_string(stats.elapsed_seconds);
-        const std::string remaining = duration_string(stats.estimated_remaining_seconds);
-        buffer = format_string("%s | %s | %s | sample %s | elapsed %s | remaining %s | %.1f FPS",
-          (_current_renderer_mode == RendererMode::GPURaytracing) ? "GPU Raytracing" : "Rasterization", state_str, status.phase.empty() ? "-" : status.phase.c_str(),
-          sample_progress.c_str(), elapsed.c_str(), remaining.c_str(), _current_fps);
-      } else {
-        buffer = format_string("%s | %s | %s | %s | %.1f FPS", (_current_renderer_mode == RendererMode::GPURaytracing) ? "GPU Raytracing" : "Rasterization", state_str,
-          status.phase.empty() ? "-" : status.phase.c_str(), progress.c_str(), _current_fps);
+    std::string timing_status = {};
+    if (status.elapsed_available) {
+      timing_status += "  |  Elapsed " + compact_duration_string(status.elapsed_seconds);
+    }
+    if (status.remaining_available) {
+      timing_status += "  |  ETA " + compact_duration_string(status.remaining_seconds);
+    }
+
+    const double ui_frame_ms = (_current_fps > 0.0f) ? (1000.0 / static_cast<double>(_current_fps)) : 0.0;
+    std::string performance_status = (_current_fps > 0.0f) ? format_string("UI %.1f FPS  |  %.1f ms", _current_fps, ui_frame_ms) : std::string("UI -- FPS");
+    const float available_width = ImGui::GetContentRegionAvail().x;
+    float performance_width = ImGui::CalcTextSize(performance_status.c_str()).x;
+    float reserved_width = performance_width + 2.0f * ImGui::GetStyle().ItemSpacing.x;
+    if ((ImGui::CalcTextSize(core_status.c_str()).x + reserved_width) > available_width) {
+      performance_status = (_current_fps > 0.0f) ? format_string("%.1f FPS", _current_fps) : std::string("-- FPS");
+      performance_width = ImGui::CalcTextSize(performance_status.c_str()).x;
+      reserved_width = performance_width + 2.0f * ImGui::GetStyle().ItemSpacing.x;
+    }
+    std::string primary_status = core_status + timing_status;
+    if ((ImGui::CalcTextSize(primary_status.c_str()).x + reserved_width) > available_width) {
+      primary_status = core_status;
+    }
+    const bool performance_fits = (ImGui::CalcTextSize(primary_status.c_str()).x + reserved_width) <= available_width;
+
+    std::string detailed_status = {};
+    if (status.elapsed_available) {
+      detailed_status = "Elapsed: " + duration_string(status.elapsed_seconds);
+    }
+    if (status.remaining_available) {
+      if (detailed_status.empty() == false) {
+        detailed_status += "\n";
       }
-      ImGui::Text("%s", buffer);
-      if (status.message.empty() == false) {
-        ImGui::SameLine(0.0f, ctx.wpadding.x);
-        ImGui::TextUnformatted(status.message.c_str());
+      detailed_status += "Remaining: " + duration_string(status.remaining_seconds);
+    }
+    if (((status.state == RendererStatusState::Preparing) || (status.state == RendererStatusState::Failed)) && (_current_renderer_preparation.message.empty() == false)) {
+      if (detailed_status.empty() == false) {
+        detailed_status += "\n";
       }
+      detailed_status += _current_renderer_preparation.message;
+    }
+    if (_current_fps > 0.0f) {
+      if (detailed_status.empty() == false) {
+        detailed_status += "\n";
+      }
+      detailed_status += format_string("UI frame: %.1f ms (%.1f FPS)", ui_frame_ms, _current_fps);
+    }
+
+    ImGui::TextUnformatted(primary_status.c_str());
+    if (detailed_status.empty() == false) {
+      draw_item_tooltip(detailed_status.c_str(), ImGuiHoveredFlags_DelayNormal);
+    }
+    const float performance_x = ImGui::GetCursorPosX() + available_width - performance_width;
+    if (performance_fits) {
+      ImGui::SameLine(performance_x);
+      ImGui::TextDisabled("%s", performance_status.c_str());
+      draw_item_tooltip("UI frame rate and frame time", ImGuiHoveredFlags_DelayNormal);
     }
     ImGui::End();
   }
+}
+
+void UI::build_renderer_preparation_modal() {
+  constexpr const char* popup_id = "Preparing GPU renderer##gpu_renderer_preparation";
+  const bool preparing = (_current_renderer_mode == RendererMode::GPURaytracing) && (_current_renderer_preparation.state == RendererPreparationState::Preparing);
+  const bool popup_open = ImGui::IsPopupOpen(popup_id);
+  if (preparing && (popup_open == false)) {
+    ImGui::OpenPopup(popup_id);
+  }
+  if ((preparing == false) && (popup_open == false)) {
+    return;
+  }
+
+  const ImVec2 display_size = ImGui::GetIO().DisplaySize;
+  const ImVec2 modal_size = {
+    std::min(760.0f, display_size.x - 48.0f),
+    std::min(620.0f, display_size.y - 48.0f),
+  };
+  ImGui::SetNextWindowPos(ImVec2(display_size.x * 0.5f, display_size.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSize(modal_size, ImGuiCond_Always);
+
+  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
+  if (ImGui::BeginPopupModal(popup_id, nullptr, flags)) {
+    if (preparing == false) {
+      ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+      return;
+    }
+
+    const RendererPreparationStatus& status = _current_renderer_preparation;
+    ImGui::TextUnformatted(status.phase.empty() ? "Preparing" : status.phase.c_str());
+    if (status.message.empty() == false) {
+      draw_item_tooltip(status.message.c_str(), ImGuiHoveredFlags_DelayNormal);
+    }
+
+    const float progress = (status.total_steps > 0u) ? (static_cast<float>(status.completed_steps) / static_cast<float>(status.total_steps)) : 0.0f;
+    const std::string progress_label =
+      (status.total_steps > 0u) ? (std::to_string(status.completed_steps) + " / " + std::to_string(status.total_steps)) : std::string("Starting...");
+    ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f), progress_label.c_str());
+
+    if (status.worker_count > 0u) {
+      ImGui::Text("Elapsed: %s | Workers: %u", duration_string(status.elapsed_seconds).c_str(), status.worker_count);
+    } else {
+      ImGui::Text("Elapsed: %s", duration_string(status.elapsed_seconds).c_str());
+    }
+
+    if (status.steps.empty() == false) {
+      ImGui::SeparatorText("Shader pipelines");
+      constexpr ImGuiTableFlags table_flags =
+        ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Resizable;
+      if (ImGui::BeginTable("##pipeline_creation_progress", 5, table_flags, ImVec2(0.0f, -52.0f))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Pipeline", ImGuiTableColumnFlags_WidthStretch, 0.30f);
+        ImGui::TableSetupColumn("Variant", ImGuiTableColumnFlags_WidthStretch, 0.31f);
+        ImGui::TableSetupColumn("SPIR-V", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 92.0f);
+        ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 82.0f);
+        ImGui::TableHeadersRow();
+        for (const auto& step : status.steps) {
+          const char* step_state = "DXC queue";
+          if (step.state == RendererPreparationStepState::CompilingSpirV) {
+            step_state = "DXC";
+          } else if (step.state == RendererPreparationStepState::QueuedForDriver) {
+            step_state = "Driver queue";
+          } else if (step.state == RendererPreparationStepState::CheckingCache) {
+            step_state = "Cache";
+          } else if (step.state == RendererPreparationStepState::DriverCompiling) {
+            step_state = "Driver";
+          } else if (step.state == RendererPreparationStepState::Complete) {
+            step_state = step.cache_hit ? "Cached" : "Complete";
+          } else if (step.state == RendererPreparationStepState::Failed) {
+            step_state = "Failed";
+          }
+
+          ImGui::TableNextRow();
+          ImGui::TableSetColumnIndex(0);
+          ImGui::TextUnformatted(step.name.c_str());
+          draw_item_tooltip(step.name.c_str(), ImGuiHoveredFlags_DelayNormal);
+          ImGui::TableSetColumnIndex(1);
+          ImGui::TextUnformatted(step.detail.c_str());
+          draw_item_tooltip(step.detail.c_str(), ImGuiHoveredFlags_DelayNormal);
+          ImGui::TableSetColumnIndex(2);
+          if (step.spirv_size_bytes == 0u) {
+            ImGui::TextUnformatted("-");
+          } else if (step.spirv_size_bytes >= 1024u) {
+            ImGui::Text("%.1f KiB", static_cast<double>(step.spirv_size_bytes) / 1024.0);
+          } else {
+            ImGui::Text("%llu B", static_cast<unsigned long long>(step.spirv_size_bytes));
+          }
+          ImGui::TableSetColumnIndex(3);
+          ImGui::TextUnformatted(step_state);
+          ImGui::TableSetColumnIndex(4);
+          if ((step.state == RendererPreparationStepState::Complete) || (step.state == RendererPreparationStepState::Failed)) {
+            ImGui::Text("%.1f ms", step.elapsed_ms);
+          } else {
+            ImGui::TextUnformatted("-");
+          }
+        }
+        ImGui::EndTable();
+      }
+    } else {
+      ImGui::Dummy(ImVec2(0.0f, ImGui::GetContentRegionAvail().y - 42.0f));
+    }
+
+    if (status.cancelable == false) {
+      ImGui::BeginDisabled();
+    }
+    const float button_width = 180.0f;
+    ImGui::SetCursorPosX((ImGui::GetWindowWidth() - button_width) * 0.5f);
+    if (ImGui::Button("Cancel and use CPU", ImVec2(button_width, 0.0f)) && callbacks.cancel_renderer_preparation_selected) {
+      callbacks.cancel_renderer_preparation_selected();
+    }
+    if (status.cancelable == false) {
+      ImGui::EndDisabled();
+    }
+    ImGui::EndPopup();
+  }
+}
+
+void UI::build_memory_diagnostics(SceneRepresentation& scene_rep, const Film& film) {
+  if ((_ui_setup & UIMemoryDiagnostics) == 0u) {
+    return;
+  }
+
+  ImGui::SetNextWindowSize(ImVec2(820.0f, 680.0f), ImGuiCond_FirstUseEver);
+  bool window_open = true;
+  const bool window_visible = ImGui::Begin("Memory Diagnostics", &window_open);
+  if (window_open == false) {
+    _ui_setup &= ~UIMemoryDiagnostics;
+  }
+  if (window_visible == false) {
+    ImGui::End();
+    return;
+  }
+
+  if (ImGui::CollapsingHeader("CPU memory", ImGuiTreeNodeFlags_DefaultOpen)) {
+    draw_memory_summary_table("cpu_memory_summary", {
+                                                      {"Process working set", _rhi_memory_stats.cpu_used_bytes},
+                                                      {"Peak working set", _rhi_memory_stats.cpu_peak_used_bytes},
+                                                      {"Process private commit", _rhi_memory_stats.cpu_private_bytes},
+                                                    });
+
+    const SceneData& scene_data = scene_rep.data();
+    const uint64_t geometry_bytes = scene_data.vertices.pos.capacity() * sizeof(float3) + scene_data.vertices.nrm.capacity() * sizeof(float3) +
+                                    scene_data.vertices.tan.capacity() * sizeof(float3) + scene_data.vertices.btn.capacity() * sizeof(float3) +
+                                    scene_data.vertices.tex.capacity() * sizeof(float2) + scene_data.triangles.capacity() * sizeof(Triangle) +
+                                    scene_data.meshes.capacity() * sizeof(Mesh);
+    const uint64_t shading_bytes = scene_data.materials.capacity() * sizeof(Material) + scene_data.spectrum_values.capacity() * sizeof(SpectralDistribution) +
+                                   scene_data.emitter_profiles.capacity() * sizeof(EmitterProfile) +
+                                   scene_data.energy_compensation_interfaces.capacity() * sizeof(Scene::EnergyCompensationInterface);
+    const uint64_t descriptor_bytes =
+      scene_data.images_vector.capacity() * sizeof(Image) + scene_data.mediums_vector.capacity() * sizeof(Medium) + scene_data.cameras.capacity() * sizeof(SceneData::CameraInfo);
+    const BufferPool::Stats pool_stats = scene_data.buffer_pool.stats();
+    const Film::MemoryStats film_stats = film.memory_stats();
+    const uint64_t film_bytes = film_stats.accumulation_bytes + film_stats.adaptive_bytes + film_stats.normals_bytes + film_stats.albedo_bytes + film_stats.denoised_bytes +
+                                film_stats.output_bytes + film_stats.internal_bytes;
+    const uint64_t tracked_cpu_bytes = geometry_bytes + shading_bytes + descriptor_bytes + pool_stats.capacity_bytes + film_bytes;
+    const uint64_t untracked_working_set = (_rhi_memory_stats.cpu_used_bytes > tracked_cpu_bytes) ? (_rhi_memory_stats.cpu_used_bytes - tracked_cpu_bytes) : 0u;
+
+    ImGui::SeparatorText("Tracked CPU allocations");
+    draw_memory_summary_table("cpu_memory_breakdown", {
+                                                        {"Scene geometry containers", geometry_bytes},
+                                                        {"Scene shading containers", shading_bytes},
+                                                        {"Scene image, medium, and camera descriptors", descriptor_bytes},
+                                                        {"Scene payload used", pool_stats.used_bytes},
+                                                        {"Scene payload reserved but unused", pool_stats.capacity_bytes - pool_stats.used_bytes},
+                                                        {"Film accumulation", film_stats.accumulation_bytes},
+                                                        {"Film adaptive accumulation", film_stats.adaptive_bytes},
+                                                        {"Film normals", film_stats.normals_bytes},
+                                                        {"Film albedo", film_stats.albedo_bytes},
+                                                        {"Film denoised layer", film_stats.denoised_bytes},
+                                                        {"Film output", film_stats.output_bytes},
+                                                        {"Film internal state", film_stats.internal_bytes},
+                                                        {"Other process working set", untracked_working_set},
+                                                      });
+  }
+
+  if (ImGui::CollapsingHeader("GPU memory", ImGuiTreeNodeFlags_DefaultOpen)) {
+    draw_memory_summary_table("gpu_memory_summary",
+      {
+        {"RHI tracked allocations", _rhi_memory_stats.gpu_allocated_bytes},
+        {"Buffers (" + std::to_string(_rhi_memory_stats.gpu_buffer_allocation_count) + ")", _rhi_memory_stats.gpu_buffer_allocated_bytes},
+        {"Textures (" + std::to_string(_rhi_memory_stats.gpu_texture_allocation_count) + ")", _rhi_memory_stats.gpu_texture_allocated_bytes},
+        {"Acceleration structures (" + std::to_string(_rhi_memory_stats.gpu_acceleration_structure_allocation_count) + ")",
+          _rhi_memory_stats.gpu_acceleration_structure_allocated_bytes},
+        {"Host-visible allocations (subset)", _rhi_memory_stats.gpu_host_visible_allocated_bytes},
+      });
+
+    uint64_t renderer_gpu_bytes = 0u;
+    for (const RendererMemoryEntry& entry : _renderer_memory_stats.entries) {
+      if (entry.location != RendererMemoryLocation::CPU) {
+        renderer_gpu_bytes += entry.bytes;
+      }
+    }
+    const uint64_t other_rhi_bytes = (_rhi_memory_stats.gpu_allocated_bytes > renderer_gpu_bytes) ? (_rhi_memory_stats.gpu_allocated_bytes - renderer_gpu_bytes) : 0u;
+
+    std::vector<MemoryAllocationRow> allocation_rows;
+    allocation_rows.reserve(_renderer_memory_stats.entries.size() + ((other_rhi_bytes > 0u) ? 1u : 0u));
+    for (const RendererMemoryEntry& entry : _renderer_memory_stats.entries) {
+      allocation_rows.push_back({entry.category, entry.name, renderer_memory_location_name(entry.location), entry.allocation_count, entry.bytes, true});
+    }
+    if (other_rhi_bytes > 0u) {
+      allocation_rows.push_back({"RHI", "Other allocations and alignment overhead", "GPU", 0u, other_rhi_bytes, false});
+    }
+
+    ImGui::SeparatorText("Active renderer allocations");
+    constexpr ImGuiTableFlags allocation_table_flags = ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp |
+                                                       ImGuiTableFlags_ScrollY | ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable;
+    if (ImGui::BeginTable("renderer_memory_breakdown", 5, allocation_table_flags, ImVec2(0.0f, 300.0f))) {
+      ImGui::TableSetupScrollFreeze(0, 1);
+      ImGui::TableSetupColumn("Category", ImGuiTableColumnFlags_WidthFixed, 90.0f, 0u);
+      ImGui::TableSetupColumn("Allocation", ImGuiTableColumnFlags_WidthStretch, 0.0f, 1u);
+      ImGui::TableSetupColumn("Location", ImGuiTableColumnFlags_WidthFixed, 112.0f, 2u);
+      ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_PreferSortDescending, 54.0f, 3u);
+      ImGui::TableSetupColumn("Memory", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort | ImGuiTableColumnFlags_PreferSortDescending, 112.0f, 4u);
+      ImGui::TableHeadersRow();
+      sort_memory_allocation_rows(allocation_rows, ImGui::TableGetSortSpecs());
+      for (const MemoryAllocationRow& row : allocation_rows) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(row.category.c_str());
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(row.allocation.c_str());
+        draw_item_tooltip(row.allocation.c_str(), ImGuiHoveredFlags_DelayNormal);
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(row.location.c_str());
+        ImGui::TableNextColumn();
+        if (row.count_available) {
+          ImGui::Text("%u", row.count);
+        } else {
+          ImGui::TextUnformatted("-");
+        }
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(memory_size_string(row.bytes).c_str());
+      }
+      ImGui::EndTable();
+    }
+
+    if (_renderer_memory_stats.light_vertex_capacity > 0u) {
+      ImGui::SeparatorText("Compact light history");
+      const float history_fraction =
+        std::clamp(static_cast<float>(_renderer_memory_stats.light_vertex_count) / static_cast<float>(_renderer_memory_stats.light_vertex_capacity), 0.0f, 1.0f);
+      const std::string history_label =
+        std::to_string(_renderer_memory_stats.light_vertex_count) + " / " + std::to_string(_renderer_memory_stats.light_vertex_capacity) + " vertices";
+      ImGui::ProgressBar(history_fraction, ImVec2(-1.0f, 0.0f), history_label.c_str());
+      ImGui::Text("Paths: %u | Max depth: %u | Tile: %u / %u", _renderer_memory_stats.wavefront_path_capacity, _renderer_memory_stats.max_path_length,
+        std::min(_renderer_memory_stats.tile_index + 1u, std::max(1u, _renderer_memory_stats.tile_count)), std::max(1u, _renderer_memory_stats.tile_count));
+    }
+  }
+
+  ImGui::End();
 }
 
 void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx) {
@@ -3224,19 +3689,13 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
     return;
 
   std::string properties_title = "Properties";
-  auto title_suffix = [&](const char* type, const char* name) {
-    properties_title = type;
-    if (name != nullptr && (name[0] != '\0')) {
-      properties_title += std::string(": ") + name;
-    }
-  };
 
   switch (_selection.kind) {
     case SelectionKind::Material:
       if (selected_material_count() > 1u) {
-        properties_title = format_string("Materials: %u selected", selected_material_count());
+        properties_title = "Materials";
       } else if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _material_mapping.size())) {
-        title_suffix("Material", _material_mapping.name(_selection.index));
+        properties_title = "Material";
       }
       break;
     case SelectionKind::Medium:
@@ -3247,7 +3706,7 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
           constexpr const char* kMediumClassNames[] = {"Homogeneous Medium", "Density Grid Medium"};
           int32_t class_index = static_cast<int32_t>(medium.cls);
           class_index = clamp(class_index, 0, static_cast<int32_t>(sizeof(kMediumClassNames) / sizeof(kMediumClassNames[0])) - 1);
-          title_suffix(kMediumClassNames[class_index], nullptr);
+          properties_title = kMediumClassNames[class_index];
         }
       }
       break;
@@ -3270,26 +3729,22 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
             emitter_type = "Emitter";
             break;
         }
-        title_suffix(emitter_type, nullptr);
+        properties_title = emitter_type;
       } else {
-        title_suffix("Emitter", nullptr);
+        properties_title = "Emitter";
       }
       break;
     }
     case SelectionKind::Mesh:
       if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _mesh_mapping.size())) {
-        title_suffix("Mesh", _mesh_mapping.name(_selection.index));
+        properties_title = "Mesh";
       }
       break;
     case SelectionKind::Camera:
-      if (_selection.index >= 0 && _selection.index < int32_t(_camera_mapping.size())) {
-        title_suffix("Camera", _camera_mapping.name(_selection.index));
-      } else {
-        title_suffix("Camera", nullptr);
-      }
+      properties_title = "Camera";
       break;
     case SelectionKind::Rendering:
-      title_suffix("Rendering", nullptr);
+      properties_title = "Rendering";
       break;
     default:
       break;
@@ -3621,7 +4076,8 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
   }
 
   if ((emitter.cls == EmitterProfile::Class::Area) && (material_index >= scene_rep.data().materials.size())) {
-    ImGui::TextDisabled("Area emitter has no material reference");
+    ImGui::TextColored(kErrorTextColor, "Material: None");
+    draw_item_tooltip("This area emitter has no material reference.", ImGuiHoveredFlags_DelayNormal);
     return;
   }
 
@@ -3666,8 +4122,6 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
         common_changed = true;
       }
     }
-  } else {
-    ImGui::TextDisabled("No mediums available");
   }
 
   if (common_changed) {
@@ -4052,15 +4506,13 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     }
   }
 
-  if (ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_Framed)) {
-    if (_medium_mapping.empty() == false) {
+  if (_medium_mapping.empty() == false) {
+    if (ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_Framed)) {
       if (labeled_control("External Medium", [&]() {
             return medium_dropdown("##camera_external_medium", camera.medium_index);
           })) {
         camera_changed = true;
       }
-    } else {
-      ImGui::TextDisabled("No mediums available. Add mediums in the scene to enable external medium selection.");
     }
   }
 
@@ -4098,8 +4550,8 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
   int32_t min_path = static_cast<int32_t>(scene_rep.data().options.min_path_length);
   int32_t max_path = static_cast<int32_t>(scene_rep.data().options.max_path_length);
 
-  bool min_changed = validated_int_control("Min Path Length", min_path, 0, 65536);
-  bool max_changed = validated_int_control("Max Path Length", max_path, 0, 65536);
+  bool min_changed = validated_int_control("Min Path Length", min_path, 0, static_cast<int32_t>(kMaximumPathLength));
+  bool max_changed = validated_int_control("Max Path Length", max_path, 0, static_cast<int32_t>(kMaximumPathLength));
 
   if (min_changed || max_changed) {
     scene_rep.data().options.min_path_length = static_cast<uint32_t>(min(min_path, max_path));
@@ -4124,18 +4576,22 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
   scene_settings_changed = (scene_settings_changed || blue_noise_changed);
 
   ImGui::Separator();
-  if (labeled_control("Noise Threshold (experimental)", [&]() {
-        return ImGui::InputFloat("##noise_thresh", &scene_rep.data().options.noise_threshold, 0.0001f, 0.01f, "%0.5f");
-      })) {
+  const bool noise_threshold_changed = labeled_control("Noise Threshold", [&]() {
+    return ImGui::InputFloat("##noise_thresh", &scene_rep.data().options.noise_threshold, 0.0001f, 0.01f, "%0.5f");
+  });
+  draw_item_tooltip("Experimental adaptive-sampling threshold.", ImGuiHoveredFlags_DelayNormal);
+  if (noise_threshold_changed) {
     scene_rep.data().options.noise_threshold = std::clamp(scene_rep.data().options.noise_threshold, 0.0f, 1.0f);
     scene_settings_changed = true;
   }
   if (scene_rep.data().options.noise_threshold > 0.0f) {
-    ImGui::Text("Active pixels: %.2f%%", double(data.film.active_pixel_count()) / double(data.film.current_pixel_count()) * 100.0);
+    const uint32_t current_pixel_count = data.film.current_pixel_count();
+    const double active_pixel_percentage = (current_pixel_count > 0u) ? (double(data.film.active_pixel_count()) / double(current_pixel_count) * 100.0) : 0.0;
+    ImGui::Text("Active pixels: %.2f%%", active_pixel_percentage);
   }
 
   if (scene_settings_changed) {
-    scene_rep.data().options.max_path_length = min(scene_rep.data().options.max_path_length, 65536u);
+    scene_rep.data().options.max_path_length = min(scene_rep.data().options.max_path_length, kMaximumPathLength);
     if (callbacks.scene_settings_changed) {
       callbacks.scene_settings_changed();
     }
@@ -4181,7 +4637,8 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
   }
 
   if (gpu_renderer_mode && (gpu_integrator_supported(_current_integrator->type()) == false)) {
-    ImGui::TextColored(kErrorTextColor, "Selected integrator is not supported by GPU raytracing");
+    ImGui::TextColored(kErrorTextColor, "Unavailable on GPU");
+    draw_item_tooltip("The selected integrator is not supported by GPU raytracing.", ImGuiHoveredFlags_DelayNormal);
   }
 
   bool options_changed = false;
@@ -4272,30 +4729,32 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
   }
 
   if (_current_renderer_mode == RendererMode::GPURaytracing) {
-    int32_t wavefront_steps = static_cast<int32_t>(_gpu_wavefront_steps_per_frame);
-    if (validated_int_control("GPU Wavefront Steps / Frame", wavefront_steps, 1, 1024)) {
-      _gpu_wavefront_steps_per_frame = static_cast<uint32_t>(wavefront_steps);
-      if (callbacks.gpu_wavefront_steps_per_frame_changed) {
-        callbacks.gpu_wavefront_steps_per_frame_changed(_gpu_wavefront_steps_per_frame);
-      }
+    ImGui::Text("Wavefront: %u step%s", _gpu_wavefront_steps_per_frame, (_gpu_wavefront_steps_per_frame == 1u) ? "" : "s");
+    draw_item_tooltip(_gpu_wavefront_automatic ? "Automatically tuned wavefront steps per UI frame." : "Wavefront steps per UI frame.", ImGuiHoveredFlags_DelayNormal);
+    if (_gpu_wavefront_automatic && (_gpu_wavefront_last_batch_ms > 0.0)) {
+      ImGui::Text("GPU batch: %.1f ms", _gpu_wavefront_last_batch_ms);
+      draw_item_tooltip("Time spent executing the most recent wavefront batch.", ImGuiHoveredFlags_DelayNormal);
+    } else if (_gpu_wavefront_automatic) {
+      ImGui::TextUnformatted("GPU batch: measuring");
+      draw_item_tooltip("Waiting for the first valid wavefront timing measurement.", ImGuiHoveredFlags_DelayNormal);
     }
     bool kernel_timing_enabled = _gpu_kernel_timing_stats.enabled;
-    if (ImGui::Checkbox("Profile GPU Kernels", &kernel_timing_enabled)) {
+    if (ImGui::Checkbox("Profile kernels", &kernel_timing_enabled)) {
       _gpu_kernel_timing_stats.enabled = kernel_timing_enabled;
       if (callbacks.gpu_kernel_timing_enabled_changed) {
         callbacks.gpu_kernel_timing_enabled_changed(kernel_timing_enabled);
       }
     }
-    if (kernel_timing_enabled) {
-      ImGui::TextDisabled("Profiling adds timestamp-query overhead.");
-    }
+    draw_item_tooltip("Collects per-kernel GPU timestamps and adds query overhead.", ImGuiHoveredFlags_DelayNormal);
   }
 
   ImGui::Spacing();
   if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
-    if (labeled_control("Exposure", [&]() {
-      return ImGui::DragFloat("##exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
-    }) && callbacks.exposure_changed) {
+    if (labeled_control("Exposure",
+          [&]() {
+            return ImGui::DragFloat("##exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
+          }) &&
+        callbacks.exposure_changed) {
       callbacks.exposure_changed(_view_options.exposure);
     }
 
@@ -4307,7 +4766,8 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
           const bool selected = i == _view_options.view_layer;
           if (ImGui::Selectable(Film::layer_name(i), selected)) {
             _view_options.view_layer = i;
-            if (callbacks.view_layer_changed) callbacks.view_layer_changed(i);
+            if (callbacks.view_layer_changed)
+              callbacks.view_layer_changed(i);
           }
         }
         ImGui::EndCombo();
@@ -4320,7 +4780,8 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
           const bool selected = i == uint32_t(_view_options.view_image);
           if (ImGui::Selectable(output_view_to_string(i).c_str(), selected)) {
             _view_options.view_image = i;
-            if (callbacks.output_view_changed) callbacks.output_view_changed(i);
+            if (callbacks.output_view_changed)
+              callbacks.output_view_changed(i);
           }
         }
         ImGui::EndCombo();
@@ -4333,14 +4794,16 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
           const bool selected = i == uint32_t(_view_options.view_option);
           if (ImGui::Selectable(view_option_to_string(i).c_str(), selected)) {
             _view_options.view_option = i;
-            if (callbacks.display_transform_changed) callbacks.display_transform_changed(i);
+            if (callbacks.display_transform_changed)
+              callbacks.display_transform_changed(i);
           }
         }
         ImGui::EndCombo();
       }
 
       if (_current_renderer_mode == RendererMode::CPURaytracing) {
-        const bool can_denoise = _current_renderer_controls.can_run && _current_renderer_stats.valid && (_current_renderer_stats.completed_samples > 0u);
+        const bool can_denoise =
+          _current_renderer_controls.can_run && (_current_renderer_status.progress_kind == RendererProgressKind::Samples) && (_current_renderer_status.completed_units > 0u);
         ImGui::Spacing();
         if (can_denoise == false) {
           ImGui::BeginDisabled();

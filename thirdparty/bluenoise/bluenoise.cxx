@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <bluenoise_shared.hpp>
 
+#include <algorithm>
+#include <cstddef>
+
 #if defined(_MSC_VER)
 # include <intrin.h>
 #endif
@@ -68,6 +71,65 @@ uint32_t next_power(uint32_t v) {
   v |= v >> 16;
   v++;
   return v;
+}
+
+namespace {
+
+constexpr size_t kBlueNoiseTileValueCount = 128u * 128u * 8u;
+constexpr size_t kBlueNoiseSobolValueCount = 256u * 8u;
+constexpr size_t kBlueNoiseGPUDataSize = 2u * kBlueNoiseTileValueCount + kBlueNoiseSobolValueCount;
+
+template <size_t RankingCount, size_t ScramblingCount, size_t SobolCount>
+bool build_blue_noise_gpu_data_from_tables(const int (&ranking)[RankingCount], const int (&scrambling)[ScramblingCount], const int (&sobol)[SobolCount],
+  std::vector<uint8_t>& data) {
+  static_assert(RankingCount == kBlueNoiseTileValueCount);
+  static_assert(ScramblingCount == kBlueNoiseTileValueCount);
+  static_assert(SobolCount == 256u * 256u);
+
+  data.resize(kBlueNoiseGPUDataSize);
+  std::transform(ranking, ranking + RankingCount, data.begin(), [](int value) {
+    return static_cast<uint8_t>(value);
+  });
+  std::transform(scrambling, scrambling + ScramblingCount, data.begin() + kBlueNoiseTileValueCount, [](int value) {
+    return static_cast<uint8_t>(value);
+  });
+
+  uint8_t* compact_sobol = data.data() + 2u * kBlueNoiseTileValueCount;
+  for (size_t sample_index = 0u; sample_index < 256u; ++sample_index) {
+    for (size_t dimension = 0u; dimension < 8u; ++dimension) {
+      compact_sobol[sample_index * 8u + dimension] = static_cast<uint8_t>(sobol[sample_index * 256u + dimension]);
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+bool build_blue_noise_gpu_data(uint32_t target_samples, std::vector<uint8_t>& data) {
+  const uint32_t clamped_samples = std::max(1u, std::min(target_samples, 256u));
+  switch (next_power(clamped_samples)) {
+    case 1u:
+      return build_blue_noise_gpu_data_from_tables(spp_1::rankingTile, spp_1::scramblingTile, sobol_256spp_256d, data);
+    case 2u:
+      return build_blue_noise_gpu_data_from_tables(spp_2::rankingTile, spp_2::scramblingTile, sobol_256spp_256d, data);
+    case 4u:
+      return build_blue_noise_gpu_data_from_tables(spp_4::rankingTile, spp_4::scramblingTile, sobol_256spp_256d, data);
+    case 8u:
+      return build_blue_noise_gpu_data_from_tables(spp_8::rankingTile, spp_8::scramblingTile, sobol_256spp_256d, data);
+    case 16u:
+      return build_blue_noise_gpu_data_from_tables(spp_16::rankingTile, spp_16::scramblingTile, sobol_256spp_256d, data);
+    case 32u:
+      return build_blue_noise_gpu_data_from_tables(spp_32::rankingTile, spp_32::scramblingTile, sobol_256spp_256d, data);
+    case 64u:
+      return build_blue_noise_gpu_data_from_tables(spp_64::rankingTile, spp_64::scramblingTile, sobol_256spp_256d, data);
+    case 128u:
+      return build_blue_noise_gpu_data_from_tables(spp_128::rankingTile, spp_128::scramblingTile, sobol_256spp_256d, data);
+    case 256u:
+      return build_blue_noise_gpu_data_from_tables(spp_256::rankingTile, spp_256::scramblingTile, sobol_256spp_256d, data);
+    default:
+      data.clear();
+      return false;
+  }
 }
 
 BNSampler::BNSampler(uint32_t pixel_x, uint32_t pixel_y, uint32_t target_samples, uint32_t current_sample) {

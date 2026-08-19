@@ -2100,6 +2100,11 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   bool force_tangents, bool spectral_scene, bool create_default_camera_entry) {
   auto& camera = active_camera;
   bool needs_camera_positioning = false;
+  if (data.options.max_path_length > kMaximumPathLength) {
+    log::warning("Scene max path length %u exceeds the supported limit; clamping to %u", data.options.max_path_length, kMaximumPathLength);
+    data.options.max_path_length = kMaximumPathLength;
+  }
+  data.options.min_path_length = std::min(data.options.min_path_length, data.options.max_path_length);
   data.options.properties[Scene::Properties::Spectral] = spectral_scene;
 
   if (options & SceneRepresentation::SetupCamera) {

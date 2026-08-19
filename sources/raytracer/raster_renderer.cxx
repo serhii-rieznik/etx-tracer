@@ -33,6 +33,13 @@ void RasterizationRenderer::cleanup(RHIContext& ctx) {
   */
 }
 
+RendererStatus RasterizationRenderer::status() const {
+  return {
+    .mode = RendererMode::Rasterization,
+    .state = _initialized ? RendererStatusState::Running : RendererStatusState::Unavailable,
+  };
+}
+
 void RasterizationRenderer::on_scene_changed(SceneRepresentation& scene) {
   Renderer::on_scene_changed(scene);
 }

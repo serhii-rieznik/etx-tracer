@@ -31,7 +31,6 @@ enum class ApplicationCommandType : uint32_t {
   SetViewLayer,
   SetOutputView,
   SetDisplayTransform,
-  SetGPUWavefrontSteps,
   Quit,
 };
 
@@ -73,7 +72,7 @@ struct ApplicationStateSnapshot {
   Integrator::Type integrator_type = Integrator::Type::Invalid;
   std::vector<ApplicationIntegratorInfo> integrators = {};
   RendererPreparationStatus preparation = {};
-  RendererRuntimeStats runtime = {};
+  RendererStatus status = {};
   RendererControlState controls = {};
   ViewParameters view = {};
 };

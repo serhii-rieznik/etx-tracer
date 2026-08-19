@@ -209,6 +209,7 @@ struct VKContext {
   void command_buffer_end(RHICommandBuffer cmd);
   void command_buffer_reset(RHICommandBuffer cmd);
 
+  void cmd_compute_barrier(RHICommandBuffer cmd);
   void cmd_buffer_barrier(RHICommandBuffer cmd, RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state);
   void cmd_texture_barrier(RHICommandBuffer cmd, RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state);
 
@@ -226,6 +227,7 @@ struct VKContext {
   void cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer);
 
   void cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc);
+  void cmd_dispatch_indirect(RHICommandBuffer cmd, RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset);
   void cmd_reset_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count);
   void cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index, RHITimestampStage stage);
 
@@ -294,7 +296,8 @@ struct VKDevice {
 
   RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
   RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);
-  std::vector<RHICreatePipelineBatchEntry> create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency);
+  std::vector<RHICreatePipelineBatchEntry> create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency,
+    const RHIPipelineBatchProgressCallback& progress_callback);
   void persist_pipeline_cache();
   RHIResult reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc);
   RHIResult reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc);
@@ -423,6 +426,7 @@ struct VKCommandBuffer {
  private:
   friend class VKContext;
 
+  void compute_barrier();
   void buffer_barrier(RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state);
   void texture_barrier(RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state);
 
@@ -440,6 +444,7 @@ struct VKCommandBuffer {
   void draw_indexed(const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer);
 
   void dispatch(const RHIDispatchDesc& desc);
+  void dispatch_indirect(RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset);
   void reset_timestamps(uint32_t first_query, uint32_t query_count);
   void write_timestamp(uint32_t query_index, RHITimestampStage stage);
   RHIResult read_timestamps(uint32_t first_query, uint32_t query_count, uint64_t* out_values) const;

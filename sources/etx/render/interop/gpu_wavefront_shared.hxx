@@ -164,6 +164,14 @@ struct ETX_ALIGNED GPUWavefrontLightPathVertex {
   float pdf_history ETX_INIT(0.0f);
   float pdf_ratio ETX_INIT(0.0f);
   float2 barycentric ETX_INIT({});
+  uint32_t previous_vertex_index ETX_INIT(kInvalidIndex);
+};
+
+struct ETX_ALIGNED GPUWavefrontFastLightEndpoint {
+  float emitter_pdf_from_prev ETX_INIT(0.0f);
+  float emitter_pdf_from_next ETX_INIT(0.0f);
+  uint32_t emitter_flags ETX_INIT(0u);
+  uint32_t first_vertex_flags ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontPathMeta {
@@ -307,5 +315,9 @@ struct ETX_ALIGNED GPUWavefrontResources {
   uint32_t light_vertex_capacity ETX_INIT(0u);
   uint32_t camera_fixed_max_bounces ETX_INIT(0u);
   uint32_t light_fixed_max_bounces ETX_INIT(0u);
-  uint32_t reserved0 ETX_INIT(0u);
+  uint32_t dispatch_args_buffer ETX_INIT(kInvalidIndex);
+  uint32_t material_queue_buffer ETX_INIT(kInvalidIndex);
+  uint32_t shadow_queue_buffer ETX_INIT(kInvalidIndex);
+  uint32_t light_vertex_counter_buffer ETX_INIT(kInvalidIndex);
+  uint32_t fast_light_endpoint_buffer ETX_INIT(kInvalidIndex);
 };

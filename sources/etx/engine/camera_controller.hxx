@@ -159,8 +159,8 @@ struct CameraController {
       if (dot(pos_diff, pos_diff) > 1.0e-8f || dot(dir_diff, dir_diff) > 1.0e-8f) {
         return true;
       }
-    } else {
-      build_camera(_camera, _camera.position, _camera.direction, kWorldUp, _camera.film_size, get_camera_fov(_camera));
+
+      _interpolation_initialized = false;
     }
 
     return camera_changed;
@@ -300,8 +300,7 @@ struct CameraController {
   }
 
   bool movement_key_pressed() const {
-    return (((_keys[SAPP_KEYCODE_W] || _keys[SAPP_KEYCODE_A]) || (_keys[SAPP_KEYCODE_S] || _keys[SAPP_KEYCODE_D])) ||
-            (_keys[SAPP_KEYCODE_Q] || _keys[SAPP_KEYCODE_E]));
+    return (((_keys[SAPP_KEYCODE_W] || _keys[SAPP_KEYCODE_A]) || (_keys[SAPP_KEYCODE_S] || _keys[SAPP_KEYCODE_D])) || (_keys[SAPP_KEYCODE_Q] || _keys[SAPP_KEYCODE_E]));
   }
 
   static void clamp_position(float3& p) {

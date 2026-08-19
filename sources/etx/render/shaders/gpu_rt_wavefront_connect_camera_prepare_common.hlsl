@@ -11,6 +11,7 @@
 
 struct WavefrontConnectCameraPrepareInput {
   GPUWavefrontResources resources;
+  uint task_index;
   uint path_index;
   GPUWavefrontPathState state;
   GPUWavefrontPathMeta path_meta;
@@ -88,14 +89,23 @@ float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_v
       return 1.0f;
     }
 
-    GPUWavefrontPathVertex emitter_root = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 0u));
+    GPUWavefrontPathVertex emitter_root = (GPUWavefrontPathVertex)0;
+    GPUWavefrontPathVertex first_light_vertex = (GPUWavefrontPathVertex)0;
+    if (input_value.path_meta.light_path_length == 1u) {
+      emitter_root = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 0u));
+      first_light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 1u));
+    } else if (input_value.resources.fast_light_endpoint_buffer != kInvalidIndex) {
+      const GPUWavefrontFastLightEndpoint endpoint = wavefront_load_fast_light_endpoint(input_value.resources.fast_light_endpoint_buffer, input_value.path_index);
+      emitter_root.pdf_from_prev = endpoint.emitter_pdf_from_prev;
+      emitter_root.pdf_from_next = endpoint.emitter_pdf_from_next;
+      emitter_root.flags = endpoint.emitter_flags;
+      first_light_vertex.flags = endpoint.first_vertex_flags;
+    } else {
+      emitter_root = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 0u));
+      first_light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 1u));
+    }
     if (wavefront_path_vertex_valid(emitter_root) == false) {
       return 1.0f;
-    }
-
-    GPUWavefrontPathVertex first_light_vertex = (GPUWavefrontPathVertex)0;
-    if (input_value.path_meta.light_path_length >= 1u) {
-      first_light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 1u));
     }
 
     float p_sample = emitter_root.pdf_from_prev;
@@ -124,6 +134,15 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
       (constants.camera_buffer_index == kInvalidIndex)) {
     return false;
   }
+
+#if ETX_ENABLE_WORK_QUEUES
+  const uint material_queue_count = wavefront_material_queue_count(input_value.resources, false, constants.work_queue_index);
+  if (dispatch_index >= material_queue_count) {
+    return false;
+  }
+  dispatch_index = wavefront_material_queue_load(input_value.resources, false, constants.work_queue_index, dispatch_index);
+#endif
+  input_value.task_index = dispatch_index;
 
   uint queue_descriptor = wavefront_queue_current_descriptor(false);
   uint queue_count = wavefront_queue_count(queue_descriptor);
@@ -161,8 +180,7 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
   if (wavefront_connect_camera_try_load_material_full(input_value.current_vertex.material_index, input_value.material) == false) {
     return false;
   }
-  bool contains_diffraction = wavefront_vertex_contains_diffraction(input_value.current_vertex) ||
-                              (input_value.material.cls == MaterialClass::DiffractionGrating);
+  bool contains_diffraction = wavefront_vertex_contains_diffraction(input_value.current_vertex) || (input_value.material.cls == MaterialClass::DiffractionGrating);
   if (wavefront_diffraction_contribution_enabled(input_value.state.spect, contains_diffraction) == false) {
     return false;
   }
@@ -261,4 +279,5 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   task.path_index = input_value.path_index;
   task.sampler_seed = sampler.seed;
   wavefront_store_connect_camera_task(input_value.resources.connect_camera_task_buffer, dispatch_index, task);
+  wavefront_shadow_queue_append(input_value.resources, kGPUWavefrontShadowQueueConnectCamera, dispatch_index);
 }

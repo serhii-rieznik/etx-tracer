@@ -9,6 +9,16 @@ struct TaskScheduler;
 
 struct FilmImpl;
 struct Film {
+  struct MemoryStats {
+    uint64_t accumulation_bytes = 0u;
+    uint64_t adaptive_bytes = 0u;
+    uint64_t normals_bytes = 0u;
+    uint64_t albedo_bytes = 0u;
+    uint64_t denoised_bytes = 0u;
+    uint64_t output_bytes = 0u;
+    uint64_t internal_bytes = 0u;
+  };
+
   enum ClearOptions : uint32_t {
     ClearIteration = 1u << 0u,
     ClearEverything = 1u << 1u,
@@ -33,6 +43,7 @@ struct Film {
   ~Film();
 
   void allocate(const uint2& dim);
+  void release();
   void reset_render_window();
   bool set_render_window(const uint2& origin, const uint2& size);
 
@@ -60,6 +71,7 @@ struct Film {
   uint32_t total_pixel_count() const;
   uint32_t current_pixel_count() const;
   uint32_t active_pixel_count() const;
+  MemoryStats memory_stats() const;
 
   bool active_pixel(uint32_t linear_index, uint2& location) const;
   void estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, float threshold);

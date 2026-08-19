@@ -81,12 +81,13 @@
   state.sampler_seed = seed;
   state.pixel = output_pixel;
   state.spect = spect;
-  state.last_vertex_index = wavefront_light_vertex_slot(path_index, 0u);
+  state.last_vertex_index = (resources.light_vertex_counter_buffer != kInvalidIndex) ? path_index : wavefront_light_vertex_slot(path_index, 0u);
   wavefront_store_path_state(resources.light_state_buffer, path_index, state);
   wavefront_write_root_light_vertex(path_index, emitter_sample, spect, output_pixel_index);
   if (resources.path_meta_buffer != kInvalidIndex) {
     GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
     meta.light_path_length = 0u;
+    meta.reserved0 = state.last_vertex_index;
     meta.flags |= GPUWavefrontPathMetaFlags::Light_active;
     meta.light_mis_history = scene_path_mode_uses_bdpt_fast() ? 1.0f : 0.0f;
     meta.from_delta = emitter_sample.is_delta;

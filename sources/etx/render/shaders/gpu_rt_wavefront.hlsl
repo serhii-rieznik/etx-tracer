@@ -296,6 +296,10 @@ GPUWavefrontResources wavefront_load_resources() {
   result.light_vertex_capacity = buffer.Load(kGPUWavefrontResourcesLightVertexCapacityOffset);
   result.camera_fixed_max_bounces = buffer.Load(kGPUWavefrontResourcesCameraFixedMaxBouncesOffset);
   result.light_fixed_max_bounces = buffer.Load(kGPUWavefrontResourcesLightFixedMaxBouncesOffset);
+  result.dispatch_args_buffer = buffer.Load(kGPUWavefrontResourcesDispatchArgsBufferOffset);
+  result.material_queue_buffer = buffer.Load(kGPUWavefrontResourcesMaterialQueueBufferOffset);
+  result.shadow_queue_buffer = buffer.Load(kGPUWavefrontResourcesShadowQueueBufferOffset);
+  result.fast_light_endpoint_buffer = buffer.Load(kGPUWavefrontResourcesFastLightEndpointBufferOffset);
   return result;
 }
 
@@ -350,6 +354,8 @@ uint wavefront_queue_append(uint descriptor_index, uint value) {
   buffer.Store(kGPUWavefrontQueueIndicesOffset + slot * 4u, value);
   return slot;
 }
+
+#include "gpu_rt_wavefront_work_queue.hlsl"
 
 float4 wavefront_film_load(uint pixel_index) {
   ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(wavefront_load_resources().film_buffer);

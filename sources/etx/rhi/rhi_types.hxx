@@ -1,6 +1,8 @@
 #pragma once
 
 #include <etx/core/handle.hxx>
+
+#include <functional>
 namespace etx {
 
 enum class RHIResult : uint32_t {
@@ -59,12 +61,22 @@ using RHICreateBindlessResult = RHICreateResult<RHIBindlessHandle>;
 using RHICreateShaderResult = RHICreateResult<RHIShader>;
 using RHICreatePipelineResult = RHICreateResult<RHIPipeline>;
 
+enum class RHIPipelineBatchProgressState : uint32_t {
+  Queued,
+  CheckingCache,
+  DriverCompiling,
+  Complete,
+};
+
 struct RHICreatePipelineBatchEntry {
   RHIResult result = RHIResult::Success;
   RHIPipeline handle = {};
   double elapsed_ms = 0.0;
   bool cache_hit = false;
+  RHIPipelineBatchProgressState state = RHIPipelineBatchProgressState::Queued;
 };
+
+using RHIPipelineBatchProgressCallback = std::function<void(uint32_t, const RHICreatePipelineBatchEntry&)>;
 
 enum class RHIBackend : uint32_t {
   Vulkan = 0,
@@ -98,6 +110,7 @@ enum class RHIBufferUsage : uint32_t {
   AccelerationStructureStorage = 1u << 7u,
   ShaderBindingTable = 1u << 8u,
   ShaderDeviceAddress = 1u << 9u,
+  Indirect = 1u << 10u,
 };
 
 inline RHIBufferUsage operator|(RHIBufferUsage a, RHIBufferUsage b) {
@@ -268,6 +281,7 @@ enum class RHIResourceState : uint32_t {
   TransferDst = 6,
   Present = 7,
   AccelerationStructure = 8,
+  IndirectArgument = 9,
 };
 
 enum class RHIResourceType : uint32_t {

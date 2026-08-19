@@ -141,9 +141,8 @@ float wavefront_emitter_sample_to_vertex_area_pdf(WavefrontEmitterSample sample_
   return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, source_vertex.position, sample_value.origin, true, sample_value.normal);
 }
 
-float wavefront_medium_direct_light_weight(
-  GPUWavefrontResources resources, uint path_index, GPUWavefrontPathMeta path_meta, GPUWavefrontPathVertex current_vertex, WavefrontEmitterSample emitter_sample,
-  MediumAccess medium_access, float phase_value) {
+float wavefront_medium_direct_light_weight(GPUWavefrontResources resources, uint path_index, GPUWavefrontPathMeta path_meta, GPUWavefrontPathVertex current_vertex,
+  WavefrontEmitterSample emitter_sample, MediumAccess medium_access, float phase_value) {
   if (scene_multiple_importance_sampling_enabled() == false) {
     return 1.0f;
   }
@@ -162,8 +161,7 @@ float wavefront_medium_direct_light_weight(
     return 1.0f;
   }
 
-  GPUWavefrontPathVertex previous_vertex =
-    wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, path_meta.camera_path_length - 1u));
+  GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, path_meta.camera_path_length - 1u));
   if (wavefront_path_vertex_valid(previous_vertex) == false) {
     return 0.0f;
   }
@@ -283,8 +281,7 @@ float wavefront_medium_direct_light_weight(
     if (mis_weight <= 0.0f) {
       return;
     }
-    SpectralResponse contribution =
-      spectral_response_mul(current_vertex.throughput, spectral_response_mul(emitter_sample.value, phase_value * (mis_weight / sampling_pdf)));
+    SpectralResponse contribution = spectral_response_mul(current_vertex.throughput, spectral_response_mul(emitter_sample.value, phase_value * (mis_weight / sampling_pdf)));
     if (gpu_valid_spectral_response(contribution) == false) {
       return;
     }
@@ -309,6 +306,7 @@ float wavefront_medium_direct_light_weight(
     task.path_index = path_index;
     task.sampler_seed = state.sampler_seed;
     wavefront_store_direct_light_task(resources.direct_light_task_buffer, dispatch_index, task);
+    wavefront_shadow_queue_append(resources, kGPUWavefrontShadowQueueDirectLight, dispatch_index);
     return;
   }
 

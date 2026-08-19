@@ -21,6 +21,8 @@ struct RasterizationRenderer : public Renderer {
     return RendererMode::Rasterization;
   }
 
+  RendererStatus status() const override;
+
   void on_scene_changed(SceneRepresentation& scene) override;
 
  private:

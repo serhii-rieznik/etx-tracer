@@ -63,7 +63,12 @@ if(APPLE)
 endif()
 
 if(WIN32)
-  target_sources(raytracer PRIVATE platform_ui_windows.cxx)
+  target_sources(raytracer PRIVATE
+    platform_ui_windows.cxx
+    windows/AppIcon.ico
+    windows/AppIcon.rc
+    windows/resource.h
+  )
 endif()
 
 if(APPLE)

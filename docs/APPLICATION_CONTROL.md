@@ -57,7 +57,7 @@ Commands are JSON objects with a `type` field. Supported types are:
 - `run`, `finish`, `stop`, `restart`
 - `reload_scene`, `reload_geometry`, `reload_shaders`, `cancel_preparation`
 - `set_exposure` with floating-point `value`
-- `set_view_layer`, `set_output_view`, `set_display_transform`, and `set_gpu_wavefront_steps` with numeric `value`
+- `set_view_layer`, `set_output_view`, and `set_display_transform` with numeric `value`
 - `quit`
 
 For example:

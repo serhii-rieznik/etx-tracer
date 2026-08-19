@@ -55,6 +55,7 @@ struct MTContext {
   void command_buffer_end(RHICommandBuffer cmd);
   void command_buffer_reset(RHICommandBuffer cmd);
 
+  void cmd_compute_barrier(RHICommandBuffer cmd);
   void cmd_buffer_barrier(RHICommandBuffer cmd, RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state);
   void cmd_texture_barrier(RHICommandBuffer cmd, RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state);
 
@@ -72,6 +73,7 @@ struct MTContext {
   void cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer);
 
   void cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc);
+  void cmd_dispatch_indirect(RHICommandBuffer cmd, RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset);
   void cmd_reset_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count);
   void cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index, RHITimestampStage stage);
 
@@ -109,7 +111,8 @@ struct MTDevice {
   RHICreateBindlessResult create_sampler(const RHISamplerDesc& desc);
   RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
   RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);
-  std::vector<RHICreatePipelineBatchEntry> create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency);
+  std::vector<RHICreatePipelineBatchEntry> create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency,
+    const RHIPipelineBatchProgressCallback& progress_callback);
   void persist_pipeline_cache();
 
   RHIResult destroy_buffer(RHIBuffer buffer);
@@ -187,6 +190,7 @@ struct MTCommandBuffer {
   void reset();
   void detach_submitted();
 
+  void compute_barrier();
   void buffer_barrier(RHIBuffer buffer, RHIResourceState old_state, RHIResourceState new_state);
   void texture_barrier(RHITexture texture, RHIResourceState old_state, RHIResourceState new_state);
 
@@ -204,6 +208,7 @@ struct MTCommandBuffer {
   void draw_indexed(const RHIIndexedDrawDesc& desc, RHIBuffer index_buffer);
 
   void dispatch(const RHIDispatchDesc& desc);
+  void dispatch_indirect(RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset);
 
   void build_acceleration_structure(const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0);
 

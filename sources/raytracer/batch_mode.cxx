@@ -353,8 +353,8 @@ const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
     .description = "Vertex connection and merging CPU integrator.",
     .integrator = Integrator::Type::VCM,
     .bdpt_mode = BDPTMode::BDPTFast,
-    .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices |
-                      Scene::Strategy::MergeVertices,
+    .strategy_flags =
+      Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices | Scene::Strategy::MergeVertices,
     .reference = false,
   },
 };
@@ -687,14 +687,15 @@ std::string format_comparison_report(const char* technique_tag, const ImageCompa
   char buffer[1792] = {};
   std::snprintf(buffer, sizeof(buffer),
     "[%s] compare_space{similarity=%.2f%%, low_freq_similarity=%.2f%%, rmse=%.6f, low_freq_rmse=%.6f, mae=%.6f, relative_rmse=%.6f, max_abs=%.6f, "
-    "mean_signed=%.6f, ref_avg_luma=%.6f, gpu_avg_luma=%.6f, brightness_ratio=%.6f, brightness_rel=%.6f, p95_abs=%.6f, p99_abs=%.6f} linear{rmse=%.6f, mae=%.6f, relative_rmse=%.6f, max_abs=%.6f, "
+    "mean_signed=%.6f, ref_avg_luma=%.6f, gpu_avg_luma=%.6f, brightness_ratio=%.6f, brightness_rel=%.6f, p95_abs=%.6f, p99_abs=%.6f} linear{rmse=%.6f, mae=%.6f, "
+    "relative_rmse=%.6f, max_abs=%.6f, "
     "mean_signed=%.6f, ref_avg_luma=%.6f, gpu_avg_luma=%.6f, brightness_ratio=%.6f, brightness_rel=%.6f, p95_abs=%.6f, p99_abs=%.6f}\n",
     technique_tag, comparison.similarity, comparison.low_frequency_similarity, comparison.root_mean_squared_error, comparison.low_frequency_root_mean_squared_error,
-    comparison.mean_absolute_error, comparison.relative_root_mean_squared_error, comparison.max_absolute_error, comparison.mean_signed_error,
-    comparison.reference_mean_luminance, comparison.result_mean_luminance, comparison.brightness_ratio, comparison.brightness_relative_error,
-    comparison.percentile_95_absolute_error, comparison.percentile_99_absolute_error, comparison.linear_root_mean_squared_error, comparison.linear_mean_absolute_error,
-    comparison.linear_relative_root_mean_squared_error, comparison.linear_max_absolute_error, comparison.linear_mean_signed_error, comparison.linear_reference_mean_luminance,
-    comparison.linear_result_mean_luminance, comparison.linear_brightness_ratio, comparison.linear_brightness_relative_error, comparison.linear_percentile_95_absolute_error,
+    comparison.mean_absolute_error, comparison.relative_root_mean_squared_error, comparison.max_absolute_error, comparison.mean_signed_error, comparison.reference_mean_luminance,
+    comparison.result_mean_luminance, comparison.brightness_ratio, comparison.brightness_relative_error, comparison.percentile_95_absolute_error,
+    comparison.percentile_99_absolute_error, comparison.linear_root_mean_squared_error, comparison.linear_mean_absolute_error, comparison.linear_relative_root_mean_squared_error,
+    comparison.linear_max_absolute_error, comparison.linear_mean_signed_error, comparison.linear_reference_mean_luminance, comparison.linear_result_mean_luminance,
+    comparison.linear_brightness_ratio, comparison.linear_brightness_relative_error, comparison.linear_percentile_95_absolute_error,
     comparison.linear_percentile_99_absolute_error);
   return buffer;
 }
@@ -710,18 +711,18 @@ std::string format_ai_comparison_report(const char* kind, const char* technique_
   char buffer[3584] = {};
   std::snprintf(buffer, sizeof(buffer),
     "AI_IMAGE_COMPARISON {\"schema\":\"etx.image_comparison.v3\",\"kind\":\"%s\",\"technique\":\"%s\",\"scene\":\"%s\",\"reference\":\"%s\","
-    "\"output\":\"%s\",\"compare_space\":{\"similarity_percent\":%.6f,\"low_frequency_similarity_percent\":%.6f,\"rmse\":%.6f,\"low_frequency_rmse\":%.6f,\"mae\":%.6f,\"relative_rmse\":%.6f,\"max_abs\":%.6f,"
+    "\"output\":\"%s\",\"compare_space\":{\"similarity_percent\":%.6f,\"low_frequency_similarity_percent\":%.6f,\"rmse\":%.6f,\"low_frequency_rmse\":%.6f,\"mae\":%.6f,\"relative_"
+    "rmse\":%.6f,\"max_abs\":%.6f,"
     "\"mean_signed\":%.6f,\"ref_avg_luma\":%.6f,\"gpu_avg_luma\":%.6f,\"brightness_ratio\":%.6f,\"brightness_rel\":%.6f,\"p95_abs\":%.6f,\"p99_abs\":%.6f},"
     "\"linear\":{\"rmse\":%.6f,\"mae\":%.6f,\"relative_rmse\":%.6f,\"max_abs\":%.6f,\"mean_signed\":%.6f,\"ref_avg_luma\":%.6f,\"gpu_avg_luma\":%.6f,"
     "\"brightness_ratio\":%.6f,\"brightness_rel\":%.6f,\"p95_abs\":%.6f,\"p99_abs\":%.6f}}\n",
-    safe_kind.c_str(), safe_technique.c_str(), safe_scene.c_str(), safe_reference.c_str(), safe_output.c_str(), comparison.similarity,
-    comparison.low_frequency_similarity, comparison.root_mean_squared_error, comparison.low_frequency_root_mean_squared_error, comparison.mean_absolute_error,
-    comparison.relative_root_mean_squared_error, comparison.max_absolute_error, comparison.mean_signed_error, comparison.reference_mean_luminance,
-    comparison.result_mean_luminance, comparison.brightness_ratio, comparison.brightness_relative_error, comparison.percentile_95_absolute_error,
-    comparison.percentile_99_absolute_error, comparison.linear_root_mean_squared_error, comparison.linear_mean_absolute_error, comparison.linear_relative_root_mean_squared_error,
-    comparison.linear_max_absolute_error, comparison.linear_mean_signed_error, comparison.linear_reference_mean_luminance, comparison.linear_result_mean_luminance,
-    comparison.linear_brightness_ratio, comparison.linear_brightness_relative_error, comparison.linear_percentile_95_absolute_error,
-    comparison.linear_percentile_99_absolute_error);
+    safe_kind.c_str(), safe_technique.c_str(), safe_scene.c_str(), safe_reference.c_str(), safe_output.c_str(), comparison.similarity, comparison.low_frequency_similarity,
+    comparison.root_mean_squared_error, comparison.low_frequency_root_mean_squared_error, comparison.mean_absolute_error, comparison.relative_root_mean_squared_error,
+    comparison.max_absolute_error, comparison.mean_signed_error, comparison.reference_mean_luminance, comparison.result_mean_luminance, comparison.brightness_ratio,
+    comparison.brightness_relative_error, comparison.percentile_95_absolute_error, comparison.percentile_99_absolute_error, comparison.linear_root_mean_squared_error,
+    comparison.linear_mean_absolute_error, comparison.linear_relative_root_mean_squared_error, comparison.linear_max_absolute_error, comparison.linear_mean_signed_error,
+    comparison.linear_reference_mean_luminance, comparison.linear_result_mean_luminance, comparison.linear_brightness_ratio, comparison.linear_brightness_relative_error,
+    comparison.linear_percentile_95_absolute_error, comparison.linear_percentile_99_absolute_error);
   return buffer;
 }
 
@@ -823,20 +824,18 @@ bool full_comparison_passes_strict_gate(const char* technique_tag, const ImageCo
   const float brightness_error = full_comparison_linear_brightness_error(comparison);
   const bool low_signal_reference = full_comparison_is_low_signal_reference(comparison);
   const bool relative_metrics_pass = low_signal_reference || ((comparison.linear_relative_root_mean_squared_error <= 5.0e-1f) && (brightness_error <= 5.0e-2f));
-  return (comparison.low_frequency_root_mean_squared_error <= 2.0e-2f) && (comparison.root_mean_squared_error <= 6.0e-2f) &&
-         (comparison.percentile_95_absolute_error <= 1.5e-1f) && (comparison.percentile_99_absolute_error <= 4.0e-1f) &&
-         relative_metrics_pass && (comparison.linear_percentile_95_absolute_error <= 2.0e-1f) && (comparison.linear_percentile_99_absolute_error <= 9.0e-1f) &&
-         (comparison.linear_max_absolute_error <= 4.0f);
+  return (comparison.low_frequency_root_mean_squared_error <= 2.0e-2f) && (comparison.root_mean_squared_error <= 6.0e-2f) && (comparison.percentile_95_absolute_error <= 1.5e-1f) &&
+         (comparison.percentile_99_absolute_error <= 4.0e-1f) && relative_metrics_pass && (comparison.linear_percentile_95_absolute_error <= 2.0e-1f) &&
+         (comparison.linear_percentile_99_absolute_error <= 9.0e-1f) && (comparison.linear_max_absolute_error <= 4.0f);
 }
 
 std::string full_comparison_strict_gate_message(const char* technique_tag, const ImageComparisonResult& comparison) {
   char buffer[768] = {};
   if (full_comparison_technique_is_exact_gate(technique_tag)) {
     const FullComparisonExactGateThresholds thresholds = full_comparison_exact_gate_thresholds(technique_tag);
-    std::snprintf(buffer, sizeof(buffer),
-      "%s failed exact gate: linear.max_abs=%.8f <= %.8f, linear.rmse=%.8f <= %.8f, low_freq.rmse=%.8f <= %.8f", technique_tag,
-      comparison.linear_max_absolute_error, thresholds.linear_max_absolute_error, comparison.linear_root_mean_squared_error,
-      thresholds.linear_root_mean_squared_error, comparison.low_frequency_root_mean_squared_error, thresholds.low_frequency_root_mean_squared_error);
+    std::snprintf(buffer, sizeof(buffer), "%s failed exact gate: linear.max_abs=%.8f <= %.8f, linear.rmse=%.8f <= %.8f, low_freq.rmse=%.8f <= %.8f", technique_tag,
+      comparison.linear_max_absolute_error, thresholds.linear_max_absolute_error, comparison.linear_root_mean_squared_error, thresholds.linear_root_mean_squared_error,
+      comparison.low_frequency_root_mean_squared_error, thresholds.low_frequency_root_mean_squared_error);
   } else {
     const float brightness_error = full_comparison_linear_brightness_error(comparison);
     const bool low_signal_reference = full_comparison_is_low_signal_reference(comparison);
@@ -1733,25 +1732,30 @@ void append_cpu_comparison_html_header(std::string& html_text, const std::string
   html_text += "  <title>ETX CPU Integrator Comparison</title>\n";
   html_text += "  <style>\n";
   html_text +=
-    "    :root { color-scheme: dark; --bg: #0d1318; --panel: #121b22; --panel-2: #18232d; --panel-3: #0f171d; --text: #edf3f7; --muted: #94a8b6; --accent: #8adbb4; --line: #26333f; "
+    "    :root { color-scheme: dark; --bg: #0d1318; --panel: #121b22; --panel-2: #18232d; --panel-3: #0f171d; --text: #edf3f7; --muted: #94a8b6; --accent: #8adbb4; --line: "
+    "#26333f; "
     "--warm: #f5b971; }\n";
   html_text += "    * { box-sizing: border-box; }\n";
   html_text +=
-    "    body { margin: 0; font-family: \"Cascadia Mono\", \"SFMono-Regular\", Consolas, \"Liberation Mono\", Menlo, monospace; background: radial-gradient(circle at top, #17232c 0%, "
+    "    body { margin: 0; font-family: \"Cascadia Mono\", \"SFMono-Regular\", Consolas, \"Liberation Mono\", Menlo, monospace; background: radial-gradient(circle at top, #17232c "
+    "0%, "
     "#0d1318 50%, #081017 100%); color: var(--text); }\n";
   html_text += "    .page { max-width: 1540px; margin: 0 auto; padding: 28px 22px 56px; }\n";
   html_text +=
-    "    .hero { padding: 24px 26px; border: 1px solid var(--line); border-radius: 22px; background: linear-gradient(135deg, rgba(138, 219, 180, 0.12), rgba(245, 185, 113, 0.06)); "
+    "    .hero { padding: 24px 26px; border: 1px solid var(--line); border-radius: 22px; background: linear-gradient(135deg, rgba(138, 219, 180, 0.12), rgba(245, 185, 113, "
+    "0.06)); "
     "box-shadow: 0 18px 48px rgba(0, 0, 0, 0.22); }\n";
   html_text += "    .hero h1 { margin: 0 0 10px; font-size: 32px; }\n";
   html_text += "    .hero p { margin: 0; color: var(--muted); word-break: break-all; }\n";
   html_text += "    .hero-meta { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 10px; }\n";
   html_text +=
-    "    .pill { display: inline-flex; align-items: center; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 7px 11px; font-size: 12px; color: var(--text); "
+    "    .pill { display: inline-flex; align-items: center; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 999px; padding: 7px 11px; font-size: 12px; color: "
+    "var(--text); "
     "background: rgba(255, 255, 255, 0.04); }\n";
   html_text += "    .layout { display: grid; gap: 18px; margin-top: 20px; }\n";
   html_text +=
-    "    .reference { display: grid; grid-template-columns: minmax(340px, 1.05fr) minmax(280px, 0.95fr); gap: 18px; padding: 20px; border: 1px solid var(--line); border-radius: 20px; "
+    "    .reference { display: grid; grid-template-columns: minmax(340px, 1.05fr) minmax(280px, 0.95fr); gap: 18px; padding: 20px; border: 1px solid var(--line); border-radius: "
+    "20px; "
     "background: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.015)); }\n";
   html_text += "    .section-title { margin: 0 0 12px; font-size: 18px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--warm); }\n";
   html_text += "    .frame { border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: #090d11; }\n";
@@ -1784,7 +1788,8 @@ void append_cpu_comparison_html_header(std::string& html_text, const std::string
   html_text += "    .file-list { padding: 0 18px 18px; color: var(--muted); font-size: 12px; }\n";
   html_text += "    .file-list div { margin-top: 4px; word-break: break-all; }\n";
   html_text += "    @media (max-width: 980px) { .reference { grid-template-columns: 1fr; } }\n";
-  html_text += "    @media (max-width: 720px) { .thumbs { grid-template-columns: 1fr; } .metrics { grid-template-columns: 1fr 1fr; } th, td { padding: 10px 12px; font-size: 13px; } }\n";
+  html_text +=
+    "    @media (max-width: 720px) { .thumbs { grid-template-columns: 1fr; } .metrics { grid-template-columns: 1fr 1fr; } th, td { padding: 10px 12px; font-size: 13px; } }\n";
   html_text += "  </style>\n";
   html_text += "</head>\n";
   html_text += "<body>\n";
@@ -1841,7 +1846,9 @@ void append_cpu_comparison_html_summary(std::string& html_text, const std::vecto
   html_text += "          <p>Compact scan of the main compare-space and linear-space metrics versus the PT reference.</p>\n";
   html_text += "        </header>\n";
   html_text += "        <table>\n";
-  html_text += "          <thead><tr><th>Technique</th><th>Compare Similarity</th><th>Low-Freq Similarity</th><th>Compare RMSE</th><th>Linear RMSE</th><th>Brightness Ratio</th></tr></thead>\n";
+  html_text +=
+    "          <thead><tr><th>Technique</th><th>Compare Similarity</th><th>Low-Freq Similarity</th><th>Compare RMSE</th><th>Linear RMSE</th><th>Brightness "
+    "Ratio</th></tr></thead>\n";
   html_text += "          <tbody>\n";
 
   for (const CPUComparisonReportEntry& entry : entries) {
@@ -2040,8 +2047,8 @@ struct BatchRenderSession {
 
     const auto total_end = std::chrono::steady_clock::now();
     log::info("Batch session init timing: total=%.2fms scene_global=%.2fms render_context=%.2fms scene_rhi=%.2fms ior=%.2fms cpu_renderer=%.2fms gpu_renderer=%.2fms",
-      elapsed_ms(total_begin, total_end), elapsed_ms(scene_global_begin, scene_global_end), elapsed_ms(render_context_begin, render_context_end), elapsed_ms(scene_rhi_begin, scene_rhi_end),
-      elapsed_ms(ior_begin, ior_end), cpu_renderer_init_ms, gpu_renderer_init_ms);
+      elapsed_ms(total_begin, total_end), elapsed_ms(scene_global_begin, scene_global_end), elapsed_ms(render_context_begin, render_context_end),
+      elapsed_ms(scene_rhi_begin, scene_rhi_end), elapsed_ms(ior_begin, ior_end), cpu_renderer_init_ms, gpu_renderer_init_ms);
     return true;
   }
 
@@ -2563,19 +2570,18 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   const double render_wall_time_ms = std::chrono::duration<double, std::milli>(render_end - render_begin).count();
   const double average_frame_time_ms = total_frame_time_ms / static_cast<double>(frame_index);
   const double steady_state_frame_time_ms = (frame_index > 1u) ? ((total_frame_time_ms - first_frame_time_ms) / static_cast<double>(frame_index - 1u)) : first_frame_time_ms;
-  log::info("GPU batch render timing: frames=%u total=%.2fms first=%.2fms avg=%.2fms steady=%.2fms", frame_index, render_wall_time_ms, first_frame_time_ms,
-    average_frame_time_ms, steady_state_frame_time_ms);
+  log::info("GPU batch render timing: frames=%u total=%.2fms first=%.2fms avg=%.2fms steady=%.2fms", frame_index, render_wall_time_ms, first_frame_time_ms, average_frame_time_ms,
+    steady_state_frame_time_ms);
 
   if (options.gpu_kernel_timings) {
     const RendererKernelTimingStats& timing_stats = session.gpu_renderer.kernel_timing_stats();
     if (timing_stats.supported == false) {
       log::warning("GPU kernel timestamps are not supported by the active backend");
     } else {
-      log::info("GPU kernel timing summary: total=%.3fms dropped_dispatches=%llu", timing_stats.total_ms,
-        static_cast<unsigned long long>(timing_stats.dropped_dispatch_count));
+      log::info("GPU kernel timing summary: total=%.3fms dropped_dispatches=%llu", timing_stats.total_ms, static_cast<unsigned long long>(timing_stats.dropped_dispatch_count));
       for (const RendererKernelTiming& timing : timing_stats.kernels) {
-        log::info("GPU kernel timing: %-42s calls=%llu total=%.3fms avg=%.3fus share=%.1f%%", timing.name.c_str(),
-          static_cast<unsigned long long>(timing.dispatch_count), timing.total_ms, timing.average_ms * 1000.0, timing.percentage);
+        log::info("GPU kernel timing: %-42s calls=%llu total=%.3fms avg=%.3fus share=%.1f%%", timing.name.c_str(), static_cast<unsigned long long>(timing.dispatch_count),
+          timing.total_ms, timing.average_ms * 1000.0, timing.percentage);
       }
     }
   }
@@ -2849,14 +2855,17 @@ bool run_cpu_comparison_batch_render(const BatchRenderOptions& options) {
   append_cpu_comparison_html_cards(report_html, report_entries);
   append_cpu_comparison_html_footer(report_html);
 
-  ai_report_json = "{\n"
-                   "  \"schema\": \"etx.cpu_comparison.v1\",\n"
-                   "  \"scene\": \"" +
-                   json_escape(absolute_scene_path) + "\",\n"
-                                                    "  \"reference\": \"" +
-                   json_escape(reference_output_file) + "\",\n"
-                                                        "  \"results\": [\n" +
-                   ai_report_json + "\n  ]\n}\n";
+  ai_report_json =
+    "{\n"
+    "  \"schema\": \"etx.cpu_comparison.v1\",\n"
+    "  \"scene\": \"" +
+    json_escape(absolute_scene_path) +
+    "\",\n"
+    "  \"reference\": \"" +
+    json_escape(reference_output_file) +
+    "\",\n"
+    "  \"results\": [\n" +
+    ai_report_json + "\n  ]\n}\n";
 
   if (save_text_to_file(report_file_name, report_html) == false) {
     return false;
@@ -3026,6 +3035,11 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
       }
       if (options.max_path_length == 0u) {
         message = "--max-path-length must be greater than zero\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      if (options.max_path_length > kMaximumPathLength) {
+        message = "--max-path-length must not exceed " + std::to_string(kMaximumPathLength) + "\n\n";
         message += batch_usage_string();
         return BatchModeCommand::Error;
       }
@@ -3212,9 +3226,8 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     return BatchModeCommand::Error;
   }
 
-  const uint32_t selected_batch_modes =
-    uint32_t(render_requested) + uint32_t(full_comparison_requested) + uint32_t(cpu_comparison_requested) + uint32_t(generate_bsdf_luts_requested) +
-    uint32_t(pregenerate_bsdf_lut_cache_requested);
+  const uint32_t selected_batch_modes = uint32_t(render_requested) + uint32_t(full_comparison_requested) + uint32_t(cpu_comparison_requested) +
+                                        uint32_t(generate_bsdf_luts_requested) + uint32_t(pregenerate_bsdf_lut_cache_requested);
   if (selected_batch_modes > 1u) {
     message = "Use exactly one of --render, --full-comparison, --cpu-comparison, --generate-bsdf-luts, or --pregenerate-bsdf-lut-cache\n\n";
     message += batch_usage_string();
@@ -3232,11 +3245,10 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
   }
 
   if (generate_bsdf_luts_requested) {
-    if ((options.scene_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) ||
-        (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) ||
-        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.strict_comparison) || (options.denoise) ||
-        (options.override_random_seed) || (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.override_bdpt_mode) ||
-        (options.exposure != 1.0f)) {
+    if ((options.scene_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) || (options.integrator.empty() == false) ||
+        (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) || (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) ||
+        (options.strict_comparison) || (options.denoise) || (options.override_random_seed) || (options.override_resolution) || (options.override_crop) ||
+        (options.override_strategy_flags) || (options.override_bdpt_mode) || (options.exposure != 1.0f)) {
       message = "--generate-bsdf-luts accepts only --output and --bsdf-lut-samples\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
@@ -3247,10 +3259,9 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
 
   if (pregenerate_bsdf_lut_cache_requested) {
     if ((options.scene_file.empty() == false) || (options.output_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) ||
-        (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) ||
-        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.strict_comparison) || (options.denoise) ||
-        (options.override_random_seed) || (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.override_bdpt_mode) || (options.exposure != 1.0f) ||
-        (options.bsdf_lut_samples != 512u)) {
+        (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) || (options.gpu_compile_only) ||
+        (options.gpu_compile_stage.empty() == false) || (options.strict_comparison) || (options.denoise) || (options.override_random_seed) || (options.override_resolution) ||
+        (options.override_crop) || (options.override_strategy_flags) || (options.override_bdpt_mode) || (options.exposure != 1.0f) || (options.bsdf_lut_samples != 512u)) {
       message = "--pregenerate-bsdf-lut-cache does not accept additional options\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
@@ -3287,7 +3298,8 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
         (options.integrator.empty() == false) || options.gpu_compile_only || (options.gpu_compile_stage.empty() == false) || (options.strict_comparison) ||
         (options.override_bdpt_mode)) {
       message =
-        "--cpu-comparison does not accept --output, --reference, --compare, --renderer, --integrator, --bdpt-mode, --gpu-compile-only, --gpu-compile-stage, or --strict-comparison\n\n";
+        "--cpu-comparison does not accept --output, --reference, --compare, --renderer, --integrator, --bdpt-mode, --gpu-compile-only, --gpu-compile-stage, or "
+        "--strict-comparison\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
     }

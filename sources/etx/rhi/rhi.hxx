@@ -28,7 +28,18 @@ struct RHIInitInfo {
 
 struct RHIMemoryStats {
   uint64_t cpu_used_bytes = 0;
+  uint64_t cpu_peak_used_bytes = 0;
+  uint64_t cpu_private_bytes = 0;
+  uint64_t cpu_system_total_bytes = 0;
+  uint64_t cpu_system_available_bytes = 0;
   uint64_t gpu_allocated_bytes = 0;
+  uint64_t gpu_buffer_allocated_bytes = 0;
+  uint64_t gpu_texture_allocated_bytes = 0;
+  uint64_t gpu_acceleration_structure_allocated_bytes = 0;
+  uint64_t gpu_host_visible_allocated_bytes = 0;
+  uint32_t gpu_buffer_allocation_count = 0;
+  uint32_t gpu_texture_allocation_count = 0;
+  uint32_t gpu_acceleration_structure_allocation_count = 0;
   uint64_t gpu_driver_allocated_bytes = 0;
   uint64_t gpu_driver_budget_bytes = 0;
   uint64_t gpu_device_local_allocated_bytes = 0;
@@ -102,7 +113,8 @@ struct RHIDevice {
 
   RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
   RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);
-  std::vector<RHICreatePipelineBatchEntry> create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency);
+  std::vector<RHICreatePipelineBatchEntry> create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency,
+    const RHIPipelineBatchProgressCallback& progress_callback);
   void persist_pipeline_cache();
   RHIResult reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc);
   RHIResult reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc);
@@ -223,6 +235,7 @@ struct RHIContext {
   void command_buffer_end(RHICommandBuffer cmd);
   void command_buffer_reset(RHICommandBuffer cmd);
 
+  void cmd_compute_barrier(RHICommandBuffer cmd);
   void cmd_buffer_barrier(RHICommandBuffer cmd, RHIBindlessHandle buffer, RHIResourceState old_state, RHIResourceState new_state);
   void cmd_texture_barrier(RHICommandBuffer cmd, RHIBindlessHandle texture, RHIResourceState old_state, RHIResourceState new_state);
 
@@ -240,6 +253,7 @@ struct RHIContext {
   void cmd_draw_indexed(RHICommandBuffer cmd, const RHIIndexedDrawDesc& desc, RHIBindlessHandle index_buffer);
 
   void cmd_dispatch(RHICommandBuffer cmd, const RHIDispatchDesc& desc);
+  void cmd_dispatch_indirect(RHICommandBuffer cmd, RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset);
   void cmd_reset_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count);
   void cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index, RHITimestampStage stage = RHITimestampStage::AllCommands);
 

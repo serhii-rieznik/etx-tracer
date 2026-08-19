@@ -390,14 +390,25 @@ float wavefront_medium_connect_camera_weight(Camera camera, CameraFilmSampleShar
       return 1.0f;
     }
 
-    GPUWavefrontPathVertex emitter_root = wavefront_load_path_vertex(resources.light_vertex_buffer, wavefront_light_vertex_slot(path_index, 0u));
+    GPUWavefrontPathVertex emitter_root = (GPUWavefrontPathVertex)0;
+    GPUWavefrontPathVertex first_light_vertex = (GPUWavefrontPathVertex)0;
+    if (path_meta.light_path_length == 1u) {
+      emitter_root = previous_vertex;
+      first_light_vertex = current_vertex;
+    } else if (resources.fast_light_endpoint_buffer != kInvalidIndex) {
+      const GPUWavefrontFastLightEndpoint endpoint = wavefront_load_fast_light_endpoint(resources.fast_light_endpoint_buffer, path_index);
+      emitter_root.pdf_from_prev = endpoint.emitter_pdf_from_prev;
+      emitter_root.pdf_from_next = endpoint.emitter_pdf_from_next;
+      emitter_root.flags = endpoint.emitter_flags;
+      first_light_vertex.flags = endpoint.first_vertex_flags;
+    } else {
+      emitter_root = wavefront_load_path_vertex(resources.light_vertex_buffer, wavefront_light_vertex_slot(path_index, 0u));
+      if (path_meta.light_path_length >= 1u) {
+        first_light_vertex = wavefront_load_path_vertex(resources.light_vertex_buffer, wavefront_light_vertex_slot(path_index, 1u));
+      }
+    }
     if (wavefront_path_vertex_valid(emitter_root) == false) {
       return 1.0f;
-    }
-
-    GPUWavefrontPathVertex first_light_vertex = (GPUWavefrontPathVertex)0;
-    if (path_meta.light_path_length >= 1u) {
-      first_light_vertex = wavefront_load_path_vertex(resources.light_vertex_buffer, wavefront_light_vertex_slot(path_index, 1u));
     }
 
     float previous_from_current_dir = gpu_medium_phase_function(medium_access, -camera_sample.direction, current_vertex.w_i);
@@ -426,14 +437,14 @@ float wavefront_medium_connect_camera_weight(Camera camera, CameraFilmSampleShar
   return 1.0f / (1.0f + w_light);
 }
 
-void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_index, GPUWavefrontResources resources, inout GPUWavefrontPathState state, GPUWavefrontPathMeta path_meta,
-  GPUWavefrontPathVertex current_vertex, GPUWavefrontPathVertex previous_vertex) {
+void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_index, GPUWavefrontResources resources, inout GPUWavefrontPathState state,
+  GPUWavefrontPathMeta path_meta, GPUWavefrontPathVertex current_vertex, GPUWavefrontPathVertex previous_vertex) {
   if (wavefront_diffraction_contribution_enabled(state.spect, wavefront_vertex_contains_diffraction(current_vertex)) == false) {
     return;
   }
 
-  if ((resources.connect_camera_task_buffer == kInvalidIndex) || (constants.camera_buffer_index == kInvalidIndex) || (scene_strategy_enabled(kSceneStrategyConnectToCamera) == false) ||
-      (wavefront_path_vertex_connectible(current_vertex) == false)) {
+  if ((resources.connect_camera_task_buffer == kInvalidIndex) || (constants.camera_buffer_index == kInvalidIndex) ||
+      (scene_strategy_enabled(kSceneStrategyConnectToCamera) == false) || (wavefront_path_vertex_connectible(current_vertex) == false)) {
     return;
   }
 
@@ -552,8 +563,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     const bool direct_hit_path_length_enabled =
       scene_path_mode_is_path_tracing() || ((state.path_length >= load_scene_options_min_path_length()) && (state.path_length <= load_scene_options_max_path_length()));
     if (from_camera && (scene_path_mode_is_light_tracing() == false) && scene_strategy_enabled(kSceneStrategyDirectHit) && direct_hit_path_length_enabled) {
-      GPUWavefrontPathVertex previous_vertex =
-        wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, state.path_length - 1u));
+      GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, state.path_length - 1u));
       if (wavefront_path_vertex_valid(previous_vertex)) {
         if (scene_path_mode_is_path_tracing() == false) {
           GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
@@ -581,8 +591,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
 
     uint vertex_descriptor = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
     GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length));
-    GPUWavefrontPathVertex previous_vertex =
-      wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u));
+    GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u));
     if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_valid(previous_vertex) == false)) {
       state.flags = 0u;
       wavefront_store_path_state(state_descriptor, path_index, state);
@@ -669,6 +678,9 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
 
     wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u), previous_vertex);
     wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length), current_vertex);
+    if ((from_camera == false) && (state.path_length == 1u) && (resources.fast_light_endpoint_buffer != kInvalidIndex)) {
+      wavefront_store_fast_light_endpoint(resources.fast_light_endpoint_buffer, path_index, previous_vertex, current_vertex);
+    }
     wavefront_store_path_meta(resources.path_meta_buffer, path_index, path_meta);
 
     if ((from_camera == false) && (subsurface_medium_vertex == false)) {
@@ -684,8 +696,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
   wavefront_write_path_meta(from_camera, path_index, state);
   uint vertex_descriptor = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
   GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length));
-  GPUWavefrontPathVertex previous_vertex =
-    wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u));
+  GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u));
   if (wavefront_path_vertex_valid(previous_vertex)) {
     current_vertex.pdf_from_prev = wavefront_vertex_to_vertex_area_pdf(state.sampled_bsdf_pdf, previous_vertex, current_vertex);
     float cos_to_prev = abs(dot(hit.vertex.nrm, -state.ray.d));
@@ -713,6 +724,13 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     wavefront_store_path_state(state_descriptor, path_index, state);
     return;
   }
+
+#if ETX_ENABLE_WORK_QUEUES
+  const uint material_queue_index = wavefront_material_queue_index_from_material(hit.material_index);
+  if (material_queue_index != kInvalidIndex) {
+    wavefront_material_queue_append(resources, from_camera, material_queue_index, dispatch_index);
+  }
+#endif
 
   state.reserved0 = 0u;
   wavefront_store_path_state(state_descriptor, path_index, state);

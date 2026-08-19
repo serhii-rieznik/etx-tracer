@@ -93,16 +93,25 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontLightPathVertexPdfAccumulatedOffset = 164
 ETX_STATIC_CONST uint32_t kGPUWavefrontLightPathVertexPdfHistoryOffset = 168u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontLightPathVertexPdfRatioOffset = 172u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontLightPathVertexBarycentricOffset = 176u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontLightPathVertexPreviousVertexIndexOffset = 184u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontLightPathVertexInlineMediumFlagsShift = 16u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontLightPathVertexFlagsMask = 0x0000ffffu;
+
+ETX_STATIC_CONST uint32_t kGPUWavefrontFastLightEndpointStride = 16u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontFastLightEndpointEmitterPdfFromPrevOffset = 0u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontFastLightEndpointEmitterPdfFromNextOffset = 4u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontFastLightEndpointEmitterFlagsOffset = 8u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontFastLightEndpointFirstVertexFlagsOffset = 12u;
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontPathMetaStride = 32u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontPathMetaCameraPathLengthOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontPathMetaLightPathLengthOffset = 4u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontPathMetaFlagsOffset = 8u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontPathMetaReserved0Offset = 12u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontPathMetaCameraMisHistoryOffset = 16u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontPathMetaLightMisHistoryOffset = 20u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontPathMetaFromDeltaOffset = 24u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontPathMetaReserved1Offset = 28u;
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStateStride = 128u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStateExtinctionOffset = 0u;
@@ -155,6 +164,9 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskPathIndexOffset = 96u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskSamplerSeedOffset = 100u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskInlineMediumExtinctionOffset = 112u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskInlineMediumFlagsOffset = 144u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskReserved1Offset = 148u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskReserved2Offset = 152u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskReserved3Offset = 156u;
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightResultStride = 48u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightResultTransmittanceOffset = 0u;
@@ -175,7 +187,7 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontConnectCameraResultStride = 48u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectCameraResultTransmittanceOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectCameraResultVisibleOffset = 32u;
 
-ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesStride = 112u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesStride = 128u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesCameraStateBufferOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesLightStateBufferOffset = 4u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesCameraHitBufferOffset = 8u;
@@ -203,3 +215,31 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesCameraVertexCapacityOffset = 92u
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesLightVertexCapacityOffset = 96u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesCameraFixedMaxBouncesOffset = 100u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesLightFixedMaxBouncesOffset = 104u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesDispatchArgsBufferOffset = 108u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesMaterialQueueBufferOffset = 112u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesShadowQueueBufferOffset = 116u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesLightVertexCounterBufferOffset = 120u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesFastLightEndpointBufferOffset = 124u;
+
+ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialQueueVarious = 0u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialQueuePlastic = 1u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialQueueConductor = 2u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialQueueDielectric = 3u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialQueueThinfilm = 4u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialQueueCountPerPathType = 5u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialQueueCount = 10u;
+
+ETX_STATIC_CONST uint32_t kGPUWavefrontShadowQueueDirectLight = 0u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontShadowQueueConnectLight = 1u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontShadowQueueConnectCamera = 2u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontShadowQueueCount = 3u;
+
+ETX_STATIC_CONST uint32_t kGPUWavefrontDispatchArgsStride = 16u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontCameraDispatchArgsOffset = 0u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontLightDispatchArgsOffset = 16u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectDispatchArgsOffset = 32u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectDispatchArgsCount = 4u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialDispatchArgsOffset = 96u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontShadowDispatchArgsOffset = 256u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontFixedDispatchArgsBufferSize = 304u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontHeavyContinuationChunkSize = 65536u;

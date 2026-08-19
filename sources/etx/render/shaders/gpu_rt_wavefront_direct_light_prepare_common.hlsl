@@ -9,17 +9,44 @@
 #include <interop/material.hxx>
 #include <interop/scene_gpu_access_shared.hxx>
 
+struct WavefrontDirectLightPathState {
+  SpectralQuery spect;
+  float2 film_uv;
+  float last_emitter_pdf;
+  uint sampler_seed;
+};
+
 struct WavefrontDirectLightPrepareInput {
   GPUWavefrontResources resources;
+  uint task_index;
   uint path_index;
-  GPUWavefrontPathState state;
-  GPUWavefrontPathMeta path_meta;
+  uint camera_path_length;
+  WavefrontDirectLightPathState state;
   GPUWavefrontHit hit;
   GPUWavefrontPathVertex current_vertex;
+#if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
   GPUWavefrontPathVertex previous_vertex;
+#endif
   GPUWavefrontDirectLightSample sample_value;
   Material material;
 };
+
+WavefrontDirectLightPathState wavefront_load_direct_light_path_state(uint descriptor_index, uint path_index) {
+  ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
+  uint base_offset = path_index * kGPUWavefrontPathStateStride;
+  WavefrontDirectLightPathState result = (WavefrontDirectLightPathState)0;
+  result.spect.wavelength = asfloat(buffer.Load(base_offset + kGPUWavefrontPathStateSpectralQueryOffset + 0u));
+  result.spect.flags = buffer.Load(base_offset + kGPUWavefrontPathStateSpectralQueryOffset + 4u);
+  result.film_uv = wavefront_load_float2(buffer, base_offset + kGPUWavefrontPathStateFilmUvOffset);
+  result.last_emitter_pdf = asfloat(buffer.Load(base_offset + kGPUWavefrontPathStateLastEmitterPdfOffset));
+  result.sampler_seed = buffer.Load(base_offset + kGPUWavefrontPathStateSamplerSeedOffset);
+  return result;
+}
+
+uint wavefront_load_camera_path_length(uint descriptor_index, uint path_index) {
+  ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
+  return buffer.Load(path_index * kGPUWavefrontPathMetaStride + kGPUWavefrontPathMetaCameraPathLengthOffset);
+}
 
 BSDFResourceContext wavefront_make_scene_bsdf_resource_gpu_context() {
   return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
@@ -123,8 +150,8 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
   float p_fwd = input_value.previous_vertex.pdf_from_prev * input_value.current_vertex.pdf_from_prev;
   float p_connection = p_fwd * p_sample;
   bool sampled_light_is_surface = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Distant) == 0u;
-  float p_bsdf_sample = sampled_light_is_surface ? wavefront_convert_solid_angle_pdf_to_area(bsdf_eval.pdf, input_value.current_vertex.position, input_value.sample_value.origin, true,
-                                                   input_value.sample_value.normal)
+  float p_bsdf_sample = sampled_light_is_surface ? wavefront_convert_solid_angle_pdf_to_area(bsdf_eval.pdf, input_value.current_vertex.position, input_value.sample_value.origin,
+                                                     true, input_value.sample_value.normal)
                                                  : bsdf_eval.pdf;
   float p_direct = 0.0f;
   if (sampled_light_is_delta == false) {
@@ -138,11 +165,10 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
   float reverse_pdf = wavefront_direct_light_stage_bsdf_pdf(wavefront_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
   float z_prev_backward_pdf = wavefront_convert_solid_angle_pdf_to_area(reverse_pdf, input_value.current_vertex.position, input_value.previous_vertex.position,
     wavefront_path_vertex_is_surface(input_value.previous_vertex), input_value.previous_vertex.normal);
-  float p_bck = input_value.previous_vertex.pdf_history * ((input_value.path_meta.camera_path_length > 1u) ? z_prev_backward_pdf : 1.0f);
+  float p_bck = input_value.previous_vertex.pdf_history * ((input_value.camera_path_length > 1u) ? z_prev_backward_pdf : 1.0f);
   float from_emitter = wavefront_direct_light_from_emitter_pdf(input_value.sample_value, input_value.current_vertex);
   if (scene_path_mode_is_bdpt_full()) {
-    float w_camera =
-      wavefront_direct_light_mis_camera(input_value.path_meta.camera_path_length, input_value.current_vertex, input_value.previous_vertex, from_emitter, z_prev_backward_pdf);
+    float w_camera = wavefront_direct_light_mis_camera(input_value.camera_path_length, input_value.current_vertex, input_value.previous_vertex, from_emitter, z_prev_backward_pdf);
     float w_light = sampled_light_is_delta ? 0.0f : wavefront_safe_div(p_bsdf_sample, p_sample);
     return 1.0f / (1.0f + w_camera + w_light);
   }
@@ -160,6 +186,15 @@ bool wavefront_load_direct_light_prepare_input(uint dispatch_index, out Wavefron
     return false;
   }
 
+#if ETX_ENABLE_WORK_QUEUES
+  const uint material_queue_count = wavefront_material_queue_count(input_value.resources, true, constants.work_queue_index);
+  if (dispatch_index >= material_queue_count) {
+    return false;
+  }
+  dispatch_index = wavefront_material_queue_load(input_value.resources, true, constants.work_queue_index, dispatch_index);
+#endif
+  input_value.task_index = dispatch_index;
+
   uint queue_descriptor = wavefront_queue_current_descriptor(true);
   uint queue_count = wavefront_queue_count(queue_descriptor);
   if (dispatch_index >= queue_count) {
@@ -167,35 +202,36 @@ bool wavefront_load_direct_light_prepare_input(uint dispatch_index, out Wavefron
   }
 
   input_value.path_index = wavefront_queue_load(queue_descriptor, dispatch_index);
-  input_value.state = wavefront_load_path_state(input_value.resources.camera_state_buffer, input_value.path_index);
-  input_value.path_meta = wavefront_load_path_meta(input_value.resources.path_meta_buffer, input_value.path_index);
+  input_value.state = wavefront_load_direct_light_path_state(input_value.resources.camera_state_buffer, input_value.path_index);
+  input_value.camera_path_length = wavefront_load_camera_path_length(input_value.resources.path_meta_buffer, input_value.path_index);
   input_value.hit = wavefront_load_hit(input_value.resources.camera_hit_buffer, input_value.path_index);
   input_value.sample_value = wavefront_load_direct_light_sample(input_value.resources.direct_light_sample_buffer, dispatch_index);
   if (scene_path_mode_is_light_tracing()) {
     return false;
   }
-  if ((wavefront_hit_valid(input_value.hit) == false) || wavefront_hit_is_miss(input_value.hit) || (input_value.path_meta.camera_path_length == 0u)) {
+  if ((wavefront_hit_valid(input_value.hit) == false) || wavefront_hit_is_miss(input_value.hit) || (input_value.camera_path_length == 0u)) {
     return false;
   }
   if ((input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Valid) == 0u) {
     return false;
   }
   input_value.current_vertex =
-    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length));
+    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.camera_path_length));
   if ((wavefront_path_vertex_valid(input_value.current_vertex) == false) || (wavefront_path_vertex_connectible(input_value.current_vertex) == false)) {
     return false;
   }
+#if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
   input_value.previous_vertex =
-    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer,
-      wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
+    wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.camera_path_length - 1u));
   if (wavefront_path_vertex_valid(input_value.previous_vertex) == false) {
     return false;
   }
+#endif
   if (wavefront_try_load_material_full(input_value.current_vertex.material_index, input_value.material) == false) {
     return false;
   }
-  bool contains_diffraction = ((input_value.current_vertex.flags & GPUWavefrontVertexFlags::Contains_diffraction) != 0u) ||
-                              (input_value.material.cls == MaterialClass::DiffractionGrating);
+  bool contains_diffraction =
+    ((input_value.current_vertex.flags & GPUWavefrontVertexFlags::Contains_diffraction) != 0u) || (input_value.material.cls == MaterialClass::DiffractionGrating);
   if (scene_diffraction_contribution_enabled(input_value.state.spect, contains_diffraction) == false) {
     return false;
   }
@@ -255,4 +291,5 @@ void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(Wavef
   task.path_index = input_value.path_index;
   task.sampler_seed = sampler.seed;
   wavefront_store_direct_light_task(input_value.resources.direct_light_task_buffer, dispatch_index, task);
+  wavefront_shadow_queue_append(input_value.resources, kGPUWavefrontShadowQueueDirectLight, dispatch_index);
 }

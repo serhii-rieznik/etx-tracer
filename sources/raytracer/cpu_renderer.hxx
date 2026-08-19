@@ -9,6 +9,8 @@
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/integrators/vcm_cpu.hxx>
 
+#include <chrono>
+
 namespace etx {
 
 struct CPURaytracingRenderer : public Renderer {
@@ -30,7 +32,7 @@ struct CPURaytracingRenderer : public Renderer {
   }
 
   bool is_running() const override;
-  RendererRuntimeStats runtime_stats() const override;
+  RendererStatus status() const override;
   RendererControlState control_state() const override;
   void start() override;
   void stop() override;
@@ -60,6 +62,9 @@ struct CPURaytracingRenderer : public Renderer {
   }
 
  private:
+  void start_render_timing();
+  void stop_render_timing();
+  void reset_render_timing();
   void update_image(RHIContext& ctx, const float4* camera);
 
  private:
@@ -77,6 +82,10 @@ struct CPURaytracingRenderer : public Renderer {
     &_cpu_bidir,  // Bidirectional = 2
     &_cpu_vcm,    // VCM = 3
   };
+
+  std::chrono::steady_clock::time_point _render_started_at = {};
+  double _last_render_elapsed_seconds = 0.0;
+  bool _render_timing_active = false;
 
   RHIPipeline rhi_pipeline = {};
 };

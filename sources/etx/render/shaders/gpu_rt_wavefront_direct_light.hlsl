@@ -1,18 +1,18 @@
 #include "gpu_rt_wavefront_common.hlsl"
 
 [numthreads(64, 1, 1)] void wavefront_camera_direct_light_accumulate_main(uint3 dtid : SV_DispatchThreadID) {
-  const uint dispatch_index = dtid.x;
+  const uint queue_index = dtid.x;
 
   GPUWavefrontResources resources = wavefront_load_resources();
   if ((resources.direct_light_task_buffer == kInvalidIndex) || (resources.direct_light_result_buffer == kInvalidIndex)) {
     return;
   }
 
-  uint queue_descriptor = wavefront_queue_current_descriptor(true);
-  uint queue_count = wavefront_queue_count(queue_descriptor);
-  if (dispatch_index >= queue_count) {
+  const uint queue_count = wavefront_shadow_queue_count(resources, kGPUWavefrontShadowQueueDirectLight);
+  if (queue_index >= queue_count) {
     return;
   }
+  const uint dispatch_index = wavefront_shadow_queue_load(resources, kGPUWavefrontShadowQueueDirectLight, queue_index);
 
   GPUWavefrontDirectLightTask task = wavefront_load_direct_light_task(resources.direct_light_task_buffer, dispatch_index);
   GPUWavefrontDirectLightResult result_value = wavefront_load_direct_light_result(resources.direct_light_result_buffer, dispatch_index);

@@ -23,7 +23,7 @@ namespace etx {
 namespace {
 
 constexpr const char* kVK_KHR_portability_subset_extension_name = "VK_KHR_portability_subset";
-constexpr uint64_t kVulkanPipelineCacheMaxBytes = 64ull * 1024ull * 1024ull;
+constexpr uint64_t kVulkanPipelineCacheMaxBytes = 256ull * 1024ull * 1024ull;
 
 std::filesystem::path vulkan_pipeline_cache_directory() {
   std::filesystem::path root(env().cache_folder());
@@ -124,6 +124,7 @@ struct VKStagingBuffer {
   VkDeviceMemory memory = VK_NULL_HANDLE;
   void* mapped_ptr = nullptr;
   uint64_t capacity = 0;
+  uint64_t allocated_size = 0;
   uint64_t frame_offsets[kRHIMaxFrames] = {0};  // Per-frame offsets for proper synchronization
   uint64_t alignment = 0;
   uint64_t per_frame_capacity = 0;  // Capacity allocated per frame
@@ -188,6 +189,7 @@ struct VKStagingBuffer {
         memory = VK_NULL_HANDLE;
         return;
       }
+      allocated_size = mem_requirements.size;
     }
   }
 
@@ -204,6 +206,7 @@ struct VKStagingBuffer {
       vkDestroyBuffer(device, buffer, nullptr);
       buffer = VK_NULL_HANDLE;
     }
+    allocated_size = 0;
   }
 
   // Frame-aware allocation to prevent data corruption
@@ -246,6 +249,13 @@ struct VKStagingBuffer {
 
 struct VKDevice::Impl {
   std::atomic<uint64_t> gpu_allocated_bytes = {0};
+  std::atomic<uint64_t> gpu_buffer_allocated_bytes = {0};
+  std::atomic<uint64_t> gpu_texture_allocated_bytes = {0};
+  std::atomic<uint64_t> gpu_acceleration_structure_allocated_bytes = {0};
+  std::atomic<uint64_t> gpu_host_visible_allocated_bytes = {0};
+  std::atomic<uint32_t> gpu_buffer_allocation_count = {0};
+  std::atomic<uint32_t> gpu_texture_allocation_count = {0};
+  std::atomic<uint32_t> gpu_acceleration_structure_allocation_count = {0};
   bool memory_budget_supported = false;
   bool fill_mode_non_solid_supported = false;
   bool headless = false;
@@ -564,7 +574,13 @@ VKDevice::Impl::Impl(const RHIInitInfo& info) {
     }
   }
 
-  staging_buffer.initialize(device, physical_device, 64 * 1024 * 1024);  // 64 MB staging buffer
+  staging_buffer.initialize(device, physical_device, 16 * 1024 * 1024);
+  if (staging_buffer.allocated_size > 0u) {
+    gpu_allocated_bytes += staging_buffer.allocated_size;
+    gpu_buffer_allocated_bytes += staging_buffer.allocated_size;
+    gpu_host_visible_allocated_bytes += staging_buffer.allocated_size;
+    ++gpu_buffer_allocation_count;
+  }
 }
 
 VKDevice::Impl::~Impl() {
@@ -576,6 +592,12 @@ VKDevice::Impl::~Impl() {
     process_deferred_destruction(i);
   }
 
+  if (staging_buffer.allocated_size > 0u) {
+    gpu_allocated_bytes -= staging_buffer.allocated_size;
+    gpu_buffer_allocated_bytes -= staging_buffer.allocated_size;
+    gpu_host_visible_allocated_bytes -= staging_buffer.allocated_size;
+    --gpu_buffer_allocation_count;
+  }
   staging_buffer.destroy(device);
 
   destroy_bindless_pipeline_layout();
@@ -1150,6 +1172,9 @@ RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuff
   if (usage & static_cast<BufferUsage>(RHIBufferUsage::ShaderDeviceAddress)) {
     vk_usage |= VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
   }
+  if (usage & static_cast<BufferUsage>(RHIBufferUsage::Indirect)) {
+    vk_usage |= VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
+  }
 
   VkBufferCreateInfo buffer_info = {VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
   buffer_info.size = desc.size;
@@ -1179,6 +1204,7 @@ RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuff
   }
 
   if (etx_vk_call(vkBindBufferMemory(device, out_buffer, out_memory, 0)) != VK_SUCCESS) {
+    gpu_allocated_bytes -= mem_requirements.size;
     vkFreeMemory(device, out_memory, nullptr);
     vkDestroyBuffer(device, out_buffer, nullptr);
     out_buffer = VK_NULL_HANDLE;
@@ -1691,6 +1717,7 @@ RHIResult VKDevice::Impl::create_vulkan_texture(const RHITextureDesc& desc, VkIm
   }
 
   if (etx_vk_call(vkBindImageMemory(device, out_image, out_memory, 0)) != VK_SUCCESS) {
+    gpu_allocated_bytes -= mem_requirements.size;
     vkFreeMemory(device, out_memory, nullptr);
     vkDestroyImage(device, out_image, nullptr);
     out_image = VK_NULL_HANDLE;
@@ -2194,6 +2221,18 @@ RHICreateBindlessResult VKDevice::create_buffer(const RHIBufferDesc& desc) {
   // Store the mapping
   _impl->buffers.set_handle_to_index(handle, index);
 
+  const bool acceleration_structure = (usage & static_cast<BufferUsage>(RHIBufferUsage::AccelerationStructureStorage)) != 0u;
+  if (acceleration_structure) {
+    _impl->gpu_acceleration_structure_allocated_bytes += mem_req.size;
+    ++_impl->gpu_acceleration_structure_allocation_count;
+  } else {
+    _impl->gpu_buffer_allocated_bytes += mem_req.size;
+    ++_impl->gpu_buffer_allocation_count;
+  }
+  if (desc.host_visible) {
+    _impl->gpu_host_visible_allocated_bytes += mem_req.size;
+  }
+
   return {RHIResult::Success, handle};
 }
 
@@ -2256,6 +2295,12 @@ RHICreateBindlessResult VKDevice::create_texture(const RHITextureDesc& desc) {
 
   // Store the mapping
   _impl->textures.set_handle_to_index(handle, index);
+
+  _impl->gpu_texture_allocated_bytes += tex_mem_req.size;
+  ++_impl->gpu_texture_allocation_count;
+  if (desc.host_visible) {
+    _impl->gpu_host_visible_allocated_bytes += tex_mem_req.size;
+  }
 
   return {RHIResult::Success, handle};
 }
@@ -2373,7 +2418,8 @@ RHICreatePipelineResult VKDevice::create_compute_pipeline(const RHIComputePipeli
   return {RHIResult::Success, pipeline_handle};
 }
 
-std::vector<RHICreatePipelineBatchEntry> VKDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency) {
+std::vector<RHICreatePipelineBatchEntry> VKDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency,
+  const RHIPipelineBatchProgressCallback& progress_callback) {
   std::vector<RHICreatePipelineBatchEntry> results(descs.size());
   if (descs.empty()) {
     return results;
@@ -2381,6 +2427,7 @@ std::vector<RHICreatePipelineBatchEntry> VKDevice::create_compute_pipelines(cons
   if ((_impl->device == VK_NULL_HANDLE) || (_impl->bindless_manager == nullptr)) {
     for (auto& result : results) {
       result.result = RHIResult::InvalidArgument;
+      result.state = RHIPipelineBatchProgressState::Complete;
     }
     return results;
   }
@@ -2389,6 +2436,7 @@ std::vector<RHICreatePipelineBatchEntry> VKDevice::create_compute_pipelines(cons
   if (vk_layout.result != RHIResult::Success) {
     for (auto& result : results) {
       result.result = vk_layout.result;
+      result.state = RHIPipelineBatchProgressState::Complete;
     }
     return results;
   }
@@ -2400,17 +2448,33 @@ std::vector<RHICreatePipelineBatchEntry> VKDevice::create_compute_pipelines(cons
     const auto begin = std::chrono::steady_clock::now();
     RHIResult result = RHIResult::NotReady;
     if (_impl->pipeline_creation_cache_control_supported) {
+      results[i].state = RHIPipelineBatchProgressState::CheckingCache;
+      if (progress_callback) {
+        progress_callback(i, results[i]);
+      }
       result = _impl->create_vulkan_compute_pipeline(descs[i], vk_layout.handle, _impl->pipeline_cache, true, vk_pipelines[i]);
     }
     if (result == RHIResult::Success) {
       results[i].result = RHIResult::Success;
       results[i].cache_hit = true;
       results[i].elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+      results[i].state = RHIPipelineBatchProgressState::Complete;
+      if (progress_callback) {
+        progress_callback(i, results[i]);
+      }
     } else if (result == RHIResult::NotReady) {
       compile_indices.push_back(i);
+      results[i].state = RHIPipelineBatchProgressState::Queued;
+      if (progress_callback) {
+        progress_callback(i, results[i]);
+      }
     } else {
       results[i].result = result;
       results[i].elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+      results[i].state = RHIPipelineBatchProgressState::Complete;
+      if (progress_callback) {
+        progress_callback(i, results[i]);
+      }
     }
   }
 
@@ -2447,9 +2511,17 @@ std::vector<RHICreatePipelineBatchEntry> VKDevice::create_compute_pipelines(cons
           return;
         }
         const uint32_t pipeline_index = compile_indices[work_index];
+        results[pipeline_index].state = RHIPipelineBatchProgressState::DriverCompiling;
+        if (progress_callback) {
+          progress_callback(pipeline_index, results[pipeline_index]);
+        }
         const auto begin = std::chrono::steady_clock::now();
         results[pipeline_index].result = _impl->create_vulkan_compute_pipeline(descs[pipeline_index], vk_layout.handle, worker_pipeline_cache, false, vk_pipelines[pipeline_index]);
         results[pipeline_index].elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+        results[pipeline_index].state = RHIPipelineBatchProgressState::Complete;
+        if (progress_callback) {
+          progress_callback(pipeline_index, results[pipeline_index]);
+        }
       }
     };
 
@@ -2523,11 +2595,25 @@ RHIResult VKDevice::destroy_buffer(RHIBindlessHandle buffer_handle) {
   _impl->buffers.remove_handle(buffer_handle);
 
   const auto& buffer_data = _impl->buffers.get_data(index);
-  uint64_t size_to_subtract = buffer_data.allocated_size;
+  const uint64_t size_to_subtract = buffer_data.allocated_size;
+  using BufferUsage = std::underlying_type<RHIBufferUsage>::type;
+  const BufferUsage usage = static_cast<BufferUsage>(buffer_data.desc.usage);
+  const bool acceleration_structure = (usage & static_cast<BufferUsage>(RHIBufferUsage::AccelerationStructureStorage)) != 0u;
+  const bool host_visible = buffer_data.desc.host_visible;
 
-  _impl->buffers.free_index(index, [this, size_to_subtract](const VKBufferData& data) {
+  _impl->buffers.free_index(index, [this, size_to_subtract, acceleration_structure, host_visible](const VKBufferData& data) {
     if (size_to_subtract != 0) {
       _impl->gpu_allocated_bytes -= size_to_subtract;
+      if (acceleration_structure) {
+        _impl->gpu_acceleration_structure_allocated_bytes -= size_to_subtract;
+        --_impl->gpu_acceleration_structure_allocation_count;
+      } else {
+        _impl->gpu_buffer_allocated_bytes -= size_to_subtract;
+        --_impl->gpu_buffer_allocation_count;
+      }
+      if (host_visible) {
+        _impl->gpu_host_visible_allocated_bytes -= size_to_subtract;
+      }
     }
     _impl->queue_deferred_destruction(data);
   });
@@ -2557,11 +2643,17 @@ RHIResult VKDevice::destroy_texture(RHIBindlessHandle texture_handle) {
   _impl->textures.remove_handle(texture_handle);
 
   const auto& tex_data = _impl->textures.get_data(index);
-  uint64_t tex_size_to_subtract = tex_data.allocated_size;
+  const uint64_t tex_size_to_subtract = tex_data.allocated_size;
+  const bool host_visible = tex_data.desc.host_visible;
 
-  _impl->textures.free_index(index, [this, tex_size_to_subtract](const VKTextureData& data) {
+  _impl->textures.free_index(index, [this, tex_size_to_subtract, host_visible](const VKTextureData& data) {
     if (tex_size_to_subtract != 0) {
       _impl->gpu_allocated_bytes -= tex_size_to_subtract;
+      _impl->gpu_texture_allocated_bytes -= tex_size_to_subtract;
+      --_impl->gpu_texture_allocation_count;
+      if (host_visible) {
+        _impl->gpu_host_visible_allocated_bytes -= tex_size_to_subtract;
+      }
     }
     _impl->queue_deferred_destruction(data);
   });
@@ -2979,10 +3071,25 @@ RHIMemoryStats VKDevice::get_memory_statistics() const {
   PROCESS_MEMORY_COUNTERS_EX pmc = {};
   if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc))) {
     stats.cpu_used_bytes = pmc.WorkingSetSize;
+    stats.cpu_peak_used_bytes = pmc.PeakWorkingSetSize;
+    stats.cpu_private_bytes = pmc.PrivateUsage;
+  }
+  MEMORYSTATUSEX memory_status = {};
+  memory_status.dwLength = sizeof(memory_status);
+  if (GlobalMemoryStatusEx(&memory_status)) {
+    stats.cpu_system_total_bytes = memory_status.ullTotalPhys;
+    stats.cpu_system_available_bytes = memory_status.ullAvailPhys;
   }
 #endif
 
   stats.gpu_allocated_bytes = _impl->gpu_allocated_bytes;
+  stats.gpu_buffer_allocated_bytes = _impl->gpu_buffer_allocated_bytes;
+  stats.gpu_texture_allocated_bytes = _impl->gpu_texture_allocated_bytes;
+  stats.gpu_acceleration_structure_allocated_bytes = _impl->gpu_acceleration_structure_allocated_bytes;
+  stats.gpu_host_visible_allocated_bytes = _impl->gpu_host_visible_allocated_bytes;
+  stats.gpu_buffer_allocation_count = _impl->gpu_buffer_allocation_count;
+  stats.gpu_texture_allocation_count = _impl->gpu_texture_allocation_count;
+  stats.gpu_acceleration_structure_allocation_count = _impl->gpu_acceleration_structure_allocation_count;
 
   if (_impl->memory_budget_supported) {
     VkPhysicalDeviceMemoryBudgetPropertiesEXT budget_props = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};

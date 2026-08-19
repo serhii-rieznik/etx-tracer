@@ -18,19 +18,19 @@
   wavefront_store_connect_camera_task(resources.connect_camera_task_buffer, dispatch_index, empty_task);
 }
 
-[numthreads(64, 1, 1)] void wavefront_light_connect_camera_accumulate_main(uint3 dtid : SV_DispatchThreadID) {
-  const uint dispatch_index = dtid.x;
+  [numthreads(64, 1, 1)] void wavefront_light_connect_camera_accumulate_main(uint3 dtid : SV_DispatchThreadID) {
+  const uint queue_index = dtid.x;
 
   GPUWavefrontResources resources = wavefront_load_resources();
   if ((resources.connect_camera_task_buffer == kInvalidIndex) || (resources.connect_camera_result_buffer == kInvalidIndex)) {
     return;
   }
 
-  uint queue_descriptor = wavefront_queue_current_descriptor(false);
-  uint queue_count = wavefront_queue_count(queue_descriptor);
-  if (dispatch_index >= queue_count) {
+  const uint queue_count = wavefront_shadow_queue_count(resources, kGPUWavefrontShadowQueueConnectCamera);
+  if (queue_index >= queue_count) {
     return;
   }
+  const uint dispatch_index = wavefront_shadow_queue_load(resources, kGPUWavefrontShadowQueueConnectCamera, queue_index);
 
   GPUWavefrontConnectCameraTask task = wavefront_load_connect_camera_task(resources.connect_camera_task_buffer, dispatch_index);
   GPUWavefrontConnectCameraResult result_value = wavefront_load_connect_camera_result(resources.connect_camera_result_buffer, dispatch_index);

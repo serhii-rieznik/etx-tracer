@@ -20,6 +20,12 @@
     wavefront_queue_reset(wavefront_queue_next_descriptor(true));
     wavefront_queue_reset(wavefront_queue_current_descriptor(false));
     wavefront_queue_reset(wavefront_queue_next_descriptor(false));
+    GPUWavefrontResources resources = wavefront_load_resources();
+    wavefront_reset_work_queues(resources);
+    if (resources.light_vertex_counter_buffer != kInvalidIndex) {
+      RWByteAddressBuffer counter_buffer = bindless_rw_buffers[NonUniformResourceIndex(resources.light_vertex_counter_buffer)];
+      counter_buffer.Store(0u, resources.path_capacity);
+    }
   }
 }
 
@@ -30,6 +36,7 @@
 
   wavefront_queue_reset(wavefront_queue_current_descriptor(true));
   wavefront_queue_reset(wavefront_queue_current_descriptor(false));
+  wavefront_reset_work_queues(wavefront_load_resources());
 }
 
 [numthreads(8, 8, 1)] void wavefront_finalize_sample_main(uint3 dtid : SV_DispatchThreadID) {

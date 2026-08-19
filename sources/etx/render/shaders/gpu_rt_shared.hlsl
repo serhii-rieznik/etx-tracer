@@ -61,12 +61,11 @@ uint load_u16(ByteAddressBuffer buffer, uint byte_offset) {
   return (word >> shift) & 0xffffu;
 }
 
-uint blue_noise_table_index(uint2 pixel, uint sample_index, uint dimension) {
+uint blue_noise_pixel_table_index(uint2 pixel, uint dimension) {
   uint x = pixel.x & (kSamplerBlueNoiseTileSize - 1u);
   uint y = pixel.y & (kSamplerBlueNoiseTileSize - 1u);
-  uint wrapped_sample = sample_index & (kSamplerBlueNoiseSampleCount - 1u);
   uint wrapped_dimension = dimension & (kSamplerBlueNoiseDimensionCount - 1u);
-  return (((wrapped_sample * kSamplerBlueNoiseDimensionCount) + wrapped_dimension) * kSamplerBlueNoiseTileSize + y) * kSamplerBlueNoiseTileSize + x;
+  return ((y * kSamplerBlueNoiseTileSize + x) * kSamplerBlueNoiseDimensionCount) + wrapped_dimension;
 }
 
 uint load_scene_options_random_seed() {
@@ -84,8 +83,16 @@ float sample_blue_noise_value(uint2 pixel, uint sample_index, uint dimension) {
   }
 
   ByteAddressBuffer blue_noise_table = bindless_buffers[NonUniformResourceIndex(constants.blue_noise_buffer_index)];
-  uint index = blue_noise_table_index(pixel, sample_index ^ load_scene_options_random_seed(), dimension);
-  return asfloat(blue_noise_table.Load(index * 4u));
+  static const uint pixel_table_size = kSamplerBlueNoiseTileSize * kSamplerBlueNoiseTileSize * kSamplerBlueNoiseDimensionCount;
+  static const uint scrambling_table_offset = pixel_table_size;
+  static const uint sobol_table_offset = 2u * pixel_table_size;
+  uint pixel_table_index = blue_noise_pixel_table_index(pixel, dimension);
+  uint wrapped_sample = (sample_index ^ load_scene_options_random_seed()) & (kSamplerBlueNoiseSampleCount - 1u);
+  uint wrapped_dimension = dimension & (kSamplerBlueNoiseDimensionCount - 1u);
+  uint ranked_sample = wrapped_sample ^ load_u8(blue_noise_table, pixel_table_index);
+  uint sobol_value = load_u8(blue_noise_table, sobol_table_offset + ranked_sample * kSamplerBlueNoiseDimensionCount + wrapped_dimension);
+  uint sample_value = sobol_value ^ load_u8(blue_noise_table, scrambling_table_offset + pixel_table_index);
+  return (0.5f + float(sample_value)) / 256.0f;
 }
 
 bool sample_use_blue_noise_primary(uint current_sample, uint stream) {
@@ -1114,7 +1121,7 @@ bool gpu_valid_spectral_response(SpectralResponse value) {
   return bsdf_diffuse_sample(context, data, material, sampler);
 }
 
-[noinline] BSDFSample gpu_plastic_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  [noinline] BSDFSample gpu_plastic_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   return bsdf_plastic_sample(context, data, material, sampler);
 }
 
@@ -1122,7 +1129,7 @@ bool gpu_valid_spectral_response(SpectralResponse value) {
   return bsdf_thinfilm_sample(context, data, material, sampler);
 }
 
-[noinline] BSDFSample gpu_sample_material_bsdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  [noinline] BSDFSample gpu_sample_material_bsdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   if (material.cls == MaterialClass::Diffuse) {
     return bsdf_sample(context, data, material, sampler);
   }

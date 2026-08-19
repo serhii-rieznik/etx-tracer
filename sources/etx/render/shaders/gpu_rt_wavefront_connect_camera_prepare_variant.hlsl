@@ -130,7 +130,7 @@ bool wavefront_connect_camera_stage_matches_material(uint material_class) {
 # if ETX_ENABLE_VELVET_STAGE
          || (material_class == MaterialClass::Velvet)
 # endif
-         ;
+    ;
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
 # if ETX_ENABLE_OPENPBR_STAGE
   return (material_class == MaterialClass::Conductor) || (material_class == MaterialClass::OpenPBR);
@@ -142,7 +142,7 @@ bool wavefront_connect_camera_stage_matches_material(uint material_class) {
 #endif
 }
 
-# include "gpu_rt_wavefront_connect_camera_prepare_common.hlsl"
+#include "gpu_rt_wavefront_connect_camera_prepare_common.hlsl"
 
 [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 dtid : SV_DispatchThreadID) {
   WavefrontConnectCameraPrepareInput input_value = (WavefrontConnectCameraPrepareInput)0;
@@ -160,5 +160,5 @@ bool wavefront_connect_camera_stage_matches_material(uint material_class) {
     input_value.material, bsdf_sampler);
   float shading_fix = bsdf_fix_shading_normal(input_value.hit.geo_normal, input_value.hit.vertex.nrm, input_value.current_vertex.w_i, input_value.camera_sample.direction);
   bsdf_eval.bsdf = spectral_response_mul(bsdf_eval.bsdf, shading_fix);
-  wavefront_store_connect_camera_prepare_task(dtid.x, input_value, bsdf_eval, bsdf_sampler);
+  wavefront_store_connect_camera_prepare_task(input_value.task_index, input_value, bsdf_eval, bsdf_sampler);
 }

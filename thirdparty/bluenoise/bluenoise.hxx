@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
+
+bool build_blue_noise_gpu_data(uint32_t target_samples, std::vector<uint8_t>& data);
 
 struct BNSampler {
   BNSampler() = default;

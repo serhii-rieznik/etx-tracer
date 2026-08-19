@@ -29,9 +29,6 @@ namespace {
 
 constexpr uint32_t kRecentFileLimit = 8u;
 constexpr size_t kRetainedApplicationCommandResultLimit = 256u;
-constexpr uint32_t kGPUWavefrontLegacyStepsPerFrame = 16u;
-constexpr uint32_t kGPUWavefrontDefaultStepsPerFrame = 256u;
-constexpr uint32_t kGPUWavefrontSettingsVersion = 1u;
 
 bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const uint2 image_size, std::vector<float4>& output) {
   output.clear();
@@ -261,18 +258,7 @@ void RTApplication::init(const ApplicationConfig& config) {
     raster_renderer.init(render_context.get_context(), scene);
   }
 
-  uint32_t gpu_wavefront_steps_per_frame = _options.get_integral<uint32_t>("gpu-wavefront-steps-per-frame", kGPUWavefrontDefaultStepsPerFrame);
-  const uint32_t gpu_wavefront_settings_version = _options.get_integral<uint32_t>("gpu-wavefront-settings-version", 0u);
-  if (gpu_wavefront_settings_version < kGPUWavefrontSettingsVersion) {
-    if (gpu_wavefront_steps_per_frame == kGPUWavefrontLegacyStepsPerFrame) {
-      gpu_wavefront_steps_per_frame = kGPUWavefrontDefaultStepsPerFrame;
-      _options.set_integral("gpu-wavefront-steps-per-frame", gpu_wavefront_steps_per_frame, "GPU Wavefront Steps Per Frame");
-    }
-    _options.set_integral("gpu-wavefront-settings-version", kGPUWavefrontSettingsVersion, "GPU Wavefront Settings Version");
-  }
-  gpu_wavefront_steps_per_frame = std::clamp(gpu_wavefront_steps_per_frame, 1u, 1024u);
-  ui.set_gpu_wavefront_steps_per_frame(gpu_wavefront_steps_per_frame);
-  gpu_renderer.set_wavefront_steps_per_render(gpu_wavefront_steps_per_frame);
+  gpu_renderer.set_wavefront_auto_tuning(true);
 
   RendererMode mode = config.override_renderer ? config.renderer : RendererMode::CPURaytracing;
   if (!config.override_renderer) {
@@ -348,10 +334,9 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.integrator_selected = [this](Integrator::Type type) {
       submit_command({.type = ApplicationCommandType::SetIntegrator, .integrator = type});
     };
-    ui.callbacks.gpu_wavefront_steps_per_frame_changed = [this](uint32_t value) {
-      submit_command({.type = ApplicationCommandType::SetGPUWavefrontSteps, .unsigned_value = value});
+    ui.callbacks.gpu_kernel_timing_enabled_changed = [this](bool value) {
+      gpu_renderer.set_kernel_timing_enabled(value);
     };
-    ui.callbacks.gpu_kernel_timing_enabled_changed = [this](bool value) { gpu_renderer.set_kernel_timing_enabled(value); };
     ui.callbacks.exposure_changed = [this](float value) {
       submit_command({.type = ApplicationCommandType::SetExposure, .float_value = value});
     };
@@ -535,6 +520,11 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
     _active_renderer->stop();
   }
 
+  if (next_renderer != &cpu_renderer) {
+    cpu_renderer.film().release();
+    cpu_renderer.integrator_thread().reset_scene_hashes();
+  }
+
   _active_renderer = next_renderer;
 
   if ((_active_renderer != nullptr) && !_current_scene_file.empty() && scene.valid()) {
@@ -581,6 +571,9 @@ void RTApplication::frame() {
   sync_platform_color_scheme();
   process_application_commands();
   ui.set_view_options(_view_parameters);
+  if (_gpu_renderer_initialized && (_active_renderer != &gpu_renderer)) {
+    gpu_renderer.poll_preparation(render_context.get_context());
+  }
 
   auto thread = _active_renderer && (_active_renderer->mode() == RendererMode::CPURaytracing) ? &cpu_renderer.integrator_thread() : nullptr;
 
@@ -995,14 +988,6 @@ void RTApplication::on_options_changed() {
   }
 }
 
-void RTApplication::on_gpu_wavefront_steps_per_frame_changed(uint32_t value) {
-  const uint32_t clamped_value = std::clamp(value, 1u, 1024u);
-  gpu_renderer.set_wavefront_steps_per_render(clamped_value);
-  ui.set_gpu_wavefront_steps_per_frame(clamped_value);
-  _options.set_integral("gpu-wavefront-steps-per-frame", clamped_value, "GPU Wavefront Steps Per Frame");
-  save_options();
-}
-
 void RTApplication::on_material_added() {
   scene.add_material(nullptr);
   notify_scene_might_have_changed();
@@ -1228,10 +1213,12 @@ void RTApplication::notify_scene_might_have_changed() {
 }
 
 void RTApplication::sync_ui_renderer_state() {
-  ui.set_current_renderer_status(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
-  ui.set_current_renderer_stats(_active_renderer ? _active_renderer->runtime_stats() : RendererRuntimeStats{});
+  ui.set_current_renderer_preparation(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
+  ui.set_current_renderer_status(_active_renderer ? _active_renderer->status() : RendererStatus{.mode = ui.current_renderer_mode()});
+  ui.set_memory_stats(render_context.get_context().device().get_memory_statistics(), _active_renderer ? _active_renderer->memory_stats() : RendererMemoryStats{});
   ui.set_current_renderer_controls((_active_renderer && !_current_scene_file.empty()) ? _active_renderer->control_state() : RendererControlState{});
   ui.set_gpu_kernel_timing_stats((_active_renderer == &gpu_renderer) ? gpu_renderer.kernel_timing_stats() : RendererKernelTimingStats{});
+  ui.set_gpu_wavefront_schedule(gpu_renderer.wavefront_steps_per_render(), gpu_renderer.wavefront_last_batch_ms(), gpu_renderer.wavefront_auto_tuning_enabled());
 }
 
 void RTApplication::process_application_commands() {
@@ -1303,14 +1290,13 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
         return false;
       }
 
-    case ApplicationCommandType::LoadReferenceImage:
-      {
-        std::error_code error = {};
-        if (command.path.empty() || !std::filesystem::is_regular_file(command.path, error)) {
-          message = "Reference image does not exist";
-          return false;
-        }
+    case ApplicationCommandType::LoadReferenceImage: {
+      std::error_code error = {};
+      if (command.path.empty() || !std::filesystem::is_regular_file(command.path, error)) {
+        message = "Reference image does not exist";
+        return false;
       }
+    }
       on_referenece_image_selected(command.path);
       message = "Reference image load requested";
       return true;
@@ -1324,18 +1310,24 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
       message = "Image save requested";
       return true;
 
-    case ApplicationCommandType::Denoise:
-      if (_current_scene_file.empty() || !scene.valid()) {
+    case ApplicationCommandType::Denoise: {
+      if (_current_scene_file.empty() || (scene.valid() == false)) {
         message = "No scene is loaded";
         return false;
       }
-      if ((_active_renderer != &cpu_renderer) || !_active_renderer->control_state().can_run || (_active_renderer->runtime_stats().completed_samples == 0u)) {
+      if (_active_renderer != &cpu_renderer) {
+        message = "Denoising requires stopped CPU output with at least one rendered sample";
+        return false;
+      }
+      const RendererStatus renderer_status = _active_renderer->status();
+      if ((_active_renderer->control_state().can_run == false) || (renderer_status.completed_units == 0u)) {
         message = "Denoising requires stopped CPU output with at least one rendered sample";
         return false;
       }
       on_denoise_selected();
       message = "Image denoised";
       return true;
+    }
 
     case ApplicationCommandType::SetRenderer:
       if ((command.renderer == RendererMode::GPURaytracing) && (_gpu_renderer_supported == false)) {
@@ -1475,20 +1467,10 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
       message = "Display transform changed";
       return true;
 
-    case ApplicationCommandType::SetGPUWavefrontSteps:
-      if ((command.unsigned_value == 0u) || (command.unsigned_value > 1024u)) {
-        message = "GPU wavefront steps must be in [1, 1024]";
-        return false;
-      }
-      on_gpu_wavefront_steps_per_frame_changed(command.unsigned_value);
-      message = "GPU wavefront step count changed";
-      return true;
-
-    case ApplicationCommandType::Quit:
-      {
-        std::lock_guard<std::mutex> lock(_application_control_mutex);
-        _application_quit_requested = true;
-      }
+    case ApplicationCommandType::Quit: {
+      std::lock_guard<std::mutex> lock(_application_control_mutex);
+      _application_quit_requested = true;
+    }
       if (_application_config.runtime_mode == RuntimeMode::Desktop) {
         sapp_request_quit();
       }
@@ -1509,10 +1491,10 @@ void RTApplication::publish_application_state() {
   state.renderer_mode = _active_renderer ? _active_renderer->mode() : RendererMode::CPURaytracing;
   state.renderer_name = _active_renderer ? _active_renderer->name() : "None";
   state.preparation = _active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{};
-  state.runtime = _active_renderer ? _active_renderer->runtime_stats() : RendererRuntimeStats{};
+  state.status = _active_renderer ? _active_renderer->status() : RendererStatus{.mode = state.renderer_mode};
   state.controls = state.scene_loaded && _active_renderer ? _active_renderer->control_state() : RendererControlState{};
-  state.can_denoise = state.scene_loaded && (_active_renderer == &cpu_renderer) && state.controls.can_run && state.runtime.valid &&
-                      (state.runtime.completed_samples > 0u);
+  state.can_denoise = state.scene_loaded && (_active_renderer == &cpu_renderer) && state.controls.can_run && (state.status.progress_kind == RendererProgressKind::Samples) &&
+                      (state.status.completed_units > 0u);
   state.view = _view_parameters;
   if (Integrator* integrator = cpu_renderer.current_integrator()) {
     state.integrator_type = integrator->type();
@@ -1570,7 +1552,7 @@ void RTApplication::on_reload_shaders_selected() {
 void RTApplication::on_cancel_renderer_preparation_selected() {
   ETX_PROFILER_SCOPE();
   if (_active_renderer == &gpu_renderer) {
-    gpu_renderer.cancel_preparation();
+    set_renderer_mode(RendererMode::CPURaytracing);
   }
 }
 

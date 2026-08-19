@@ -1,0 +1,3 @@
+#include "resource.h"
+
+IDI_ETX_TRACER ICON "AppIcon.ico"
