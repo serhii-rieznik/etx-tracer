@@ -1,5 +1,6 @@
 #include "cpu_renderer.hxx"
 
+#include <etx/core/log.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
 
 #include <algorithm>
@@ -201,17 +202,26 @@ void CPURaytracingRenderer::update_image(RHIContext& ctx, const float4* camera) 
 }
 
 void CPURaytracingRenderer::set_output_dimensions(RHIContext& ctx, const uint2& dim) {
-  if (_output_dimensions == dim) {
+  const uint2 output_dimensions = {max(1u, dim.x), max(1u, dim.y)};
+  const bool output_state_matches_context = ctx.valid() ? _output_texture.valid() : (_output_texture.valid() == false);
+  if ((_output_dimensions == output_dimensions) && output_state_matches_context) {
     return;
   }
 
   stop();
 
-  _output_dimensions = {max(1u, dim.x), max(1u, dim.y)};
-
   if (_output_texture.valid()) {
+    if (ctx.valid() == false) {
+      log::error("Cannot release the CPU renderer output texture without a valid RHI context");
+      return;
+    }
     ctx.device().destroy_texture(_output_texture);
     _output_texture = {};
+  }
+
+  _output_dimensions = output_dimensions;
+  if (ctx.valid() == false) {
+    return;
   }
 
   RHITextureDesc desc = {

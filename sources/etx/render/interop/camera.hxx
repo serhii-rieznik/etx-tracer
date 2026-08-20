@@ -45,9 +45,18 @@ ETX_SHARED_INLINE Ray camera_ray_make(ETX_IN(float3, origin), ETX_IN(float3, dir
   return result;
 }
 
+ETX_SHARED_INLINE float3 camera_equirectangular_local_to_world(ETX_IN(Camera, camera), ETX_IN(float3, local_direction)) {
+  return normalize(local_direction.x * camera.direction + local_direction.y * camera.up + local_direction.z * camera.side);
+}
+
+ETX_SHARED_INLINE float3 camera_equirectangular_world_to_local(ETX_IN(Camera, camera), ETX_IN(float3, world_direction)) {
+  return normalize(float3(dot(world_direction, camera.direction), dot(world_direction, camera.up), dot(world_direction, camera.side)));
+}
+
 ETX_SHARED_INLINE Ray camera_generate_ray(ETX_IN(Camera, camera), ETX_IN(float2, uv), ETX_IN(float2, sensor_sample)) {
   if (camera.cls == Camera::Class::Equirectangular) {
-    return camera_ray_make(camera.position, from_spherical(uv.x * kPi, uv.y * kHalfPi), kRayEpsilon, kMaxFloat);
+    float3 local_direction = from_spherical(uv.x * kPi, uv.y * kHalfPi);
+    return camera_ray_make(camera.position, camera_equirectangular_local_to_world(camera, local_direction), kRayEpsilon, kMaxFloat);
   }
 
   float3 origin = camera.position;

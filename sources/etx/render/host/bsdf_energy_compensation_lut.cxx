@@ -72,7 +72,7 @@ struct EnergyCompensationGpuParams {
   uint32_t pass_kind = 0u;
   uint32_t sample_count = kEnergyCompensationSampleCount;
   uint32_t multisample_count = kEnergyCompensationDielectricMultiScatterSampleCount;
-  uint32_t pad0 = 0u;
+  uint32_t spectral_channel = 0u;
   uint32_t pad1 = 0u;
   float4 ext_eta = {};
   float4 ext_k = {};
@@ -90,6 +90,7 @@ struct EnergyCompensationGpuParams {
 static_assert(sizeof(EnergyCompensationGpuParams) == 192u);
 static_assert(offsetof(EnergyCompensationGpuParams, output_directional_index) == 0u);
 static_assert(offsetof(EnergyCompensationGpuParams, cache_mode) == 28u);
+static_assert(offsetof(EnergyCompensationGpuParams, spectral_channel) == 56u);
 static_assert(offsetof(EnergyCompensationGpuParams, ext_eta) == 64u);
 static_assert(offsetof(EnergyCompensationGpuParams, int_eta) == 96u);
 static_assert(offsetof(EnergyCompensationGpuParams, film_eta) == 128u);
@@ -103,7 +104,8 @@ struct EnergyCompensationGpuPushConstants {
 };
 
 struct EnergyCompensationGpuBuffers {
-  RHIBuffer params_directional = {};
+  RHIBuffer params_directional[kEnergyCompensationSpectralWavelengthGroupSize] = {};
+  uint32_t params_directional_count = 0u;
   RHIBuffer params_average = {};
   RHIBuffer directional = {};
   RHIBuffer average = {};
@@ -316,7 +318,9 @@ void gpu_destroy_buffer_if_valid(RHIContext& rhi, RHIBuffer& buffer) {
 }
 
 void gpu_destroy_energy_compensation_buffers(RHIContext& rhi, EnergyCompensationGpuBuffers& buffers) {
-  gpu_destroy_buffer_if_valid(rhi, buffers.params_directional);
+  for (RHIBuffer& params_buffer : buffers.params_directional) {
+    gpu_destroy_buffer_if_valid(rhi, params_buffer);
+  }
   gpu_destroy_buffer_if_valid(rhi, buffers.params_average);
   gpu_destroy_buffer_if_valid(rhi, buffers.directional);
   gpu_destroy_buffer_if_valid(rhi, buffers.average);
@@ -434,52 +438,54 @@ bool gpu_dispatch_energy_compensation(RHIContext& rhi, EnergyCompensationGpuPipe
     return false;
   }
 
-  RHICommandBuffer cmd = rhi.get_command_buffer();
-  if (cmd.valid() == false) {
-    log::error("Failed to acquire command buffer for BSDF energy-compensation GPU generation");
-    return false;
-  }
-
-  rhi.command_buffer_begin(cmd);
-  rhi.cmd_set_pipeline(cmd, pipeline.pipeline);
-
-  EnergyCompensationGpuPushConstants pc = {};
-  pc.params_buffer_index = get_bindless_descriptor_index(buffers.params_directional);
-  rhi.cmd_push_constants(cmd, &pc, sizeof(pc), 0);
-  RHIDispatchDesc dispatch = {};
-  dispatch.group_count_x = (width + 7u) / 8u;
-  dispatch.group_count_y = (height + 7u) / 8u;
-  dispatch.group_count_z = 1u;
-  rhi.cmd_dispatch(cmd, dispatch);
-
-  if (run_average_pass) {
-    rhi.cmd_buffer_barrier(cmd, buffers.directional, RHIResourceState::General, RHIResourceState::General);
-    if (buffers.geometric.valid()) {
-      rhi.cmd_buffer_barrier(cmd, buffers.geometric, RHIResourceState::General, RHIResourceState::General);
-    }
-    if (buffers.total.valid()) {
-      rhi.cmd_buffer_barrier(cmd, buffers.total, RHIResourceState::General, RHIResourceState::General);
+  auto dispatch_pass = [&](RHIBuffer params_buffer, uint32_t dispatch_width, uint32_t dispatch_height, bool synchronize_outputs) {
+    RHICommandBuffer cmd = rhi.get_command_buffer();
+    if (cmd.valid() == false) {
+      log::error("Failed to acquire command buffer for BSDF energy-compensation GPU generation");
+      return false;
     }
 
-    pc.params_buffer_index = get_bindless_descriptor_index(buffers.params_average);
+    rhi.command_buffer_begin(cmd);
+    if (synchronize_outputs) {
+      rhi.cmd_buffer_barrier(cmd, buffers.directional, RHIResourceState::General, RHIResourceState::General);
+      if (buffers.geometric.valid()) {
+        rhi.cmd_buffer_barrier(cmd, buffers.geometric, RHIResourceState::General, RHIResourceState::General);
+      }
+      if (buffers.total.valid()) {
+        rhi.cmd_buffer_barrier(cmd, buffers.total, RHIResourceState::General, RHIResourceState::General);
+      }
+      if (buffers.probability.valid()) {
+        rhi.cmd_buffer_barrier(cmd, buffers.probability, RHIResourceState::General, RHIResourceState::General);
+      }
+    }
+    rhi.cmd_set_pipeline(cmd, pipeline.pipeline);
+
+    EnergyCompensationGpuPushConstants pc = {};
+    pc.params_buffer_index = get_bindless_descriptor_index(params_buffer);
     rhi.cmd_push_constants(cmd, &pc, sizeof(pc), 0);
-    RHIDispatchDesc average_dispatch = {};
-    average_dispatch.group_count_x = 8u;
-    average_dispatch.group_count_y = 1u;
-    average_dispatch.group_count_z = 1u;
-    rhi.cmd_dispatch(cmd, average_dispatch);
+    RHIDispatchDesc dispatch = {};
+    dispatch.group_count_x = (dispatch_width + 7u) / 8u;
+    dispatch.group_count_y = (dispatch_height + 7u) / 8u;
+    dispatch.group_count_z = 1u;
+    rhi.cmd_dispatch(cmd, dispatch);
+    rhi.command_buffer_end(cmd);
+    rhi.submit_command_buffer({cmd});
+    const RHIResult wait_result = rhi.wait_idle();
+    rhi.destroy_command_buffer(cmd);
+    if (wait_result != RHIResult::Success) {
+      log::error("Failed to wait for BSDF energy-compensation GPU generation (%u)", static_cast<uint32_t>(wait_result));
+      return false;
+    }
+    return true;
+  };
+
+  for (uint32_t pass_index = 0u; pass_index < buffers.params_directional_count; ++pass_index) {
+    if (dispatch_pass(buffers.params_directional[pass_index], width, height, pass_index > 0u) == false) {
+      return false;
+    }
   }
 
-  rhi.command_buffer_end(cmd);
-  rhi.submit_command_buffer({cmd});
-  const RHIResult wait_result = rhi.wait_idle();
-  rhi.destroy_command_buffer(cmd);
-  if (wait_result != RHIResult::Success) {
-    log::error("Failed to wait for BSDF energy-compensation GPU generation (%u)", static_cast<uint32_t>(wait_result));
-    return false;
-  }
-
-  return true;
+  return (run_average_pass == false) || dispatch_pass(buffers.params_average, width, 1u, true);
 }
 
 void fill_gpu_refractive_index_integrated(const SceneData& data, const RefractiveIndex& refractive_index, float4& eta, float4& k) {
@@ -1351,8 +1357,14 @@ bool generate_conductor_interface_gpu(RHIContext& rhi, EnergyCompensationGpuPipe
     average_params.output_geometric_average_index = get_bindless_descriptor_index(buffers.geometric_average);
     average_params.output_conductor_fms_index = get_bindless_descriptor_index(buffers.conductor_fms);
 
-    if ((gpu_create_params_buffer(rhi, directional_params, buffers.params_directional, "ec_conductor_directional_params") == false) ||
-        (gpu_create_params_buffer(rhi, average_params, buffers.params_average, "ec_conductor_average_params") == false)) {
+    buffers.params_directional_count = (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) ? kEnergyCompensationSpectralWavelengthGroupSize : 1u;
+    bool directional_params_created = true;
+    for (uint32_t channel = 0u; channel < buffers.params_directional_count; ++channel) {
+      directional_params.spectral_channel = channel;
+      const std::string debug_name = "ec_conductor_directional_params_" + std::to_string(channel);
+      directional_params_created = gpu_create_params_buffer(rhi, directional_params, buffers.params_directional[channel], debug_name.c_str()) && directional_params_created;
+    }
+    if ((directional_params_created == false) || (gpu_create_params_buffer(rhi, average_params, buffers.params_average, "ec_conductor_average_params") == false)) {
       break;
     }
 
@@ -1431,8 +1443,14 @@ bool generate_dielectric_interface_gpu(RHIContext& rhi, EnergyCompensationGpuPip
     average_params.output_total_index = get_bindless_descriptor_index(buffers.total);
     average_params.output_average_index = get_bindless_descriptor_index(buffers.average);
 
-    if ((gpu_create_params_buffer(rhi, directional_params, buffers.params_directional, "ec_dielectric_directional_params") == false) ||
-        (gpu_create_params_buffer(rhi, average_params, buffers.params_average, "ec_dielectric_average_params") == false)) {
+    buffers.params_directional_count = (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) ? kEnergyCompensationSpectralWavelengthGroupSize : 1u;
+    bool directional_params_created = true;
+    for (uint32_t channel = 0u; channel < buffers.params_directional_count; ++channel) {
+      directional_params.spectral_channel = channel;
+      const std::string debug_name = "ec_dielectric_directional_params_" + std::to_string(channel);
+      directional_params_created = gpu_create_params_buffer(rhi, directional_params, buffers.params_directional[channel], debug_name.c_str()) && directional_params_created;
+    }
+    if ((directional_params_created == false) || (gpu_create_params_buffer(rhi, average_params, buffers.params_average, "ec_dielectric_average_params") == false)) {
       break;
     }
 
@@ -2156,7 +2174,7 @@ bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& sched
 }
 
 bool ensure_energy_compensation_interfaces(SceneData& data, TaskScheduler& scheduler, RHIContext& rhi) {
-  return ensure_energy_compensation_interfaces_impl(data, scheduler, &rhi);
+  return ensure_energy_compensation_interfaces_impl(data, scheduler, rhi.valid() ? &rhi : nullptr);
 }
 
 bool validate_energy_compensation_gpu_lut_parity(RHIContext& rhi, TaskScheduler& scheduler) {

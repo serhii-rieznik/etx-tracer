@@ -49,7 +49,8 @@ ETX_SHARED_INLINE CameraFilmSampleShared camera_film_shared_evaluate(ETX_IN(Came
     result.direction *= inv_distance;
 
     float3 out_direction = -result.direction;
-    float2 uv = direction_to_uv(out_direction, float2(0.0f, 0.0f), 1.0f, Projection::Equirectangular);
+    float3 local_direction = camera_equirectangular_world_to_local(camera, out_direction);
+    float2 uv = direction_to_uv(local_direction, float2(0.0f, 0.0f), 1.0f, Projection::Equirectangular);
     result.uv = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     result.pdf_area = 1.0f;
     result.pdf_dir = distance_squared;
@@ -101,7 +102,8 @@ ETX_SHARED_INLINE CameraFilmEvalShared camera_film_shared_evaluate_out(ETX_IN(Ca
   ETX_ZERO_INIT(CameraFilmEvalShared, result);
   result.normal = camera.direction;
   if (camera.cls == Camera::Class::Equirectangular) {
-    float2 uv = direction_to_uv(normalize(out_ray.d), float2(0.0f, 0.0f), 1.0f, Projection::Equirectangular);
+    float3 local_direction = camera_equirectangular_world_to_local(camera, normalize(out_ray.d));
+    float2 uv = direction_to_uv(local_direction, float2(0.0f, 0.0f), 1.0f, Projection::Equirectangular);
     result.pdf_dir = projection_environment_image_pdf_to_solid_angle(1.0f, uv, Projection::Equirectangular);
     return result;
   }

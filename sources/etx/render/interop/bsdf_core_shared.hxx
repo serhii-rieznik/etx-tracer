@@ -51,32 +51,10 @@ ETX_SHARED_INLINE float3 bsdf_data_front_facing_normal(ETX_IN(BSDFData, data)) {
 }
 
 ETX_SHARED_INLINE LocalFrame bsdf_local_frame_make(ETX_IN(float3, tangent_hint), ETX_IN(float3, bitangent_hint), ETX_IN(float3, normal), bool entering_material) {
-  float3 frame_normal = normal;
-  float3 tangent = tangent_hint;
-  float3 bitangent = bitangent_hint;
-
-#if (ETX_CPP == 0)
-  float3 normalized_normal = normalize(normal);
-  frame_normal = normalized_normal;
-  float tangent_hint_length_sq = dot(tangent_hint, tangent_hint);
-  float bitangent_hint_length_sq = dot(bitangent_hint, bitangent_hint);
-  if ((tangent_hint_length_sq > 0.0f) && (bitangent_hint_length_sq > 0.0f)) {
-    tangent = orthogonalize(tangent_hint, normalized_normal);
-    bitangent = normalize(cross(normalized_normal, tangent));
-    if (dot(bitangent, bitangent_hint) < 0.0f) {
-      bitangent = -bitangent;
-    }
-  } else {
-    OrthonormalBasis basis = orthonormal_basis(normalized_normal);
-    tangent = basis.u;
-    bitangent = basis.v;
-  }
-#endif
-
   LocalFrame result = ETX_ZERO(LocalFrame);
-  result.tan = entering_material ? tangent : -tangent;
-  result.btn = entering_material ? bitangent : -bitangent;
-  result.nrm = entering_material ? frame_normal : -frame_normal;
+  result.tan = entering_material ? tangent_hint : -tangent_hint;
+  result.btn = entering_material ? bitangent_hint : -bitangent_hint;
+  result.nrm = entering_material ? normal : -normal;
   result.flags = entering_material ? LocalFrame::EnteringMaterial : 0u;
   return result;
 }

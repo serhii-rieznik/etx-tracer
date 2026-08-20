@@ -67,6 +67,7 @@ bool emitter_access_try_load_profile(EmitterAccessGPUContext context, uint emitt
   access.medium_index = profile_data.medium_index;
   access.emitter_profile_meta = profile_data.emitter_profile_meta;
   access.emitter_direction = profile_data.emitter_direction;
+  access.emitter_angular_size = profile_data.emitter_angular_size;
   access.emitter_angular_size_cosine = profile_data.emitter_angular_size_cosine;
   return access.emission_spectrum_index != kInvalidIndex;
 }
@@ -141,7 +142,7 @@ float2 emitter_access_environment_uv(EmitterAccessGPUContext context, EmitterAcc
   float image_u_scale = 1.0f;
   emitter_access_try_load_image_params(context, access.emission_image_index, image_offset, image_u_scale);
   return emitter_access_shared_environment_uv(access.emitter_class, access.emitter_profile_meta, image_offset, image_u_scale, access.emitter_direction,
-    access.emitter_angular_size_cosine, direction);
+    access.emitter_angular_size, access.emitter_angular_size_cosine, direction);
 }
 
 bool emitter_access_can_sample_spectrum(EmitterAccessGPUContext context, uint emission_spectrum_index) {

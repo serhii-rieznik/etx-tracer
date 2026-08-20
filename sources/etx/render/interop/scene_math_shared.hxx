@@ -31,32 +31,45 @@ ETX_SHARED_INLINE float3 scene_math_shared_shading_pos(ETX_IN(float3, g0), ETX_I
 
 ETX_SHARED_INLINE float3 scene_math_shared_orient_normals_to_hemisphere(ETX_IN(float3, shading_normal), ETX_IN(float3, geo_normal), ETX_IN(float3, view_direction)) {
   const uint32_t max_attempts = 16u;
-  float i_dot_g = dot(view_direction, geo_normal);
+  float3 normalized_geo_normal = normalize(geo_normal);
+  float i_dot_g = dot(view_direction, normalized_geo_normal);
 
-  float3 result = shading_normal;
+  float shading_normal_length_sq = dot(shading_normal, shading_normal);
+  if ((shading_normal_length_sq > kEpsilon) == false) {
+    return normalized_geo_normal;
+  }
+  float3 result = shading_normal / sqrt(shading_normal_length_sq);
+  if (dot(result, normalized_geo_normal) < 0.0f) {
+    result = -result;
+  }
   float i_dot_s = dot(view_direction, result);
   for (uint32_t i = 0u; ((i_dot_s * i_dot_g) <= kEpsilon) && (i < max_attempts); ++i) {
-    result = normalize(8.0f * result + geo_normal);
+    result = normalize(8.0f * result + normalized_geo_normal);
     i_dot_s = dot(view_direction, result);
   }
 
+  if ((i_dot_s * i_dot_g) <= kEpsilon) {
+    result = normalized_geo_normal;
+  }
   return result;
+}
+
+ETX_SHARED_INLINE void scene_math_shared_build_sampling_frame_with_handedness(ETX_IN(float3, normal), ETX_IN(float3, tangent_hint), ETX_IN(float3, bitangent_hint),
+  float handedness, ETX_OUT(float3, normalized_normal), ETX_OUT(float3, tangent), ETX_OUT(float3, bitangent)) {
+  surface_point_shared_build_frame_with_handedness(normal, tangent_hint, bitangent_hint, handedness, normalized_normal, tangent, bitangent);
 }
 
 ETX_SHARED_INLINE void scene_math_shared_build_sampling_frame(ETX_IN(float3, normal), ETX_IN(float3, tangent_hint), ETX_IN(float3, bitangent_hint),
   ETX_OUT(float3, normalized_normal), ETX_OUT(float3, tangent), ETX_OUT(float3, bitangent)) {
-  normalized_normal = normalize(normal);
+  float handedness = (dot(cross(normal, tangent_hint), bitangent_hint) >= 0.0f) ? 1.0f : -1.0f;
+  scene_math_shared_build_sampling_frame_with_handedness(normal, tangent_hint, bitangent_hint, handedness, normalized_normal, tangent, bitangent);
+}
 
-  float tangent_hint_length_sq = dot(tangent_hint, tangent_hint);
-  float bitangent_hint_length_sq = dot(bitangent_hint, bitangent_hint);
-  float frame_strength = tangent_hint_length_sq * bitangent_hint_length_sq;
-  if (frame_strength > 0.0f) {
-    surface_point_shared_orthogonalize_frame(normalized_normal, tangent_hint, bitangent_hint, tangent, bitangent);
-  } else {
-    OrthonormalBasis basis = orthonormal_basis(normalized_normal);
-    tangent = basis.u;
-    bitangent = basis.v;
-  }
+ETX_SHARED_INLINE void scene_math_shared_finalize_shading_frame(ETX_IN(float3, shading_normal), ETX_IN(float3, frame_normal), ETX_IN(float3, tangent_hint),
+  ETX_IN(float3, bitangent_hint), ETX_IN(float3, geo_normal), ETX_IN(float3, view_direction), ETX_OUT(float3, normal), ETX_OUT(float3, tangent), ETX_OUT(float3, bitangent)) {
+  float handedness = (dot(cross(frame_normal, tangent_hint), bitangent_hint) >= 0.0f) ? 1.0f : -1.0f;
+  normal = scene_math_shared_orient_normals_to_hemisphere(shading_normal, geo_normal, view_direction);
+  scene_math_shared_build_sampling_frame_with_handedness(normal, tangent_hint, bitangent_hint, handedness, normal, tangent, bitangent);
 }
 
 ETX_SHARED_INLINE float3 scene_math_shared_local_to_world(ETX_IN(float3, normal), ETX_IN(float3, tangent), ETX_IN(float3, bitangent), ETX_IN(float3, local_direction)) {

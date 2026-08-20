@@ -88,7 +88,7 @@ if(APPLE)
 
   target_compile_options(raytracer_app PRIVATE "-include" "${CMAKE_SOURCE_DIR}/sources/etx/std.hxx")
   target_link_libraries(raytracer_app PRIVATE
-    imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
+    imgui imguizmo sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
     "-framework Foundation"
     "-framework QuartzCore"
     "-framework CoreGraphics"
@@ -209,7 +209,7 @@ else()
 endif()
 
 target_link_libraries(raytracer
-  PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
+  PRIVATE imgui imguizmo sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
 )
 
 if(WIN32)

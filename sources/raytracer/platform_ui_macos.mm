@@ -19,6 +19,8 @@ static NSMenuItem* g_raster_renderer_item = nil;
 static NSMenuItem* g_gpu_renderer_item = nil;
 static NSMenuItem* g_scene_objects_item = nil;
 static NSMenuItem* g_properties_item = nil;
+static NSMenuItem* g_scene_tree_item = nil;
+static NSMenuItem* g_node_properties_item = nil;
 static NSToolbarItem* g_frame_scene_toolbar_item = nil;
 static std::vector<std::string> g_recent_files = {};
 static bool g_recent_files_initialized = false;
@@ -473,6 +475,8 @@ void PlatformUI::setup(UI& ui) {
   [view_menu addItem:[NSMenuItem separatorItem]];
   g_scene_objects_item = add_command_item(view_menu, @"Scene Objects", MenuCommand::ToggleSceneObjects, @"1", NSEventModifierFlagCommand | NSEventModifierFlagOption);
   g_properties_item = add_command_item(view_menu, @"Properties", MenuCommand::ToggleProperties, @"2", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+  g_scene_tree_item = add_command_item(view_menu, @"Scene Tree", MenuCommand::ToggleSceneTree, @"4", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+  g_node_properties_item = add_command_item(view_menu, @"Node Properties", MenuCommand::ToggleNodeProperties, @"5", NSEventModifierFlagCommand | NSEventModifierFlagOption);
 
   NSWindow* window = NSApp.keyWindow ?: NSApp.mainWindow;
   if (window != nil) {
@@ -511,6 +515,8 @@ void PlatformUI::update(UI& ui, const std::vector<std::string>& recent_files) {
   g_gpu_renderer_item.enabled = ui.gpu_renderer_available();
   g_scene_objects_item.state = ui.scene_objects_visible() ? NSControlStateValueOn : NSControlStateValueOff;
   g_properties_item.state = ui.properties_visible() ? NSControlStateValueOn : NSControlStateValueOff;
+  g_scene_tree_item.state = ui.scene_tree_visible() ? NSControlStateValueOn : NSControlStateValueOff;
+  g_node_properties_item.state = ui.node_properties_visible() ? NSControlStateValueOn : NSControlStateValueOff;
   const BOOL frame_scene_enabled = ui.scene_view_commands_available() ? YES : NO;
   if (g_frame_scene_toolbar_item.enabled != frame_scene_enabled) {
     g_frame_scene_toolbar_item.enabled = frame_scene_enabled;

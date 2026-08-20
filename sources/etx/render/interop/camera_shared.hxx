@@ -25,7 +25,8 @@ ETX_SHARED_INLINE float camera_shared_film_pdf_out(ETX_IN(Camera, camera), ETX_I
 
   float3 w_i = camera_to_point / sqrt(distance_squared);
   if (camera.cls == Camera::Class::Equirectangular) {
-    float2 uv = direction_to_uv(w_i, float2(0.0f, 0.0f), 1.0f, Projection::Equirectangular);
+    float3 local_direction = camera_equirectangular_world_to_local(camera, w_i);
+    float2 uv = direction_to_uv(local_direction, float2(0.0f, 0.0f), 1.0f, Projection::Equirectangular);
     return projection_environment_image_pdf_to_solid_angle(1.0f, uv, Projection::Equirectangular);
   }
 

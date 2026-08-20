@@ -19,6 +19,11 @@ ETX_SHARED_INLINE float2 get_jittered_uv(Sampler& smp, const uint2& pixel, const
 
 ETX_SHARED_INLINE float film_pdf_out(const Camera& camera, const float3& to_point) {
   float3 w_i = normalize(to_point - camera.position);
+  if (camera.cls == Camera::Class::Equirectangular) {
+    const float3 local_direction = camera_equirectangular_world_to_local(camera, w_i);
+    const float2 uv = direction_to_uv(local_direction, float2(0.0f, 0.0f), 1.0f, Projection::Equirectangular);
+    return projection_environment_image_pdf_to_solid_angle(1.0f, uv, Projection::Equirectangular);
+  }
   float cos_t = dot(w_i, camera.direction);
   return 1.0f / fabsf(camera.area * cos_t * cos_t * cos_t);
 }
@@ -31,7 +36,8 @@ ETX_SHARED_INLINE Ray generate_ray(const Camera& camera, const float2& uv, const
   ETX_CHECK_FINITE(uv);
 
   if (camera.cls == Camera::Class::Equirectangular) {
-    return {camera.position, from_spherical(uv.x * kPi, uv.y * kHalfPi), kRayEpsilon, kMaxFloat};
+    const float3 local_direction = from_spherical(uv.x * kPi, uv.y * kHalfPi);
+    return {camera.position, camera_equirectangular_local_to_world(camera, local_direction), kRayEpsilon, kMaxFloat};
   }
 
   float3 origin = camera.position;
@@ -133,7 +139,13 @@ ETX_SHARED_INLINE CameraEval film_evaluate_out(SpectralQuery spect, const Camera
   float cos_t = dot(out_ray.d, camera.direction);
   CameraEval result = {};
   result.normal = camera.direction;
-  result.pdf_dir = (camera.cls == Camera::Class::Equirectangular) ? 1.0f : 1.0f / (camera.area * cos_t * cos_t * cos_t);
+  if (camera.cls == Camera::Class::Equirectangular) {
+    const float3 local_direction = camera_equirectangular_world_to_local(camera, normalize(out_ray.d));
+    const float2 uv = direction_to_uv(local_direction, float2(0.0f, 0.0f), 1.0f, Projection::Equirectangular);
+    result.pdf_dir = projection_environment_image_pdf_to_solid_angle(1.0f, uv, Projection::Equirectangular);
+  } else {
+    result.pdf_dir = 1.0f / (camera.area * cos_t * cos_t * cos_t);
+  }
   return result;
 }
 

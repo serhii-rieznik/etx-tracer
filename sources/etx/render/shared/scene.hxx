@@ -189,18 +189,6 @@ ETX_SHARED_INLINE float3 lerp_normal(const Scene& scene, const Triangle& t, cons
                    scene.vertices.nrm[t.i[2]] * bc.z);  //
 }
 
-ETX_SHARED_INLINE float3 lerp_tangent(const Scene& scene, const Triangle& t, const float3& bc) {
-  return normalize(scene.vertices.tan[t.i[0]] * bc.x +  //
-                   scene.vertices.tan[t.i[1]] * bc.y +  //
-                   scene.vertices.tan[t.i[2]] * bc.z);  //
-}
-
-ETX_SHARED_INLINE float3 lerp_bitangent(const Scene& scene, const Triangle& t, const float3& bc) {
-  return normalize(scene.vertices.btn[t.i[0]] * bc.x +  //
-                   scene.vertices.btn[t.i[1]] * bc.y +  //
-                   scene.vertices.btn[t.i[2]] * bc.z);  //
-}
-
 ETX_SHARED_INLINE float2 lerp_uv(const Scene& scene, const Triangle& t, const float3& b) {
   return scene.vertices.tex[t.i[0]] * b.x +  //
          scene.vertices.tex[t.i[1]] * b.y +  //
@@ -217,11 +205,8 @@ ETX_SHARED_INLINE void lerp_vertex(const Scene& scene, const Triangle& t, const 
   vertex.tex = scene.vertices.tex[i0] * bc.x + scene.vertices.tex[i1] * bc.y + scene.vertices.tex[i2] * bc.z;
 
   const auto t0 = scene.vertices.tan[i0] * bc.x + scene.vertices.tan[i1] * bc.y + scene.vertices.tan[i2] * bc.z;
-  vertex.tan = normalize(t0 - dot(t0, vertex.nrm) * vertex.nrm);
-
   const auto b0 = scene.vertices.btn[i0] * bc.x + scene.vertices.btn[i1] * bc.y + scene.vertices.btn[i2] * bc.z;
-  auto btn = cross(vertex.nrm, vertex.tan);
-  vertex.btn = normalize(btn * (dot(btn, b0) > 0.0f ? 1.0f : -1.0f));
+  scene_math_shared_build_sampling_frame(vertex.nrm, t0, b0, vertex.nrm, vertex.tan, vertex.btn);
 }
 
 ETX_SHARED_INLINE void lerp_vertex(const Scene& scene, const Triangle& t, const float3& bc, Intersection& vertex) {
@@ -238,14 +223,6 @@ ETX_SHARED_INLINE Vertex lerp_vertex(const Scene& scene, const Triangle& t, cons
   Vertex vertex = {};
   lerp_vertex(scene, t, bc, vertex);
   return vertex;
-}
-
-ETX_SHARED_INLINE void orthogonalize(Vertex& v) {
-  auto b = v.btn;
-  v.nrm = normalize(v.nrm);
-  v.tan = normalize(v.tan - dot(v.tan, v.nrm) * v.nrm);
-  v.btn = normalize(cross(v.nrm, v.tan));
-  v.btn = v.btn * (dot(b, v.btn) > 0.0f ? 1.0f : -1.0f);
 }
 
 ETX_SHARED_INLINE float3 barycentrics(const Scene& scene, const Triangle& t, const float3& p) {
@@ -297,20 +274,6 @@ ETX_SHARED_INLINE float3 shading_pos(const Scene& scene, const Triangle& t, cons
   return offset_ray(convex ? sh_pos : geo_pos, t.geo_n * direction);
 }
 
-ETX_SHARED_INLINE float3 orient_normals_to_hemisphere(float3 n_s, const float3& n_g, const float3& v) {
-  constexpr uint32_t kMaxAttempts = 16u;
-  const float i_dot_g = dot(v, n_g);
-
-  float i_dot_s = dot(v, n_s);
-  for (uint32_t i = 0u; ((i_dot_s * i_dot_g) <= kEpsilon) && (i < kMaxAttempts); ++i) {
-    n_s = normalize(8.0f * n_s + n_g);
-    ETX_ASSERT(is_valid_vector(n_s));
-    i_dot_s = dot(v, n_s);
-  }
-
-  return n_s;
-}
-
 ETX_SHARED_INLINE float3 scene_instance_transform_point(ETX_IN(AffineTransform, transform), float3 point) {
   return float3(dot(float3(transform.rows[0].x, transform.rows[0].y, transform.rows[0].z), point) + transform.rows[0].w,
     dot(float3(transform.rows[1].x, transform.rows[1].y, transform.rows[1].z), point) + transform.rows[1].w,
@@ -329,13 +292,12 @@ ETX_SHARED_INLINE float3 scene_instance_transform_normal(ETX_IN(AffineTransform,
 }
 
 ETX_SHARED_INLINE Vertex scene_instance_transform_vertex(const SceneInstance& instance, Vertex vertex) {
-  const float local_handedness = dot(cross(vertex.nrm, vertex.tan), vertex.btn) >= 0.0f ? 1.0f : -1.0f;
   const float orientation = ((instance.flags & SceneInstance::Mirrored) != 0u) ? -1.0f : 1.0f;
   vertex.pos = scene_instance_transform_point(instance.object_to_world, vertex.pos);
   vertex.nrm = scene_instance_transform_normal(instance.world_to_object, vertex.nrm) * orientation;
-  vertex.tan = normalize(scene_instance_transform_vector(instance.object_to_world, vertex.tan));
-  vertex.tan = orthonormalize(vertex.nrm, vertex.tan);
-  vertex.btn = normalize(cross(vertex.nrm, vertex.tan)) * local_handedness;
+  const float3 tangent_hint = scene_instance_transform_vector(instance.object_to_world, vertex.tan);
+  const float3 bitangent_hint = scene_instance_transform_vector(instance.object_to_world, vertex.btn);
+  scene_math_shared_build_sampling_frame(vertex.nrm, tangent_hint, bitangent_hint, vertex.nrm, vertex.tan, vertex.btn);
   return vertex;
 }
 
@@ -428,25 +390,32 @@ ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float
   if ((base.instance_index != kInvalidIndex) && (base.instance_index < scene.instances.count)) {
     const SceneInstance& instance = scene.instances[base.instance_index];
     result_intersection.pos = scene_instance_transform_point(instance.object_to_world, result_intersection.pos);
-    const float local_handedness = dot(cross(result_intersection.nrm, result_intersection.tan), result_intersection.btn) >= 0.0f ? 1.0f : -1.0f;
     const float orientation = (instance.flags & SceneInstance::Mirrored) != 0u ? -1.0f : 1.0f;
     result_intersection.nrm = scene_instance_transform_normal(instance.world_to_object, result_intersection.nrm) * orientation;
     world_geo_n = scene_triangle_world_geometric_normal(scene, tri, base.instance_index);
-    result_intersection.tan = normalize(scene_instance_transform_vector(instance.object_to_world, result_intersection.tan));
-    result_intersection.tan = orthonormalize(result_intersection.nrm, result_intersection.tan);
-    result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan)) * local_handedness;
+    const float3 tangent_hint = scene_instance_transform_vector(instance.object_to_world, result_intersection.tan);
+    const float3 bitangent_hint = scene_instance_transform_vector(instance.object_to_world, result_intersection.btn);
+    scene_math_shared_build_sampling_frame(result_intersection.nrm, tangent_hint, bitangent_hint, result_intersection.nrm, result_intersection.tan, result_intersection.btn);
   }
+
+  scene_math_shared_finalize_shading_frame(result_intersection.nrm, result_intersection.nrm, result_intersection.tan, result_intersection.btn, world_geo_n, w_i,
+    result_intersection.nrm, result_intersection.tan, result_intersection.btn);
+  ETX_ASSERT(is_valid_vector(result_intersection.nrm));
+  ETX_ASSERT(is_valid_vector(result_intersection.tan));
+  ETX_ASSERT(is_valid_vector(result_intersection.btn));
 
   const auto& mat = scene.materials[result_intersection.material_index];
   if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_image_index < scene.images.count) && (mat.normal_scale > kEpsilon)) {
-    const float frame_handedness = dot(cross(result_intersection.nrm, result_intersection.tan), result_intersection.btn) >= 0.0f ? 1.0f : -1.0f;
     auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(result_intersection.tex, mat.normal_scale);
-    result_intersection.nrm = normalize(result_intersection.tan * sampled_normal.x + result_intersection.btn * sampled_normal.y + result_intersection.nrm * sampled_normal.z);
-    result_intersection.nrm = orient_normals_to_hemisphere(result_intersection.nrm, world_geo_n, w_i);
+    const float3 mapped_normal_value = result_intersection.tan * sampled_normal.x + result_intersection.btn * sampled_normal.y + result_intersection.nrm * sampled_normal.z;
+    const float mapped_normal_length_sq = dot(mapped_normal_value, mapped_normal_value);
+    if (mapped_normal_length_sq > kEpsilon) {
+      const float3 mapped_normal = mapped_normal_value / sqrt(mapped_normal_length_sq);
+      scene_math_shared_finalize_shading_frame(mapped_normal, result_intersection.nrm, result_intersection.tan, result_intersection.btn, world_geo_n, w_i,
+        result_intersection.nrm, result_intersection.tan, result_intersection.btn);
+    }
     ETX_ASSERT(is_valid_vector(result_intersection.nrm));
-    result_intersection.tan = orthonormalize(result_intersection.nrm, result_intersection.tan);
     ETX_ASSERT(is_valid_vector(result_intersection.tan));
-    result_intersection.btn = normalize(cross(result_intersection.nrm, result_intersection.tan)) * frame_handedness;
     ETX_ASSERT(is_valid_vector(result_intersection.btn));
   }
 

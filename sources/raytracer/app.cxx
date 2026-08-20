@@ -587,6 +587,7 @@ void RTApplication::frame() {
     .ior_database = _ior_database,
     .recent_files = _recent_files,
     .film = film,
+    .output_size = _active_renderer ? _active_renderer->output_size() : uint2{},
     .dt = render_frame_data.dt,
   };
   sync_ui_renderer_state();
@@ -1135,6 +1136,9 @@ void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
   ETX_PROFILER_SCOPE();
 
   scene.update_active_camera();
+  if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
+    _active_renderer->camera_controller()->sync_from_camera();
+  }
   if ((_active_renderer == &cpu_renderer) && ((viewport != film.base_dimensions()) || (pixel_size != film.pixel_size()))) {
     cpu_renderer.set_output_dimensions(render_context.get_context(), scene.camera().film_size);
   }
@@ -1145,6 +1149,9 @@ void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
 }
 
 void RTApplication::on_scene_settings_changed() {
+  if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
+    _active_renderer->camera_controller()->sync_from_camera();
+  }
   notify_scene_might_have_changed();
 }
 
@@ -1198,9 +1205,7 @@ void RTApplication::on_camera_activated(uint32_t camera_index) {
 
   scene.data().cameras[camera_index].active = true;
 
-  scene.update_active_camera();
-
-  notify_scene_might_have_changed();
+  on_camera_changed(scene.data().cameras[camera_index].cam.film_size, film.pixel_size());
   if (_active_renderer != nullptr) {
     _active_renderer->on_camera_changed(scene);
   }

@@ -561,8 +561,10 @@ struct MTTextureData {
 
 struct MTAccelerationStructureData {
   id<MTLAccelerationStructure> acceleration_structure = nil;
+  id<MTLBuffer> instance_descriptor_buffer = nil;
   RHIAccelerationStructureDesc desc = {};
   uint64_t allocated_size = 0;
+  uint64_t instance_descriptor_buffer_size = 0;
   uint64_t build_scratch_size = 0;
 };
 
@@ -788,9 +790,7 @@ static MTLInstanceAccelerationStructureDescriptor* create_metal_tlas_sizing_desc
   MTLInstanceAccelerationStructureDescriptor* descriptor = [MTLInstanceAccelerationStructureDescriptor descriptor];
   descriptor.usage = allow_update ? MTLAccelerationStructureUsageRefit : MTLAccelerationStructureUsageNone;
   descriptor.instanceCount = instance_count;
-  if (@available(macOS 12.0, *)) {
-    descriptor.instanceDescriptorType = MTLAccelerationStructureInstanceDescriptorTypeDefault;
-  }
+  descriptor.instanceDescriptorType = MTLAccelerationStructureInstanceDescriptorTypeUserID;
   return descriptor;
 }
 
@@ -1628,6 +1628,10 @@ void create_metal_context(RHIContext& context, const RHIInitInfo& info) {
   static_assert(sizeof(MTContext) <= RHIContext::kBackendStorageSize, "MTContext does not fit into RHIContext backend storage");
   static_assert(alignof(MTContext) <= RHIContext::kBackendStorageAlignment, "MTContext alignment exceeds RHIContext backend storage alignment");
   auto* mt_context = new (context._backend_storage) MTContext();
+  if (mt_context->valid() == false) {
+    mt_context->~MTContext();
+    return;
+  }
   context.initialize_backend(RHIBackend::Metal, mt_context, mt_context->get_device(), mt_context->get_bindless_manager());
 }
 
@@ -1638,6 +1642,7 @@ MTContext::MTContext()
     log::error("Metal RHI: failed to create default MTLDevice");
     return;
   }
+  _impl->device._impl->metal_device = _impl->metal_device;
 
   _impl->command_queue = [_impl->metal_device newCommandQueue];
   if (_impl->command_queue == nil) {
@@ -1646,7 +1651,6 @@ MTContext::MTContext()
   }
 
   _impl->supports_ray_tracing = device_reports_raytracing(_impl->metal_device);
-  _impl->device._impl->metal_device = _impl->metal_device;
   _impl->device._impl->command_queue = _impl->command_queue;
   _impl->device._impl->bindless_manager = &_impl->bindless_manager;
   initialize_pipeline_binary_archive(_impl->device._impl);
@@ -1728,6 +1732,10 @@ MTContext::~MTContext() {
     _impl->command_queue = nil;
   }
   delete _impl;
+}
+
+bool MTContext::valid() const {
+  return (_impl != nullptr) && (_impl->metal_device != nil) && (_impl->command_queue != nil);
 }
 
 MTDevice* MTContext::get_device() {
@@ -2212,6 +2220,7 @@ MTDevice::~MTDevice() {
     [sampler.sampler release];
   }
   for (auto& [handle, acceleration_structure] : _impl->acceleration_structures) {
+    [acceleration_structure.instance_descriptor_buffer release];
     [acceleration_structure.acceleration_structure release];
   }
   for (auto& [handle, pipeline] : _impl->pipelines) {
@@ -3294,9 +3303,22 @@ RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAcceler
     return {RHIResult::OutOfMemory, {}};
   }
 
+  const uint64_t instance_descriptor_buffer_size = (desc.type == RHIAccelerationStructureType::TopLevel)
+                                                      ? static_cast<uint64_t>(desc.instance_count) * sizeof(MTLAccelerationStructureUserIDInstanceDescriptor)
+                                                      : 0u;
+  id<MTLBuffer> instance_descriptor_buffer = nil;
+  if (instance_descriptor_buffer_size > 0u) {
+    instance_descriptor_buffer = [_impl->metal_device newBufferWithLength:static_cast<NSUInteger>(instance_descriptor_buffer_size) options:MTLResourceStorageModeShared];
+    if (instance_descriptor_buffer == nil) {
+      [acceleration_structure release];
+      return {RHIResult::OutOfMemory, {}};
+    }
+  }
+
   RHIBindlessHandle as_handle = {};
   const RHIResult register_result = _impl->bindless_manager->register_acceleration_structure((__bridge const void*)acceleration_structure, size_info.accelerationStructureSize, as_handle);
   if (register_result != RHIResult::Success) {
+    [instance_descriptor_buffer release];
     [acceleration_structure release];
     return {register_result, {}};
   }
@@ -3304,11 +3326,13 @@ RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAcceler
   const uint64_t build_scratch_size = desc.allow_update ? std::max(static_cast<uint64_t>(size_info.buildScratchBufferSize), static_cast<uint64_t>(size_info.refitScratchBufferSize)) : static_cast<uint64_t>(size_info.buildScratchBufferSize);
   _impl->acceleration_structures.emplace(as_handle, MTAccelerationStructureData{
                                                       .acceleration_structure = acceleration_structure,
+                                                      .instance_descriptor_buffer = instance_descriptor_buffer,
                                                       .desc = desc,
                                                       .allocated_size = static_cast<uint64_t>(size_info.accelerationStructureSize),
+                                                      .instance_descriptor_buffer_size = instance_descriptor_buffer_size,
                                                       .build_scratch_size = build_scratch_size,
                                                     });
-  _impl->gpu_allocated_bytes += static_cast<uint64_t>(size_info.accelerationStructureSize);
+  _impl->gpu_allocated_bytes += static_cast<uint64_t>(size_info.accelerationStructureSize) + instance_descriptor_buffer_size;
   return {RHIResult::Success, as_handle};
 }
 
@@ -3321,7 +3345,8 @@ RHIResult MTDevice::destroy_acceleration_structure(RHIBindlessHandle as_handle) 
     return RHIResult::Success;
   }
   _impl->bindless_manager->unregister_acceleration_structure(as_handle);
-  _impl->gpu_allocated_bytes -= it->second.allocated_size;
+  _impl->gpu_allocated_bytes -= it->second.allocated_size + it->second.instance_descriptor_buffer_size;
+  [it->second.instance_descriptor_buffer release];
   [it->second.acceleration_structure release];
   _impl->acceleration_structures.erase(it);
   return RHIResult::Success;
@@ -3367,20 +3392,26 @@ void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
       return;
     }
 
-    const NSUInteger descriptor_stride = sizeof(MTLAccelerationStructureInstanceDescriptor);
+    const NSUInteger source_stride = sizeof(RHIAccelerationStructureInstance);
+    const NSUInteger source_size = static_cast<NSUInteger>(desc.instance_count) * source_stride;
+    if (instance_buffer_it->second.buffer.length < source_size) {
+      log::error("Metal RHI: TLAS instance source buffer is too small");
+      return;
+    }
+
+    const NSUInteger descriptor_stride = sizeof(MTLAccelerationStructureUserIDInstanceDescriptor);
     const NSUInteger required_size = static_cast<NSUInteger>(desc.instance_count) * descriptor_stride;
-    if (instance_buffer_it->second.buffer.length < required_size) {
-      log::error("Metal RHI: TLAS instance buffer is too small for Metal descriptors");
+    if ((as_it->second.instance_descriptor_buffer == nil) || (as_it->second.instance_descriptor_buffer.length < required_size)) {
+      log::error("Metal RHI: TLAS translated instance descriptor buffer is too small");
       return;
     }
 
     auto* src_instances = static_cast<const RHIAccelerationStructureInstance*>(instance_buffer_it->second.buffer.contents);
-    std::vector<RHIAccelerationStructureInstance> instance_source(src_instances, src_instances + desc.instance_count);
-    auto* dst_instances = static_cast<MTLAccelerationStructureInstanceDescriptor*>(instance_buffer_it->second.buffer.contents);
+    auto* dst_instances = static_cast<MTLAccelerationStructureUserIDInstanceDescriptor*>(as_it->second.instance_descriptor_buffer.contents);
     NSMutableArray<id<MTLAccelerationStructure>>* instanced_acceleration_structures = [NSMutableArray arrayWithCapacity:desc.instance_count];
 
     for (uint32_t i = 0; i < desc.instance_count; ++i) {
-      const auto& src_instance = instance_source[i];
+      const auto& src_instance = src_instances[i];
       RHIBindlessHandle referenced_handle = {.value = src_instance.acceleration_structure_reference};
       auto referenced_it = owner->device._impl->acceleration_structures.find(referenced_handle);
       if ((referenced_it == owner->device._impl->acceleration_structures.end()) || (referenced_it->second.acceleration_structure == nil)) {
@@ -3393,20 +3424,19 @@ void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
       dst_instances[i].mask = src_instance.mask;
       dst_instances[i].intersectionFunctionTableOffset = src_instance.instance_shader_binding_table_record_offset;
       dst_instances[i].accelerationStructureIndex = i;
+      dst_instances[i].userID = src_instance.instance_custom_index;
       [instanced_acceleration_structures addObject:referenced_it->second.acceleration_structure];
     }
-    [instance_buffer_it->second.buffer didModifyRange:NSMakeRange(0u, required_size)];
+    [as_it->second.instance_descriptor_buffer didModifyRange:NSMakeRange(0u, required_size)];
 
     MTLInstanceAccelerationStructureDescriptor* tlas_descriptor = [MTLInstanceAccelerationStructureDescriptor descriptor];
     tlas_descriptor.usage = desc.allow_update ? MTLAccelerationStructureUsageRefit : MTLAccelerationStructureUsageNone;
-    tlas_descriptor.instanceDescriptorBuffer = instance_buffer_it->second.buffer;
+    tlas_descriptor.instanceDescriptorBuffer = as_it->second.instance_descriptor_buffer;
     tlas_descriptor.instanceDescriptorBufferOffset = 0u;
     tlas_descriptor.instanceDescriptorStride = descriptor_stride;
     tlas_descriptor.instanceCount = desc.instance_count;
     tlas_descriptor.instancedAccelerationStructures = instanced_acceleration_structures;
-    if (@available(macOS 12.0, *)) {
-      tlas_descriptor.instanceDescriptorType = MTLAccelerationStructureInstanceDescriptorTypeDefault;
-    }
+    tlas_descriptor.instanceDescriptorType = MTLAccelerationStructureInstanceDescriptorTypeUserID;
     descriptor = tlas_descriptor;
   }
 

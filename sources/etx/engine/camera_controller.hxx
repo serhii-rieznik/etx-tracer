@@ -213,6 +213,14 @@ struct CameraController {
     reset_velocities();
   }
 
+  void sync_from_camera() {
+    clear_input_state();
+    _scheduled.active = false;
+    _pivot_initialized = false;
+    _interpolation_initialized = false;
+    _move_scale_distance = max(estimate_navigation_scale(), 4.0f);
+  }
+
   void handle_event(const sapp_event* e) {
     switch (e->type) {
       case SAPP_EVENTTYPE_MOUSE_SCROLL: {

@@ -6,7 +6,7 @@ Target branch: `transform`
 
 Repository: `F:\Projects\etx-tracer`
 
-Status: implementation complete and validated on Windows/Vulkan; Metal source path implemented and statically reviewed, but not runtime-tested on this Windows host.
+Status: implementation complete and validated on Windows/Vulkan and macOS/Metal. The macOS continuation added orientation-only hierarchy propagation, transform-aware editor windows, Metal runtime fixes, and bounded CPU/GPU validation.
 
 ## 1. Executive summary
 
@@ -28,7 +28,7 @@ The implementation supports:
 - explicit, compile-time-checked CPU/GPU ABI layouts;
 - native hierarchy round trips and backward-compatible geometry loading;
 - iterative glTF hierarchy import with mesh instancing, cameras, punctual directional lights, and `doubleSided` material behavior;
-- an editor view for flat hierarchy selection, reparenting, enable state, and local 3x4 transform editing.
+- separate Scene Tree and Node Properties windows for hierarchy selection, reparenting, enable state, and local TRS editing, with non-TRS affine matrices preserved until an explicit reset.
 
 The implementation intentionally does not upload nodes, names, parents, traversal order, or attachment records to the GPU. GPU memory contains the dense render-facing `SceneInstance` array only.
 
@@ -179,6 +179,8 @@ Attachments are references. They do not own or duplicate mesh, camera, emitter, 
 | `order_position` | Node index to position in `evaluation_order` |
 | `subtree_end_position` | Exclusive end of each node's contiguous DFS subtree interval |
 | `world_transforms` | Resolved object-to-world transform for every node |
+| `world_orientations` | Rotation-only world transform for cameras and infinite emitters |
+| `orientation_valid` | Whether the local-to-world chain can be represented without shear/singularity |
 | `effective_enabled` | Local enabled state combined with all ancestors |
 | `mesh_instances` | Dense renderable mesh attachment results |
 
@@ -225,8 +227,11 @@ On the next update:
 1. topology is rebuilt first if required;
 2. nodes in the dirty evaluation interval are visited parent-before-child;
 3. each world transform is recomputed from its parent's current world transform and its local transform;
-4. effective enabled state is recomputed from local and parent state;
-5. unaffected world-transform entries remain unchanged.
+4. each decomposable local rotation is composed with its parent's rotation-only world orientation;
+5. effective enabled state is recomputed from local and parent state;
+6. unaffected derived entries remain unchanged.
+
+The full affine transform remains authoritative for positions, meshes, media, and area emitters. Rotation-only propagation prevents inherited non-uniform scale from skewing camera bases and infinite-light directions. A sheared or singular local transform invalidates the orientation chain instead of silently inventing a rotation.
 
 This is partial transform propagation. The subsequent render-instance resolution currently scans mesh attachments to regenerate the dense instance view. That scan is simple and sequential; further optimization should be measurement-driven rather than adding speculative indexing structures.
 
@@ -433,6 +438,8 @@ Normals are transformed with the inverse-transpose linear transform derived from
 
 Tangents and bitangents preserve source tangent-frame handedness under reflection. This is covered by a maintained regression test.
 
+Before BSDF construction, CPU and GPU hit paths run the same shared frame finalization. It normalizes and hemisphere-aligns shading normals against the world-space geometric normal and incident ray, projects both tangent hints, preserves handedness, and falls back to a deterministic orthonormal basis for missing or degenerate tangents. Normal maps then rebuild the complete frame through the same helper. Stored VCM/BDPT path vertices also restore their world-space tangent frame before connection evaluation.
+
 ## 10. GPU rendering path
 
 Primary files:
@@ -563,7 +570,7 @@ When a ray hits an emissive triangle, emitter lookup binary-searches only that i
 
 ### 12.3 Directional emitters
 
-A directional emitter attached to an enabled node receives the node's world linear transform. The transformed direction is normalized. Degenerate transformed directions are rejected from active packing.
+A directional emitter attached to an enabled node receives the node's rotation-only world orientation. Environment profile rotation is composed with the same orientation. This prevents nested non-uniform scale from skewing infinite-light directions; invalid orientation chains are rejected from active packing.
 
 Unattached global directional/environment emitters retain their previous global behavior. An emitter explicitly attached to a disabled node must not reappear as an unattached global emitter; this is covered by a regression test.
 
@@ -580,8 +587,8 @@ Cameras are resources referenced by `Camera` attachments.
 The resolved camera transform applies:
 
 - affine point transform to camera position;
-- linear vector transform and normalization to direction;
-- linear vector transform and normalization to up;
+- rotation-only transform and normalization to direction;
+- rotation-only transform and normalization to up;
 - camera rebuild from transformed basis and existing optical settings.
 
 Multiple cameras persist through native save/load. The active camera is updated after hierarchy transform, parent, or enabled-state edits.
@@ -635,6 +642,7 @@ Relevant update aggregation:
 | Change | Consequence |
 | --- | --- |
 | local transform content | transform resolution, instance upload, Embree instance update, GPU TLAS refit |
+| node enabled flags | effective visibility recomputation, instance-mask upload, Embree instance update, GPU TLAS refit |
 | parent/topology structure | hierarchy rebuild and acceleration-structure organization rebuild |
 | attachment structure | instance/emitter/resource resolution and acceleration-structure organization rebuild |
 | vertex positions or triangle indices | BLAS/Embree geometry rebuild |
@@ -642,6 +650,8 @@ Relevant update aggregation:
 | emitter/material changes | repack/update shading resources as required |
 
 `UpdateFlags::AnyGeometryStructure` includes vertex positions, triangle-index changes, hierarchy structure, and attachments. `UpdateFlags::Transforms` is deliberately separate, enabling the refit path.
+
+Enabled flags are part of the transform/instance-state hash rather than the hierarchy-structure hash. Visibility changes therefore update masks through the existing Embree/TLAS refit paths instead of rebuilding BLAS resources. Hierarchy resolution tracks whether derived state is current; failed validation remains dirty, and attachment-transform queries only resolve again when needed.
 
 ## 16. CPU/GPU ABI audit
 
@@ -713,6 +723,8 @@ When changing any shared record:
 - CPU instance transforms update without rebuilding mesh scenes.
 - GPU transform updates refit TLAS without rebuilding BLAS.
 - TLAS staging storage is reused.
+- Camera/medium attachment-validation scratch storage is reused across hierarchy resolutions.
+- Medium bound and attachment scratch storage is reused across transform edits.
 - Area-emitter lookup is restricted to an instance range and binary-searched.
 - Hierarchy authoring data is not uploaded to GPU memory.
 - Inverse matrices are computed once during resolution, not per shader hit.
@@ -739,19 +751,25 @@ Primary files:
 - `sources/raytracer/ui.cxx`
 - `sources/raytracer/ui.hxx`
 
-The scene panel displays nodes in flat `evaluation_order` and computes indentation depth iteratively. The UI does not build a recursive view model.
+The Scene Tree window presents the flat `evaluation_order` as an interactive hierarchy beneath a virtual `Scene` root. Expansion skips closed subtree intervals without building a recursive view model. Cameras and emitters use compact markers from the existing bundled UI font; mesh and empty nodes remain unmarked. Selection is shared with a separate Node Properties window.
 
 Node properties expose:
 
 - name;
 - enabled state;
-- parent selection;
-- all three `float4` rows of the local affine transform;
-- attachment summary.
+- parent selection that preserves the node's current world transform and rejects cycles or singular parents;
+- translation, quaternion-derived Euler rotation, and scale controls when the local affine is losslessly decomposable as TRS;
+- a viewport transform gizmo located at the resolved node pivot;
+- direct properties for attached meshes, cameras, emitters, and media;
+- explicit `Bake Transform` and `Center Pivot` geometry operations.
+
+Geometry edits make attached mesh assets single-user before changing vertices, so other instances retain their source geometry. Baking applies the selected node's local affine to positions, normals, tangent frames, bounds, and geometric normals before resetting the local transform to identity. Centering uses the area-weighted center of the attached triangle surfaces. Both operations compensate direct child transforms to preserve descendant world placement and reject nodes that directly mix mesh attachments with cameras, emitters, or media.
 
 After hierarchy mutations, the UI resolves hierarchy state and refreshes transformed medium bounds and the active camera.
 
-The UI currently edits matrix rows directly. This preserves shear and arbitrary affine transforms. A future decomposed translate/rotate/scale widget must not destructively rewrite matrices containing shear unless the UX makes that loss explicit.
+Visibility edits are transactional: if enabling a node would create an invalid duplicate camera or medium attachment, the edit is reverted and the previously valid hierarchy is restored. Editing an active attached camera first converts the world-space editor camera back into the resource's local space, avoiding a second application of its node transform.
+
+Sheared or otherwise non-TRS matrices are shown as non-editable affine state and remain byte-for-byte authoritative. The user must explicitly reset such a node to TRS before decomposed editing can replace it. Negative and non-uniform scale are supported.
 
 ## 19. Maintained regression tests
 
@@ -759,7 +777,7 @@ The UI currently edits matrix rows directly. This preserves shear and arbitrary 
 
 File: `sources/tests/scene_hierarchy.cxx`
 
-Eleven maintained tests cover:
+Twenty-six maintained tests cover hierarchy and transform behavior. In addition to the original coverage, the suite now includes world-preserving reparenting, robust frame finalization, update classification, resolution recovery, attached-medium lifecycle checks, and transactional node-geometry editing.
 
 1. `deep_hierarchy_is_iterative` — 100,000-node chain, no recursion/stack overflow.
 2. `reparent_rejects_cycles` — cycle and self-parent rejection.
@@ -773,7 +791,25 @@ Eleven maintained tests cover:
 10. `transformed_medium_coordinates_and_bounds` — world/local density mapping and world-distance bounds intersection.
 11. `embree_transform_only_commit` — old location stops hitting and transformed location begins hitting without a geometry rebuild.
 
-Latest result: 11/11 passed.
+The additional macOS-continuation coverage is:
+
+12. `affine_trs_round_trip_and_shear_detection` — stable TRS decomposition and explicit shear rejection.
+13. `affine_inverse_is_scale_aware` — robust inverses across very small and large finite scales.
+14. `vcm_vertex_restores_world_tangent_frame` — world-space tangent-frame restoration for CPU/GPU connection paths.
+15. `equirectangular_camera_uses_orientation` — camera profile orientation is honored.
+16. `directional_and_area_emitters_use_node_transforms` — finite and infinite emitter transform semantics.
+17. `environment_emitter_uses_node_rotation` — environment profile and hierarchy rotations compose correctly.
+18. `active_camera_uses_node_transform` — nested non-uniform scale does not skew camera orientation and store/rebuild round-trips.
+19. `reparent_preserves_world_transform` — reparenting across rotated/non-uniform parents keeps world affine state and rejects singular parents atomically.
+20. `shading_frame_finalization` — opposite/degenerate normals and tangent hints recover to finite orthonormal frames with preserved handedness.
+21. `enabled_state_is_an_instance_update` — visibility changes select instance refit/mask updates rather than geometry-structure rebuilds.
+22. `failed_resolution_remains_dirty_and_recovers` — duplicate enabled resource attachments cannot mark invalid derived state current.
+23. `attached_medium_bounds_follow_visibility_and_transform` — medium mapping/bounds follow node transforms and restore authored state when disabled.
+24. `bake_node_transform_isolates_geometry_and_preserves_children` — baking creates private geometry, applies mirrored/non-uniform transforms correctly, and keeps descendants stable.
+25. `center_node_pivot_preserves_geometry_and_children` — the area-weighted pivot moves while rendered vertices and descendants remain fixed.
+26. `node_geometry_edits_reject_mixed_attachments` — geometry-only edits reject camera/emitter/medium mixtures without mutation.
+
+Latest result: 26/26 passed on macOS.
 
 ### 19.2 `procedural_geometry`
 
@@ -789,7 +825,7 @@ The existing suite was extended with:
 
 Latest result: 14/14 passed.
 
-Total maintained executable-test result: 25/25 passed.
+Total maintained executable-test result: 37/37 passed.
 
 ## 20. Offline render validation
 
@@ -825,6 +861,22 @@ The repeated/mirrored scene exercises shared geometry instancing, reflections, n
 For the transformed validation scene, GPU/CPU light-tracing brightness ratio was 0.615490. The untransformed Cornell baseline was 0.622018. Because the transformed case tracks the pre-existing untransformed baseline, this is evidence that the large LT CPU/GPU discrepancy is not introduced by hierarchy transforms.
 
 Do not treat that ratio as an accepted renderer-quality target. It is a separate pre-existing CPU/GPU normalization or implementation discrepancy and should be investigated in a dedicated task with a baseline-first methodology.
+
+### 20.4 macOS/Metal continuation
+
+The macOS continuation used deliberately bounded jobs after an earlier large validation path made the machine unresponsive:
+
+- full native build, including the signed `raytracer_app` bundle: passed;
+- Metal path-tracing compile-only preparation: 16/16 stages passed;
+- Metal BDPT-full compile-only preparation: 34/34 stages passed (including the light-path and connection-stage superset);
+- actual CPU render: 8x8, 1 spp, maximum path length 2: passed;
+- actual Metal render: 8x8, 1 spp, maximum path length 2, one wavefront step per frame: passed in 3 frames with readback;
+- one-sample CPU/GPU smoke comparisons completed successfully; their stochastic metrics are recorded only as runtime/readback evidence, not as renderer-quality thresholds;
+- GPU energy-compensation LUT parity: conductor/dielectric RGB and spectral families passed;
+- material-specialized BSDF runtime harness: conductor, dielectric, plastic, and diffraction sample/evaluate/PDF/albedo operations passed with 1x1x1 dispatches;
+- a bounded 1x1 OpenPBR scene check was rejected during GPU renderer preparation with the explicit CPU-fallback diagnostic, before shader compilation or rendering.
+
+The validation scene reports a missing `image-0` asset on both CPU and GPU. This is an existing validation-asset issue rather than a transform or backend divergence.
 
 ## 21. Validation commands
 
@@ -874,19 +926,33 @@ git status --short
 
 Line-ending conversion warnings may be printed on Windows; they are not `diff --check` whitespace errors.
 
+### 21.6 macOS bounded validation
+
+Build and maintained tests:
+
+```bash
+cmake --build build -j 6
+./bin/scene_hierarchy
+./bin/procedural_geometry
+```
+
+When exercising Metal runtime rendering, begin with an 8x8, 1-spp job and always bound wavefront progress with `--gpu-wavefront-steps-per-frame 1`. Compile-only checks should precede actual dispatch whenever shader or ABI code changed.
+
 ## 22. Known boundaries and follow-up candidates
 
-### 22.1 Metal runtime validation
+### 22.1 Metal runtime status
 
-The Metal RHI source implements:
+The Metal RHI implements and has now runtime-validated:
 
 - update-capable TLAS sizing;
 - refit usage flags;
 - maximum build/refit scratch sizing;
 - transform conversion;
-- refit command encoding.
+- refit command encoding;
+- user-ID TLAS descriptors backed by Metal-owned translated storage;
+- bounded path-tracing execution and readback on Apple M2 Pro.
 
-This code compiled only within the repository's Windows-visible C++ boundary and was statically reviewed. It was not executed on Apple hardware. Before declaring cross-platform runtime completion, build and run transformed/offline scenes on a Metal-capable machine.
+Keep actual GPU validation jobs small until their compilation and dispatch behavior is known. A 1x1x1 BSDF validation dispatch is safe, but a monolithic all-material/all-operation shader can overwhelm DXC or Apple's Metal compiler before dispatch.
 
 ### 22.2 Light-tracing CPU/GPU baseline gap
 
@@ -918,6 +984,10 @@ World propagation is dirty-subtree incremental; instance resolution/hashing rema
 ### 22.7 Animation and motion blur
 
 There is no keyframe or motion-transform system in this change. A future animation layer should write local transforms through `set_local_transform` and batch resolution once per update. Motion blur would require explicit time-sampled transforms in Embree/RHI and is not implied by the current static affine ABI.
+
+### 22.8 OpenPBR GPU boundary
+
+OpenPBR is fully exercised by the CPU BSDF suite, but its generic mixed-component GPU functions remain intentionally excluded from production wavefront stages. Even after separating validation by operation and material kind, DXC/SPIR-V legalization or the Apple Metal compiler expands those kernels pathologically. The GPU renderer now rejects any scene containing OpenPBR during initialization or pipeline reconfiguration and tells the user to select the CPU renderer; batch mode preserves that specific reason instead of reporting a generic preparation failure. This prevents silent path loss and avoids starting the pathological shader compile. Do not claim OpenPBR GPU parity until the production path is split into smaller shader stages. The bounded GPU runtime harness validates only material classes enabled by the production wavefront renderer.
 
 ## 23. File map by subsystem
 
@@ -1019,7 +1089,7 @@ Do not append directly to render-facing `SceneInstance` arrays; those are derive
 3. Refresh dependent medium bounds and camera state if operating below the normal scene-representation UI path.
 4. Allow the renderer's hash comparison to select Embree update/TLAS refit.
 
-Do not bake the new matrix into vertices for an ordinary object transform.
+Do not bake the new matrix into vertices for an ordinary object transform. Use the explicit node-geometry edit API only when the user requests a destructive `Bake Transform` operation; it isolates shared mesh assets and compensates child transforms before changing geometry.
 
 ### 24.3 Add a new attachment type
 
@@ -1054,7 +1124,7 @@ If a matrix cannot be losslessly represented as TRS, retain matrix-row editing o
 Before merging or extending this branch, verify:
 
 - [ ] Full RelWithDebInfo Visual Studio build passes.
-- [ ] `scene_hierarchy` reports 11/11.
+- [ ] `scene_hierarchy` reports 23/23.
 - [ ] `procedural_geometry` reports 14/14.
 - [ ] PT, LT, BDPT-fast, and BDPT-full compile-only shader modes pass.
 - [ ] No literal replacement for shared GPU ABI offsets was introduced.
@@ -1066,7 +1136,7 @@ Before merging or extending this branch, verify:
 - [ ] Native version-1 geometry still loads.
 - [ ] Native hierarchy/cameras save and reload.
 - [ ] No one-off scene, image, executable, comparison report, or cache is staged.
-- [ ] Metal runtime is tested before claiming Apple runtime support.
+- [ ] Metal compile-only and a bounded 8x8 runtime smoke test pass before claiming Apple runtime support.
 - [ ] Any performance claim includes a measured baseline.
 
 ## 26. Workspace and artifact policy
@@ -1098,7 +1168,7 @@ When resuming work:
 4. Run a full RelWithDebInfo build.
 5. If modifying ABI or shader transport, compile all four GPU mode families.
 6. If modifying performance behavior, capture CPU commit, GPU upload, and TLAS timing before changing code.
-7. If preparing a merge, perform Metal runtime validation or explicitly preserve the Windows-only validation boundary in the review description.
+7. If preparing a merge, repeat the bounded Metal compile/runtime smoke checks after any RHI, ABI, or shader change.
 8. Keep local validation assets under the build tree and out of commits.
 
 Useful Git commands:
@@ -1119,9 +1189,10 @@ At handover time:
 - render geometry is instanced rather than transform-baked;
 - CPU and GPU transform-only acceleration updates are implemented;
 - GPU layout alignment and offsets are explicitly protected;
-- 25/25 maintained tests pass;
+- 37/37 maintained tests pass;
 - all tested GPU shader mode families compile;
 - representative offline CPU/GPU transform comparisons are close for PT and transformed media;
 - the known LT CPU/GPU gap is baseline-confirmed as pre-existing;
-- Metal runtime validation remains the main platform-specific verification boundary;
+- Metal path tracing, readback, BSDF LUT parity, and production-enabled BSDF runtime operations have bounded runtime coverage;
+- generic OpenPBR GPU wavefront sampling remains an explicit pre-existing compiler/architecture boundary;
 - one-off validation artifacts and unrelated third-party directories are not part of the commit.

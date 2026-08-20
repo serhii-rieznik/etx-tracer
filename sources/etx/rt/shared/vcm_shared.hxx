@@ -235,6 +235,11 @@ struct ETX_ALIGNED VCMLightVertex {
     if (instance_index < s.instances.count) {
       result = scene_instance_transform_vertex(s.instances[instance_index], result);
     }
+
+    const float frame_handedness = dot(cross(result.nrm, result.tan), result.btn) >= 0.0f ? 1.0f : -1.0f;
+    result.pos = pos;
+    result.nrm = nrm;
+    scene_math_shared_build_sampling_frame_with_handedness(result.nrm, result.tan, result.btn, frame_handedness, result.nrm, result.tan, result.btn);
     return result;
   }
 };

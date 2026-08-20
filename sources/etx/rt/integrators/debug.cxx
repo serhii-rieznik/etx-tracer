@@ -535,7 +535,7 @@ struct CPUDebugIntegratorImpl : public Task {
           };
           case Mode::NormalMap: {
             const auto& mat = scene.materials[intersection.material_index];
-            if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > kEpsilon)) {
+            if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_image_index < scene.images.count) && (mat.normal_scale > kEpsilon)) {
               auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(intersection.tex, mat.normal_scale);
               output = saturate(sampled_normal * 0.5f + 0.5f);
             } else {
@@ -544,16 +544,7 @@ struct CPUDebugIntegratorImpl : public Task {
             break;
           };
           case Mode::NormalMapApplied: {
-            const auto& tri = scene.triangles[intersection.triangle_index];
-            float3 base_nrm = lerp_normal(scene, tri, intersection.barycentric);
-            float3 base_tan = lerp_tangent(scene, tri, intersection.barycentric);
-            float3 base_btn = lerp_bitangent(scene, tri, intersection.barycentric);
-            const auto& mat = scene.materials[intersection.material_index];
-            if ((mat.normal_image_index != kInvalidIndex) && (mat.normal_scale > kEpsilon)) {
-              auto sampled_normal = scene.images[mat.normal_image_index].evaluate_normal(intersection.tex, mat.normal_scale);
-              base_nrm = normalize(base_tan * sampled_normal.x + base_btn * sampled_normal.y + base_nrm * sampled_normal.z);
-            }
-            output = saturate(base_nrm * 0.5f + 0.5f);
+            output = saturate(intersection.nrm * 0.5f + 0.5f);
             break;
           };
           case Mode::TransmittanceColor: {

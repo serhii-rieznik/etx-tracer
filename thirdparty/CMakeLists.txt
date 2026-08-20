@@ -1,4 +1,5 @@
 add_subdirectory(imgui)
+add_subdirectory(imguizmo)
 add_subdirectory(sokol)
 add_subdirectory(nativefiledialog)
 add_subdirectory(stb_image)

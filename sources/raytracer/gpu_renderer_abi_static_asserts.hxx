@@ -428,6 +428,8 @@ static_assert(offsetof(EmitterProfile, emission) == kEmitterProfileEmissionSpect
 static_assert(offsetof(EmitterProfile, cls) == kEmitterProfileClassOffset, "EmitterProfile::cls offset changed; update GPU shader decode");
 static_assert((offsetof(EmitterProfile, directional) + offsetof(EmitterProfile::DirectionalData, direction)) == kEmitterProfileDirectionalDirectionOffset,
   "EmitterProfile::directional.direction offset changed; update GPU shader decode");
+static_assert((offsetof(EmitterProfile, directional) + offsetof(EmitterProfile::DirectionalData, angular_size)) == kEmitterProfileDirectionalAngularSizeOffset,
+  "EmitterProfile::directional.angular_size offset changed; update GPU shader decode");
 static_assert((offsetof(EmitterProfile, directional) + offsetof(EmitterProfile::DirectionalData, angular_size_cosine)) == kEmitterProfileDirectionalAngularSizeCosineOffset,
   "EmitterProfile::directional.angular_size_cosine offset changed; update GPU shader decode");
 static_assert(offsetof(EmitterProfile, medium_index) == kEmitterProfileMediumIndexOffset, "EmitterProfile::medium_index offset changed; update GPU shader decode");

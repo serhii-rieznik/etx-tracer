@@ -153,12 +153,11 @@ ETX_SHARED_NOINLINE OpenPBRSampleResult bsdf_openpbr_sample_component(ETX_IN(BSD
 // TODO(OpenPBR GPU parity): DO NOT CLAIM OPENPBR GPU PARITY YET.
 //
 // This generic mixed-component sample path is still the active OpenPBR blocker.
-// The runtime GPU BSDF harness can validate OpenPBR evaluate/pdf/reverse-pdf/
-// is-delta/albedo, but compiling OpenPBR sample currently overflows SPIR-V IDs
-// after real plastic sampling is enabled. Production wavefront shaders therefore
-// compile OpenPBR only when an OpenPBR material exists in the scene, and OpenPBR
-// scenes are expected to fail until this path is split into smaller shader pieces
-// or otherwise made small enough for DXC/SPIR-V legalization.
+// The CPU suite validates the OpenPBR operations. Compiling the generic GPU path
+// currently overwhelms DXC/SPIR-V legalization (sample first, with the other
+// mixed-component operations affected on some toolchains as well). Production
+// wavefront shaders therefore do not compile OpenPBR yet; OpenPBR scenes are
+// expected to fail until this path is split into smaller shader pieces.
 //
 ETX_SHARED_NOINLINE BSDFSample bsdf_openpbr_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   const OpenPBRComponents components = bsdf_openpbr_make_components(context, data, material);

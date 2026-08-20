@@ -12,6 +12,11 @@
   #define ETX_BSDF_RUNTIME_VALIDATION_OPERATION 0
 #endif
 
+#define ETX_BSDF_RUNTIME_VALIDATION_KIND_PLASTIC     1
+#define ETX_BSDF_RUNTIME_VALIDATION_KIND_CONDUCTOR   2
+#define ETX_BSDF_RUNTIME_VALIDATION_KIND_DIELECTRIC  3
+#define ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION 4
+
 #if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
   #include <interop/bsdf_energy_compensated_shared.hxx>
   #include <interop/bsdf_diffraction_grating_shared.hxx>
@@ -89,6 +94,17 @@ Sampler validation_sampler(uint seed, float fixed_u, float fixed_v, float fixed_
 
 #if (ETX_BSDF_RUNTIME_VALIDATION_OPERATION == 0) || (ETX_BSDF_RUNTIME_VALIDATION_OPERATION == 1)
 BSDFSample validation_sample(BSDFResourceContext context, BSDFData data, Material material, inout Sampler sampler) {
+#if defined(ETX_BSDF_RUNTIME_VALIDATION_KIND)
+# if ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_CONDUCTOR
+  return bsdf_conductor_energy_compensated_sample(context, data, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIELECTRIC
+  return bsdf_dielectric_energy_compensated_sample(context, data, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_PLASTIC
+  return bsdf_plastic_sample(context, data, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION
+  return bsdf_diffraction_grating_sample(context, data, material, sampler);
+# endif
+#else
   if (material.cls == MaterialClass::Conductor) {
     return bsdf_conductor_energy_compensated_sample(context, data, material, sampler);
   }
@@ -111,11 +127,23 @@ BSDFSample validation_sample(BSDFResourceContext context, BSDFData data, Materia
   }
 #endif
   return bsdf_sample_zero(data.spectrum_sample);
+#endif
 }
 #endif
 
 #if (ETX_BSDF_RUNTIME_VALIDATION_OPERATION == 0) || (ETX_BSDF_RUNTIME_VALIDATION_OPERATION == 2)
 BSDFEval validation_evaluate(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+#if defined(ETX_BSDF_RUNTIME_VALIDATION_KIND)
+# if ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_CONDUCTOR
+  return bsdf_conductor_energy_compensated_evaluate(context, data, outgoing_direction, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIELECTRIC
+  return bsdf_dielectric_energy_compensated_evaluate(context, data, outgoing_direction, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_PLASTIC
+  return bsdf_plastic_evaluate(context, data, outgoing_direction, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION
+  return bsdf_diffraction_grating_evaluate(context, data, outgoing_direction, material, sampler);
+# endif
+#else
   if (material.cls == MaterialClass::Conductor) {
     return bsdf_conductor_energy_compensated_evaluate(context, data, outgoing_direction, material, sampler);
   }
@@ -138,11 +166,23 @@ BSDFEval validation_evaluate(BSDFResourceContext context, BSDFData data, float3 
   }
 #endif
   return bsdf_eval_zero(data.spectrum_sample);
+#endif
 }
 #endif
 
 #if (ETX_BSDF_RUNTIME_VALIDATION_OPERATION == 0) || (ETX_BSDF_RUNTIME_VALIDATION_OPERATION == 3)
 float validation_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+#if defined(ETX_BSDF_RUNTIME_VALIDATION_KIND)
+# if ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_CONDUCTOR
+  return bsdf_conductor_energy_compensated_pdf(context, data, outgoing_direction, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIELECTRIC
+  return bsdf_dielectric_energy_compensated_pdf(context, data, outgoing_direction, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_PLASTIC
+  return bsdf_plastic_pdf(context, data, outgoing_direction, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION
+  return bsdf_diffraction_grating_pdf(context, data, outgoing_direction, material, sampler);
+# endif
+#else
   if (material.cls == MaterialClass::Conductor) {
     return bsdf_conductor_energy_compensated_pdf(context, data, outgoing_direction, material, sampler);
   }
@@ -165,6 +205,7 @@ float validation_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing
   }
 #endif
   return 0.0f;
+#endif
 }
 
 float validation_reverse_pdf(BSDFResourceContext context, BSDFData input_data, float3 outgoing_direction, Material material, inout Sampler sampler) {
@@ -182,6 +223,17 @@ float validation_reverse_pdf(BSDFResourceContext context, BSDFData input_data, f
 
 #if (ETX_BSDF_RUNTIME_VALIDATION_OPERATION == 0) || (ETX_BSDF_RUNTIME_VALIDATION_OPERATION == 4)
 bool validation_is_delta(BSDFResourceContext context, Material material, float2 tex, inout Sampler sampler) {
+#if defined(ETX_BSDF_RUNTIME_VALIDATION_KIND)
+# if ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_CONDUCTOR
+  return bsdf_conductor_energy_compensated_is_delta_with_context(context, material, tex);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIELECTRIC
+  return bsdf_dielectric_energy_compensated_is_delta_with_context(context, material, tex);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_PLASTIC
+  return bsdf_plastic_is_delta(material, tex, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION
+  return bsdf_diffraction_grating_is_delta(material, tex, sampler);
+# endif
+#else
   if (material.cls == MaterialClass::Conductor) {
     return bsdf_conductor_energy_compensated_is_delta_with_context(context, material, tex);
   }
@@ -204,9 +256,21 @@ bool validation_is_delta(BSDFResourceContext context, Material material, float2 
   }
 #endif
   return false;
+#endif
 }
 
 SpectralResponse validation_albedo(BSDFResourceContext context, BSDFData data, Material material, inout Sampler sampler) {
+#if defined(ETX_BSDF_RUNTIME_VALIDATION_KIND)
+# if ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_CONDUCTOR
+  return bsdf_conductor_energy_compensated_albedo(context, data, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIELECTRIC
+  return bsdf_dielectric_energy_compensated_albedo(context, data, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_PLASTIC
+  return bsdf_plastic_albedo(context, data, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION
+  return bsdf_diffraction_grating_albedo(context, data, material, sampler);
+# endif
+#else
   if (material.cls == MaterialClass::Conductor) {
     return bsdf_conductor_energy_compensated_albedo(context, data, material, sampler);
   }
@@ -229,6 +293,7 @@ SpectralResponse validation_albedo(BSDFResourceContext context, BSDFData data, M
   }
 #endif
   return spectral_response_zero(data.spectrum_sample);
+#endif
 }
 #endif
 

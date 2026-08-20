@@ -227,13 +227,12 @@ float3 scene_instance_transform_geometric_normal(GPUSceneInstanceData instance, 
 }
 
 Vertex scene_instance_transform_vertex(GPUSceneInstanceData instance, Vertex vertex) {
-  const float local_handedness = dot(cross(vertex.nrm, vertex.tan), vertex.btn) >= 0.0f ? 1.0f : -1.0f;
   const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
   vertex.pos = scene_instance_transform_point(instance, vertex.pos);
   vertex.nrm = scene_instance_transform_normal(instance, vertex.nrm) * orientation;
-  vertex.tan = normalize(scene_instance_transform_vector(instance, vertex.tan));
-  vertex.tan = normalize(vertex.tan - vertex.nrm * dot(vertex.tan, vertex.nrm));
-  vertex.btn = normalize(cross(vertex.nrm, vertex.tan)) * local_handedness;
+  const float3 tangent_hint = scene_instance_transform_vector(instance, vertex.tan);
+  const float3 bitangent_hint = scene_instance_transform_vector(instance, vertex.btn);
+  scene_math_shared_build_sampling_frame(vertex.nrm, tangent_hint, bitangent_hint, vertex.nrm, vertex.tan, vertex.btn);
   return vertex;
 }
 
@@ -658,6 +657,35 @@ struct SurfacePoint {
   float3 geo_normal;
 };
 
+void surface_point_apply_material_normal_map(inout SurfacePoint surface_point, Material material, float3 incoming_direction) {
+  if ((material.normal_image_index == kInvalidIndex) || (material.normal_scale <= kEpsilon) || (constants.scene.images == kInvalidIndex)) {
+    return;
+  }
+
+  float4 normal_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
+  ImageEvaluateGPUContext image_context = make_image_evaluate_gpu_context(constants.scene.images);
+  if (image_evaluate_gpu_try_rgba_no_pdf(image_context, material.normal_image_index, surface_point.vertex.tex, normal_value) == false) {
+    return;
+  }
+
+  const float tangent_length_squared = dot(surface_point.vertex.tan, surface_point.vertex.tan);
+  const float bitangent_length_squared = dot(surface_point.vertex.btn, surface_point.vertex.btn);
+  if ((tangent_length_squared <= kEpsilon) || (bitangent_length_squared <= kEpsilon)) {
+    return;
+  }
+
+  const float3 tangent_space_normal = float3(material.normal_scale * (normal_value.x * 2.0f - 1.0f), material.normal_scale * (normal_value.y * 2.0f - 1.0f),
+    material.normal_scale * (normal_value.z * 2.0f - 1.0f) + (1.0f - material.normal_scale));
+  const float3 mapped_normal_value = surface_point.vertex.tan * tangent_space_normal.x + surface_point.vertex.btn * tangent_space_normal.y +
+                                     surface_point.vertex.nrm * tangent_space_normal.z;
+  const float mapped_normal_length_sq = dot(mapped_normal_value, mapped_normal_value);
+  if (mapped_normal_length_sq > kEpsilon) {
+    const float3 mapped_normal = mapped_normal_value / sqrt(mapped_normal_length_sq);
+    scene_math_shared_finalize_shading_frame(mapped_normal, surface_point.vertex.nrm, surface_point.vertex.tan, surface_point.vertex.btn, surface_point.geo_normal,
+      incoming_direction, surface_point.vertex.nrm, surface_point.vertex.tan, surface_point.vertex.btn);
+  }
+}
+
 struct TraceSurfaceResult {
   uint hit;
   uint medium_index;
@@ -711,16 +739,11 @@ SurfacePoint load_surface_point(ByteAddressBuffer position_buffer, ByteAddressBu
   surface_point_shared_interpolate_vertex(p0, p1, p2, n0, n1, n2, tangent_0, tangent_1, tangent_2, bitangent_0, bitangent_1, bitangent_2, texcoord_0, texcoord_1, texcoord_2,
     result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
   const GPUSceneInstanceData instance = load_scene_instance(instance_index);
-  const float local_handedness = dot(cross(result.vertex.nrm, result.vertex.tan), result.vertex.btn) >= 0.0f ? 1.0f : -1.0f;
-  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
-  result.vertex.pos = scene_instance_transform_point(instance, result.vertex.pos);
-  result.vertex.nrm = scene_instance_transform_normal(instance, result.vertex.nrm) * orientation;
-  result.vertex.tan = normalize(scene_instance_transform_vector(instance, result.vertex.tan));
-  result.vertex.tan = normalize(result.vertex.tan - result.vertex.nrm * dot(result.vertex.tan, result.vertex.nrm));
-  result.vertex.btn = normalize(cross(result.vertex.nrm, result.vertex.tan)) * local_handedness;
+  result.vertex = scene_instance_transform_vertex(instance, result.vertex);
   const float3 world_geo_normal = scene_instance_transform_geometric_normal(instance, tri.geo_n);
-  result.vertex.nrm = scene_math_shared_orient_normals_to_hemisphere(result.vertex.nrm, world_geo_normal, ray_dir);
-  result.geo_normal = surface_point_shared_orient_geo_normal(world_geo_normal, ray_dir);
+  scene_math_shared_finalize_shading_frame(result.vertex.nrm, result.vertex.nrm, result.vertex.tan, result.vertex.btn, world_geo_normal, ray_dir, result.vertex.nrm,
+    result.vertex.tan, result.vertex.btn);
+  result.geo_normal = world_geo_normal;
 
   return result;
 }
@@ -1085,7 +1108,9 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
   result.surface_point = load_surface_point(position_buffer, normal_buffer, tangent_buffer, bitangent_buffer, texcoord_buffer, has_surface_frame_buffers, has_texcoords, result.tri,
     bary, ray.Direction, result.instance_index);
   result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
-  try_load_material_full(result.tri.material_index, result.material);
+  if (try_load_material_full(result.tri.material_index, result.material)) {
+    surface_point_apply_material_normal_map(result.surface_point, result.material, ray.Direction);
+  }
   result.hit = 1u;
   return true;
 }

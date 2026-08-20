@@ -1,6 +1,7 @@
 #pragma once
 
 #include <etx/render/host/scene_global.hxx>
+#include <etx/render/access/emitter_access_shared.hxx>
 #include <etx/render/shared/scene.hxx>
 
 namespace etx {
@@ -15,6 +16,16 @@ float emitter_discrete_pdf_from_distribution(const Emitter& emitter, const Distr
   }
 
   return (emitter.spectrum_weight * emitter.additional_weight) / dist.total_weight;
+}
+
+float3 environment_local_to_world(const EmitterProfile& profile, const float3& direction) {
+  const float4 rotation = profile.environment_rotation();
+  return emitter_access_environment_local_to_world({rotation.x, rotation.y, rotation.z}, rotation.w, direction);
+}
+
+float3 environment_world_to_local(const EmitterProfile& profile, const float3& direction) {
+  const float4 rotation = profile.environment_rotation();
+  return emitter_access_environment_world_to_local({rotation.x, rotation.y, rotation.z}, rotation.w, direction);
 }
 
 }  // namespace
@@ -252,7 +263,7 @@ SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, const Spectra
       bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
       uint32_t projection = projection_environment_mode(is_atmosphere);
       const float2 image_offset = float2{img.offset.x, img.offset.y};
-      float2 uv = direction_to_uv(in_direction, image_offset, 1.0f, projection);
+      float2 uv = direction_to_uv(environment_world_to_local(em, in_direction), image_offset, 1.0f, projection);
 
       float image_pdf = 0.0f;
       SpectralResponse eval = apply_image(spect, em.emission, uv, image_pdf);
@@ -294,7 +305,7 @@ SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuer
       bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
       uint32_t projection = projection_environment_mode(is_atmosphere);
       const float2 image_offset = float2{img.offset.x, img.offset.y};
-      float2 uv = direction_to_uv(query.direction, image_offset, img.scale.x, projection);
+      float2 uv = direction_to_uv(environment_world_to_local(em, query.direction), image_offset, img.scale.x, projection);
 
       float image_pdf = 0.0f;
       SpectralResponse eval = apply_image(spect, em.emission, uv, image_pdf);
@@ -372,7 +383,7 @@ float emitter_sample_pdf(const Emitter& em_inst, ETX_IN(float3, in_direction)) {
       bool is_atmosphere = (em.meta & EmitterProfile::Meta::Atmosphere) != 0u;
       uint32_t projection = projection_environment_mode(is_atmosphere);
       const float2 image_offset = float2{img.offset.x, img.offset.y};
-      float2 uv = direction_to_uv(in_direction, image_offset, img.scale.x, projection);
+      float2 uv = direction_to_uv(environment_world_to_local(em, in_direction), image_offset, img.scale.x, projection);
 
       float image_pdf = 0.0f;
       img.evaluate(uv, &image_pdf);
@@ -506,7 +517,7 @@ EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spec
 
       result.image_uv = uv;
       const float2 image_offset = float2{img.offset.x, img.offset.y};
-      result.direction = uv_to_direction(result.image_uv, image_offset, img.scale.x, projection);
+      result.direction = environment_local_to_world(em, uv_to_direction(result.image_uv, image_offset, img.scale.x, projection));
       result.normal = -result.direction;
       result.origin = from_point + result.direction * distance_to_sphere(from_point, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
       result.pdf_dir = projection_environment_image_pdf_to_solid_angle(pdf_image, uv, projection);
@@ -589,7 +600,7 @@ EmitterSample sample_emission_from_emitter(const Emitter& em_inst, const Spectra
       }
 
       const float2 image_offset = float2{img.offset.x, img.offset.y};
-      auto d = -uv_to_direction(uv, image_offset, img.scale.x, projection);
+      auto d = environment_local_to_world(em, -uv_to_direction(uv, image_offset, img.scale.x, projection));
       auto basis = orthonormal_basis(d);
       auto disk_sample = sample_disk(smp.next_2d());
 

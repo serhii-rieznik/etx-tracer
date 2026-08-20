@@ -298,6 +298,8 @@ static_assert((offsetof(etx::EmitterProfile, emission) + offsetof(SpectralImage,
 static_assert(offsetof(etx::EmitterProfile, cls) == kEmitterProfileClassOffset, "EmitterProfile::cls offset changed");
 static_assert((offsetof(etx::EmitterProfile, directional) + offsetof(etx::EmitterProfile::DirectionalData, direction)) == kEmitterProfileDirectionalDirectionOffset,
   "EmitterProfile::directional.direction offset changed");
+static_assert((offsetof(etx::EmitterProfile, directional) + offsetof(etx::EmitterProfile::DirectionalData, angular_size)) == kEmitterProfileDirectionalAngularSizeOffset,
+  "EmitterProfile::directional.angular_size offset changed");
 static_assert(
   (offsetof(etx::EmitterProfile, directional) + offsetof(etx::EmitterProfile::DirectionalData, angular_size_cosine)) == kEmitterProfileDirectionalAngularSizeCosineOffset,
   "EmitterProfile::directional.angular_size_cosine offset changed");

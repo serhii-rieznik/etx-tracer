@@ -34,6 +34,295 @@ constexpr uint2 kDefaultModelCameraFilmSize = {1280u, 720u};
 constexpr float kDefaultModelSunAngularDiameter = 0.53f;
 constexpr float kDefaultModelAtmosphereQuality = 0.125f;
 
+struct NodeGeometryEditAnalysis {
+  std::vector<uint32_t> attachment_indices;
+  std::vector<uint32_t> mesh_indices;
+};
+
+bool finite_point(const float3& value) {
+  return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+bool valid_direction(const float3& value) {
+  const float length_squared = dot(value, value);
+  return finite_point(value) && std::isfinite(length_squared) && (length_squared > 0.0f);
+}
+
+NodeGeometryEditResult analyze_node_geometry_edit(
+  const SceneData& data, uint32_t node_index, NodeGeometryOperation operation, bool validate_contents, NodeGeometryEditAnalysis* out_analysis) {
+  if (node_index >= data.hierarchy.nodes.size()) {
+    return NodeGeometryEditResult::InvalidNode;
+  }
+
+  const SceneNode& node = data.hierarchy.nodes[node_index];
+  const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+  if ((attachment_end < node.attachment_offset) || (attachment_end > data.hierarchy.attachments.size())) {
+    return NodeGeometryEditResult::InvalidGeometry;
+  }
+
+  NodeGeometryEditAnalysis analysis = {};
+  for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+    const SceneAttachment& attachment = data.hierarchy.attachments[attachment_index];
+    if (attachment.type != SceneAttachment::Type::Mesh) {
+      return NodeGeometryEditResult::NonMeshAttachments;
+    }
+    if (attachment.resource_index >= data.meshes.size()) {
+      return NodeGeometryEditResult::InvalidGeometry;
+    }
+    analysis.attachment_indices.push_back(attachment_index);
+    if (std::find(analysis.mesh_indices.begin(), analysis.mesh_indices.end(), attachment.resource_index) == analysis.mesh_indices.end()) {
+      analysis.mesh_indices.push_back(attachment.resource_index);
+    }
+  }
+  if (analysis.attachment_indices.empty()) {
+    return NodeGeometryEditResult::NoMeshAttachments;
+  }
+
+  const bool has_normals = data.vertices.nrm.empty() == false;
+  const bool has_tangents = data.vertices.tan.empty() == false;
+  const bool has_bitangents = data.vertices.btn.empty() == false;
+  const bool has_texcoords = data.vertices.tex.empty() == false;
+  if ((has_normals && (data.vertices.nrm.size() != data.vertices.pos.size())) || (has_tangents != has_bitangents) || (has_tangents && (has_normals == false)) ||
+      (has_tangents && ((data.vertices.tan.size() != data.vertices.pos.size()) || (data.vertices.btn.size() != data.vertices.pos.size()))) ||
+      (has_texcoords && (data.vertices.tex.size() != data.vertices.pos.size()))) {
+    return NodeGeometryEditResult::InvalidGeometry;
+  }
+
+  uint64_t cloned_vertex_count = data.vertices.pos.size();
+  uint64_t cloned_triangle_count = data.triangles.size();
+  for (uint32_t mesh_index : analysis.mesh_indices) {
+    const Mesh& mesh = data.meshes[mesh_index];
+    const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
+    if ((mesh.triangle_count == 0u) || (triangle_end < mesh.triangle_offset) || (triangle_end > data.triangles.size())) {
+      return NodeGeometryEditResult::InvalidGeometry;
+    }
+    cloned_triangle_count += mesh.triangle_count;
+    if (cloned_triangle_count >= kInvalidIndex) {
+      return NodeGeometryEditResult::InvalidGeometry;
+    }
+    if (validate_contents) {
+      for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+        const Triangle& triangle = data.triangles[triangle_index];
+        for (uint32_t corner = 0u; corner < 3u; ++corner) {
+          const uint32_t vertex_index = triangle.i[corner];
+          if ((vertex_index >= data.vertices.pos.size()) || (has_normals && (vertex_index >= data.vertices.nrm.size())) ||
+              (has_tangents && ((vertex_index >= data.vertices.tan.size()) || (vertex_index >= data.vertices.btn.size()))) ||
+              (has_texcoords && (vertex_index >= data.vertices.tex.size())) || (finite_point(data.vertices.pos[vertex_index]) == false) ||
+              (has_normals && (valid_direction(data.vertices.nrm[vertex_index]) == false)) ||
+              (has_tangents && ((finite_point(data.vertices.tan[vertex_index]) == false) || (finite_point(data.vertices.btn[vertex_index]) == false))) ||
+              (has_texcoords && ((std::isfinite(data.vertices.tex[vertex_index].x) == false) || (std::isfinite(data.vertices.tex[vertex_index].y) == false)))) {
+            return NodeGeometryEditResult::InvalidGeometry;
+          }
+        }
+      }
+    }
+    cloned_vertex_count += static_cast<uint64_t>(mesh.triangle_count) * 3u;
+    if (cloned_vertex_count >= kInvalidIndex) {
+      return NodeGeometryEditResult::InvalidGeometry;
+    }
+  }
+
+  if (operation == NodeGeometryOperation::BakeLocalTransform) {
+    AffineTransform inverse = {};
+    double determinant = 0.0;
+    if (invert_affine(node.local_transform, inverse, determinant) == false) {
+      return NodeGeometryEditResult::SingularTransform;
+    }
+  }
+
+  if (out_analysis != nullptr) {
+    *out_analysis = std::move(analysis);
+  }
+  return NodeGeometryEditResult::Success;
+}
+
+NodeGeometryEditResult compute_node_surface_center(const SceneData& data, const NodeGeometryEditAnalysis& analysis, float3& center) {
+  double weighted_x = 0.0;
+  double weighted_y = 0.0;
+  double weighted_z = 0.0;
+  double total_area = 0.0;
+  for (uint32_t attachment_index : analysis.attachment_indices) {
+    const uint32_t mesh_index = data.hierarchy.attachments[attachment_index].resource_index;
+    const Mesh& mesh = data.meshes[mesh_index];
+    const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
+    for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+      const Triangle& triangle = data.triangles[triangle_index];
+      const float3& p0 = data.vertices.pos[triangle.i[0]];
+      const float3& p1 = data.vertices.pos[triangle.i[1]];
+      const float3& p2 = data.vertices.pos[triangle.i[2]];
+      const double area = 0.5 * static_cast<double>(length(cross(p1 - p0, p2 - p0)));
+      if ((area <= 0.0) || (std::isfinite(area) == false)) {
+        continue;
+      }
+      const double scale = area / 3.0;
+      weighted_x += scale * static_cast<double>(p0.x + p1.x + p2.x);
+      weighted_y += scale * static_cast<double>(p0.y + p1.y + p2.y);
+      weighted_z += scale * static_cast<double>(p0.z + p1.z + p2.z);
+      total_area += area;
+    }
+  }
+  if ((total_area <= 0.0) || (std::isfinite(total_area) == false)) {
+    return NodeGeometryEditResult::DegenerateGeometry;
+  }
+  const double inverse_area = 1.0 / total_area;
+  const double values[3] = {weighted_x * inverse_area, weighted_y * inverse_area, weighted_z * inverse_area};
+  for (double value : values) {
+    if ((std::isfinite(value) == false) || (std::abs(value) > static_cast<double>(std::numeric_limits<float>::max()))) {
+      return NodeGeometryEditResult::DegenerateGeometry;
+    }
+  }
+  center = {static_cast<float>(values[0]), static_cast<float>(values[1]), static_cast<float>(values[2])};
+  return NodeGeometryEditResult::Success;
+}
+
+std::string source_mesh_name(const SceneData& data, uint32_t mesh_index) {
+  std::string result;
+  for (const auto& [name, index] : data.mesh_mapping) {
+    if ((index == mesh_index) && (result.empty() || (name < result))) {
+      result = name;
+    }
+  }
+  return result.empty() ? ("mesh-" + std::to_string(mesh_index)) : result;
+}
+
+std::string unique_edited_mesh_name(const SceneData& data, uint32_t mesh_index, const std::vector<std::string>& reserved_names) {
+  const std::string base = source_mesh_name(data, mesh_index) + "-edited";
+  std::string result = base;
+  uint32_t suffix = 1u;
+  while (data.mesh_mapping.contains(result) || (std::find(reserved_names.begin(), reserved_names.end(), result) != reserved_names.end())) {
+    result = base + "#" + std::to_string(suffix++);
+  }
+  return result;
+}
+
+struct PendingNodeGeometry {
+  std::vector<float3> positions;
+  std::vector<float3> normals;
+  std::vector<float3> tangents;
+  std::vector<float3> bitangents;
+  std::vector<float2> texcoords;
+  std::vector<Triangle> triangles;
+  std::vector<Mesh> meshes;
+  std::vector<std::string> mesh_names;
+  std::unordered_map<uint32_t, uint32_t> source_to_clone;
+};
+
+NodeGeometryEditResult build_edited_meshes(
+  const SceneData& data, const NodeGeometryEditAnalysis& analysis, NodeGeometryOperation operation, const AffineTransform& geometry_transform, const float3& center,
+  PendingNodeGeometry& pending) {
+  const bool has_normals = data.vertices.nrm.empty() == false;
+  const bool has_tangents = data.vertices.tan.empty() == false;
+  const bool has_texcoords = data.vertices.tex.empty() == false;
+
+  AffineTransform inverse = {};
+  double determinant = 1.0;
+  SceneInstance bake_instance = {};
+  if (operation == NodeGeometryOperation::BakeLocalTransform) {
+    if (invert_affine(geometry_transform, inverse, determinant) == false) {
+      return NodeGeometryEditResult::SingularTransform;
+    }
+    bake_instance.object_to_world = geometry_transform;
+    bake_instance.world_to_object = inverse;
+    if (determinant < 0.0) {
+      bake_instance.flags |= SceneInstance::Mirrored;
+    }
+  }
+
+  size_t maximum_new_vertices = 0u;
+  size_t new_triangles = 0u;
+  for (uint32_t source_mesh_index : analysis.mesh_indices) {
+    const size_t triangle_count = data.meshes[source_mesh_index].triangle_count;
+    maximum_new_vertices += triangle_count * 3u;
+    new_triangles += triangle_count;
+  }
+  pending.positions.reserve(maximum_new_vertices);
+  pending.normals.reserve(has_normals ? maximum_new_vertices : 0u);
+  pending.tangents.reserve(has_tangents ? maximum_new_vertices : 0u);
+  pending.bitangents.reserve(has_tangents ? maximum_new_vertices : 0u);
+  pending.texcoords.reserve(has_texcoords ? maximum_new_vertices : 0u);
+  pending.triangles.reserve(new_triangles);
+  pending.meshes.reserve(analysis.mesh_indices.size());
+  pending.mesh_names.reserve(analysis.mesh_indices.size());
+  pending.source_to_clone.reserve(analysis.mesh_indices.size());
+
+  for (uint32_t source_mesh_index : analysis.mesh_indices) {
+    const Mesh& source_mesh = data.meshes[source_mesh_index];
+    Mesh clone = {};
+    clone.triangle_offset = static_cast<uint32_t>(data.triangles.size() + pending.triangles.size());
+    clone.triangle_count = source_mesh.triangle_count;
+    clone.bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
+    clone.bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
+
+    std::unordered_map<uint32_t, uint32_t> vertex_mapping;
+    const uint32_t triangle_end = source_mesh.triangle_offset + source_mesh.triangle_count;
+    for (uint32_t triangle_index = source_mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+      Triangle triangle = data.triangles[triangle_index];
+      for (uint32_t corner = 0u; corner < 3u; ++corner) {
+        const uint32_t source_vertex_index = triangle.i[corner];
+        auto existing = vertex_mapping.find(source_vertex_index);
+        if (existing != vertex_mapping.end()) {
+          triangle.i[corner] = existing->second;
+          continue;
+        }
+
+        Vertex vertex = {};
+        vertex.pos = data.vertices.pos[source_vertex_index];
+        if (has_normals) {
+          vertex.nrm = data.vertices.nrm[source_vertex_index];
+        }
+        if (has_tangents) {
+          vertex.tan = data.vertices.tan[source_vertex_index];
+          vertex.btn = data.vertices.btn[source_vertex_index];
+        }
+        if (has_texcoords) {
+          vertex.tex = data.vertices.tex[source_vertex_index];
+        }
+
+        if (operation == NodeGeometryOperation::CenterPivot) {
+          vertex.pos -= center;
+        } else {
+          vertex = scene_instance_transform_vertex(bake_instance, vertex);
+        }
+        if ((finite_point(vertex.pos) == false) || (has_normals && (valid_direction(vertex.nrm) == false)) ||
+            (has_tangents && ((finite_point(vertex.tan) == false) || (finite_point(vertex.btn) == false)))) {
+          return NodeGeometryEditResult::InvalidGeometry;
+        }
+
+        const uint32_t cloned_vertex_index = static_cast<uint32_t>(data.vertices.pos.size() + pending.positions.size());
+        vertex_mapping.emplace(source_vertex_index, cloned_vertex_index);
+        triangle.i[corner] = cloned_vertex_index;
+        pending.positions.push_back(vertex.pos);
+        if (has_normals) {
+          pending.normals.push_back(vertex.nrm);
+        }
+        if (has_tangents) {
+          pending.tangents.push_back(vertex.tan);
+          pending.bitangents.push_back(vertex.btn);
+        }
+        if (has_texcoords) {
+          pending.texcoords.push_back(vertex.tex);
+        }
+        clone.bbox_min = min(clone.bbox_min, vertex.pos);
+        clone.bbox_max = max(clone.bbox_max, vertex.pos);
+      }
+      const float3& p0 = pending.positions[triangle.i[0] - data.vertices.pos.size()];
+      const float3& p1 = pending.positions[triangle.i[1] - data.vertices.pos.size()];
+      const float3& p2 = pending.positions[triangle.i[2] - data.vertices.pos.size()];
+      const float3 geometric_normal = cross(p1 - p0, p2 - p0);
+      if (dot(geometric_normal, geometric_normal) > 0.0f) {
+        triangle.geo_n = normalize(geometric_normal);
+      }
+      pending.triangles.push_back(triangle);
+    }
+
+    const uint32_t clone_mesh_index = static_cast<uint32_t>(data.meshes.size() + pending.meshes.size());
+    pending.source_to_clone.emplace(source_mesh_index, clone_mesh_index);
+    pending.meshes.push_back(clone);
+    pending.mesh_names.push_back(unique_edited_mesh_name(data, source_mesh_index, pending.mesh_names));
+  }
+  return NodeGeometryEditResult::Success;
+}
+
 void sanitize_camera_clip_planes(Camera& camera) {
   camera.clip_near = (camera.clip_near > 0.0f) ? camera.clip_near : kDefaultCameraClipNear;
   camera.clip_far = (camera.clip_far > camera.clip_near) ? camera.clip_far : max(camera.clip_near + 0.001f, kDefaultCameraClipFar);
@@ -126,6 +415,28 @@ void add_default_raw_model_lighting(SceneData& data) {
 
 }  // namespace
 
+const char* node_geometry_edit_result_message(NodeGeometryEditResult result) {
+  switch (result) {
+    case NodeGeometryEditResult::Success:
+      return "";
+    case NodeGeometryEditResult::InvalidNode:
+      return "The selected node is invalid.";
+    case NodeGeometryEditResult::NoMeshAttachments:
+      return "The node has no mesh geometry.";
+    case NodeGeometryEditResult::NonMeshAttachments:
+      return "The node also contains a camera, emitter, or medium.";
+    case NodeGeometryEditResult::InvalidGeometry:
+      return "The attached mesh data is invalid.";
+    case NodeGeometryEditResult::SingularTransform:
+      return "A singular transform cannot be baked.";
+    case NodeGeometryEditResult::DegenerateGeometry:
+      return "The mesh has no non-degenerate surface area.";
+    case NodeGeometryEditResult::HierarchyUpdateFailed:
+      return "The hierarchy could not be updated.";
+  }
+  return "The geometry edit failed.";
+}
+
 void material_class_to_string(Material::Class cls, const char** str) {
   static const char* names[] = {
     "diffuse",
@@ -163,7 +474,11 @@ struct SceneRepresentationImpl {
   RHIContext* rhi = nullptr;
   scattering::GpuContext scattering_gpu = {};
   bool scattering_gpu_ready = false;
-  std::vector<BoundingBox> medium_local_bounds;
+  // Material-derived media overwrite the render-facing local bounds, so retain the authored volume bounds separately for later node attachment.
+  std::vector<BoundingBox> medium_authored_bounds;
+  std::vector<BoundingBox> medium_bounds_scratch;
+  std::vector<uint8_t> medium_has_bounds_scratch;
+  std::vector<uint32_t> medium_attachment_nodes_scratch;
 
   const IORDatabase& ior_database;
   SceneRepresentation::IntegratorData integrator_data = {};
@@ -237,7 +552,10 @@ struct SceneRepresentationImpl {
 
   void cleanup() {
     data.clear(scheduler);
-    medium_local_bounds.clear();
+    medium_authored_bounds.clear();
+    medium_bounds_scratch.clear();
+    medium_has_bounds_scratch.clear();
+    medium_attachment_nodes_scratch.clear();
     integrator_data = {};
 
     active_camera = {};
@@ -597,7 +915,7 @@ struct SceneRepresentationImpl {
   void setup_atmosphere_references();
 
   bool finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len, bool force_tangents,
-    bool spectral_scene, bool create_default_camera_entry);
+    bool spectral_scene);
 };
 
 void build_camera(Camera& camera, const float3& position, const float3& direction, const float3& up, const uint2& viewport, const float fov) {
@@ -763,8 +1081,16 @@ void compute_camera_position_to_fit_scene(const SceneData& scene_data, const Cam
   out_target = center;
 }
 
-bool find_attachment_transform(SceneData& data, SceneAttachment::Type type, uint32_t resource_index, AffineTransform& object_to_world, AffineTransform& world_to_object) {
-  if (data.resolve_hierarchy() == false) {
+struct AttachmentTransform {
+  AffineTransform object_to_world = {};
+  AffineTransform world_to_object = {};
+  AffineTransform orientation_to_world = {};
+  AffineTransform orientation_to_object = {};
+  uint32_t node_index = kInvalidIndex;
+};
+
+bool find_attachment_transform(SceneData& data, SceneAttachment::Type type, uint32_t resource_index, AttachmentTransform& result) {
+  if ((data.hierarchy.resolved_state_current() == false) && (data.resolve_hierarchy() == false)) {
     return false;
   }
 
@@ -782,21 +1108,129 @@ bool find_attachment_transform(SceneData& data, SceneAttachment::Type type, uint
       if ((attachment.type != type) || (attachment.resource_index != resource_index)) {
         continue;
       }
-      float determinant = 0.0f;
-      object_to_world = data.hierarchy.world_transforms[node_index];
-      return invert_affine(object_to_world, world_to_object, determinant);
+      if ((node_index >= data.hierarchy.orientation_valid.size()) || (data.hierarchy.orientation_valid[node_index] == 0u) ||
+          (node_index >= data.hierarchy.world_orientations.size())) {
+        log::warning("Attachment %u of type %u is below a sheared or singular node and has no valid orientation", resource_index, static_cast<uint32_t>(type));
+        return false;
+      }
+      double determinant = 0.0;
+      result.object_to_world = data.hierarchy.world_transforms[node_index];
+      if (invert_affine(result.object_to_world, result.world_to_object, determinant) == false) {
+        return false;
+      }
+      result.orientation_to_world = data.hierarchy.world_orientations[node_index];
+      result.node_index = node_index;
+      return invert_affine(result.orientation_to_world, result.orientation_to_object, determinant);
     }
   }
   return false;
 }
 
-Camera transform_camera(const Camera& source, const AffineTransform& transform) {
+Camera transform_camera(const Camera& source, const AffineTransform& position_transform, const AffineTransform& orientation_transform) {
   Camera result = source;
-  const float3 position = transform_point(transform, source.position);
-  const float3 direction = normalize(transform_vector(transform, source.direction));
-  const float3 up = normalize(transform_vector(transform, source.up));
+  const float3 position = transform_point(position_transform, source.position);
+  const float3 direction = normalize(transform_vector(orientation_transform, source.direction));
+  const float3 up = normalize(transform_vector(orientation_transform, source.up));
   build_camera(result, position, direction, up, source.film_size, get_camera_fov(source));
   return result;
+}
+
+bool camera_pose_is_canonical(const Camera& camera) {
+  return (camera.position.x == 0.0f) && (camera.position.y == 0.0f) && (camera.position.z == 0.0f) && (camera.direction.x == kWorldForward.x) &&
+         (camera.direction.y == kWorldForward.y) && (camera.direction.z == kWorldForward.z) && (camera.up.x == kWorldUp.x) && (camera.up.y == kWorldUp.y) &&
+         (camera.up.z == kWorldUp.z);
+}
+
+bool camera_pose_transform(const Camera& camera, AffineTransform& result) {
+  const float3 direction = camera.direction;
+  const float3 up_hint = camera.up;
+  const float3 side = cross(direction, up_hint);
+  const float fov = get_camera_fov(camera);
+  if ((value_is_correct(camera.position) == false) || (is_valid_vector(direction) == false) || (is_valid_vector(up_hint) == false) ||
+      (is_valid_vector(side) == false) || (camera.film_size.x == 0u) || (camera.film_size.y == 0u) || (std::isfinite(fov) == false) || (fov <= 0.0f)) {
+    return false;
+  }
+
+  const float3 forward = normalize(direction);
+  const float3 right = normalize(side);
+  const float3 up = normalize(cross(right, forward));
+  result.rows[0] = {right.x, up.x, -forward.x, camera.position.x};
+  result.rows[1] = {right.y, up.y, -forward.y, camera.position.y};
+  result.rows[2] = {right.z, up.z, -forward.z, camera.position.z};
+  return true;
+}
+
+bool ensure_camera_nodes(SceneData& data) {
+  for (uint32_t camera_index = 0u; camera_index < data.cameras.size(); ++camera_index) {
+    uint32_t attachment_node_index = kInvalidIndex;
+    uint32_t local_attachment_index = kInvalidIndex;
+    SceneAttachment source_attachment = {};
+    uint32_t attachment_count = 0u;
+    for (uint32_t node_index = 0u; node_index < data.hierarchy.nodes.size(); ++node_index) {
+      const SceneNode& node = data.hierarchy.nodes[node_index];
+      const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+      for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+        const SceneAttachment& attachment = data.hierarchy.attachments[attachment_index];
+        if ((attachment.type != SceneAttachment::Type::Camera) || (attachment.resource_index != camera_index)) {
+          continue;
+        }
+        ++attachment_count;
+        attachment_node_index = node_index;
+        local_attachment_index = attachment_index - node.attachment_offset;
+        source_attachment = attachment;
+      }
+    }
+    if (attachment_count > 1u) {
+      log::error("Camera %u is attached to multiple scene nodes; camera resources require one owning node", camera_index);
+      return false;
+    }
+    if ((attachment_count == 1u) && camera_pose_is_canonical(data.cameras[camera_index].cam)) {
+      continue;
+    }
+
+    Camera& camera = data.cameras[camera_index].cam;
+    AffineTransform camera_transform = {};
+    if (camera_pose_transform(camera, camera_transform) == false) {
+      log::error("Camera %u has an invalid pose or projection and cannot be attached to a scene node", camera_index);
+      return false;
+    }
+
+    const std::string node_name = data.cameras[camera_index].id.empty() ? ("camera-" + std::to_string(camera_index)) : data.cameras[camera_index].id;
+    const uint32_t node_index = data.hierarchy.add_node(node_name.c_str(), attachment_node_index, camera_transform);
+    if (node_index == kInvalidIndex) {
+      log::error("Failed to create a scene node for camera %u", camera_index);
+      return false;
+    }
+    if (attachment_node_index != kInvalidIndex) {
+      if (data.hierarchy.remove_attachment(attachment_node_index, local_attachment_index) == false) {
+        log::error("Failed to move camera %u to its dedicated scene node", camera_index);
+        return false;
+      }
+    } else {
+      source_attachment = {SceneAttachment::Type::Camera, camera_index, 0u, 0u};
+    }
+    if (data.hierarchy.add_attachment(node_index, source_attachment) == false) {
+      log::error("Failed to attach camera %u to its scene node", camera_index);
+      return false;
+    }
+
+    const float fov = get_camera_fov(camera);
+    build_camera(camera, {}, kWorldForward, kWorldUp, camera.film_size, fov);
+  }
+  return true;
+}
+
+SceneData::CameraInfo& select_active_camera(SceneData& data) {
+  auto selected = std::find_if(data.cameras.begin(), data.cameras.end(), [](const SceneData::CameraInfo& entry) {
+    return entry.active;
+  });
+  if (selected == data.cameras.end()) {
+    selected = data.cameras.begin();
+  }
+  for (auto& entry : data.cameras) {
+    entry.active = (&entry == &*selected);
+  }
+  return *selected;
 }
 
 ETX_PIMPL_IMPLEMENT(SceneRepresentation, Impl);
@@ -831,15 +1265,6 @@ const SceneRepresentation::MediumMapping& SceneRepresentation::medium_mapping() 
 
 const SceneRepresentation::MeshMapping& SceneRepresentation::mesh_mapping() const {
   return _private->data.mesh_mapping;
-}
-
-const SceneRepresentation::CameraMapping& SceneRepresentation::camera_mapping() const {
-  static CameraMapping camera_mapping_cache;
-  camera_mapping_cache.clear();
-  for (size_t i = 0; i < _private->data.cameras.size(); ++i) {
-    camera_mapping_cache[_private->data.cameras[i].id] = static_cast<uint32_t>(i);
-  }
-  return camera_mapping_cache;
 }
 
 uint32_t SceneRepresentation::add_material(const char* name) {
@@ -887,26 +1312,105 @@ void SceneRepresentation::update_active_camera() {
   if (it != _private->data.cameras.end()) {
     _private->active_camera = it->cam;
     const uint32_t camera_index = static_cast<uint32_t>(std::distance(_private->data.cameras.begin(), it));
-    AffineTransform object_to_world = {};
-    AffineTransform world_to_object = {};
-    if (find_attachment_transform(_private->data, SceneAttachment::Type::Camera, camera_index, object_to_world, world_to_object)) {
-      _private->active_camera = transform_camera(it->cam, object_to_world);
+    AttachmentTransform transform = {};
+    if (find_attachment_transform(_private->data, SceneAttachment::Type::Camera, camera_index, transform)) {
+      _private->active_camera = transform_camera(it->cam, transform.object_to_world, transform.orientation_to_world);
     }
   }
 }
 
-void SceneRepresentation::store_active_camera() {
+bool SceneRepresentation::store_active_camera() {
   auto it = std::find_if(_private->data.cameras.begin(), _private->data.cameras.end(), [](const auto& e) {
     return e.active;
   });
   if (it != _private->data.cameras.end()) {
     const uint32_t camera_index = static_cast<uint32_t>(std::distance(_private->data.cameras.begin(), it));
-    AffineTransform object_to_world = {};
-    AffineTransform world_to_object = {};
-    it->cam = find_attachment_transform(_private->data, SceneAttachment::Type::Camera, camera_index, object_to_world, world_to_object)
-                ? transform_camera(_private->active_camera, world_to_object)
+    AttachmentTransform transform = {};
+    const bool canonical_local_pose = camera_pose_is_canonical(it->cam);
+    if (canonical_local_pose && find_attachment_transform(_private->data, SceneAttachment::Type::Camera, camera_index, transform) &&
+        (transform.node_index < _private->data.hierarchy.nodes.size())) {
+      AffineTransform desired_world_pose = {};
+      AffineTRS current_local_trs = {};
+      SceneNode& camera_node = _private->data.hierarchy.nodes[transform.node_index];
+      if ((camera_pose_transform(_private->active_camera, desired_world_pose) == false) || (affine_to_trs(camera_node.local_transform, current_local_trs) == false)) {
+        log::error("Failed to derive a valid node transform for active camera %u", camera_index);
+        return false;
+      }
+
+      AffineTransform desired_local_orientation = desired_world_pose;
+      float3 desired_local_position = _private->active_camera.position;
+      if (camera_node.parent_index != kInvalidIndex) {
+        const uint32_t parent_index = camera_node.parent_index;
+        if ((parent_index >= _private->data.hierarchy.world_transforms.size()) || (parent_index >= _private->data.hierarchy.world_orientations.size())) {
+          log::error("Camera %u has an invalid parent transform", camera_index);
+          return false;
+        }
+        AffineTransform parent_to_local = {};
+        AffineTransform parent_orientation_to_local = {};
+        double determinant = 0.0;
+        if ((invert_affine(_private->data.hierarchy.world_transforms[parent_index], parent_to_local, determinant) == false) ||
+            (invert_affine(_private->data.hierarchy.world_orientations[parent_index], parent_orientation_to_local, determinant) == false)) {
+          log::error("Camera %u has a singular parent transform", camera_index);
+          return false;
+        }
+        desired_local_position = transform_point(parent_to_local, _private->active_camera.position);
+        desired_local_orientation = multiply_affine(parent_orientation_to_local, desired_world_pose);
+      }
+
+      desired_local_orientation.rows[0].x *= current_local_trs.scale.x;
+      desired_local_orientation.rows[1].x *= current_local_trs.scale.x;
+      desired_local_orientation.rows[2].x *= current_local_trs.scale.x;
+      desired_local_orientation.rows[0].y *= current_local_trs.scale.y;
+      desired_local_orientation.rows[1].y *= current_local_trs.scale.y;
+      desired_local_orientation.rows[2].y *= current_local_trs.scale.y;
+      desired_local_orientation.rows[0].z *= current_local_trs.scale.z;
+      desired_local_orientation.rows[1].z *= current_local_trs.scale.z;
+      desired_local_orientation.rows[2].z *= current_local_trs.scale.z;
+      desired_local_orientation.rows[0].w = desired_local_position.x;
+      desired_local_orientation.rows[1].w = desired_local_position.y;
+      desired_local_orientation.rows[2].w = desired_local_position.z;
+
+      const AffineTransform previous_local_transform = camera_node.local_transform;
+      if ((_private->data.hierarchy.set_local_transform(transform.node_index, desired_local_orientation) == false) || (_private->data.resolve_hierarchy() == false)) {
+        _private->data.hierarchy.set_local_transform(transform.node_index, previous_local_transform);
+        if (_private->data.resolve_hierarchy() == false) {
+          log::error("Failed to restore camera hierarchy after rejecting an invalid camera transform");
+        }
+        return false;
+      }
+
+      bool affects_scene_resources = false;
+      const SceneHierarchy& hierarchy = _private->data.hierarchy;
+      if ((transform.node_index < hierarchy.order_position.size()) && (transform.node_index < hierarchy.subtree_end_position.size())) {
+        const uint32_t subtree_begin = hierarchy.order_position[transform.node_index];
+        const uint32_t subtree_end = std::min<uint32_t>(hierarchy.subtree_end_position[transform.node_index], static_cast<uint32_t>(hierarchy.evaluation_order.size()));
+        for (uint32_t order_position = subtree_begin; (order_position < subtree_end) && (affects_scene_resources == false); ++order_position) {
+          const uint32_t descendant_index = hierarchy.evaluation_order[order_position];
+          if (descendant_index >= hierarchy.nodes.size()) {
+            continue;
+          }
+          const SceneNode& descendant = hierarchy.nodes[descendant_index];
+          const uint32_t attachment_end = descendant.attachment_offset + descendant.attachment_count;
+          for (uint32_t attachment_index = descendant.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+            affects_scene_resources = hierarchy.attachments[attachment_index].type != SceneAttachment::Type::Camera;
+            if (affects_scene_resources) {
+              break;
+            }
+          }
+        }
+      }
+
+      const float fov = get_camera_fov(_private->active_camera);
+      it->cam = _private->active_camera;
+      build_camera(it->cam, {}, kWorldForward, kWorldUp, it->cam.film_size, fov);
+      return affects_scene_resources;
+    }
+
+    it->cam = find_attachment_transform(_private->data, SceneAttachment::Type::Camera, camera_index, transform)
+                ? transform_camera(_private->active_camera, transform.world_to_object, transform.orientation_to_object)
                 : _private->active_camera;
   }
+  return false;
 }
 
 std::string SceneRepresentation::rename_mesh(uint32_t index, const char* name) {
@@ -915,6 +1419,121 @@ std::string SceneRepresentation::rename_mesh(uint32_t index, const char* name) {
 
 void SceneRepresentation::set_mesh_material(uint32_t mesh_index, uint32_t material_index) {
   _private->set_mesh_material_impl(mesh_index, material_index);
+}
+
+NodeGeometryEditResult SceneRepresentation::validate_node_geometry_edit(uint32_t node_index, NodeGeometryOperation operation) const {
+  return analyze_node_geometry_edit(_private->data, node_index, operation, false, nullptr);
+}
+
+NodeGeometryEditResult SceneRepresentation::edit_node_geometry(uint32_t node_index, NodeGeometryOperation operation) {
+  SceneData& scene_data = _private->data;
+  NodeGeometryEditAnalysis analysis = {};
+  NodeGeometryEditResult result = analyze_node_geometry_edit(scene_data, node_index, operation, true, &analysis);
+  if (result != NodeGeometryEditResult::Success) {
+    return result;
+  }
+
+  SceneHierarchy& hierarchy = scene_data.hierarchy;
+  const AffineTransform original_node_transform = hierarchy.nodes[node_index].local_transform;
+  float3 center = {};
+  if (operation == NodeGeometryOperation::CenterPivot) {
+    result = compute_node_surface_center(scene_data, analysis, center);
+    if (result != NodeGeometryEditResult::Success) {
+      return result;
+    }
+  }
+
+  PendingNodeGeometry pending = {};
+  result = build_edited_meshes(scene_data, analysis, operation, original_node_transform, center, pending);
+  if (result != NodeGeometryEditResult::Success) {
+    return result;
+  }
+
+  AffineTransform node_transform = {};
+  AffineTransform child_compensation = {};
+  if (operation == NodeGeometryOperation::CenterPivot) {
+    AffineTransform to_center = {};
+    to_center.rows[0].w = center.x;
+    to_center.rows[1].w = center.y;
+    to_center.rows[2].w = center.z;
+    node_transform = multiply_affine(original_node_transform, to_center);
+    child_compensation.rows[0].w = -center.x;
+    child_compensation.rows[1].w = -center.y;
+    child_compensation.rows[2].w = -center.z;
+  }
+
+  std::vector<uint32_t> child_indices;
+  std::vector<AffineTransform> original_child_transforms;
+  std::vector<AffineTransform> edited_child_transforms;
+  for (uint32_t candidate_index = 0u; candidate_index < hierarchy.nodes.size(); ++candidate_index) {
+    const SceneNode& candidate = hierarchy.nodes[candidate_index];
+    if (candidate.parent_index != node_index) {
+      continue;
+    }
+    child_indices.push_back(candidate_index);
+    original_child_transforms.push_back(candidate.local_transform);
+    edited_child_transforms.push_back(operation == NodeGeometryOperation::BakeLocalTransform ? multiply_affine(original_node_transform, candidate.local_transform)
+                                                                                              : multiply_affine(child_compensation, candidate.local_transform));
+  }
+
+  const size_t original_position_count = scene_data.vertices.pos.size();
+  const size_t original_normal_count = scene_data.vertices.nrm.size();
+  const size_t original_tangent_count = scene_data.vertices.tan.size();
+  const size_t original_bitangent_count = scene_data.vertices.btn.size();
+  const size_t original_texcoord_count = scene_data.vertices.tex.size();
+  const size_t original_triangle_count = scene_data.triangles.size();
+  const size_t original_mesh_count = scene_data.meshes.size();
+  std::vector<uint32_t> original_attachment_meshes;
+  original_attachment_meshes.reserve(analysis.attachment_indices.size());
+  for (uint32_t attachment_index : analysis.attachment_indices) {
+    original_attachment_meshes.push_back(hierarchy.attachments[attachment_index].resource_index);
+  }
+
+  scene_data.vertices.pos.insert(scene_data.vertices.pos.end(), pending.positions.begin(), pending.positions.end());
+  scene_data.vertices.nrm.insert(scene_data.vertices.nrm.end(), pending.normals.begin(), pending.normals.end());
+  scene_data.vertices.tan.insert(scene_data.vertices.tan.end(), pending.tangents.begin(), pending.tangents.end());
+  scene_data.vertices.btn.insert(scene_data.vertices.btn.end(), pending.bitangents.begin(), pending.bitangents.end());
+  scene_data.vertices.tex.insert(scene_data.vertices.tex.end(), pending.texcoords.begin(), pending.texcoords.end());
+  scene_data.triangles.insert(scene_data.triangles.end(), pending.triangles.begin(), pending.triangles.end());
+  scene_data.meshes.insert(scene_data.meshes.end(), pending.meshes.begin(), pending.meshes.end());
+  for (uint32_t pending_index = 0u; pending_index < pending.mesh_names.size(); ++pending_index) {
+    scene_data.mesh_mapping.emplace(pending.mesh_names[pending_index], static_cast<uint32_t>(original_mesh_count + pending_index));
+  }
+  for (uint32_t attachment_index : analysis.attachment_indices) {
+    SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+    attachment.resource_index = pending.source_to_clone.at(attachment.resource_index);
+  }
+
+  bool hierarchy_updated = hierarchy.set_local_transform(node_index, node_transform);
+  for (uint32_t child = 0u; hierarchy_updated && (child < child_indices.size()); ++child) {
+    hierarchy_updated = hierarchy.set_local_transform(child_indices[child], edited_child_transforms[child]);
+  }
+  hierarchy_updated = hierarchy_updated && scene_data.resolve_hierarchy();
+  if (hierarchy_updated) {
+    return NodeGeometryEditResult::Success;
+  }
+
+  for (uint32_t attachment = 0u; attachment < analysis.attachment_indices.size(); ++attachment) {
+    hierarchy.attachments[analysis.attachment_indices[attachment]].resource_index = original_attachment_meshes[attachment];
+  }
+  hierarchy.set_local_transform(node_index, original_node_transform);
+  for (uint32_t child = 0u; child < child_indices.size(); ++child) {
+    hierarchy.set_local_transform(child_indices[child], original_child_transforms[child]);
+  }
+  for (const std::string& mesh_name : pending.mesh_names) {
+    scene_data.mesh_mapping.erase(mesh_name);
+  }
+  scene_data.vertices.pos.resize(original_position_count);
+  scene_data.vertices.nrm.resize(original_normal_count);
+  scene_data.vertices.tan.resize(original_tangent_count);
+  scene_data.vertices.btn.resize(original_bitangent_count);
+  scene_data.vertices.tex.resize(original_texcoord_count);
+  scene_data.triangles.resize(original_triangle_count);
+  scene_data.meshes.resize(original_mesh_count);
+  if (scene_data.resolve_hierarchy() == false) {
+    log::error("Failed to restore scene hierarchy after rejecting a node geometry edit");
+  }
+  return NodeGeometryEditResult::HierarchyUpdateFailed;
 }
 
 Camera& SceneRepresentation::camera() {
@@ -1374,7 +1993,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
       uint32_t load_result = load_from_tungsten_file(filename, _private->data, _private->ior_database, _private->scheduler, _private->active_camera);
       if ((load_result & SceneLoadSucceeded) == 0)
         return false;
-      return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene, false);
+      return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene);
     }
 
     if (parsed == false) {
@@ -1617,7 +2236,6 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   }
 
   const bool setup_camera = (options & SceneRepresentation::SetupCamera) != 0u;
-  const bool create_default_camera_entry = ((raw_model_file && setup_camera) && _private->data.cameras.empty() && ((load_result & SceneLoadCameraInfo) == 0));
 
   if ((raw_model_file && setup_camera) && (scene_has_environment_emitter(_private->data) == false)) {
     add_default_raw_model_lighting(_private->data);
@@ -1645,39 +2263,45 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
     entry.cam.clip_far = default_camera.clip_far;
   }
 
-  return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene,
-    create_default_camera_entry);
+  return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene);
 }
 
 bool SceneRepresentationImpl::update_medium_bounds() {
-  std::unordered_map<uint32_t, std::pair<float3, float3>> medium_bounds_map;
-  std::vector<uint32_t> attached_nodes(data.mediums.array_size(), kInvalidIndex);
-  bool valid = true;
-
-  const size_t previous_local_bound_count = medium_local_bounds.size();
-  medium_local_bounds.resize(data.mediums.array_size());
-  for (size_t medium_index = previous_local_bound_count; medium_index < medium_local_bounds.size(); ++medium_index) {
-    medium_local_bounds[medium_index] = data.mediums.get(static_cast<uint32_t>(medium_index)).bounds;
+  const uint32_t medium_count = data.mediums.array_size();
+  if (medium_count == 0u) {
+    medium_authored_bounds.clear();
+    return true;
   }
 
-  for (uint32_t medium_index = 0u; medium_index < data.mediums.array_size(); ++medium_index) {
+  medium_bounds_scratch.assign(medium_count, {});
+  medium_has_bounds_scratch.assign(medium_count, 0u);
+  medium_attachment_nodes_scratch.assign(medium_count, kInvalidIndex);
+  bool valid = true;
+
+  const size_t previous_authored_bound_count = medium_authored_bounds.size();
+  medium_authored_bounds.resize(medium_count);
+  for (size_t medium_index = previous_authored_bound_count; medium_index < medium_authored_bounds.size(); ++medium_index) {
+    medium_authored_bounds[medium_index] = data.mediums.get(static_cast<uint32_t>(medium_index)).bounds;
+  }
+
+  for (uint32_t medium_index = 0u; medium_index < medium_count; ++medium_index) {
     Medium& medium = data.mediums.get(medium_index);
-    medium.bounds = medium_local_bounds[medium_index];
-    medium.local_bounds = medium_local_bounds[medium_index];
+    medium.bounds = medium_authored_bounds[medium_index];
+    medium.local_bounds = medium_authored_bounds[medium_index];
     medium.world_to_object = {};
   }
 
   auto add_bounds = [&](uint32_t medium_index, const float3& bounds_min, const float3& bounds_max) {
-    if ((medium_index == kInvalidIndex) || (medium_index >= data.mediums.array_size())) {
+    if ((medium_index == kInvalidIndex) || (medium_index >= medium_count)) {
       return;
     }
-    auto existing = medium_bounds_map.find(medium_index);
-    if (existing == medium_bounds_map.end()) {
-      medium_bounds_map.emplace(medium_index, std::make_pair(bounds_min, bounds_max));
+    if (medium_has_bounds_scratch[medium_index] == 0u) {
+      medium_bounds_scratch[medium_index] = {bounds_min, 0.0f, bounds_max, 0.0f};
+      medium_has_bounds_scratch[medium_index] = 1u;
       return;
     }
-    existing->second.first = min(existing->second.first, bounds_min);
-    existing->second.second = max(existing->second.second, bounds_max);
+    medium_bounds_scratch[medium_index].p_min = min(medium_bounds_scratch[medium_index].p_min, bounds_min);
+    medium_bounds_scratch[medium_index].p_max = max(medium_bounds_scratch[medium_index].p_max, bounds_max);
   };
 
   for (const ResolvedMeshInstance& instance : data.hierarchy.mesh_instances) {
@@ -1696,6 +2320,10 @@ bool SceneRepresentationImpl::update_medium_bounds() {
         continue;
       }
       const Material& material = data.materials[triangle.material_index];
+      if (((material.int_medium == kInvalidIndex) || (material.int_medium >= medium_count)) &&
+          ((material.ext_medium == kInvalidIndex) || (material.ext_medium >= medium_count))) {
+        continue;
+      }
       const float3 v0 = transform_point(instance.object_to_world, data.vertices.pos[triangle.i[0]]);
       const float3 v1 = transform_point(instance.object_to_world, data.vertices.pos[triangle.i[1]]);
       const float3 v2 = transform_point(instance.object_to_world, data.vertices.pos[triangle.i[2]]);
@@ -1718,35 +2346,35 @@ bool SceneRepresentationImpl::update_medium_bounds() {
       if ((attachment.type != SceneAttachment::Type::Medium) || (attachment.resource_index >= data.mediums.array_size())) {
         continue;
       }
-      if (attached_nodes[attachment.resource_index] != kInvalidIndex) {
+      if (medium_attachment_nodes_scratch[attachment.resource_index] != kInvalidIndex) {
         log::error("Medium %u is attached to multiple enabled nodes (%u and %u); medium resources support one transform", attachment.resource_index,
-          attached_nodes[attachment.resource_index], node_index);
+          medium_attachment_nodes_scratch[attachment.resource_index], node_index);
         valid = false;
         continue;
       }
 
       AffineTransform world_to_object = {};
-      float determinant = 0.0f;
+      double determinant = 0.0;
       if (invert_affine(data.hierarchy.world_transforms[node_index], world_to_object, determinant) == false) {
         log::error("Medium %u is attached to node %u with a singular transform", attachment.resource_index, node_index);
         valid = false;
         continue;
       }
 
-      attached_nodes[attachment.resource_index] = node_index;
+      medium_attachment_nodes_scratch[attachment.resource_index] = node_index;
       Medium& medium = data.mediums.get(attachment.resource_index);
       medium.world_to_object = world_to_object;
-      medium.local_bounds = medium_local_bounds[attachment.resource_index];
+      medium.local_bounds = medium_authored_bounds[attachment.resource_index];
       medium.bounds = transform_bounding_box(data.hierarchy.world_transforms[node_index], medium.local_bounds);
     }
   }
 
-  for (const auto& [medium_index, bounds_pair] : medium_bounds_map) {
-    if ((medium_index >= data.mediums.array_size()) || (attached_nodes[medium_index] != kInvalidIndex)) {
+  for (uint32_t medium_index = 0u; medium_index < medium_count; ++medium_index) {
+    if ((medium_has_bounds_scratch[medium_index] == 0u) || (medium_attachment_nodes_scratch[medium_index] != kInvalidIndex)) {
       continue;
     }
     Medium& medium = data.mediums.get(medium_index);
-    medium.bounds = {bounds_pair.first, 0.0f, bounds_pair.second, 0.0f};
+    medium.bounds = medium_bounds_scratch[medium_index];
     medium.local_bounds = medium.bounds;
   }
 
@@ -2073,9 +2701,8 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       const SceneData::CameraInfo& entry = impl->data.cameras[camera_index];
       const Camera* camera_to_save = &entry.cam;
       if (entry.active) {
-        AffineTransform object_to_world = {};
-        AffineTransform world_to_object = {};
-        if (find_attachment_transform(impl->data, SceneAttachment::Type::Camera, camera_index, object_to_world, world_to_object) == false) {
+        AttachmentTransform transform = {};
+        if (find_attachment_transform(impl->data, SceneAttachment::Type::Camera, camera_index, transform) == false) {
           camera_to_save = &impl->active_camera;
         }
       }
@@ -2450,7 +3077,7 @@ void SceneRepresentationImpl::setup_atmosphere_references() {
 }
 
 bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len,
-  bool force_tangents, bool spectral_scene, bool create_default_camera_entry) {
+  bool force_tangents, bool spectral_scene) {
   if (data.resolve_hierarchy() == false) {
     log::error("Failed to resolve scene hierarchy");
     return false;
@@ -2481,16 +3108,12 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
         needs_camera_positioning = true;
       }
     } else {
-      auto it = std::find_if(data.cameras.begin(), data.cameras.end(), [](const auto& e) {
-        return e.active;
-      });
-      const auto& selected = (it != data.cameras.end()) ? *it : data.cameras.front();
+      const auto& selected = select_active_camera(data);
       camera = selected.cam;
       const uint32_t camera_index = static_cast<uint32_t>(&selected - data.cameras.data());
-      AffineTransform object_to_world = {};
-      AffineTransform world_to_object = {};
-      if (find_attachment_transform(data, SceneAttachment::Type::Camera, camera_index, object_to_world, world_to_object)) {
-        camera = transform_camera(selected.cam, object_to_world);
+      AttachmentTransform transform = {};
+      if (find_attachment_transform(data, SceneAttachment::Type::Camera, camera_index, transform)) {
+        camera = transform_camera(selected.cam, transform.object_to_world, transform.orientation_to_world);
       }
     }
   }
@@ -2559,12 +3182,26 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
     compute_camera_position_to_fit_scene(data, camera, kDefaultViewDirection, position, target);
     const float3 direction = normalize(target - position);
     build_camera(camera, position, direction, kWorldUp, camera.film_size, camera_fov);
-    if (create_default_camera_entry && (data.cameras.empty())) {
-      auto& entry = data.cameras.emplace_back();
-      entry.id = "default";
-      entry.active = true;
-      entry.cam = camera;
-    }
+  }
+
+  if (data.cameras.empty()) {
+    auto& entry = data.cameras.emplace_back();
+    entry.id = "camera";
+    entry.active = true;
+    entry.cam = camera;
+  }
+
+  SceneData::CameraInfo& selected_camera = select_active_camera(data);
+  if ((ensure_camera_nodes(data) == false) || (data.resolve_hierarchy() == false)) {
+    log::error("Failed to attach cameras to the scene hierarchy");
+    return false;
+  }
+
+  camera = selected_camera.cam;
+  const uint32_t selected_camera_index = static_cast<uint32_t>(&selected_camera - data.cameras.data());
+  AttachmentTransform camera_transform = {};
+  if (find_attachment_transform(data, SceneAttachment::Type::Camera, selected_camera_index, camera_transform)) {
+    camera = transform_camera(selected_camera.cam, camera_transform.object_to_world, camera_transform.orientation_to_world);
   }
 
   return true;

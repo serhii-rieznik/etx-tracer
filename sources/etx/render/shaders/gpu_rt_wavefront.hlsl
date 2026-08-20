@@ -551,14 +551,10 @@ SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary,
     texcoord_0, texcoord_1, texcoord_2, result.barycentrics, has_surface_frame, has_texcoords, result.vertex);
 
   const GPUSceneInstanceData instance = load_scene_instance(instance_index);
-  const float local_handedness = dot(cross(result.vertex.nrm, result.vertex.tan), result.vertex.btn) >= 0.0f ? 1.0f : -1.0f;
-  const float orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
-  result.vertex.pos = scene_instance_transform_point(instance, result.vertex.pos);
-  result.vertex.nrm = scene_instance_transform_normal(instance, result.vertex.nrm) * orientation;
-  result.vertex.tan = normalize(scene_instance_transform_vector(instance, result.vertex.tan));
-  result.vertex.tan = normalize(result.vertex.tan - result.vertex.nrm * dot(result.vertex.tan, result.vertex.nrm));
-  result.vertex.btn = normalize(cross(result.vertex.nrm, result.vertex.tan)) * local_handedness;
+  result.vertex = scene_instance_transform_vertex(instance, result.vertex);
   result.geo_normal = scene_instance_transform_geometric_normal(instance, tri.geo_n);
+  scene_math_shared_finalize_shading_frame(result.vertex.nrm, result.vertex.nrm, result.vertex.tan, result.vertex.btn, result.geo_normal, ray_dir, result.vertex.nrm,
+    result.vertex.tan, result.vertex.btn);
   return result;
 }
 
@@ -666,7 +662,9 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
   result.tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], result.triangle_index);
   result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction, result.instance_index);
   result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
-  try_load_material_full(result.tri.material_index, result.material);
+  if (try_load_material_full(result.tri.material_index, result.material)) {
+    surface_point_apply_material_normal_map(result.surface_point, result.material, ray.Direction);
+  }
   result.hit = 1u;
   return true;
 }
@@ -746,7 +744,8 @@ bool wavefront_sample_emitter_to_point(uint light_sampling_mode, SpectralQuery s
   float2 image_offset = float2(0.0f, 0.0f);
   float image_u_scale = 1.0f;
   emitter_access_try_load_image_params(make_scene_emitter_access_gpu_context(), emitter_profile.emission_image_index, image_offset, image_u_scale);
-  sample_value.direction = uv_to_direction(image_sample.uv, image_offset, image_u_scale, projection);
+  float3 local_direction = uv_to_direction(image_sample.uv, image_offset, image_u_scale, projection);
+  sample_value.direction = emitter_access_environment_local_to_world(emitter_profile.emitter_direction, emitter_profile.emitter_angular_size, local_direction);
   sample_value.normal = -sample_value.direction;
   sample_value.origin =
     from_point + sample_value.direction * distance_to_sphere(from_point, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
@@ -834,7 +833,8 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
   float2 image_offset = float2(0.0f, 0.0f);
   float image_u_scale = 1.0f;
   emitter_access_try_load_image_params(make_scene_emitter_access_gpu_context(), emitter_profile.emission_image_index, image_offset, image_u_scale);
-  sample_value.direction = -uv_to_direction(image_sample.uv, image_offset, image_u_scale, projection);
+  float3 local_direction = -uv_to_direction(image_sample.uv, image_offset, image_u_scale, projection);
+  sample_value.direction = emitter_access_environment_local_to_world(emitter_profile.emitter_direction, emitter_profile.emitter_angular_size, local_direction);
   sample_value.normal = sample_value.direction;
   OrthonormalBasis basis = orthonormal_basis(sample_value.direction);
   float2 disk_sample = sample_disk(float2(rnd01(seed), rnd01(seed)));

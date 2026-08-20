@@ -30,6 +30,7 @@ struct GPUEmitterProfileABIData {
   uint32_t medium_index;
   uint32_t emitter_profile_meta;
   float3 emitter_direction;
+  float emitter_angular_size;
   float emitter_angular_size_cosine;
 };
 
@@ -148,6 +149,7 @@ ETX_SHARED_INLINE GPUEmitterProfileABIData gpu_abi_load_emitter_profile(ByteAddr
   result.medium_index = gpu_abi_load_u32(buffer, base_offset + kEmitterProfileMediumIndexOffset);
   result.emitter_profile_meta = gpu_abi_load_u32(buffer, base_offset + kEmitterProfileMetaOffset);
   result.emitter_direction = gpu_abi_load_f32x3(buffer, base_offset + kEmitterProfileDirectionalDirectionOffset);
+  result.emitter_angular_size = gpu_abi_load_f32(buffer, base_offset + kEmitterProfileDirectionalAngularSizeOffset);
   result.emitter_angular_size_cosine = gpu_abi_load_f32(buffer, base_offset + kEmitterProfileDirectionalAngularSizeCosineOffset);
   return result;
 }

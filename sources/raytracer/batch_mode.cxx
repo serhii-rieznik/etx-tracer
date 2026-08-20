@@ -2012,13 +2012,20 @@ struct BatchRenderSession {
     render_context.init();
     const auto render_context_end = std::chrono::steady_clock::now();
     if (render_context.context().valid() == false) {
-      log::error("Failed to initialize headless RHI context");
-      return false;
+      if (initialize_gpu_renderer) {
+        log::error("Failed to initialize headless RHI context for GPU batch rendering");
+        return false;
+      }
+      log::warning("Headless RHI is unavailable; continuing with CPU-only batch rendering");
     }
 
     const auto scene_rhi_begin = std::chrono::steady_clock::now();
-    scene.set_scattering_rhi(render_context.context());
-    gpu_renderer_supported = render_context.context().capabilities().supports_ray_tracing;
+    if (render_context.context().valid()) {
+      scene.set_scattering_rhi(render_context.context());
+      gpu_renderer_supported = render_context.context().capabilities().supports_ray_tracing;
+    } else {
+      gpu_renderer_supported = false;
+    }
     const auto scene_rhi_end = std::chrono::steady_clock::now();
 
     const auto ior_begin = std::chrono::steady_clock::now();
@@ -2511,7 +2518,11 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
 
   session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene);
   if (session.gpu_renderer.finish_preparation(session.render_context.context(), session.scene) == false) {
-    log::error("GPU renderer preparation failed before batch rendering");
+    if (session.gpu_renderer.runtime_failed()) {
+      log::error("GPU renderer preparation failed before batch rendering: %s", session.gpu_renderer.runtime_failure_reason().c_str());
+    } else {
+      log::error("GPU renderer preparation failed before batch rendering");
+    }
     return false;
   }
   session.gpu_renderer.set_wavefront_steps_per_render(options.gpu_wavefront_steps_per_frame);

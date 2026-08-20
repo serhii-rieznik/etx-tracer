@@ -36,9 +36,15 @@ Vertex wavefront_make_connect_path_vertex(GPUWavefrontPathVertex path_vertex) {
 
   TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], path_vertex.triangle_index);
   Vertex result = wavefront_interpolate_vertex(tri, barycentrics(path_vertex.barycentric));
+  if (path_vertex.instance_index != kInvalidIndex) {
+    result = scene_instance_transform_vertex(load_scene_instance(path_vertex.instance_index), result);
+  }
+
+  float frame_handedness = dot(cross(result.nrm, result.tan), result.btn) >= 0.0f ? 1.0f : -1.0f;
   result.pos = path_vertex.position;
   result.nrm = path_vertex.normal;
   result.tex = path_vertex.texcoord;
+  scene_math_shared_build_sampling_frame_with_handedness(result.nrm, result.tan, result.btn, frame_handedness, result.nrm, result.tan, result.btn);
   return result;
 }
 

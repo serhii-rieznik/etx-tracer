@@ -22,7 +22,7 @@ struct EnergyCompensationParams {
   uint pass_kind;
   uint sample_count;
   uint multisample_count;
-  uint pad0;
+  uint spectral_channel;
   uint pad1;
   float4 ext_eta;
   float4 ext_k;
@@ -85,7 +85,7 @@ EnergyCompensationParams load_params() {
   result.pass_kind = load_u32(buffer, 44u);
   result.sample_count = load_u32(buffer, 48u);
   result.multisample_count = load_u32(buffer, 52u);
-  result.pad0 = load_u32(buffer, 56u);
+  result.spectral_channel = load_u32(buffer, 56u);
   result.pad1 = load_u32(buffer, 60u);
   result.ext_eta = load_f32x4(buffer, 64u);
   result.ext_k = load_f32x4(buffer, 80u);
@@ -577,9 +577,13 @@ void main(uint3 id : SV_DispatchThreadID) {
     float4 image = float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 geometric = float4(0.0f, 0.0f, 0.0f, 1.0f);
     if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
-      for (uint channel = 0u; channel < kBSDFEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
-        EnergyCompensationDirectionalResult value = ec_integrate_conductor_directional(params, channel, mu, alpha);
-        ec_set_channel(image, channel, value.albedo.x);
+      uint channel = params.spectral_channel;
+      EnergyCompensationDirectionalResult value = ec_integrate_conductor_directional(params, channel, mu, alpha);
+      if (channel > 0u) {
+        image = load_float4(params.output_directional_index, index);
+      }
+      ec_set_channel(image, channel, value.albedo.x);
+      if (channel == 0u) {
         geometric.x = value.geometric_albedo;
         geometric.y = value.visible_probability;
       }
@@ -589,7 +593,9 @@ void main(uint3 id : SV_DispatchThreadID) {
       geometric = float4(value.geometric_albedo, value.visible_probability, 0.0f, 1.0f);
     }
     store_float4(params.output_directional_index, index, image);
-    store_float4(params.output_geometric_index, index, geometric);
+    if ((params.cache_mode != kBSDFEnergyCompensationCacheModeSpectralScalar) || (params.spectral_channel == 0u)) {
+      store_float4(params.output_geometric_index, index, geometric);
+    }
     return;
   }
 
@@ -643,15 +649,22 @@ void main(uint3 id : SV_DispatchThreadID) {
     float4 total_albedo[2] = {float4(0.0f, 0.0f, 0.0f, 0.0f), float4(0.0f, 0.0f, 0.0f, 0.0f)};
     float4 probability[2] = {float4(0.0f, 0.0f, 0.0f, 0.0f), float4(0.0f, 0.0f, 0.0f, 0.0f)};
     if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
-      for (uint channel = 0u; channel < kBSDFEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
-        EnergyCompensationDielectricResult single_value = ec_integrate_dielectric_directional(params, channel, false, incident_outside, mu, alpha);
-        EnergyCompensationDielectricResult total_value = ec_integrate_dielectric_directional(params, channel, true, incident_outside, mu, alpha);
-        ec_set_channel(branch_albedo[0], channel, single_value.branch_albedo[0].x);
-        ec_set_channel(branch_albedo[1], channel, single_value.branch_albedo[1].x);
-        ec_set_channel(total_albedo[0], channel, total_value.branch_albedo[0].x);
-        ec_set_channel(total_albedo[1], channel, total_value.branch_albedo[1].x);
-        ec_set_channel(probability[0], channel, single_value.branch_visible_probability[0]);
-        ec_set_channel(probability[1], channel, single_value.branch_visible_probability[1]);
+      uint channel = params.spectral_channel;
+      EnergyCompensationDielectricResult single_value = ec_integrate_dielectric_directional(params, channel, false, incident_outside, mu, alpha);
+      EnergyCompensationDielectricResult total_value = ec_integrate_dielectric_directional(params, channel, true, incident_outside, mu, alpha);
+      uint incident_side = side;
+      for (uint outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
+        uint branch = ec_dielectric_branch_index(incident_side, outgoing_side);
+        uint x = branch * kBSDFEnergyCompensationDielectricLutSize + mu_index;
+        uint out_index = alpha_index * (kBSDFEnergyCompensationDielectricBranchCount * kBSDFEnergyCompensationDielectricLutSize) + x;
+        if (channel > 0u) {
+          branch_albedo[outgoing_side] = load_float4(params.output_directional_index, out_index);
+          total_albedo[outgoing_side] = load_float4(params.output_total_index, out_index);
+          probability[outgoing_side] = load_float4(params.output_probability_index, out_index);
+        }
+        ec_set_channel(branch_albedo[outgoing_side], channel, single_value.branch_albedo[outgoing_side].x);
+        ec_set_channel(total_albedo[outgoing_side], channel, total_value.branch_albedo[outgoing_side].x);
+        ec_set_channel(probability[outgoing_side], channel, single_value.branch_visible_probability[outgoing_side]);
       }
     } else {
       EnergyCompensationDielectricResult single_value = ec_integrate_dielectric_directional(params, 0u, false, incident_outside, mu, alpha);

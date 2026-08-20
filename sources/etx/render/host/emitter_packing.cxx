@@ -21,11 +21,53 @@ bool triangle_has_valid_positions(const SceneData& scene_data, const Triangle& t
   return i0_valid && i1_valid && i2_valid;
 }
 
+float4 normalize_quaternion(const float4& value) {
+  const float length_squared = dot(value, value);
+  return (length_squared > kEpsilon) ? (value / std::sqrt(length_squared)) : float4{0.0f, 0.0f, 0.0f, 1.0f};
+}
+
+float4 multiply_quaternions(const float4& a, const float4& b) {
+  return {
+    a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  };
+}
+
+float4 quaternion_from_orientation(const AffineTransform& orientation) {
+  const float m00 = orientation.rows[0].x;
+  const float m11 = orientation.rows[1].y;
+  const float m22 = orientation.rows[2].z;
+  float4 result = {};
+  const float trace = m00 + m11 + m22;
+  if (trace > 0.0f) {
+    const float scale = 2.0f * std::sqrt(trace + 1.0f);
+    result = {(orientation.rows[2].y - orientation.rows[1].z) / scale, (orientation.rows[0].z - orientation.rows[2].x) / scale,
+      (orientation.rows[1].x - orientation.rows[0].y) / scale, 0.25f * scale};
+  } else if ((m00 > m11) && (m00 > m22)) {
+    const float scale = 2.0f * std::sqrt(1.0f + m00 - m11 - m22);
+    result = {0.25f * scale, (orientation.rows[0].y + orientation.rows[1].x) / scale, (orientation.rows[0].z + orientation.rows[2].x) / scale,
+      (orientation.rows[2].y - orientation.rows[1].z) / scale};
+  } else if (m11 > m22) {
+    const float scale = 2.0f * std::sqrt(1.0f + m11 - m00 - m22);
+    result = {(orientation.rows[0].y + orientation.rows[1].x) / scale, 0.25f * scale, (orientation.rows[1].z + orientation.rows[2].y) / scale,
+      (orientation.rows[0].z - orientation.rows[2].x) / scale};
+  } else {
+    const float scale = 2.0f * std::sqrt(1.0f + m22 - m00 - m11);
+    result = {(orientation.rows[0].z + orientation.rows[2].x) / scale, (orientation.rows[1].z + orientation.rows[2].y) / scale, 0.25f * scale,
+      (orientation.rows[1].x - orientation.rows[0].y) / scale};
+  }
+  return normalize_quaternion(result);
+}
+
 void update_directional_profile_data(std::vector<EmitterProfile>& emitter_profiles) {
   for (auto& profile : emitter_profiles) {
     if (profile.cls == EmitterProfile::Class::Directional) {
       profile.directional.equivalent_disk_size = 2.0f * std::tan(profile.directional.angular_size * 0.5f);
       profile.directional.angular_size_cosine = std::cos(profile.directional.angular_size * 0.5f);
+    } else if (profile.cls == EmitterProfile::Class::Environment) {
+      profile.set_environment_rotation(normalize_quaternion(profile.environment_rotation()));
     }
   }
 }
@@ -97,13 +139,22 @@ PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
         }
 
         EmitterProfile profile = source_profile;
+        if ((node_index >= scene_data.hierarchy.orientation_valid.size()) || (scene_data.hierarchy.orientation_valid[node_index] == 0u) ||
+            (node_index >= scene_data.hierarchy.world_orientations.size())) {
+          log::warning("Distant emitter %u is attached below a sheared or singular node and was skipped", attachment.resource_index);
+          continue;
+        }
+        const AffineTransform& world_orientation = scene_data.hierarchy.world_orientations[node_index];
         if (profile.cls == EmitterProfile::Class::Directional) {
-          const float3 transformed_direction = transform_vector(scene_data.hierarchy.world_transforms[node_index], profile.directional.direction);
+          const float3 transformed_direction = transform_vector(world_orientation, profile.directional.direction);
           if (dot(transformed_direction, transformed_direction) <= kEpsilon) {
-            log::warning("Directional emitter %u has a degenerate node transform and was skipped", attachment.resource_index);
+            log::warning("Directional emitter %u has a degenerate direction and was skipped", attachment.resource_index);
             continue;
           }
           profile.directional.direction = normalize(transformed_direction);
+        } else if (profile.cls == EmitterProfile::Class::Environment) {
+          const float4 node_rotation = quaternion_from_orientation(world_orientation);
+          profile.set_environment_rotation(normalize_quaternion(multiply_quaternions(node_rotation, profile.environment_rotation())));
         }
         const uint32_t packed_profile_index = static_cast<uint32_t>(result.emitter_profiles.size());
         result.emitter_profiles.push_back(profile);

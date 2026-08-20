@@ -222,6 +222,10 @@ struct SceneData {
   void build_atmosphere_and_sun_images(uint32_t atmosphere_emitter_index, RHIContext& rhi, scattering::GpuContext& gpu_context);
   void rebuild_sun_images_for_atmosphere(uint32_t atmosphere_emitter_index, const std::vector<uint32_t>& sun_emitter_indices, RHIContext& rhi, scattering::GpuContext& gpu_context);
   void rebuild_atmosphere_emitter(uint32_t emitter_index, RHIContext& rhi, scattering::GpuContext& gpu_context);
+
+ private:
+  std::vector<uint32_t> _camera_attachment_nodes_scratch;
+  std::vector<uint32_t> _medium_attachment_nodes_scratch;
 };
 
 }  // namespace etx

@@ -163,7 +163,8 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
   float2 image_offset = float2(0.0f, 0.0f);
   float image_u_scale = 1.0f;
   emitter_access_try_load_image_params(make_scene_emitter_access_gpu_context(), emitter_profile.emission_image_index, image_offset, image_u_scale);
-  sample_value.direction = uv_to_direction(image_sample.uv, image_offset, image_u_scale, projection);
+  float3 local_direction = uv_to_direction(image_sample.uv, image_offset, image_u_scale, projection);
+  sample_value.direction = emitter_access_environment_local_to_world(emitter_profile.emitter_direction, emitter_profile.emitter_angular_size, local_direction);
   sample_value.normal = -sample_value.direction;
   sample_value.origin =
     from_point + sample_value.direction * distance_to_sphere(from_point, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
@@ -279,7 +280,8 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
   float2 image_offset = float2(0.0f, 0.0f);
   float image_u_scale = 1.0f;
   emitter_access_try_load_image_params(make_scene_emitter_access_gpu_context(), emitter_profile.emission_image_index, image_offset, image_u_scale);
-  sample_value.direction = -uv_to_direction(image_sample.uv, image_offset, image_u_scale, projection);
+  float3 local_direction = -uv_to_direction(image_sample.uv, image_offset, image_u_scale, projection);
+  sample_value.direction = emitter_access_environment_local_to_world(emitter_profile.emitter_direction, emitter_profile.emitter_angular_size, local_direction);
   sample_value.normal = sample_value.direction;
   OrthonormalBasis basis = orthonormal_basis(sample_value.direction);
   float2 disk_sample = sample_disk(float2(rnd01(seed), rnd01(seed)));

@@ -14,10 +14,9 @@
 
 #include "ui.hxx"
 #include "platform_ui.hxx"
-#include <etx/engine/camera_controller.hxx>
-
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <ImGuizmo.h>
 
 #include <etx/rhi/rhi_types.hxx>
 #include <etx/rhi/rhi.hxx>
@@ -381,7 +380,7 @@ void UI::full_width_item() {
 }
 
 bool UI::labeled_control(const char* label, std::function<bool()>&& control_func) {
-  ImGui::Text("%s:", label);
+  ImGui::TextUnformatted(label);
   full_width_item();
   return control_func();
 }
@@ -776,7 +775,12 @@ bool UI::build_options(Options& options) {
     switch (option.cls) {
       case Option::Class::String: {
         auto& data = option.as<Option::Class::String>();
-        ImGui::TextColored(kOptionStringColor, "%s", data.value.c_str());
+        if (option.description.empty() == false) {
+          ImGui::TextUnformatted(option.description.c_str());
+        }
+        ImGui::PushStyleColor(ImGuiCol_Text, kOptionStringColor);
+        ImGui::TextWrapped("%s", data.value.c_str());
+        ImGui::PopStyleColor();
         break;
       };
       case Option::Class::Boolean: {
@@ -788,12 +792,14 @@ bool UI::build_options(Options& options) {
         auto& data = option.as<Option::Class::Float>();
         const std::string& id_source = option.id.empty() ? option.description : option.id;
         std::string label = "##" + id_source;
-        std::string fmt = option.description.empty() ? "%.3f" : option.description + " %.3f";
+        if (option.description.empty() == false) {
+          ImGui::TextUnformatted(option.description.c_str());
+        }
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         if (data.bounds.maximum > data.bounds.minimum) {
-          changed = ImGui::DragFloat(label.c_str(), &data.value, 0.1f, data.bounds.minimum, data.bounds.maximum, fmt.c_str(), ImGuiSliderFlags_AlwaysClamp);
+          changed = ImGui::DragFloat(label.c_str(), &data.value, 0.1f, data.bounds.minimum, data.bounds.maximum, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         } else {
-          changed = ImGui::InputFloat(label.c_str(), &data.value, 0.0f, 0.0f, fmt.c_str());
+          changed = ImGui::InputFloat(label.c_str(), &data.value, 0.0f, 0.0f, "%.3f");
         }
         break;
       }
@@ -803,22 +809,35 @@ bool UI::build_options(Options& options) {
           ETX_CRITICAL(data.bounds.maximum > data.bounds.minimum);
           ETX_CRITICAL(option.name_getter);
           int32_t original = data.value;
-          if (ImGui::TreeNodeEx(option.description.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_Framed)) {
-            for (int32_t i = data.bounds.minimum; i <= data.bounds.maximum; ++i) {
-              if (ImGui::RadioButton(option.name_getter(i).c_str(), &data.value, i)) {
-                data.value = i;
+          const std::string& id_source = option.id.empty() ? option.description : option.id;
+          const bool value_valid = (data.value >= data.bounds.minimum) && (data.value <= data.bounds.maximum);
+          const std::string preview = value_valid ? option.name_getter(data.value) : std::string("Invalid");
+          if (option.description.empty() == false) {
+            ImGui::TextUnformatted(option.description.c_str());
+          }
+          full_width_item();
+          if (ImGui::BeginCombo(("##" + id_source).c_str(), preview.c_str())) {
+            for (int32_t value = data.bounds.minimum; value <= data.bounds.maximum; ++value) {
+              const bool selected = data.value == value;
+              if (ImGui::Selectable(option.name_getter(value).c_str(), selected)) {
+                data.value = value;
+              }
+              if (selected) {
+                ImGui::SetItemDefaultFocus();
               }
             }
-            ImGui::TreePop();
+            ImGui::EndCombo();
           }
           changed = data.value != original;
         } else {
           const std::string& id_source = option.id.empty() ? option.description : option.id;
           std::string label = "##" + id_source;
-          std::string fmt = option.description.empty() ? "%d" : option.description + " %d";
+          if (option.description.empty() == false) {
+            ImGui::TextUnformatted(option.description.c_str());
+          }
           ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           if (data.bounds.maximum > data.bounds.minimum) {
-            changed = ImGui::DragInt(label.c_str(), &data.value, 0.1f, data.bounds.minimum, data.bounds.maximum, fmt.c_str(), ImGuiSliderFlags_AlwaysClamp);
+            changed = ImGui::DragInt(label.c_str(), &data.value, 0.1f, data.bounds.minimum, data.bounds.maximum, "%d", ImGuiSliderFlags_AlwaysClamp);
           } else {
             changed = ImGui::InputInt(label.c_str(), &data.value, 0, 0);
           }
@@ -827,7 +846,7 @@ bool UI::build_options(Options& options) {
       }
       case Option::Class::Float3: {
         auto& data = option.as<Option::Class::Float3>();
-        ImGui::Text("%s", option.description.c_str());
+        ImGui::TextUnformatted(option.description.c_str());
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         const char* buffer_name = format_string("##%s", option.description.c_str());
         changed = ImGui::DragFloat3(buffer_name, &data.value.x, 0.1f, data.bounds.minimum.x, data.bounds.maximum.x, "%.3f", ImGuiSliderFlags_AlwaysClamp);
@@ -864,8 +883,9 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
 
   float clamped_min_elevation = max(min_elevation, -pole_threshold);
   float clamped_max_elevation = min(max_elevation, pole_threshold);
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (ImGui::SliderFloat("##elevation", &elevation_deg, clamped_min_elevation, clamped_max_elevation, "Elevation: %.1f°")) {
+  ImGui::TextUnformatted("Elevation");
+  full_width_item();
+  if (ImGui::SliderFloat("##elevation", &elevation_deg, clamped_min_elevation, clamped_max_elevation, "%.1f°")) {
     angles.y = std::clamp(elevation_deg * kPi / 180.0f, clamped_min_elevation * kPi / 180.0f, clamped_max_elevation * kPi / 180.0f);
     if (!std::isfinite(angles.y))
       angles.y = 0.0f;
@@ -874,11 +894,12 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
 
   bool near_pole = (std::abs(elevation_deg) >= pole_threshold);
 
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  ImGui::TextUnformatted("Azimuth");
+  full_width_item();
   if (near_pole) {
     ImGui::BeginDisabled();
   }
-  if (ImGui::SliderFloat("##azimuth", &azimuth_deg, min_azimuth, max_azimuth, "Azimuth: %.1f°")) {
+  if (ImGui::SliderFloat("##azimuth", &azimuth_deg, min_azimuth, max_azimuth, "%.1f°")) {
     angles.x = std::clamp(azimuth_deg * kPi / 180.0f, min_azimuth * kPi / 180.0f, max_azimuth * kPi / 180.0f);
     if (!std::isfinite(angles.x))
       angles.x = 0.0f;
@@ -1058,9 +1079,9 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
     "Preset",
   };
 
-  ImGui::Text("%s", base_label);
+  ImGui::TextUnformatted(base_label);
   SpectrumEditorState::Mode previous_mode = editor_state.mode;
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  full_width_item();
   if (ImGui::BeginCombo("##emission_mode", kModeLabels[static_cast<uint32_t>(editor_state.mode)])) {
     for (uint32_t i = 0; i < 3; ++i) {
       bool selected = (editor_state.mode == static_cast<SpectrumEditorState::Mode>(i));
@@ -1083,7 +1104,8 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
     }
     const char* temperature_label = format_string("##emission_temp_%s", unique_id);
     float temperature = editor_state.temperature;
-    if (ImGui::InputFloat(temperature_label, &temperature, 100.0f, 1000.0f, "%.0f")) {
+    full_width_item();
+    if (ImGui::InputFloat(temperature_label, &temperature, 100.0f, 1000.0f, "%.0f K")) {
       temperature = std::clamp(temperature, 1000.0f, 40000.0f);
       editor_state.temperature = temperature;
       SpectralDistribution temp_spd = SpectralDistribution::from_normalized_black_body(temperature, editor_state.scale);
@@ -1324,8 +1346,8 @@ bool UI::sampled_image_picker(SceneRepresentation& scene_rep, const char* label,
 
   const char* channel_names[] = {"R", "G", "B", "A"};
   int32_t channel_index = static_cast<int32_t>(image.channel);
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  const std::string channel_label = std::string("Channel##") + label;
+  full_width_item();
+  const std::string channel_label = std::string("##channel_") + label;
   if (ImGui::Combo(channel_label.c_str(), &channel_index, channel_names, 4)) {
     image.channel = static_cast<uint32_t>(channel_index);
     changed = true;
@@ -1472,10 +1494,11 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
   bool scale_active = false;
   bool scale_deactivated_after_edit = false;
   if (scale && show_scale) {
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    ImGui::TextUnformatted("Scale");
+    full_width_item();
     float drag_speed = max(0.01f, max(editor_state.scale, 1.0f) * 0.01f);
     float scale_value = editor_state.scale;
-    scale_changed = ImGui::DragFloat(scale_label, &scale_value, drag_speed, show_color ? 1.0f : 0.01f, 1000.0f, "Scale: %.2f", ImGuiSliderFlags_NoRoundToFormat);
+    scale_changed = ImGui::DragFloat(scale_label, &scale_value, drag_speed, show_color ? 1.0f : 0.01f, 1000.0f, "%.2f", ImGuiSliderFlags_NoRoundToFormat);
     scale_active = ImGui::IsItemActive();
     scale_deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
     if (scale_changed) {
@@ -1503,6 +1526,7 @@ constexpr uint32_t kCompactWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindow
 
 void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ETX_PROFILER_SCOPE();
+  ImGuizmo::BeginFrame();
 
   if (_selection.kind == SelectionKind::None) {
     set_selection(SelectionKind::Rendering, 0);
@@ -1557,12 +1581,6 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
     _mesh_mapping_hash = meshh;
   }
 
-  uint64_t camh = hash_mapping(scene_rep.camera_mapping());
-  if (camh != _camera_mapping_hash) {
-    _camera_mapping.build(scene_rep.camera_mapping());
-    _camera_mapping_hash = camh;
-  }
-
   auto apply_pending_selection = [&](const MappingRepresentation& map, SelectionKind kind) {
     if ((_pending_selection.has == false) || (_pending_selection.kind != kind)) {
       return;
@@ -1576,7 +1594,6 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   apply_pending_selection(_material_mapping, SelectionKind::Material);
   apply_pending_selection(_medium_mapping, SelectionKind::Medium);
   apply_pending_selection(_mesh_mapping, SelectionKind::Mesh);
-  apply_pending_selection(_camera_mapping, SelectionKind::Camera);
   _pending_selection = {};
 
   validate_selections(scene_rep);
@@ -1589,7 +1606,10 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   }
   build_status_bar(ctx);
   build_scene_objects_window(scene_rep, ctx);
-  build_properties_window(scene_rep, scene_rep.camera(), ctx, data);
+  build_scene_tree_window(scene_rep, ctx);
+  build_node_properties_window(scene_rep, ctx, data);
+  build_properties_window(scene_rep, ctx, data);
+  build_transform_gizmo(scene_rep, data);
   build_memory_diagnostics(scene_rep, data.film);
   build_renderer_preparation_modal();
 
@@ -1603,9 +1623,17 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
     if (debug_info_visible) {
       if (has_integrator_debug_info) {
         const auto debug_info = _current_integrator->status().debug_info;
-        for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
-          const char* value_buffer = format_string("%.3f", debug_info[i].value);
-          ImGui::LabelText(debug_info[i].title, "%s", value_buffer);
+        if (ImGui::BeginTable("##integrator_debug_info", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+          ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch);
+          ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 88.0f);
+          for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(debug_info[i].title);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.3f", debug_info[i].value);
+          }
+          ImGui::EndTable();
         }
       }
 
@@ -1654,6 +1682,10 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
 }
 
 bool UI::handle_event(const sapp_event* e) {
+  if ((e->type == SAPP_EVENTTYPE_MOUSE_DOWN) || (e->type == SAPP_EVENTTYPE_MOUSE_UP) || (e->type == SAPP_EVENTTYPE_MOUSE_MOVE) ||
+      (e->type == SAPP_EVENTTYPE_MOUSE_SCROLL)) {
+    return _gizmo_captures_mouse;
+  }
   if (e->type != SAPP_EVENTTYPE_KEY_DOWN) {
     return false;
   }
@@ -1706,7 +1738,9 @@ bool UI::handle_event(const sapp_event* e) {
   switch (e->key_code) {
     case SAPP_KEYCODE_F1:
     case SAPP_KEYCODE_F2:
-    case SAPP_KEYCODE_F3: {
+    case SAPP_KEYCODE_F3:
+    case SAPP_KEYCODE_F4:
+    case SAPP_KEYCODE_F5: {
       uint32_t flag = 1u << (e->key_code - SAPP_KEYCODE_F1);
       _ui_setup = (_ui_setup & flag) ? (_ui_setup & (~flag)) : (_ui_setup | flag);
       break;
@@ -1852,6 +1886,12 @@ void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std:
       break;
     case MenuCommand::ToggleProperties:
       _ui_setup ^= UIProperties;
+      break;
+    case MenuCommand::ToggleSceneTree:
+      _ui_setup ^= UISceneTree;
+      break;
+    case MenuCommand::ToggleNodeProperties:
+      _ui_setup ^= UINodeProperties;
       break;
     case MenuCommand::ToggleMemoryDiagnostics:
       _ui_setup ^= UIMemoryDiagnostics;
@@ -2103,6 +2143,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           return value.reflectance.image_index;
         }),
           [&]() {
+            ImGui::TextUnformatted("Texture");
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
             return image_picker(scene_rep, "Reflectance Texture##reflectance_texture", material.reflectance.image_index, Image::RepeatU | Image::RepeatV);
           });
@@ -2119,17 +2160,19 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             return value.scattering.image_index;
           }),
             [&]() {
+              ImGui::TextUnformatted("Texture");
               ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
               return image_picker(scene_rep, "Scattering Texture##scattering_texture", material.scattering.image_index, Image::RepeatU | Image::RepeatV);
             });
         }
         ImGui::Spacing();
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
         const bool opacity_mixed = material_values_mixed([](const Material& value) {
           return value.opacity;
         });
+        ImGui::TextUnformatted("Opacity");
+        full_width_item();
         changed |= mixed_control(opacity_mixed, [&]() {
-          return ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, opacity_mixed ? "Opacity mixed" : "Opacity %.3f",
+          return ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, opacity_mixed ? "mixed" : "%.3f",
             ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
         });
         if (uses_roughness()) {
@@ -2164,12 +2207,13 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             ImGui::Spacing();
           }
 
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           const bool rough_u_mixed = material_values_mixed([](const Material& value) {
             return value.roughness.value.x;
           });
+          ImGui::TextUnformatted(anisotropic ? "Roughness U" : "Roughness");
+          full_width_item();
           const bool rough_u_changed = mixed_control(rough_u_mixed, [&]() {
-            return ImGui::SliderFloat("##rough_u", &rough_u, 0.0f, 1.0f, rough_u_mixed ? "Roughness mixed" : (anisotropic ? "Roughness U %.3f" : "Roughness %.3f"),
+            return ImGui::SliderFloat("##rough_u", &rough_u, 0.0f, 1.0f, rough_u_mixed ? "mixed" : "%.3f",
               ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
           });
           if (rough_u_changed) {
@@ -2181,12 +2225,13 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           }
 
           if (anisotropic) {
-            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
             const bool rough_v_mixed = material_values_mixed([](const Material& value) {
               return value.roughness.value.y;
             });
+            ImGui::TextUnformatted("Roughness V");
+            full_width_item();
             const bool rough_v_changed = mixed_control(rough_v_mixed, [&]() {
-              return ImGui::SliderFloat("##rough_v", &rough_v, 0.0f, 1.0f, rough_v_mixed ? "Roughness V mixed" : "Roughness V %.3f",
+              return ImGui::SliderFloat("##rough_v", &rough_v, 0.0f, 1.0f, rough_v_mixed ? "mixed" : "%.3f",
                 ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
             });
             if (rough_v_changed) {
@@ -2199,6 +2244,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             return uint2{value.roughness.image_index, value.roughness.channel};
           }),
             [&]() {
+              ImGui::TextUnformatted("Texture");
               ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
               return sampled_image_picker(scene_rep, "Roughness Texture##roughness_texture", material.roughness, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
             });
@@ -2206,12 +2252,13 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
         if (material.cls == MaterialClass::OpenPBR) {
           ImGui::Spacing();
           float metal = material.metalness.value.x;
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           const bool metalness_mixed = material_values_mixed([](const Material& value) {
             return value.metalness.value.x;
           });
+          ImGui::TextUnformatted("Metalness");
+          full_width_item();
           const bool metalness_changed = mixed_control(metalness_mixed, [&]() {
-            return ImGui::SliderFloat("##metalness", &metal, 0.0f, 1.0f, metalness_mixed ? "Metalness mixed" : "Metalness %.3f",
+            return ImGui::SliderFloat("##metalness", &metal, 0.0f, 1.0f, metalness_mixed ? "mixed" : "%.3f",
               ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
           });
           if (metalness_changed) {
@@ -2222,17 +2269,19 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             return uint2{value.metalness.image_index, value.metalness.channel};
           }),
             [&]() {
+              ImGui::TextUnformatted("Texture");
               ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
               return sampled_image_picker(scene_rep, "Metalness Texture##metalness_texture", material.metalness, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
             });
 
           float trans = material.transmission.value.x;
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           const bool transmission_mixed = material_values_mixed([](const Material& value) {
             return value.transmission.value.x;
           });
+          ImGui::TextUnformatted("Transmission");
+          full_width_item();
           const bool transmission_changed = mixed_control(transmission_mixed, [&]() {
-            return ImGui::SliderFloat("##transmission", &trans, 0.0f, 1.0f, transmission_mixed ? "Transmission mixed" : "Transmission %.3f",
+            return ImGui::SliderFloat("##transmission", &trans, 0.0f, 1.0f, transmission_mixed ? "mixed" : "%.3f",
               ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
           });
           if (transmission_changed) {
@@ -2243,6 +2292,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             return uint2{value.transmission.image_index, value.transmission.channel};
           }),
             [&]() {
+              ImGui::TextUnformatted("Texture");
               ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
               return sampled_image_picker(scene_rep, "Transmission Texture##transmission_texture", material.transmission,
                 Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
@@ -2259,12 +2309,13 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             return image_picker(scene_rep, "Normal Texture##normal_texture", material.normal_image_index, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
           });
         if (material.normal_image_index != kInvalidIndex) {
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.normal_scale;
           }),
             [&]() {
-              return ImGui::SliderFloat("##normal_scale", &material.normal_scale, 0.0f, 4.0f, "Normal Scale %.3f", ImGuiSliderFlags_AlwaysClamp);
+              ImGui::TextUnformatted("Scale");
+              full_width_item();
+              return ImGui::SliderFloat("##normal_scale", &material.normal_scale, 0.0f, 4.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
             });
         }
 
@@ -2430,6 +2481,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           return value.thinfilm.thinkness_image;
         }),
           [&]() {
+            ImGui::TextUnformatted("Texture");
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
             return image_picker(scene_rep, "Thickness Texture##thinfilm_thickness_texture", material.thinfilm.thinkness_image,
               Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
@@ -2443,7 +2495,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       3, "Volume & Media",
       [&]() {
         if (uses_subsurface()) {
-          ImGui::TextDisabled("Subsurface Scattering");
+          ImGui::TextUnformatted("Subsurface");
           ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.subsurface_cls;
@@ -2451,6 +2503,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             [&]() {
               return ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface_cls), "Disabled\0Random Walk\0");
             });
+          ImGui::TextUnformatted("Path");
           ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.subsurface_path;
@@ -2462,12 +2515,14 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             return value.subsurface.spectrum_index;
           }),
             [&]() {
+              ImGui::TextUnformatted("Distance");
               return spectrum_picker(scene_rep, "Subsurface Distance", material.subsurface.spectrum_index, true, true);
             });
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.subsurface.image_index;
           }),
             [&]() {
+              ImGui::TextUnformatted("Texture");
               ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
               return image_picker(scene_rep, "Subsurface Texture##subsurface_texture", material.subsurface.image_index, Image::RepeatU | Image::RepeatV);
             });
@@ -2511,13 +2566,14 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   with_section(
     4, "Emission",
     [&]() {
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
       float collimation = material.emission_collimation;
       const bool collimation_mixed = material_values_mixed([](const Material& value) {
         return value.emission_collimation;
       });
+      ImGui::TextUnformatted("Collimation");
+      full_width_item();
       const bool collimation_changed = mixed_control(collimation_mixed, [&]() {
-        return ImGui::SliderFloat("##material_emission_collimation", &collimation, 0.0f, 1.0f, collimation_mixed ? "Collimation mixed" : "Collimation %.2f",
+        return ImGui::SliderFloat("##material_emission_collimation", &collimation, 0.0f, 1.0f, collimation_mixed ? "mixed" : "%.2f",
           ImGuiSliderFlags_AlwaysClamp);
       });
       if (collimation_changed) {
@@ -2589,8 +2645,9 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
     changed = true;
   }
 
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (ImGui::SliderFloat("##medium_phase_g", &m.phase_function_g, -0.999f, 0.999f, "Anisotropy %.3f", ImGuiSliderFlags_AlwaysClamp)) {
+  ImGui::TextUnformatted("Anisotropy");
+  full_width_item();
+  if (ImGui::SliderFloat("##medium_phase_g", &m.phase_function_g, -0.999f, 0.999f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
     changed = true;
   }
 
@@ -2602,13 +2659,13 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
 
   if (m.cls == Medium::Heterogeneous) {
     if (m.grid_type_enum() == DensityGrid::Type::Texture3D) {
-      ImGui::Text("Density grid (3D Texture)");
+      ImGui::TextUnformatted("Density Texture");
       ImGui::Text("%u x %u x %u", m.grid.dimensions.x, m.grid.dimensions.y, m.grid.dimensions.z);
       ImGui::Text("Bounds");
       ImGui::Text("Min: %.3f %.3f %.3f", m.bounds.p_min.x, m.bounds.p_min.y, m.bounds.p_min.z);
       ImGui::Text("Max: %.3f %.3f %.3f", m.bounds.p_max.x, m.bounds.p_max.y, m.bounds.p_max.z);
     } else if (m.grid_type_enum() == DensityGrid::Type::NoiseFunction) {
-      ImGui::Text("Density grid (Noise Function)");
+      ImGui::TextUnformatted("Density Noise");
       ImGui::Text("Noise Type");
       const char* noise_names[] = {"Perlin", "Worley", "Billow", "Voronoi", "Lattice", "Uniform"};
       int32_t noise_idx = static_cast<int32_t>(m.noise_type_enum());
@@ -2617,32 +2674,39 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
         m.set_noise_type(static_cast<NoiseFunction>(noise_idx));
         changed = true;
       }
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderFloat("##medium_noise_scale", &m.grid.noise_scale, 0.01f, 100.0f, "Scale: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      ImGui::TextUnformatted("Scale");
+      full_width_item();
+      if (ImGui::SliderFloat("##medium_noise_scale", &m.grid.noise_scale, 0.01f, 100.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderInt("##medium_noise_octaves", reinterpret_cast<int32_t*>(&m.grid.noise_octaves), 1, 16, "Octaves: %d", ImGuiSliderFlags_AlwaysClamp)) {
+      ImGui::TextUnformatted("Octaves");
+      full_width_item();
+      if (ImGui::SliderInt("##medium_noise_octaves", reinterpret_cast<int32_t*>(&m.grid.noise_octaves), 1, 16, "%d", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderFloat("##medium_noise_lacunarity", &m.grid.noise_lacunarity, 1.0f, 4.0f, "Lacunarity: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      ImGui::TextUnformatted("Lacunarity");
+      full_width_item();
+      if (ImGui::SliderFloat("##medium_noise_lacunarity", &m.grid.noise_lacunarity, 1.0f, 4.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderFloat("##medium_noise_persistence", &m.grid.noise_persistence, 0.01f, 1.0f, "Persistence: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      ImGui::TextUnformatted("Persistence");
+      full_width_item();
+      if (ImGui::SliderFloat("##medium_noise_persistence", &m.grid.noise_persistence, 0.01f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+      ImGui::TextUnformatted("Seed");
+      full_width_item();
       if (ImGui::InputInt("##medium_noise_seed", reinterpret_cast<int32_t*>(&m.grid.noise_seed))) {
         changed = true;
       }
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderFloat("##medium_noise_power", &m.grid.noise_power, 0.1f, 10.0f, "Power: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      ImGui::TextUnformatted("Power");
+      full_width_item();
+      if (ImGui::SliderFloat("##medium_noise_power", &m.grid.noise_power, 0.1f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::SliderFloat("##medium_noise_sharpness", &m.grid.noise_sharpness, 0.1f, 10.0f, "Sharpness: %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      ImGui::TextUnformatted("Sharpness");
+      full_width_item();
+      if (ImGui::SliderFloat("##medium_noise_sharpness", &m.grid.noise_sharpness, 0.1f, 10.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
       ImGui::Text("Offset");
@@ -2656,8 +2720,9 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
         changed = true;
       }
       if (border_fade_enabled) {
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        if (ImGui::SliderFloat("##medium_noise_border_fade_distance", &m.grid.noise_border_fade_distance, 0.01f, 0.5f, "Fade Distance: %.3f", ImGuiSliderFlags_AlwaysClamp)) {
+        ImGui::TextUnformatted("Fade Distance");
+        full_width_item();
+        if (ImGui::SliderFloat("##medium_noise_border_fade_distance", &m.grid.noise_border_fade_distance, 0.01f, 0.5f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
           changed = true;
         }
       }
@@ -2855,6 +2920,8 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
       ui_toggle("Scene Objects", UIObjects, MenuCommand::ToggleSceneObjects);
       ui_toggle("Properties", UIProperties, MenuCommand::ToggleProperties);
       ui_toggle("Memory Diagnostics", UIMemoryDiagnostics, MenuCommand::ToggleMemoryDiagnostics);
+      ui_toggle("Scene Tree", UISceneTree, MenuCommand::ToggleSceneTree);
+      ui_toggle("Node Properties", UINodeProperties, MenuCommand::ToggleNodeProperties);
       ImGui::EndMenu();
     }
 
@@ -3536,73 +3603,6 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
 
     ImGui::Separator();
 
-    SceneData& scene_data = scene_rep.data();
-    ImGui::Text("Nodes (%zu)", scene_data.hierarchy.nodes.size());
-    if (scene_data.hierarchy.nodes.empty()) {
-      ImGui::TextDisabled("None");
-    } else if (ImGui::BeginListBox("##nodes_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
-      std::vector<uint32_t> depths(scene_data.hierarchy.nodes.size(), 0u);
-      for (uint32_t node_index : scene_data.hierarchy.evaluation_order) {
-        const SceneNode& node = scene_data.hierarchy.nodes[node_index];
-        if (node.parent_index != kInvalidIndex) {
-          depths[node_index] = depths[node.parent_index] + 1u;
-        }
-        ImGui::PushID(static_cast<int>(node_index + 4096u));
-        const float indent = static_cast<float>(depths[node_index]) * ImGui::GetTreeNodeToLabelSpacing();
-        ImGui::Indent(indent);
-        const bool node_selected = (_selection.kind == SelectionKind::Node) && (_selection.index == static_cast<int32_t>(node_index));
-        const bool enabled = (node.flags & SceneNode::Enabled) != 0u;
-        if (enabled == false) {
-          ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        }
-        if (ImGui::Selectable(scene_data.hierarchy.node_names[node_index].c_str(), node_selected)) {
-          set_selection(SelectionKind::Node, static_cast<int32_t>(node_index));
-        }
-        if (enabled == false) {
-          ImGui::PopStyleColor();
-        }
-        ImGui::Unindent(indent);
-        ImGui::PopID();
-      }
-      ImGui::EndListBox();
-    }
-
-    ImGui::Separator();
-
-    ImGui::Text("Cameras (%zu)", static_cast<size_t>(_camera_mapping.size()));
-    if (_camera_mapping.empty()) {
-      ImGui::TextDisabled("None");
-    } else if (ImGui::BeginListBox("##cameras_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
-      for (uint64_t i = 0; i < _camera_mapping.size(); ++i) {
-        ImGui::PushID(static_cast<int>(i));
-        bool camera_selected = (_selection.kind == SelectionKind::Camera) && (_selection.index == static_cast<int32_t>(i));
-        const auto& entry = _camera_mapping.entry(static_cast<int32_t>(i));
-        uint32_t camera_index = entry.index;
-
-        bool is_active = (camera_index < scene_rep.data().cameras.size()) && scene_rep.data().cameras[camera_index].active;
-        if (is_active) {
-          ImGui::PushStyleColor(ImGuiCol_Text, kCameraTextColor);
-          std::string display_name = std::string("[") + entry.name + "]";
-          if (ImGui::Selectable(display_name.c_str(), camera_selected)) {
-            set_selection(SelectionKind::Camera, static_cast<int32_t>(i));
-          }
-          ImGui::PopStyleColor();
-        } else {
-          if (ImGui::Selectable(entry.name, camera_selected)) {
-            set_selection(SelectionKind::Camera, static_cast<int32_t>(i));
-          }
-        }
-
-        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0) && callbacks.camera_activated) {
-          callbacks.camera_activated(camera_index);
-        }
-        ImGui::PopID();
-      }
-      ImGui::EndListBox();
-    }
-
-    ImGui::Separator();
-
     ImGui::Text("Materials (%zu)", static_cast<size_t>(_material_mapping.size()));
     if (_material_mapping.empty()) {
       ImGui::TextDisabled("None");
@@ -3621,24 +3621,6 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
           } else {
             set_single_material_selection(list_index, true);
           }
-        }
-        ImGui::PopID();
-      }
-      ImGui::EndListBox();
-    }
-
-    ImGui::Separator();
-
-    ImGui::Text("Meshes (%zu)", static_cast<size_t>(_mesh_mapping.size()));
-    if (_mesh_mapping.empty()) {
-      ImGui::TextDisabled("None");
-    } else if (ImGui::BeginListBox("##meshes_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
-      for (uint64_t i = 0; i < _mesh_mapping.size(); ++i) {
-        ImGui::PushID(static_cast<int>(i + 512));  // Use different ID range
-        bool mesh_selected = (_selection.kind == SelectionKind::Mesh) && (_selection.index == static_cast<int32_t>(i));
-        const auto& entry = _mesh_mapping.entry(static_cast<int32_t>(i));
-        if (ImGui::Selectable(entry.name, mesh_selected)) {
-          set_selection(SelectionKind::Mesh, static_cast<int32_t>(i));
         }
         ImGui::PopID();
       }
@@ -3722,16 +3704,142 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
   });
 }
 
-void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx, const FrameData& data) {
+void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildContext& ctx) {
+  ctx.with_window(UISceneTree, "Scene Tree", [&]() {
+    SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
+    if (hierarchy.nodes.empty() || hierarchy.evaluation_order.empty()) {
+      ImGui::TextDisabled("No scene nodes");
+      return;
+    }
+
+    const float tree_height = 14.0f * ImGui::GetTextLineHeightWithSpacing();
+    if (ImGui::BeginChild("##scene_tree", ImVec2(-FLT_MIN, tree_height), ImGuiChildFlags_Borders)) {
+      const ImGuiTreeNodeFlags scene_flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+      const bool scene_open = ImGui::TreeNodeEx("##scene_root", scene_flags, "Scene (%zu)", hierarchy.nodes.size());
+      if (scene_open) {
+        constexpr const char* kCameraSymbol = "\xE2\x97\x8A";  // ◊
+        constexpr const char* kEmitterSymbol = "*";
+        _scene_tree_open_subtree_ends.clear();
+        auto& open_subtree_ends = _scene_tree_open_subtree_ends;
+        uint32_t order_position = 0u;
+        while (order_position < hierarchy.evaluation_order.size()) {
+          while (open_subtree_ends.empty() == false && open_subtree_ends.back() <= order_position) {
+            ImGui::TreePop();
+            open_subtree_ends.pop_back();
+          }
+
+          const uint32_t node_index = hierarchy.evaluation_order[order_position];
+          if (node_index >= hierarchy.nodes.size()) {
+            ++order_position;
+            continue;
+          }
+          const SceneNode& node = hierarchy.nodes[node_index];
+
+          uint32_t attached_camera_index = kInvalidIndex;
+          bool contains_active_camera = false;
+          bool has_camera_attachment = false;
+          bool has_emitter_attachment = false;
+          const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+          if ((attachment_end >= node.attachment_offset) && (attachment_end <= hierarchy.attachments.size())) {
+            for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+              const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+              if (attachment.type == SceneAttachment::Type::Emitter) {
+                has_emitter_attachment = true;
+              }
+              if (attachment.type == SceneAttachment::Type::Camera) {
+                has_camera_attachment = true;
+              }
+              if ((attachment.type != SceneAttachment::Type::Camera) || (attachment.resource_index >= scene_rep.data().cameras.size())) {
+                continue;
+              }
+              if (attached_camera_index == kInvalidIndex) {
+                attached_camera_index = attachment.resource_index;
+              }
+              contains_active_camera = contains_active_camera || scene_rep.data().cameras[attachment.resource_index].active;
+            }
+          }
+
+          const uint32_t subtree_end = (node_index < hierarchy.subtree_end_position.size())
+                                         ? std::min<uint32_t>(hierarchy.subtree_end_position[node_index], static_cast<uint32_t>(hierarchy.evaluation_order.size()))
+                                         : (order_position + 1u);
+          const bool leaf = subtree_end <= (order_position + 1u);
+          ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+          if (node.parent_index == kInvalidIndex) {
+            flags |= ImGuiTreeNodeFlags_DefaultOpen;
+          }
+          if ((_selection.kind == SelectionKind::Node) && (_selection.index == static_cast<int32_t>(node_index))) {
+            flags |= ImGuiTreeNodeFlags_Selected;
+          }
+          if (leaf) {
+            flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+          }
+
+          const bool enabled = (node_index < hierarchy.effective_enabled.size()) && (hierarchy.effective_enabled[node_index] != 0u);
+          if (enabled == false) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+          } else if (contains_active_camera) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kCameraTextColor);
+          }
+          const char* node_name = (node_index < hierarchy.node_names.size() && hierarchy.node_names[node_index].empty() == false)
+                                    ? hierarchy.node_names[node_index].c_str()
+                                    : format_string("Node %u", node_index);
+          std::string node_symbols;
+          if (has_camera_attachment) {
+            node_symbols += kCameraSymbol;
+          }
+          if (has_emitter_attachment) {
+            node_symbols += kEmitterSymbol;
+          }
+          const std::string node_label = node_symbols.empty() ? std::string(node_name) : (node_symbols + "  " + node_name);
+          const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<uintptr_t>(node_index) + 1u), flags, "%s", node_label.c_str());
+          if (ImGui::IsItemClicked()) {
+            set_selection(SelectionKind::Node, static_cast<int32_t>(node_index));
+          }
+          if (enabled && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0) && (attached_camera_index != kInvalidIndex) && callbacks.camera_activated) {
+            callbacks.camera_activated(attached_camera_index);
+          }
+          if ((enabled == false) || contains_active_camera) {
+            ImGui::PopStyleColor();
+          }
+
+          if (leaf == false && open) {
+            open_subtree_ends.push_back(subtree_end);
+            ++order_position;
+          } else if (leaf == false) {
+            order_position = std::max(order_position + 1u, subtree_end);
+          } else {
+            ++order_position;
+          }
+        }
+
+        while (open_subtree_ends.empty() == false) {
+          ImGui::TreePop();
+          open_subtree_ends.pop_back();
+        }
+        ImGui::TreePop();
+      }
+    }
+    ImGui::EndChild();
+  });
+}
+
+void UI::build_node_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
+  ctx.with_window(UINodeProperties, "Node Properties", [&]() {
+    if (_selection.kind != SelectionKind::Node) {
+      ImGui::TextDisabled("Select a node in Scene Tree");
+      return;
+    }
+    build_node_selection_properties(scene_rep, ctx, data);
+  });
+}
+
+void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   if ((_ui_setup & UIProperties) == 0)
     return;
 
   std::string properties_title = "Properties";
 
   switch (_selection.kind) {
-    case SelectionKind::Node:
-      properties_title = "Node";
-      break;
     case SelectionKind::Material:
       if (selected_material_count() > 1u) {
         properties_title = "Materials";
@@ -3781,9 +3889,6 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
         properties_title = "Mesh";
       }
       break;
-    case SelectionKind::Camera:
-      properties_title = "Camera";
-      break;
     case SelectionKind::Rendering:
       properties_title = "Rendering";
       break;
@@ -3795,7 +3900,7 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
   ctx.with_window(UIProperties, properties_window_name.c_str(), [&]() {
     switch (_selection.kind) {
       case SelectionKind::Node: {
-        build_node_selection_properties(scene_rep, ctx);
+        ImGui::TextDisabled("See Node Properties");
         break;
       }
       case SelectionKind::Material: {
@@ -3814,19 +3919,6 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
         build_emitter_selection_properties(scene_rep, ctx, data);
         break;
       }
-      case SelectionKind::Camera: {
-        if (_selection.index >= 0 && _selection.index < int32_t(_camera_mapping.size())) {
-          uint32_t camera_index = _camera_mapping.at(_selection.index);
-          if (camera_index < scene_rep.data().cameras.size()) {
-            Camera* selected_camera = &scene_rep.data().cameras[camera_index].cam;
-            if (scene_rep.data().cameras[camera_index].active) {
-              selected_camera = &scene_rep.mutable_camera();
-            }
-            build_camera_selection_properties(scene_rep, *selected_camera, camera_index, ctx, data);
-          }
-        }
-        break;
-      }
       case SelectionKind::Rendering: {
         build_rendering_properties(scene_rep, ctx, data);
         break;
@@ -3838,7 +3930,7 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, Camera& camera,
   });
 }
 
-void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const BuildContext&) {
+void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
   if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= hierarchy.nodes.size())) {
     ImGui::Text("Invalid node selection");
@@ -3847,65 +3939,421 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
 
   const uint32_t node_index = static_cast<uint32_t>(_selection.index);
   SceneNode& node = hierarchy.nodes[node_index];
-  update_name_buffer(SelectionKind::Node, _selection.index, hierarchy.node_names[node_index].c_str());
-  ImGui::AlignTextToFramePadding();
-  ImGui::Text("Name");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  if (_node_geometry_edit_result_node != static_cast<int32_t>(node_index)) {
+    _node_geometry_edit_result_node = static_cast<int32_t>(node_index);
+    _node_geometry_edit_result = NodeGeometryEditResult::Success;
+  }
+  auto subtree_contains_active_camera = [&]() {
+    if ((node_index >= hierarchy.order_position.size()) || (node_index >= hierarchy.subtree_end_position.size())) {
+      return false;
+    }
+    const uint32_t subtree_begin = hierarchy.order_position[node_index];
+    const uint32_t subtree_end = std::min<uint32_t>(hierarchy.subtree_end_position[node_index], static_cast<uint32_t>(hierarchy.evaluation_order.size()));
+    if (subtree_begin >= subtree_end) {
+      return false;
+    }
+    for (uint32_t order_position = subtree_begin; order_position < subtree_end; ++order_position) {
+      const uint32_t descendant_index = hierarchy.evaluation_order[order_position];
+      if (descendant_index >= hierarchy.nodes.size()) {
+        continue;
+      }
+      const SceneNode& descendant = hierarchy.nodes[descendant_index];
+      const uint32_t attachment_end = descendant.attachment_offset + descendant.attachment_count;
+      if ((attachment_end < descendant.attachment_offset) || (attachment_end > hierarchy.attachments.size())) {
+        continue;
+      }
+      for (uint32_t attachment_index = descendant.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+        const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+        if ((attachment.type == SceneAttachment::Type::Camera) && (attachment.resource_index < scene_rep.data().cameras.size()) &&
+            scene_rep.data().cameras[attachment.resource_index].active) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+  auto resolve_node_change = [&]() {
+    if (scene_rep.data().resolve_hierarchy() == false) {
+      return false;
+    }
+    scene_rep.update_medium_bounds();
+    scene_rep.update_active_camera();
+    if (callbacks.scene_settings_changed) {
+      callbacks.scene_settings_changed();
+    }
+    return true;
+  };
+  const char* selected_node_name = (node_index < hierarchy.node_names.size()) ? hierarchy.node_names[node_index].c_str() : "";
+  update_name_buffer(SelectionKind::Node, _selection.index, selected_node_name);
+  ImGui::TextUnformatted("Name");
+  full_width_item();
   const bool name_edit_active = ImGui::InputText("##node_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
   if (ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter))) {
+    if (hierarchy.node_names.size() < hierarchy.nodes.size()) {
+      hierarchy.node_names.resize(hierarchy.nodes.size());
+    }
     hierarchy.node_names[node_index] = _name_edit_buffer;
   }
 
   bool enabled = (node.flags & SceneNode::Enabled) != 0u;
+  const bool protects_active_camera = enabled && subtree_contains_active_camera();
+  if (protects_active_camera) {
+    ImGui::BeginDisabled();
+  }
   if (ImGui::Checkbox("Enabled", &enabled)) {
-    if (hierarchy.set_enabled(node_index, enabled) && scene_rep.data().resolve_hierarchy()) {
-      scene_rep.update_medium_bounds();
-      scene_rep.update_active_camera();
-    }
-  }
-
-  std::vector<const char*> parent_names;
-  parent_names.reserve(hierarchy.nodes.size() + 1u);
-  parent_names.emplace_back("None");
-  for (const std::string& name : hierarchy.node_names) {
-    parent_names.emplace_back(name.c_str());
-  }
-  int32_t parent_selection = node.parent_index == kInvalidIndex ? 0 : static_cast<int32_t>(node.parent_index + 1u);
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (ImGui::Combo("Parent", &parent_selection, parent_names.data(), static_cast<int32_t>(parent_names.size()))) {
-    const uint32_t parent_index = parent_selection == 0 ? kInvalidIndex : static_cast<uint32_t>(parent_selection - 1);
-    if (hierarchy.set_parent(node_index, parent_index)) {
-      if (scene_rep.data().resolve_hierarchy()) {
-        scene_rep.update_medium_bounds();
-        scene_rep.update_active_camera();
+    if (hierarchy.set_enabled(node_index, enabled)) {
+      if (resolve_node_change() == false) {
+        hierarchy.set_enabled(node_index, !enabled);
+        if (scene_rep.data().resolve_hierarchy() == false) {
+          log::error("Failed to restore scene hierarchy after rejecting an invalid node visibility edit");
+        }
       }
     }
   }
+  if (protects_active_camera) {
+    ImGui::EndDisabled();
+    draw_item_tooltip("Activate another camera before disabling this node.", ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+  }
 
-  ImGui::Spacing();
-  ImGui::Text("Local transform");
-  AffineTransform transform = node.local_transform;
-  bool transform_changed = false;
-  transform_changed = ImGui::DragFloat4("X##node_transform", &transform.rows[0].x, 0.01f) || transform_changed;
-  transform_changed = ImGui::DragFloat4("Y##node_transform", &transform.rows[1].x, 0.01f) || transform_changed;
-  transform_changed = ImGui::DragFloat4("Z##node_transform", &transform.rows[2].x, 0.01f) || transform_changed;
-  if (transform_changed) {
-    if (hierarchy.set_local_transform(node_index, transform) && scene_rep.data().resolve_hierarchy()) {
-      scene_rep.update_medium_bounds();
-      scene_rep.update_active_camera();
+  const char* parent_name = "None";
+  if ((node.parent_index != kInvalidIndex) && (node.parent_index < hierarchy.node_names.size())) {
+    parent_name = hierarchy.node_names[node.parent_index].c_str();
+  }
+  ImGui::TextUnformatted("Parent");
+  full_width_item();
+  const bool parent_combo_open = ImGui::BeginCombo("##node_parent", parent_name);
+  draw_item_tooltip("Reparenting preserves the world transform.", ImGuiHoveredFlags_DelayNormal);
+  if (parent_combo_open) {
+    bool parent_changed = false;
+    if (ImGui::Selectable("None", node.parent_index == kInvalidIndex)) {
+      if ((node.parent_index != kInvalidIndex) && hierarchy.reparent_preserve_world(node_index, kInvalidIndex)) {
+        parent_changed = resolve_node_change();
+      }
     }
+    const bool traversal_valid = (node_index < hierarchy.order_position.size()) && (node_index < hierarchy.subtree_end_position.size());
+    const uint32_t subtree_begin = traversal_valid ? hierarchy.order_position[node_index] : kInvalidIndex;
+    const uint32_t subtree_end = traversal_valid ? hierarchy.subtree_end_position[node_index] : kInvalidIndex;
+    for (uint32_t candidate_index = 0u; (candidate_index < hierarchy.nodes.size()) && (parent_changed == false); ++candidate_index) {
+      ImGui::PushID(static_cast<int>(candidate_index));
+      const uint32_t candidate_position = candidate_index < hierarchy.order_position.size() ? hierarchy.order_position[candidate_index] : kInvalidIndex;
+      const bool creates_cycle = (candidate_index == node_index) ||
+                                 (traversal_valid && (candidate_position != kInvalidIndex) && (candidate_position >= subtree_begin) && (candidate_position < subtree_end));
+      AffineTransform inverse_parent = {};
+      double parent_determinant = 0.0;
+      const bool singular_parent = (candidate_index >= hierarchy.world_transforms.size()) ||
+                                   (invert_affine(hierarchy.world_transforms[candidate_index], inverse_parent, parent_determinant) == false);
+      const bool invalid_parent = creates_cycle || singular_parent;
+      if (invalid_parent) {
+        ImGui::BeginDisabled();
+      }
+      const char* candidate_name = candidate_index < hierarchy.node_names.size() ? hierarchy.node_names[candidate_index].c_str() : "Unnamed node";
+      if (ImGui::Selectable(candidate_name, node.parent_index == candidate_index) && (invalid_parent == false)) {
+        if ((node.parent_index != candidate_index) && hierarchy.reparent_preserve_world(node_index, candidate_index)) {
+          parent_changed = resolve_node_change();
+        }
+      }
+      if (invalid_parent) {
+        ImGui::EndDisabled();
+      }
+      ImGui::PopID();
+    }
+    ImGui::EndCombo();
   }
 
   ImGui::Spacing();
-  ImGui::Text("Attachments: %u", node.attachment_count);
+  ImGui::TextUnformatted("Local Transform");
+  const float gizmo_spacing = ImGui::GetStyle().ItemSpacing.x;
+  const float gizmo_button_width = (ImGui::GetContentRegionAvail().x - 3.0f * gizmo_spacing) / 4.0f;
+  auto gizmo_button = [&](const char* label, bool selected) {
+    if (selected) {
+      ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+    }
+    const bool pressed = ImGui::Button(label, ImVec2(gizmo_button_width, 0.0f));
+    if (selected) {
+      ImGui::PopStyleColor();
+    }
+    return pressed;
+  };
+  if (gizmo_button("Move##gizmo_move", _gizmo_operation == GizmoOperation::Translate)) {
+    _gizmo_operation = GizmoOperation::Translate;
+  }
+  ImGui::SameLine();
+  if (gizmo_button("Rotate##gizmo_rotate", _gizmo_operation == GizmoOperation::Rotate)) {
+    _gizmo_operation = GizmoOperation::Rotate;
+  }
+  ImGui::SameLine();
+  if (gizmo_button("Scale##gizmo_scale", _gizmo_operation == GizmoOperation::Scale)) {
+    _gizmo_operation = GizmoOperation::Scale;
+  }
+  ImGui::SameLine();
+  const bool local_gizmo = _gizmo_mode == GizmoMode::Local;
+  const bool scale_gizmo = _gizmo_operation == GizmoOperation::Scale;
+  const char* gizmo_mode_label = scale_gizmo ? "Local##gizmo_mode" : (local_gizmo ? "Local##gizmo_mode" : "World##gizmo_mode");
+  if (scale_gizmo) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::Button(gizmo_mode_label, ImVec2(gizmo_button_width, 0.0f)) && (scale_gizmo == false)) {
+    _gizmo_mode = local_gizmo ? GizmoMode::World : GizmoMode::Local;
+  }
+  if (scale_gizmo) {
+    ImGui::EndDisabled();
+  }
+  auto refresh_transform_editor = [&]() {
+    _node_transform_editor.node_index = static_cast<int32_t>(node_index);
+    _node_transform_editor.source_transform = node.local_transform;
+    _node_transform_editor.trs = {};
+    _node_transform_editor.decomposable = affine_to_trs(node.local_transform, _node_transform_editor.trs);
+    _node_transform_editor.rotation_degrees = _node_transform_editor.trs.rotation_radians * (180.0f / kPi);
+  };
+  if ((_node_transform_editor.node_index != static_cast<int32_t>(node_index)) ||
+      (std::memcmp(&_node_transform_editor.source_transform, &node.local_transform, sizeof(AffineTransform)) != 0)) {
+    refresh_transform_editor();
+  }
+
+  bool transform_changed = false;
+  ImGui::TextUnformatted("Position");
+  full_width_item();
+  transform_changed = ImGui::DragFloat3("##node_position", &_node_transform_editor.trs.translation.x, 0.01f, 0.0f, 0.0f, "%.3f") || transform_changed;
+  if (_node_transform_editor.decomposable) {
+    ImGui::TextUnformatted("Rotation");
+    full_width_item();
+    transform_changed = ImGui::DragFloat3("##node_rotation", &_node_transform_editor.rotation_degrees.x, 0.25f, 0.0f, 0.0f, "%.2f°") || transform_changed;
+    ImGui::TextUnformatted("Scale");
+    full_width_item();
+    transform_changed = ImGui::DragFloat3("##node_scale", &_node_transform_editor.trs.scale.x, 0.01f, 0.0f, 0.0f, "%.3f") || transform_changed;
+    _node_transform_editor.trs.rotation_radians = _node_transform_editor.rotation_degrees * (kPi / 180.0f);
+  } else {
+    ImGui::TextWrapped("Transform contains shear or zero scale. Reset it to edit rotation and scale.");
+    if (ImGui::Button("Reset to TRS")) {
+      _node_transform_editor.trs.rotation_radians = {};
+      _node_transform_editor.rotation_degrees = {};
+      _node_transform_editor.trs.scale = {1.0f, 1.0f, 1.0f};
+      _node_transform_editor.decomposable = true;
+      transform_changed = true;
+    }
+  }
+  if (transform_changed) {
+    AffineTransform transform = _node_transform_editor.decomposable ? affine_from_trs(_node_transform_editor.trs) : _node_transform_editor.source_transform;
+    if (_node_transform_editor.decomposable == false) {
+      transform.rows[0].w = _node_transform_editor.trs.translation.x;
+      transform.rows[1].w = _node_transform_editor.trs.translation.y;
+      transform.rows[2].w = _node_transform_editor.trs.translation.z;
+    }
+    if (hierarchy.set_local_transform(node_index, transform)) {
+      _node_transform_editor.source_transform = transform;
+      resolve_node_change();
+    } else {
+      refresh_transform_editor();
+    }
+  }
+
+  const NodeGeometryEditResult bake_status = scene_rep.validate_node_geometry_edit(node_index, NodeGeometryOperation::BakeLocalTransform);
+  const NodeGeometryEditResult center_status = scene_rep.validate_node_geometry_edit(node_index, NodeGeometryOperation::CenterPivot);
+  const float geometry_action_spacing = ImGui::GetStyle().ItemSpacing.x;
+  const float geometry_action_width = (ImGui::GetContentRegionAvail().x - geometry_action_spacing) * 0.5f;
+  auto geometry_action = [&](const char* label, NodeGeometryOperation operation, NodeGeometryEditResult status, const char* description) {
+    const bool available = status == NodeGeometryEditResult::Success;
+    if (available == false) {
+      ImGui::BeginDisabled();
+    }
+    const bool pressed = ImGui::Button(label, ImVec2(geometry_action_width, 0.0f));
+    if (available == false) {
+      ImGui::EndDisabled();
+      draw_item_tooltip(node_geometry_edit_result_message(status), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+    } else {
+      draw_item_tooltip(description, ImGuiHoveredFlags_DelayNormal);
+    }
+    if (pressed == false) {
+      return;
+    }
+
+    _node_geometry_edit_result = scene_rep.edit_node_geometry(node_index, operation);
+    if (_node_geometry_edit_result == NodeGeometryEditResult::Success) {
+      scene_rep.update_medium_bounds();
+      scene_rep.update_active_camera();
+      refresh_transform_editor();
+      if (callbacks.scene_settings_changed) {
+        callbacks.scene_settings_changed();
+      }
+    } else {
+      log::error("Node geometry edit failed: %s", node_geometry_edit_result_message(_node_geometry_edit_result));
+    }
+  };
+  geometry_action("Bake Transform", NodeGeometryOperation::BakeLocalTransform, bake_status, "Apply the local transform to private mesh geometry and reset it to identity.");
+  ImGui::SameLine();
+  geometry_action("Center Pivot", NodeGeometryOperation::CenterPivot, center_status, "Move the pivot to the area-weighted center of the attached triangles.");
+  if (_node_geometry_edit_result != NodeGeometryEditResult::Success) {
+    ImGui::TextColored(kErrorTextColor, "%s", node_geometry_edit_result_message(_node_geometry_edit_result));
+  }
+
+  AffineTransform inverse_transform = {};
+  double determinant = 0.0;
+  if (invert_affine(node.local_transform, inverse_transform, determinant) == false) {
+    ImGui::TextColored(kErrorTextColor, "Singular transform; attachments disabled.");
+  }
+
+  ImGui::Spacing();
+  ImGui::SeparatorText("Attachments");
+  if (node.attachment_count == 0u) {
+    ImGui::TextDisabled("None");
+  }
   static constexpr const char* kAttachmentNames[] = {"Mesh", "Camera", "Emitter", "Medium"};
   const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+  if ((attachment_end < node.attachment_offset) || (attachment_end > hierarchy.attachments.size())) {
+    ImGui::TextColored(kErrorTextColor, "Invalid attachment range");
+    return;
+  }
   for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
     const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
     const uint32_t type_index = static_cast<uint32_t>(attachment.type);
     const char* type_name = type_index < std::size(kAttachmentNames) ? kAttachmentNames[type_index] : "Unknown";
-    ImGui::BulletText("%s %u", type_name, attachment.resource_index);
+    ImGui::PushID(static_cast<int>(attachment_index));
+    ImGui::SeparatorText(type_name);
+    switch (attachment.type) {
+      case SceneAttachment::Type::Mesh:
+        build_mesh_resource_properties(scene_rep, attachment.resource_index, false);
+        break;
+      case SceneAttachment::Type::Camera:
+        if (attachment.resource_index < scene_rep.data().cameras.size()) {
+          Camera& camera = scene_rep.data().cameras[attachment.resource_index].cam;
+          const bool attachment_enabled = (node_index < hierarchy.effective_enabled.size()) && (hierarchy.effective_enabled[node_index] != 0u);
+          build_camera_selection_properties(scene_rep, camera, attachment.resource_index, attachment_enabled, data);
+        } else {
+          ImGui::TextColored(kErrorTextColor, "Invalid camera");
+        }
+        break;
+      case SceneAttachment::Type::Emitter:
+        build_emitter_resource_properties(scene_rep, attachment.resource_index, data, false);
+        break;
+      case SceneAttachment::Type::Medium:
+        build_medium_resource_properties(scene_rep, attachment.resource_index);
+        break;
+      default:
+        ImGui::TextColored(kErrorTextColor, "Unsupported attachment");
+        break;
+    }
+    ImGui::PopID();
+  }
+}
+
+void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& data) {
+  _gizmo_captures_mouse = false;
+  auto finish_interaction = [&]() {
+    if (_gizmo_changed_during_interaction && callbacks.scene_settings_changed) {
+      callbacks.scene_settings_changed();
+    }
+    _gizmo_was_using = false;
+    _gizmo_changed_during_interaction = false;
+  };
+  if ((_selection.kind != SelectionKind::Node) || (_selection.index < 0)) {
+    finish_interaction();
+    return;
+  }
+
+  SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
+  const uint32_t node_index = static_cast<uint32_t>(_selection.index);
+  if ((node_index >= hierarchy.nodes.size()) || (node_index >= hierarchy.world_transforms.size())) {
+    finish_interaction();
+    return;
+  }
+
+  const Camera& camera = scene_rep.camera();
+  if (camera.cls != Camera::Class::Perspective) {
+    finish_interaction();
+    return;
+  }
+
+  uint2 output_size = data.output_size;
+  if ((output_size.x == 0u) || (output_size.y == 0u)) {
+    output_size = camera.film_size;
+  }
+  if ((output_size.x == 0u) || (output_size.y == 0u)) {
+    finish_interaction();
+    return;
+  }
+
+  AffineTransform inverse_parent = {};
+  const SceneNode& node = hierarchy.nodes[node_index];
+  if (node.parent_index != kInvalidIndex) {
+    double determinant = 0.0;
+    if ((node.parent_index >= hierarchy.world_transforms.size()) ||
+        (invert_affine(hierarchy.world_transforms[node.parent_index], inverse_parent, determinant) == false)) {
+      finish_interaction();
+      return;
+    }
+  }
+
+  const ImGuiIO& io = ImGui::GetIO();
+  const float framebuffer_scale_x = io.DisplayFramebufferScale.x > 0.0f ? io.DisplayFramebufferScale.x : 1.0f;
+  const float framebuffer_scale_y = io.DisplayFramebufferScale.y > 0.0f ? io.DisplayFramebufferScale.y : 1.0f;
+  const ImVec2 rect_size(static_cast<float>(output_size.x) / framebuffer_scale_x, static_cast<float>(output_size.y) / framebuffer_scale_y);
+  const ImVec2 rect_position(0.5f * (io.DisplaySize.x - rect_size.x), 0.5f * (io.DisplaySize.y - rect_size.y));
+
+  const uint2 projection_size = ((camera.film_size.x > 0u) && (camera.film_size.y > 0u)) ? camera.film_size : output_size;
+  float4x4 view = look_at(camera.position, camera_target(camera), camera.up);
+  float4x4 projection = perspective(get_camera_fov(camera) * kPi / 180.0f, projection_size.x, projection_size.y, camera.clip_near, camera.clip_far);
+  // The resolved node translation is its pivot. Attachments must not shift the
+  // gizmo to a mesh bounding-box center or another resource-specific origin.
+  float4x4 world_matrix = matrix_from_affine(hierarchy.world_transforms[node_index]);
+
+  ImGuizmo::SetRect(rect_position.x, rect_position.y, rect_size.x, rect_size.y);
+  ImGuizmo::SetOrthographic(false);
+  ImGuizmo::SetGizmoSizeClipSpace(0.18f);
+  ImGuizmo::Style& gizmo_style = ImGuizmo::GetStyle();
+  gizmo_style.TranslationLineThickness = 1.5f;
+  gizmo_style.TranslationLineArrowSize = 5.0f;
+  gizmo_style.RotationLineThickness = 1.5f;
+  gizmo_style.RotationOuterLineThickness = 2.0f;
+  gizmo_style.ScaleLineThickness = 1.5f;
+  gizmo_style.ScaleLineCircleSize = 5.0f;
+  gizmo_style.HatchedAxisLineThickness = 3.0f;
+  gizmo_style.CenterCircleSize = 3.0f;
+  ImGuizmo::PushID(static_cast<int>(node_index));
+
+  ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;
+  switch (_gizmo_operation) {
+    case GizmoOperation::Rotate:
+      operation = ImGuizmo::ROTATE;
+      break;
+    case GizmoOperation::Scale:
+      operation = ImGuizmo::SCALE;
+      break;
+    case GizmoOperation::Translate:
+      break;
+  }
+  const ImGuizmo::MODE mode = (_gizmo_mode == GizmoMode::Local) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
+  const bool transform_changed = ImGuizmo::Manipulate(&view.col[0].x, &projection.col[0].x, operation, mode, &world_matrix.col[0].x);
+  const bool gizmo_using = ImGuizmo::IsUsing();
+  const bool interaction_finished = _gizmo_was_using && (gizmo_using == false);
+  _gizmo_captures_mouse = ImGuizmo::IsOver() || gizmo_using;
+  _gizmo_was_using = gizmo_using;
+
+  ImGuizmo::PopID();
+
+  if (transform_changed) {
+    const AffineTransform previous_local_transform = node.local_transform;
+    const AffineTransform edited_world_transform = affine_from_matrix(world_matrix);
+    const AffineTransform edited_local_transform = (node.parent_index == kInvalidIndex) ? edited_world_transform : multiply_affine(inverse_parent, edited_world_transform);
+    if (hierarchy.set_local_transform(node_index, edited_local_transform) && scene_rep.data().resolve_hierarchy()) {
+      scene_rep.update_medium_bounds();
+      scene_rep.update_active_camera();
+      _gizmo_changed_during_interaction = _gizmo_changed_during_interaction || gizmo_using;
+      if (callbacks.scene_settings_changed) {
+        callbacks.scene_settings_changed();
+      }
+    } else {
+      hierarchy.set_local_transform(node_index, previous_local_transform);
+      if (scene_rep.data().resolve_hierarchy() == false) {
+        log::error("Failed to restore scene hierarchy after rejecting an invalid gizmo transform");
+      }
+    }
+  }
+
+  if (interaction_finished) {
+    if (_gizmo_changed_during_interaction && callbacks.scene_settings_changed) {
+      callbacks.scene_settings_changed();
+    }
+    _gizmo_changed_during_interaction = false;
   }
 }
 
@@ -3989,10 +4437,8 @@ void UI::build_material_selection_properties(SceneRepresentation& scene_rep, con
   if (material_indices.size() == 1u) {
     update_name_buffer(SelectionKind::Material, _selection.index, material_name);
 
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Name");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    ImGui::TextUnformatted("Name");
+    full_width_item();
     const bool name_edit_active = ImGui::InputText("##material_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
     const bool name_commit = (ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter)));
     if (name_commit) {
@@ -4148,20 +4594,26 @@ void UI::build_medium_selection_properties(SceneRepresentation& scene_rep, const
     return;
   }
   uint32_t medium_index = _medium_mapping.at(_selection.index);
-  Medium& medium = scene_rep.data().mediums.get(medium_index);
   const char* medium_name = _medium_mapping.name(_selection.index);
   update_name_buffer(SelectionKind::Medium, _selection.index, medium_name);
-  ImGui::AlignTextToFramePadding();
-  ImGui::Text("Name");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  ImGui::TextUnformatted("Name");
+  full_width_item();
   bool name_edit_active = ImGui::InputText("##medium_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
   bool name_commit = ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter));
   if (name_commit && callbacks.medium_renamed) {
     callbacks.medium_renamed(medium_index, std::string(_name_edit_buffer));
     _pending_selection = {SelectionKind::Medium, medium_index, true};
   }
-  bool changed = build_medium(scene_rep, medium);
+  build_medium_resource_properties(scene_rep, medium_index);
+}
+
+void UI::build_medium_resource_properties(SceneRepresentation& scene_rep, uint32_t medium_index) {
+  if (medium_index >= scene_rep.data().mediums_vector.size()) {
+    ImGui::TextColored(kErrorTextColor, "Invalid medium");
+    return;
+  }
+  Medium& medium = scene_rep.data().mediums.get(medium_index);
+  const bool changed = build_medium(scene_rep, medium);
   if (changed) {
     if (callbacks.medium_changed) {
       callbacks.medium_changed(medium_index);
@@ -4175,6 +4627,14 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
     return;
   }
   uint32_t emitter_index = static_cast<uint32_t>(_selection.index);
+  build_emitter_resource_properties(scene_rep, emitter_index, data, true);
+}
+
+void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint32_t emitter_index, const FrameData& data, bool standalone_actions) {
+  if (emitter_index >= scene_rep.data().emitter_profiles.size()) {
+    ImGui::TextColored(kErrorTextColor, "Invalid emitter");
+    return;
+  }
   auto& emitter = scene_rep.data().emitter_profiles[emitter_index];
   bool changed = false;
   bool material_changed = false;
@@ -4206,7 +4666,7 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
       float3 integrated = material.emission.spectrum_index < scene_rep.data().spectrum_values.size()  //
                             ? scene_rep.data().spectrum_values[material.emission.spectrum_index].integrated()
                             : float3{0.0f};
-      if ((integrated.x <= 0.0f) && (integrated.y <= 0.0f) && (integrated.z <= 0.0f)) {
+      if (standalone_actions && (integrated.x <= 0.0f) && (integrated.y <= 0.0f) && (integrated.z <= 0.0f)) {
         for (uint64_t i = 0; i < _material_mapping.size(); ++i) {
           if (_material_mapping.at(static_cast<int32_t>(i)) == material_index) {
             set_selection(SelectionKind::Material, static_cast<int32_t>(i), false);
@@ -4261,9 +4721,10 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
         ImGui::Text("Material index: %u", material_index);
       }
 
-      ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+      ImGui::TextUnformatted("Collimation");
+      full_width_item();
       float collimation = material.emission_collimation;
-      if (ImGui::SliderFloat("##area_collimation", &collimation, 0.0f, 1.0f, "Collimation %.2f", ImGuiSliderFlags_AlwaysClamp)) {
+      if (ImGui::SliderFloat("##area_collimation", &collimation, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
         material.emission_collimation = std::clamp(collimation, 0.0f, 1.0f);
         material_changed = true;
         changed = true;
@@ -4341,19 +4802,29 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
       ImGui::Spacing();
 
       if (ImGui::CollapsingHeader("Atmosphere Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (ImGui::DragFloat("##altitude", &sky_emitter.atmosphere.scattering.altitude, 10.0f, 100.0f, 100000.0f, "Altitude: %.0f m")) {
+        ImGui::TextUnformatted("Altitude");
+        full_width_item();
+        if (ImGui::DragFloat("##altitude", &sky_emitter.atmosphere.scattering.altitude, 10.0f, 100.0f, 100000.0f, "%.0f m")) {
           changed = true;
         }
-        if (ImGui::SliderFloat("##anisotropy", &sky_emitter.atmosphere.scattering.anisotropy, -0.999f, 0.999f, "Anisotropy: %.3f", ImGuiSliderFlags_None)) {
+        ImGui::TextUnformatted("Anisotropy");
+        full_width_item();
+        if (ImGui::SliderFloat("##anisotropy", &sky_emitter.atmosphere.scattering.anisotropy, -0.999f, 0.999f, "%.3f", ImGuiSliderFlags_None)) {
           changed = true;
         }
-        if (ImGui::DragFloat("##rayleigh", &sky_emitter.atmosphere.scattering.rayleigh_scale, 0.0f, 0.0f, 10.0f, "Rayleigh: %.3f")) {
+        ImGui::TextUnformatted("Rayleigh");
+        full_width_item();
+        if (ImGui::DragFloat("##rayleigh", &sky_emitter.atmosphere.scattering.rayleigh_scale, 0.0f, 0.0f, 10.0f, "%.3f")) {
           changed = true;
         }
-        if (ImGui::DragFloat("##mie", &sky_emitter.atmosphere.scattering.mie_scale, 0.0f, 0.0f, 10.0f, "Mie: %.3f")) {
+        ImGui::TextUnformatted("Mie");
+        full_width_item();
+        if (ImGui::DragFloat("##mie", &sky_emitter.atmosphere.scattering.mie_scale, 0.0f, 0.0f, 10.0f, "%.3f")) {
           changed = true;
         }
-        if (ImGui::DragFloat("##ozone", &sky_emitter.atmosphere.scattering.ozone_scale, 0.0f, 0.0f, 10.0f, "Ozone: %.3f")) {
+        ImGui::TextUnformatted("Ozone");
+        full_width_item();
+        if (ImGui::DragFloat("##ozone", &sky_emitter.atmosphere.scattering.ozone_scale, 0.0f, 0.0f, 10.0f, "%.3f")) {
           changed = true;
         }
         bool primary_scattering = sky_emitter.atmosphere.scattering.primary_scattering != 0u;
@@ -4370,7 +4841,7 @@ void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, cons
     }
   }
 
-  if (emitter.cls != EmitterProfile::Class::Area) {
+  if (standalone_actions && (emitter.cls != EmitterProfile::Class::Area)) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -4403,20 +4874,26 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
   }
 
   uint32_t mesh_index = _mesh_mapping.at(_selection.index);
-  const Mesh& mesh = scene_rep.data().meshes[mesh_index];
-
   const char* mesh_name = _mesh_mapping.name(_selection.index);
   update_name_buffer(SelectionKind::Mesh, _selection.index, mesh_name);
-  ImGui::AlignTextToFramePadding();
-  ImGui::Text("Name");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  ImGui::TextUnformatted("Name");
+  full_width_item();
   bool name_edit_active = ImGui::InputText("##mesh_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
   bool name_commit = ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter));
   if (name_commit && callbacks.mesh_renamed) {
     callbacks.mesh_renamed(mesh_index, std::string(_name_edit_buffer));
     _pending_selection = {SelectionKind::Mesh, mesh_index, true};
   }
+
+  build_mesh_resource_properties(scene_rep, mesh_index, true);
+}
+
+void UI::build_mesh_resource_properties(SceneRepresentation& scene_rep, uint32_t mesh_index, bool show_links) {
+  if (mesh_index >= scene_rep.data().meshes.size()) {
+    ImGui::TextColored(kErrorTextColor, "Invalid mesh");
+    return;
+  }
+  const Mesh& mesh = scene_rep.data().meshes[mesh_index];
 
   ImGui::Text("Triangles: %u", mesh.triangle_count);
 
@@ -4441,7 +4918,8 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
     }
   }
 
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+  ImGui::TextUnformatted("Material");
+  full_width_item();
   if (ImGui::Combo("##mesh_material", &selected_material, material_names.data(), static_cast<int>(material_names.size()))) {
     uint32_t new_material_index = _material_mapping.at(selected_material);
     if (callbacks.mesh_material_changed) {
@@ -4449,10 +4927,12 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
     }
   }
 
+  if (show_links == false) {
+    return;
+  }
+
   ImGui::Spacing();
-  ImGui::Separator();
-  ImGui::Text("Edit Links");
-  ImGui::Spacing();
+  ImGui::SeparatorText("Links");
 
   bool has_valid_material = (current_material != kInvalidIndex);
   if (has_valid_material == false) {
@@ -4498,16 +4978,27 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
   }
 }
 
-void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, const BuildContext& ctx, const FrameData& data) {
-  // bool film_changed = false;
+void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, bool attachment_enabled, const FrameData& data) {
   bool camera_changed = false;
   bool camera_is_active = false;
   if (camera_index < scene_rep.data().cameras.size()) {
     camera_is_active = scene_rep.data().cameras[camera_index].active;
   }
 
+  bool active_control = camera_is_active;
+  if (camera_is_active || (attachment_enabled == false)) {
+    ImGui::BeginDisabled();
+  }
+  const bool activate_camera = ImGui::Checkbox("Active", &active_control) && active_control;
+  if (camera_is_active || (attachment_enabled == false)) {
+    ImGui::EndDisabled();
+  }
+  if (activate_camera && callbacks.camera_activated) {
+    callbacks.camera_activated(camera_index);
+    return;
+  }
+
   uint2 viewport = camera.film_size;
-  float3 pos = camera.position;
   float focal_len = get_camera_focal_length(camera);
   int32_t pixel_size = std::countr_zero(data.film.pixel_size());
 
@@ -4531,7 +5022,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
       static float fov_input = current_fov_deg;  // Static to maintain value between frames
       fov_input = current_fov_deg;               // Sync with current camera FOV
 
-      if (labeled_control("FOV (Horizontal)", [&]() {
+      if (labeled_control("Horizontal FOV", [&]() {
             return ImGui::InputFloat("##fov_input", &fov_input, 0.1f, 1.0f, "%.1f°");
           })) {
         focal_len = fov_to_focal_length(fov_input * kPi / 180.0f);
@@ -4570,28 +5061,9 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
         })) {
       camera_changed = true;
     }
-  }
-
-  if (ImGui::CollapsingHeader("Position & Orientation", ImGuiTreeNodeFlags_Framed)) {
-    ImGui::Text("Camera Position:");
-    full_width_item();
-    if (ImGui::InputFloat3("##campos", &pos.x, "%.3f")) {
-      pos.x = std::clamp(pos.x, -CameraController::kMaxCameraDistance, CameraController::kMaxCameraDistance);
-      pos.y = std::clamp(pos.y, -CameraController::kMaxCameraDistance, CameraController::kMaxCameraDistance);
-      pos.z = std::clamp(pos.z, -CameraController::kMaxCameraDistance, CameraController::kMaxCameraDistance);
-      camera_changed = true;
-    }
-
-    auto spherical = to_spherical(camera.direction);
-    float2 angles = {spherical.phi, spherical.theta};
-
-    if (angle_editor("Camera Direction", angles, -180.0f, 180.0f, -89.99f, 89.99f, 89.99f)) {
-      camera.direction = from_spherical(angles.x, angles.y);
-      camera_changed = true;
-    }
 
     float clip_values[2] = {camera.clip_near, camera.clip_far};
-    if (labeled_control("Clip Planes (near/far)", [&]() {
+    if (labeled_control("Clip Planes", [&]() {
           return ImGui::DragFloat2("##clipplanes", clip_values, 0.01f, 0.0f, 5000.0f, "%.3f");
         })) {
       camera.clip_near = max(0.0f, clip_values[0]);
@@ -4602,10 +5074,9 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
 
   float pixel_filter_radius = scene_rep.data().pixel_filter.radius;
   if (ImGui::CollapsingHeader("Output", ImGuiTreeNodeFlags_Framed)) {
-    ImGui::Text("Output Image Size:");
+    ImGui::TextUnformatted("Image Size");
     full_width_item();
     if (ImGui::InputInt2("##outimgsize", reinterpret_cast<int32_t*>(&viewport.x))) {
-      // film_changed = true;
       camera_changed = true;
     }
 
@@ -4615,7 +5086,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
       camera_changed = true;
     }
 
-    ImGui::Text("Pixel Size:");
+    ImGui::TextUnformatted("Pixel Size");
     full_width_item();
     if (ImGui::Combo("##pixelsize", &pixel_size, "Default\0Scaled 2x\0Scaled 4x\0Scaled 8x\0Scaled 16x\0")) {
       camera_changed = true;
@@ -4643,10 +5114,10 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     scene_rep.data().pixel_filter.radius = clamp(pixel_filter_radius, 0.0f, 32.0f);
 
     auto fov = focal_length_to_fov(focal_len) * 180.0f / kPi;
-    build_camera(camera, pos, camera.direction, camera.up, camera.film_size, fov);
+    build_camera(camera, camera.position, camera.direction, camera.up, camera.film_size, fov);
 
     if (camera_is_active) {
-      scene_rep.data().cameras[camera_index].cam = camera;
+      scene_rep.update_active_camera();
       if (callbacks.camera_changed) {
         callbacks.camera_changed(viewport, 1u << pixel_size);
       }
@@ -4720,7 +5191,7 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
     return;
   }
 
-  ImGui::Text("Integrator Type:");
+  ImGui::TextUnformatted("Integrator Type");
   full_width_item();
 
   const bool gpu_renderer_mode = _current_renderer_mode == RendererMode::GPURaytracing;
@@ -4812,9 +5283,10 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
     callbacks.scene_settings_changed();
   }
 
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   int current_light_sampling = static_cast<int>(scene_rep.data().options.light_sampling);
   const char* light_sampling_options[] = {"Uniform", "From Distribution", "RIS Uniform", "RIS From Distribution"};
+  ImGui::TextUnformatted("Light Sampling");
+  full_width_item();
   const bool light_sampling_changed = ImGui::Combo("##light_sampling", &current_light_sampling, light_sampling_options, IM_ARRAYSIZE(light_sampling_options));
   if (light_sampling_changed) {
     scene_rep.data().options.light_sampling = static_cast<Scene::LightSampling>(current_light_sampling);
@@ -4829,9 +5301,9 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
 }
 
 void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
-  ImGui::Text("Renderer Mode:");
+  ImGui::TextUnformatted("Renderer");
   full_width_item();
-  const char* renderer_modes[] = {"CPU Raytracing", "Rasterization", _gpu_renderer_available ? "GPU Raytracing" : "GPU Raytracing (Unavailable)"};
+  const char* renderer_modes[] = {"CPU", "Raster", _gpu_renderer_available ? "GPU" : "GPU (Unavailable)"};
   int current_mode = static_cast<int>(_current_renderer_mode);
   if (ImGui::Combo("##renderer_mode", &current_mode, renderer_modes, IM_ARRAYSIZE(renderer_modes))) {
     RendererMode selected_mode = static_cast<RendererMode>(current_mode);
@@ -4875,7 +5347,7 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
     }
 
     if (_embedded_toolbar_enabled == false) {
-      ImGui::Text("View Layer:");
+      ImGui::TextUnformatted("View Layer");
       full_width_item();
       if (ImGui::BeginCombo("##view_layer", Film::layer_name(_view_options.view_layer))) {
         for (uint32_t i = 0; i < ViewLayer::Count; ++i) {
@@ -4889,7 +5361,7 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
         ImGui::EndCombo();
       }
 
-      ImGui::Text("Output Image:");
+      ImGui::TextUnformatted("Output Image");
       full_width_item();
       if (ImGui::BeginCombo("##view_image", output_view_to_string(uint32_t(_view_options.view_image)).c_str())) {
         for (uint32_t i = 0; i < uint32_t(OutputView::Count); ++i) {
@@ -4903,7 +5375,7 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
         ImGui::EndCombo();
       }
 
-      ImGui::Text("Display Transform:");
+      ImGui::TextUnformatted("Display Transform");
       full_width_item();
       if (ImGui::BeginCombo("##view_option", view_option_to_string(uint32_t(_view_options.view_option)).c_str())) {
         for (uint32_t i = 0; i < uint32_t(ViewOptions::Count); ++i) {
@@ -4924,7 +5396,7 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
         if (can_denoise == false) {
           ImGui::BeginDisabled();
         }
-        if (ImGui::Button("Denoise Current Image", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)) && callbacks.denoise_selected) {
+        if (ImGui::Button("Denoise Image", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)) && callbacks.denoise_selected) {
           callbacks.denoise_selected();
         }
         if (can_denoise == false) {

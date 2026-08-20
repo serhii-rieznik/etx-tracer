@@ -64,6 +64,15 @@ struct ETX_ALIGNED EmitterProfile {
   ETX_SHARED_INLINE bool is_delta() const {
     return (cls == Class::Directional);
   }
+
+  float4 environment_rotation() const {
+    return {directional.direction.x, directional.direction.y, directional.direction.z, directional.angular_size};
+  }
+
+  void set_environment_rotation(const float4& rotation) {
+    directional.direction = {rotation.x, rotation.y, rotation.z};
+    directional.angular_size = rotation.w;
+  }
 };
 
 struct Emitter {

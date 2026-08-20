@@ -749,6 +749,17 @@ uint32_t build_material_compile_mask(const SceneData& scene_data) {
   return result;
 }
 
+bool gpu_material_compile_mask_supported(uint32_t mask) {
+  return material_compile_mask_has(mask, MaterialClass::OpenPBR) == false;
+}
+
+const char* gpu_material_compile_mask_error_message(uint32_t mask) {
+  if (material_compile_mask_has(mask, MaterialClass::OpenPBR)) {
+    return "GPU RT does not support OpenPBR materials yet. Use the CPU renderer for scenes containing OpenPBR materials.";
+  }
+  return "GPU RT does not support one or more scene material classes.";
+}
+
 uint32_t normalize_blue_noise_target_samples(uint32_t value) {
   uint32_t result = value;
   if (result == 0u) {
@@ -1449,6 +1460,10 @@ void GPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
     set_runtime_failure(gpu_integrator_selection_error_message(integrator_selection));
     return;
   }
+  if (gpu_material_compile_mask_supported(_material_compile_mask) == false) {
+    set_runtime_failure(gpu_material_compile_mask_error_message(_material_compile_mask));
+    return;
+  }
 
   set_preparation_ready();
 }
@@ -1470,7 +1485,9 @@ void GPURaytracingRenderer::update_camera(SceneRepresentation& scene, float dt) 
   const bool camera_updated = _camera_controller->update(dt);
   const bool camera_navigation_input_active = _camera_controller->camera_navigation_input_active();
   if (camera_updated) {
-    scene.store_active_camera();
+    if (scene.store_active_camera()) {
+      request_scene_update();
+    }
     on_camera_changed(scene);
   } else if ((camera_navigation_input_active == false) && (_preview_active || (camera_updated != last_camera_update_state))) {
     on_camera_become_steady(scene);
@@ -2185,6 +2202,19 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
   if (_initialized == false) {
     return;
   }
+
+  const GPUIntegratorSelection integrator_selection = gpu_integrator_selection_from_scene(scene);
+  if (integrator_selection.supported == false) {
+    set_runtime_failure(gpu_integrator_selection_error_message(integrator_selection));
+    return;
+  }
+
+  const uint32_t material_compile_mask = build_material_compile_mask(scene.data());
+  if (gpu_material_compile_mask_supported(material_compile_mask) == false) {
+    set_runtime_failure(gpu_material_compile_mask_error_message(material_compile_mask));
+    return;
+  }
+
   if (_pipeline_publish_task) {
     _preparation_generation += 1u;
     _preparation_canceled = false;
@@ -2193,18 +2223,12 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
     return;
   }
 
-  const GPUIntegratorSelection integrator_selection = gpu_integrator_selection_from_scene(scene);
-  if (integrator_selection.supported == false) {
-    set_runtime_failure(gpu_integrator_selection_error_message(integrator_selection));
-    return;
-  }
-
   reset_runtime_failure();
   _preparation_canceled = false;
   reset_render_progress();
   _integrator_mode = static_cast<uint32_t>(integrator_selection.mode);
   _integrator_features = integrator_selection.features;
-  _material_compile_mask = build_material_compile_mask(scene.data());
+  _material_compile_mask = material_compile_mask;
   _preparation_generation += 1u;
   _active_preparation = std::make_shared<PendingPipelinePreparation>();
   _active_preparation->generation = _preparation_generation;
@@ -3278,7 +3302,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const bool pipeline_configuration_changed = integrator_mode_changed || integrator_features_changed || material_compile_mask_changed;
   const bool missing_pipelines = (_preparation_state == RendererPreparationState::Ready) && (pipelines_valid() == false);
   const bool failed_preparation_can_retry = (_preparation_state == RendererPreparationState::Failed) && (_preparation_canceled == false) && (_runtime_failed == false);
-  const bool should_request_prepare = integrator_selection.supported && (pipeline_configuration_changed || missing_pipelines || failed_preparation_can_retry);
+  const bool material_configuration_supported = gpu_material_compile_mask_supported(new_material_compile_mask);
+  const bool should_request_prepare =
+    integrator_selection.supported && material_configuration_supported && (pipeline_configuration_changed || missing_pipelines || failed_preparation_can_retry);
   if (should_request_prepare) {
     const auto pipeline_refresh_begin = std::chrono::steady_clock::now();
     request_pipeline_preparation(scene, pipeline_configuration_changed ? "scene pipeline change" : "missing pipelines");
@@ -3288,6 +3314,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
 
   if (integrator_selection.supported == false) {
     set_runtime_failure(gpu_integrator_selection_error_message(integrator_selection));
+    return;
+  }
+  if (material_configuration_supported == false) {
+    set_runtime_failure(gpu_material_compile_mask_error_message(new_material_compile_mask));
     return;
   }
   if (_runtime_failed) {

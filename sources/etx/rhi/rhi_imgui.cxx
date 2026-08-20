@@ -300,7 +300,7 @@ RHIResult RHIImGui::create_font() {
   font_config.OversampleV = 4;
 
   char font_file[1024] = {};
-  env().file_in_data("fonts/roboto.ttf", font_file, sizeof(font_file));
+  env().file_in_data("fonts/ubuntu.ttf", font_file, sizeof(font_file));
   float font_size = 14.0f;
 
   auto font = io.Fonts->AddFontFromFileTTF(font_file, font_size, &font_config, nullptr);

@@ -52,6 +52,8 @@ enum class MenuCommand : uint32_t {
   DecreaseExposure,
   ToggleSceneObjects,
   ToggleProperties,
+  ToggleSceneTree,
+  ToggleNodeProperties,
   ToggleMemoryDiagnostics,
 };
 
@@ -60,6 +62,7 @@ struct UI {
     const IORDatabase& ior_database;
     const std::vector<std::string>& recent_files;
     const Film& film;
+    uint2 output_size = {};
     float dt = 0.0f;
   };
 
@@ -151,6 +154,14 @@ struct UI {
     return (_ui_setup & UIProperties) != 0u;
   }
 
+  bool scene_tree_visible() const {
+    return (_ui_setup & UISceneTree) != 0u;
+  }
+
+  bool node_properties_visible() const {
+    return (_ui_setup & UINodeProperties) != 0u;
+  }
+
   bool scene_view_commands_available() const {
     return static_cast<bool>(callbacks.view_scene);
   }
@@ -230,7 +241,6 @@ struct UI {
     Medium,
     Mesh,
     Emitter,
-    Camera,
     Rendering,  // Combined Scene + Integrator properties
   };
 
@@ -280,18 +290,24 @@ struct UI {
   void build_renderer_preparation_modal();
   void build_memory_diagnostics(SceneRepresentation& scene_rep, const Film& film);
   void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  void build_properties_window(SceneRepresentation& scene_rep, Camera& camera, const BuildContext& ctx, const FrameData& data);
+  void build_scene_tree_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_node_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
+  void build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& data);
+  void build_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
 
   bool build_material_class_selector(Material& material);
   bool build_material_class_selector(Material& material, bool mixed);
 
   void build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
-  void build_node_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_node_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_atmosphere_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_mesh_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  void build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, const BuildContext& ctx, const FrameData& data);
+  void build_medium_resource_properties(SceneRepresentation& scene_rep, uint32_t medium_index);
+  void build_emitter_resource_properties(SceneRepresentation& scene_rep, uint32_t emitter_index, const FrameData& data, bool standalone_actions);
+  void build_mesh_resource_properties(SceneRepresentation& scene_rep, uint32_t mesh_index, bool show_links);
+  void build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, bool attachment_enabled, const FrameData& data);
   void build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_integrator_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
@@ -360,8 +376,10 @@ struct UI {
     UIObjects = 1u << 0u,
     UIProperties = 1u << 1u,
     UIMemoryDiagnostics = 1u << 2u,
+    UISceneTree = 1u << 3u,
+    UINodeProperties = 1u << 4u,
 
-    UIDefaults = UIObjects | UIProperties,
+    UIDefaults = UIObjects | UIProperties | UISceneTree | UINodeProperties,
   };
 
   struct SelectionState {
@@ -386,10 +404,35 @@ struct UI {
     bool has = false;
   } _pending_selection;
 
+  struct NodeTransformEditorState {
+    int32_t node_index = -1;
+    AffineTransform source_transform = {};
+    AffineTRS trs = {};
+    float3 rotation_degrees = {};
+    bool decomposable = false;
+  } _node_transform_editor;
+  int32_t _node_geometry_edit_result_node = -1;
+  NodeGeometryEditResult _node_geometry_edit_result = NodeGeometryEditResult::Success;
+
+  enum class GizmoOperation : uint32_t {
+    Translate,
+    Rotate,
+    Scale,
+  } _gizmo_operation = GizmoOperation::Translate;
+
+  enum class GizmoMode : uint32_t {
+    Local,
+    World,
+  } _gizmo_mode = GizmoMode::Local;
+
+  bool _gizmo_captures_mouse = false;
+  bool _gizmo_was_using = false;
+  bool _gizmo_changed_during_interaction = false;
+
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;
   MappingRepresentation _mesh_mapping;
-  MappingRepresentation _camera_mapping;
+  std::vector<uint32_t> _scene_tree_open_subtree_ends;
   SelectionState _selection;
   SelectionState _name_edit_selection = {};
   char _name_edit_buffer[256] = {};
@@ -408,7 +451,6 @@ struct UI {
   uint64_t _material_mapping_hash = 0ull;
   uint64_t _medium_mapping_hash = 0ull;
   uint64_t _mesh_mapping_hash = 0ull;
-  uint64_t _camera_mapping_hash = 0ull;
   bool _auto_open_emission_section = false;
   double _last_fps_update_time = 0.0;
   uint32_t _frame_count = 0;

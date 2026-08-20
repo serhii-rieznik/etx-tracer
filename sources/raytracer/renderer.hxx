@@ -159,7 +159,9 @@ struct Renderer {
 
     bool camera_updated = _camera_controller->update(dt);
     if (camera_updated) {
-      scene.store_active_camera();
+      if (scene.store_active_camera()) {
+        request_scene_update();
+      }
       on_camera_changed(scene);
     } else if (camera_updated != last_camera_update_state) {
       on_camera_become_steady(scene);

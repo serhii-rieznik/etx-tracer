@@ -64,7 +64,6 @@ uint64_t hash_hierarchy_structure(const SceneHierarchy& hierarchy) {
     result = etx_hash64_continue(&node.parent_index, sizeof(node.parent_index), result);
     result = etx_hash64_continue(&node.attachment_offset, sizeof(node.attachment_offset), result);
     result = etx_hash64_continue(&node.attachment_count, sizeof(node.attachment_count), result);
-    result = etx_hash64_continue(&node.flags, sizeof(node.flags), result);
   }
   return result;
 }
@@ -73,6 +72,7 @@ uint64_t hash_hierarchy_transforms(const SceneHierarchy& hierarchy) {
   uint64_t result = 0u;
   for (const SceneNode& node : hierarchy.nodes) {
     result = etx_hash64_continue(&node.local_transform, sizeof(node.local_transform), result);
+    result = etx_hash64_continue(&node.flags, sizeof(node.flags), result);
   }
   return result;
 }
@@ -357,8 +357,8 @@ bool SceneData::resolve_hierarchy() {
     return false;
   }
 
-  std::vector<uint32_t> camera_attachment_nodes(cameras.size(), kInvalidIndex);
-  std::vector<uint32_t> medium_attachment_nodes(mediums.array_size(), kInvalidIndex);
+  _camera_attachment_nodes_scratch.assign(cameras.size(), kInvalidIndex);
+  _medium_attachment_nodes_scratch.assign(mediums.array_size(), kInvalidIndex);
   for (uint32_t node_index : hierarchy.evaluation_order) {
     const SceneNode& node = hierarchy.nodes[node_index];
     const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
@@ -379,11 +379,12 @@ bool SceneData::resolve_hierarchy() {
             return false;
           }
           if (hierarchy.effective_enabled[node_index] != 0u) {
-            if (camera_attachment_nodes[attachment.resource_index] != kInvalidIndex) {
-              log::error("Camera %u is attached to multiple enabled nodes (%u and %u)", attachment.resource_index, camera_attachment_nodes[attachment.resource_index], node_index);
+            if (_camera_attachment_nodes_scratch[attachment.resource_index] != kInvalidIndex) {
+              log::error("Camera %u is attached to multiple enabled nodes (%u and %u)", attachment.resource_index,
+                _camera_attachment_nodes_scratch[attachment.resource_index], node_index);
               return false;
             }
-            camera_attachment_nodes[attachment.resource_index] = node_index;
+            _camera_attachment_nodes_scratch[attachment.resource_index] = node_index;
           }
           break;
         case SceneAttachment::Type::Emitter:
@@ -396,11 +397,12 @@ bool SceneData::resolve_hierarchy() {
             return false;
           }
           if (hierarchy.effective_enabled[node_index] != 0u) {
-            if (medium_attachment_nodes[attachment.resource_index] != kInvalidIndex) {
-              log::error("Medium %u is attached to multiple enabled nodes (%u and %u)", attachment.resource_index, medium_attachment_nodes[attachment.resource_index], node_index);
+            if (_medium_attachment_nodes_scratch[attachment.resource_index] != kInvalidIndex) {
+              log::error("Medium %u is attached to multiple enabled nodes (%u and %u)", attachment.resource_index,
+                _medium_attachment_nodes_scratch[attachment.resource_index], node_index);
               return false;
             }
-            medium_attachment_nodes[attachment.resource_index] = node_index;
+            _medium_attachment_nodes_scratch[attachment.resource_index] = node_index;
           }
           break;
         default:
@@ -408,6 +410,7 @@ bool SceneData::resolve_hierarchy() {
       }
     }
   }
+  hierarchy.mark_resolved_state_current();
   return true;
 }
 

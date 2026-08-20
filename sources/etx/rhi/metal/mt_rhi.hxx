@@ -19,6 +19,7 @@ struct MTContext {
   MTContext(MTContext&&) noexcept;
   MTContext& operator=(MTContext&&) noexcept = delete;
 
+  bool valid() const;
   MTDevice* get_device();
   MTBindlessManager* get_bindless_manager();
 

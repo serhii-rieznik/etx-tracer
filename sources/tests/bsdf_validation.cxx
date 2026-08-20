@@ -2989,8 +2989,15 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
       uint32_t case_count;
     };
 
+    enum : uint32_t {
+      ValidationKindPlastic = 1u,
+      ValidationKindConductor = 2u,
+      ValidationKindDielectric = 3u,
+      ValidationKindDiffraction = 4u,
+    };
+
     auto validate_batch = [&](const char* batch_label, const uint32_t first_case, const uint32_t batch_case_count, const uint32_t validation_mode,
-                            const uint32_t validation_operation) -> bool {
+                            const uint32_t validation_operation, const uint32_t validation_kind) -> bool {
       std::vector<BSDFRuntimeValidationCase> batch_cases(cases + first_case, cases + first_case + batch_case_count);
       etx::RHIBuffer case_buffer = {};
       etx::RHIBuffer output_buffer = {};
@@ -3015,8 +3022,9 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
         std::unordered_map<std::string, std::string> defines = {
           {"ETX_BSDF_RUNTIME_VALIDATION_MODE", std::to_string(validation_mode)},
           {"ETX_BSDF_RUNTIME_VALIDATION_OPERATION", std::to_string(validation_operation)},
+          {"ETX_BSDF_RUNTIME_VALIDATION_KIND", std::to_string(validation_kind)},
         };
-        if (validation_mode != 0u) {
+        if (validation_mode == 3u) {
           defines["ETX_DXC_OPT_LEVEL"] = "0";
           defines["ETX_DXC_SPIRV_OPT_CONFIG"] = "--compact-ids";
         }
@@ -3106,14 +3114,14 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
     };
 
     if (diffraction_only == false) {
-      valid = validate_batch("energy", 0u, 2u, 0u, 0u) && valid;
       for (uint32_t operation = 1u; operation <= 4u; ++operation) {
-        valid = validate_batch("plastic", 2u, 1u, 1u, operation) && valid;
-        valid = validate_batch("openpbr", 3u, 2u, 2u, operation) && valid;
+        valid = validate_batch("energy conductor", 0u, 1u, 0u, operation, ValidationKindConductor) && valid;
+        valid = validate_batch("energy dielectric", 1u, 1u, 0u, operation, ValidationKindDielectric) && valid;
+        valid = validate_batch("plastic", 2u, 1u, 1u, operation, ValidationKindPlastic) && valid;
       }
     }
     for (uint32_t operation = 1u; operation <= 4u; ++operation) {
-      valid = validate_batch("diffraction", 5u, 1u, 3u, operation) && valid;
+      valid = validate_batch("diffraction", 5u, 1u, 3u, operation, ValidationKindDiffraction) && valid;
     }
   } while (false);
 
