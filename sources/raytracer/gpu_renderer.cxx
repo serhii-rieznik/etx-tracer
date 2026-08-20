@@ -75,6 +75,18 @@ enum class GPUIntegratorMode : uint32_t {
   VCM = 4u,
 };
 
+enum class GPUSpectralMode : uint32_t {
+  Runtime = 0u,
+  RGB = 1u,
+};
+
+GPUSpectralMode gpu_spectral_mode(const SceneData& scene_data) {
+  if ((scene_data.options.properties[Scene::Properties::Spectral]) || (scene_data.options.properties[Scene::Properties::DiffractionGrating])) {
+    return GPUSpectralMode::Runtime;
+  }
+  return GPUSpectralMode::RGB;
+}
+
 struct GPUIntegratorFeatures {
   enum : uint32_t {
     CameraPath = 1u << 0u,
@@ -1536,6 +1548,7 @@ void GPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
   _integrator_mode = static_cast<uint32_t>(integrator_selection.mode);
   _integrator_features = integrator_selection.features;
   _material_compile_mask = build_material_compile_mask(scene.data());
+  _spectral_mode = static_cast<uint32_t>(gpu_spectral_mode(scene.data()));
   _initialized = true;
   _scene_valid = scene.valid();
   _run_state = RunState::Stopped;
@@ -1997,8 +2010,8 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
   }
 
   result->compile_started_at = std::chrono::steady_clock::now();
-  log::info("GPU RT preparation queued: generation=%u integrator=%s features=0x%08x material_mask=0x%08x filter=%s", result->generation,
-    gpu_integrator_mode_to_string(static_cast<GPUIntegratorMode>(result->integrator_mode)), result->integrator_features, result->material_compile_mask,
+  log::info("GPU RT preparation queued: generation=%u integrator=%s features=0x%08x material_mask=0x%08x spectral_mode=%u filter=%s", result->generation,
+    gpu_integrator_mode_to_string(static_cast<GPUIntegratorMode>(result->integrator_mode)), result->integrator_features, result->material_compile_mask, result->spectral_mode,
     result->compile_stage_filter.empty() ? "<all>" : result->compile_stage_filter.c_str());
   log::info("GPU RT preparation background compile started: generation=%u", result->generation);
 
@@ -2121,6 +2134,7 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
     if (group.bsdf_kind.empty() == false) {
       defines["ETX_BSDF_KIND"] = group.bsdf_kind;
     }
+    defines["ETX_SPECTRAL_MODE"] = std::to_string(result->spectral_mode);
     if (static_cast<GPUIntegratorMode>(result->integrator_mode) == GPUIntegratorMode::PathTracing) {
       defines["ETX_WAVEFRONT_PATH_TRACING_ONLY"] = "1";
     }
@@ -2263,12 +2277,14 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
   _integrator_mode = static_cast<uint32_t>(integrator_selection.mode);
   _integrator_features = integrator_selection.features;
   _material_compile_mask = material_compile_mask;
+  _spectral_mode = static_cast<uint32_t>(gpu_spectral_mode(scene.data()));
   _preparation_generation += 1u;
   _active_preparation = std::make_shared<PendingPipelinePreparation>();
   _active_preparation->generation = _preparation_generation;
   _active_preparation->integrator_mode = _integrator_mode;
   _active_preparation->integrator_features = _integrator_features;
   _active_preparation->material_compile_mask = _material_compile_mask;
+  _active_preparation->spectral_mode = _spectral_mode;
   _active_preparation->compile_stage_filter = _compile_stage_filter;
   _active_preparation->queued_at = std::chrono::steady_clock::now();
   _publish_preparation.reset();
@@ -3369,11 +3385,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const uint32_t new_integrator_mode = static_cast<uint32_t>(integrator_selection.mode);
   const uint32_t new_integrator_features = integrator_selection.features;
   const uint32_t new_material_compile_mask = build_material_compile_mask(scene.data());
+  const uint32_t new_spectral_mode = static_cast<uint32_t>(gpu_spectral_mode(scene.data()));
   _last_target_samples = std::max(1u, scene.data().options.samples);
   const bool integrator_mode_changed = (_integrator_mode != new_integrator_mode);
   const bool integrator_features_changed = (_integrator_features != new_integrator_features);
   const bool material_compile_mask_changed = (_material_compile_mask != new_material_compile_mask);
-  const bool pipeline_configuration_changed = integrator_mode_changed || integrator_features_changed || material_compile_mask_changed;
+  const bool spectral_mode_changed = (_spectral_mode != new_spectral_mode);
+  const bool pipeline_configuration_changed = integrator_mode_changed || integrator_features_changed || material_compile_mask_changed || spectral_mode_changed;
   const bool missing_pipelines = (_preparation_state == RendererPreparationState::Ready) && (pipelines_valid() == false);
   const bool failed_preparation_can_retry = (_preparation_state == RendererPreparationState::Failed) && (_preparation_canceled == false) && (_runtime_failed == false);
   const bool material_configuration_supported = gpu_material_compile_mask_supported(new_material_compile_mask);
@@ -4626,6 +4644,7 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _integrator_mode = 0u;
   _integrator_features = 0u;
   _material_compile_mask = 0u;
+  _spectral_mode = 0u;
   _render_window_origin = {};
   _render_window_size = {};
   _active_preparation.reset();

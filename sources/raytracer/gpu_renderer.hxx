@@ -192,6 +192,7 @@ struct GPURaytracingRenderer : public Renderer {
     uint32_t integrator_mode = 0u;
     uint32_t integrator_features = 0u;
     uint32_t material_compile_mask = 0u;
+    uint32_t spectral_mode = 0u;
     std::string compile_stage_filter = {};
     uint32_t total_steps = 0u;
     uint32_t total_compile_groups = 0u;
@@ -465,6 +466,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _integrator_mode = 0u;
   uint32_t _integrator_features = 0u;
   uint32_t _material_compile_mask = 0u;
+  uint32_t _spectral_mode = 0u;
   uint2 _render_window_origin = {};
   uint2 _render_window_size = {};
   RHIResourceState _output_texture_state = RHIResourceState::Undefined;

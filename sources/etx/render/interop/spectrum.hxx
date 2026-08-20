@@ -2,6 +2,13 @@
 
 #include "interop.hxx"
 
+#define ETX_SPECTRAL_MODE_RUNTIME 0
+#define ETX_SPECTRAL_MODE_RGB     1
+
+#if defined(ETX_SPECTRAL_MODE) == false
+# define ETX_SPECTRAL_MODE ETX_SPECTRAL_MODE_RUNTIME
+#endif
+
 ETX_STATIC_CONST uint32_t RGBResponseShortestWavelength = 390u;
 ETX_STATIC_CONST uint32_t RGBResponseLongestWavelength = 780u;
 ETX_STATIC_CONST uint32_t RGBResponseWavelengthCount = RGBResponseLongestWavelength - RGBResponseShortestWavelength + 1u;
@@ -108,15 +115,30 @@ ETX_SHARED_INLINE float3 spectral_rgb_to_xyz(ETX_IN(float3, rgb)) {
 }
 
 ETX_SHARED_INLINE bool spectral_query_is_spectral(ETX_IN(SpectralQuery, query)) {
+#if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
+  (void)query;
+  return false;
+#else
   return (query.flags & SpectralFlags::Spectral) != 0u;
+#endif
 }
 
 ETX_SHARED_INLINE bool spectral_query_is_packet(ETX_IN(SpectralQuery, query)) {
+#if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
+  (void)query;
+  return false;
+#else
   return (query.flags & SpectralFlags::Packet) != 0u;
+#endif
 }
 
 ETX_SHARED_INLINE bool spectral_query_is_hero_only(ETX_IN(SpectralQuery, query)) {
+#if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
+  (void)query;
+  return false;
+#else
   return (query.flags & SpectralFlags::HeroOnly) != 0u;
+#endif
 }
 
 ETX_SHARED_INLINE float spectral_query_wavelength_pdf(float wavelength) {
@@ -354,7 +376,12 @@ ETX_SHARED_INLINE float luminance(ETX_IN(float3, value)) {
 }
 
 ETX_SHARED_INLINE bool spectral_response_is_spectral(ETX_IN(SpectralResponse, value)) {
+#if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
+  (void)value;
+  return false;
+#else
   return value.flags & SpectralFlags::Spectral;
+#endif
 }
 
 ETX_SHARED_INLINE float spectral_response_monochromatic(ETX_IN(SpectralResponse, value)) {
