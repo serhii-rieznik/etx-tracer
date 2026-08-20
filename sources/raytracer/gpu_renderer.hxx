@@ -444,6 +444,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _wavefront_light_vertex_sample_peak_count = 0u;
   uint32_t _wavefront_light_history_underuse_sample_count = 0u;
   uint32_t _wavefront_light_history_underuse_peak_count = 0u;
+  uint32_t _wavefront_vcm_spectral_phase = 0u;
   uint32_t _wavefront_tile_index = 0u;
   uint32_t _wavefront_tile_max_pixels = 0u;
   uint32_t _wavefront_tile_count = 1u;

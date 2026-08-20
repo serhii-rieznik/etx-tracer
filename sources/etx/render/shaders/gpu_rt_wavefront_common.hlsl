@@ -787,7 +787,8 @@ SpectralQuery wavefront_vcm_iteration_spectral_query() {
   SpectralQuery spect = spectral_query_sample();
   uint iteration_seed = scene_random_seed(0u, constants.sample_index);
   if (scene_uses_spectral_mode()) {
-    spect = spectral_query_packet_sample(rnd01(iteration_seed));
+    SpectralQuery packet = spectral_query_packet_sample(rnd01(iteration_seed));
+    spect = spectral_query_packet_lane(packet, constants.vcm_spectral_phase);
   } else if (scene_has_diffraction_grating()) {
     spect = diffraction_transport_sample_query(false, true, rnd01(iteration_seed), rnd01(iteration_seed));
   }

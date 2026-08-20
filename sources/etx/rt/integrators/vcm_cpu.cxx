@@ -101,10 +101,17 @@ struct CPUVCMImpl {
 
     float eta_vcm = kPi * sqr(vcm_iteration.current_radius) * float(rt.film().current_pixel_count());
     vcm_iteration.vc_weight = 1.0f / eta_vcm;
-    vcm_iteration.vm_weight = vcm_options.enable_merging() ? eta_vcm : 0.0f;
+    vcm_iteration.vm_weight = vcm_options.merge_vertices() ? eta_vcm : 0.0f;
     vcm_iteration.vm_normalization = 1.0f / eta_vcm;
 
     status.current_iteration = vcm_iteration.iteration;
+
+    vcm_iteration.spectral_phase = 0u;
+    start_current_spectral_phase();
+  }
+
+  void start_current_spectral_phase() {
+    wait_for_tasks();
 
     _light_paths.clear();
     _light_paths.resize(rt.film().current_pixel_count());
@@ -140,7 +147,7 @@ struct CPUVCMImpl {
         if (step_result.splat) {
           const float3 val = step_result.value_to_splat.to_rgb_estimate() / vcm_branch_pdf(state);
           if (dot(val, val) > kEpsilon) {
-            film.submit(val, step_result.splat_uv);
+            film.submit(val * vcm_spectral_phase_weight(scene), step_result.splat_uv);
           }
         }
       }
@@ -187,7 +194,7 @@ struct CPUVCMImpl {
         state.merged *= vcm_iteration.vm_normalization / vcm_branch_pdf(state);
         state.merged += state.gathered.to_rgb_estimate() / vcm_branch_pdf(state);
 
-        film.submit(state.merged, {}, {}, pixel);
+        film.submit(state.merged * vcm_spectral_phase_weight(scene), {}, {}, pixel);
       }
     }
   }
@@ -209,6 +216,12 @@ struct CPUVCMImpl {
 
   void complete_camera_vertices() {
     const auto& scene = rt.scene();
+    if (vcm_iteration.spectral_phase + 1u < vcm_spectral_phase_count(scene)) {
+      vcm_iteration.spectral_phase += 1u;
+      start_current_spectral_phase();
+      return;
+    }
+
     rt.film().commit_iteration(vcm_iteration.iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp);
     status.completed_iterations += 1u;
     status.last_iteration_time = iteration_time.measure();

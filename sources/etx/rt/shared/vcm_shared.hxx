@@ -81,7 +81,7 @@ struct ETX_ALIGNED VCMIteration {
   uint32_t iteration ETX_EMPTY_INIT;
   uint32_t active_paths ETX_EMPTY_INIT;
   uint32_t light_vertices ETX_EMPTY_INIT;
-  uint32_t pad ETX_EMPTY_INIT;
+  uint32_t spectral_phase ETX_EMPTY_INIT;
   float current_radius ETX_EMPTY_INIT;
   float vm_weight ETX_EMPTY_INIT;
   float vc_weight ETX_EMPTY_INIT;
@@ -169,21 +169,31 @@ ETX_SHARED_INLINE float vcm_branch_pdf(ETX_IN(VCMPathState, state)) {
   return diffraction_transport_branch_pdf(state.diffraction_partition(), state.spect);
 }
 
-// Vertex merging combines light and camera subpaths before converting the
-// complete path to RGB. All paths in one VCM iteration must therefore use the
-// same spectral query; independently sampled wavelengths cannot be multiplied
-// into a valid spectral path contribution.
+// VCM combines light and camera subpaths before converting the complete path
+// to RGB. Every path in one spectral phase must therefore use the same scalar
+// wavelength. One logical sample averages coherent full-frame phases for all
+// stratified packet wavelengths.
 ETX_SHARED_INLINE SpectralQuery vcm_iteration_spectral_query(const Scene& scene, ETX_IN(VCMIteration, iteration)) {
   Sampler sampler = {};
   sampler.init(0u, iteration.iteration ^ scene.options.random_seed);
   if (scene.spectral()) {
-    return SpectralQuery::packet_sample(sampler.next());
+    const SpectralQuery packet = SpectralQuery::packet_sample(sampler.next());
+    const ::SpectralQuery phase_query = ::spectral_query_packet_lane(packet, iteration.spectral_phase);
+    return SpectralQuery{phase_query.wavelength, phase_query.flags};
   }
   if (scene.diffraction_transport_partition()) {
     const auto query = diffraction_transport_sample_query(false, true, sampler.next(), sampler.next());
     return SpectralQuery{query.wavelength, query.flags};
   }
   return SpectralQuery::sample();
+}
+
+ETX_SHARED_INLINE uint32_t vcm_spectral_phase_count(const Scene& scene) {
+  return scene.spectral() ? kSpectralPacketSize : 1u;
+}
+
+ETX_SHARED_INLINE float vcm_spectral_phase_weight(const Scene& scene) {
+  return 1.0f / float(vcm_spectral_phase_count(scene));
 }
 
 struct ETX_ALIGNED VCMLightVertex {

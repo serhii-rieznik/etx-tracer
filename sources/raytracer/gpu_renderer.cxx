@@ -479,18 +479,16 @@ struct GPUVCMIterationParameters {
   uint32_t kernel = 1u;
 };
 
-GPUVCMIterationParameters gpu_vcm_iteration_parameters(const SceneRepresentation& scene, float bounding_sphere_radius, uint32_t sample_index,
-  const uint2& render_dimensions, uint32_t light_path_count) {
+GPUVCMIterationParameters gpu_vcm_iteration_parameters(const SceneRepresentation& scene, float bounding_sphere_radius, uint32_t sample_index, const uint2& render_dimensions,
+  uint32_t light_path_count, bool merging_enabled) {
   GPUVCMIterationParameters result = {};
   float initial_radius = 0.0f;
   uint32_t radius_decay = 256u;
-  bool merging_enabled = true;
   auto settings_it = scene.integrator_data().settings.find(Integrator::Type::VCM);
   if (settings_it != scene.integrator_data().settings.end()) {
     initial_radius = settings_it->second.get_float("vcm-initial_radius", initial_radius);
     radius_decay = settings_it->second.get_integral("vcm-radius_decay", radius_decay);
     result.kernel = settings_it->second.get_integral("vcm-kernel", result.kernel);
-    merging_enabled = settings_it->second.get_bool("vcm-merging", merging_enabled);
   }
 
   if (initial_radius == 0.0f) {
@@ -1473,6 +1471,7 @@ bool GPURaytracingRenderer::set_render_window(const uint2& origin, const uint2& 
 
   _render_window_origin = origin;
   _render_window_size = size;
+  _wavefront_vcm_spectral_phase = 0u;
   _wavefront_tile_index = 0u;
   _wavefront_tile_max_pixels = 0u;
   _wavefront_tile_count = 1u;
@@ -1500,6 +1499,7 @@ void GPURaytracingRenderer::set_batch_coarse_progress(bool value) {
 void GPURaytracingRenderer::reset_render_window() {
   _render_window_origin = {};
   _render_window_size = {};
+  _wavefront_vcm_spectral_phase = 0u;
   _wavefront_tile_index = 0u;
   _wavefront_tile_max_pixels = 0u;
   _wavefront_tile_count = 1u;
@@ -1827,6 +1827,7 @@ void GPURaytracingRenderer::reset_render_progress() {
   _wavefront_light_vertex_sample_peak_count = 0u;
   _wavefront_light_history_underuse_sample_count = 0u;
   _wavefront_light_history_underuse_peak_count = 0u;
+  _wavefront_vcm_spectral_phase = 0u;
   _wavefront_tile_index = 0u;
   _wavefront_tile_max_pixels = 0u;
   _wavefront_tile_count = 1u;
@@ -2635,6 +2636,7 @@ void GPURaytracingRenderer::stop() {
   _wavefront_path_iteration = 0u;
   _wavefront_camera_queue_count = 0u;
   _wavefront_light_queue_count = 0u;
+  _wavefront_vcm_spectral_phase = 0u;
   _wavefront_camera_phase_initialized = false;
   _run_state = RunState::Stopped;
 }
@@ -2723,6 +2725,7 @@ void GPURaytracingRenderer::destroy_wavefront_buffers(RHIContext& ctx) {
   _wavefront_light_vertex_sample_peak_count = 0u;
   _wavefront_light_history_underuse_sample_count = 0u;
   _wavefront_light_history_underuse_peak_count = 0u;
+  _wavefront_vcm_spectral_phase = 0u;
   _wavefront_resources = {};
   _wavefront_tile_index = 0u;
   _wavefront_tile_max_pixels = 0u;
@@ -3575,7 +3578,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const uint32_t scene_max_path_length_for_tiling = std::max(1u, scene.data().options.max_path_length);
   const bool use_complete_light_history = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::ConnectVertices) ||
                                           gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::MergeVertices);
-  const bool use_wavefront_tiling = (render_preview_this_frame == false) && use_complete_light_history;
+  const bool vcm_mode = static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::VCM;
+  // VCM's light population, normalization, and spatial grid are iteration-global.
+  const bool use_wavefront_tiling = (render_preview_this_frame == false) && use_complete_light_history && (vcm_mode == false);
   const uint64_t base_render_pixel_count_u64 = static_cast<uint64_t>(base_render_dim.x) * static_cast<uint64_t>(base_render_dim.y);
   if (base_render_pixel_count_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
     log::error("GPU RT: render window path capacity overflow");
@@ -3654,6 +3659,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     _wavefront_hard_iteration_cap = 0u;
     _wavefront_camera_queue_count = 0u;
     _wavefront_light_queue_count = 0u;
+    _wavefront_vcm_spectral_phase = 0u;
     _wavefront_tile_index = 0u;
     _wavefront_tile_max_pixels = 0u;
     _wavefront_tile_count = 1u;
@@ -3691,6 +3697,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     .dispatch_item_offset = 0u,
     .dispatch_item_count = 0u,
     .work_queue_index = kInvalidIndex,
+    .vcm_spectral_phase = _wavefront_vcm_spectral_phase,
     .scene = _gpu_scene,
   };
   const RHIDispatchDesc film_dispatch = {
@@ -3717,7 +3724,11 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
 
   const auto wavefront_buffer_begin = std::chrono::steady_clock::now();
   if (ensure_wavefront_buffers(ctx, scene, wavefront_buffer_path_capacity, wavefront_path_capacity, false) == false) {
-    log::error("GPU RT: failed to allocate wavefront buffers");
+    if (vcm_mode) {
+      set_runtime_failure("GPU VCM requires whole-frame wavefront buffers; allocation failed for the current resolution and path length");
+    } else {
+      log::error("GPU RT: failed to allocate wavefront buffers");
+    }
     return;
   }
   const auto wavefront_buffer_end = std::chrono::steady_clock::now();
@@ -3726,7 +3737,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const bool vcm_merging_enabled = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::MergeVertices);
   if (static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::VCM) {
     const GPUVCMIterationParameters vcm =
-      gpu_vcm_iteration_parameters(scene, _scene_bounding_sphere_radius, _sample_index, base_render_dim, wavefront_path_capacity);
+      gpu_vcm_iteration_parameters(scene, _scene_bounding_sphere_radius, _sample_index, base_render_dim, wavefront_path_capacity, vcm_merging_enabled);
     constants.vcm_radius = vcm.radius;
     constants.vcm_vm_weight = vcm.vm_weight;
     constants.vcm_vc_weight = vcm.vc_weight;
@@ -3946,6 +3957,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     const bool has_dielectric = material_compile_mask_has(_material_compile_mask, MaterialClass::Dielectric);
     const bool has_thinfilm = material_compile_mask_has(_material_compile_mask, MaterialClass::Thinfilm);
     const bool use_material_work_queues = material_compile_mask_work_queue_count(_material_compile_mask) > 1u;
+    const uint32_t vcm_spectral_phase_count = (vcm_mode && scene.data().options.properties[Scene::Properties::Spectral]) ? kSpectralPacketSize : 1u;
     const auto dispatch_stage_material_indirect = [&](RHICommandBuffer cmd, PipelineStage stage, bool from_camera, uint32_t material_queue_index, uint32_t path_iteration) {
       if (use_material_work_queues) {
         dispatch_stage_work_queue_indirect(cmd, stage, material_dispatch_args_offset(from_camera, material_queue_index), path_iteration, material_queue_index);
@@ -3963,21 +3975,24 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       log::info("GPU path mode: %s", gpu_integrator_mode_to_string(integrator_mode));
     }
     const auto finalize_wavefront_sample = [&]() {
-      record_and_submit([&](RHICommandBuffer cmd) {
-        ctx.cmd_texture_barrier(cmd, render_output_texture, render_output_texture_state, RHIResourceState::General);
-        barrier_wavefront_buffers(cmd);
-        dispatch_stage(cmd, PipelineStage::FinalizeSample, film_dispatch, _wavefront_hard_iteration_cap);
-        ctx.cmd_texture_barrier(cmd, render_output_texture, RHIResourceState::General, RHIResourceState::ShaderReadOnly);
-      });
+      const bool final_spectral_phase = (_wavefront_vcm_spectral_phase + 1u) >= vcm_spectral_phase_count;
+      if (final_spectral_phase) {
+        record_and_submit([&](RHICommandBuffer cmd) {
+          ctx.cmd_texture_barrier(cmd, render_output_texture, render_output_texture_state, RHIResourceState::General);
+          barrier_wavefront_buffers(cmd);
+          dispatch_stage(cmd, PipelineStage::FinalizeSample, film_dispatch, _wavefront_hard_iteration_cap);
+          ctx.cmd_texture_barrier(cmd, render_output_texture, RHIResourceState::General, RHIResourceState::ShaderReadOnly);
+        });
 
-      const RHIResult finalize_result = wait_and_destroy_submitted_commands("finalize sample submit");
-      if (finalize_result != RHIResult::Success) {
-        set_runtime_failure("GPU RT finalize sample submit failed (" + std::to_string(static_cast<uint32_t>(finalize_result)) + ")");
-        _wavefront_camera_queue_count = 0u;
-        _wavefront_light_queue_count = 0u;
-        return false;
+        const RHIResult finalize_result = wait_and_destroy_submitted_commands("finalize sample submit");
+        if (finalize_result != RHIResult::Success) {
+          set_runtime_failure("GPU RT finalize sample submit failed (" + std::to_string(static_cast<uint32_t>(finalize_result)) + ")");
+          _wavefront_camera_queue_count = 0u;
+          _wavefront_light_queue_count = 0u;
+          return false;
+        }
+        render_output_texture_state = RHIResourceState::ShaderReadOnly;
       }
-      render_output_texture_state = RHIResourceState::ShaderReadOnly;
       _wavefront_render_step = WavefrontRenderStep::InitSample;
       _wavefront_path_iteration = 0u;
       _wavefront_hard_iteration_cap = 0u;
@@ -3986,6 +4001,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       _wavefront_light_max_path_length = 0u;
       _wavefront_camera_phase_initialized = false;
       _wavefront_light_vertex_sample_peak_count = std::max(_wavefront_light_vertex_sample_peak_count, _wavefront_light_vertex_reserved_count);
+      if (final_spectral_phase == false) {
+        _wavefront_vcm_spectral_phase += 1u;
+        dispatch_submit_ms = elapsed_ms(dispatch_submit_begin, std::chrono::steady_clock::now());
+        return true;
+      }
+
+      _wavefront_vcm_spectral_phase = 0u;
       if (_wavefront_tile_index + 1u >= wavefront_tile_count_value) {
         _wavefront_tile_index = 0u;
         _wavefront_tile_plan_valid = false;
@@ -4592,6 +4614,7 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _wavefront_camera_queue_count = 0u;
   _wavefront_light_queue_count = 0u;
   _wavefront_light_max_path_length = 0u;
+  _wavefront_vcm_spectral_phase = 0u;
   _wavefront_tile_index = 0u;
   _wavefront_tile_max_pixels = 0u;
   _wavefront_tile_count = 1u;
