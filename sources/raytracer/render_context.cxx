@@ -513,7 +513,7 @@ void RenderContext::end_frame() {
     _private->rhi_context.cmd_begin_render_pass(_private->rhi_cmd, 1, &output_texture, clear_color);
   }
 
-  RHITexture output = _private->active_renderer ? _private->active_renderer->output_texture() : RHITexture{};
+  RHITexture output = _private->active_renderer ? _private->active_renderer->display_texture() : RHITexture{};
 
   if (output.valid()) {
     ETX_PROFILER_NAMED_SCOPE("render_context_draw_present_quad");

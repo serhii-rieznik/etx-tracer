@@ -49,6 +49,7 @@ struct RaytracingImpl {
     std::vector<Emitter> emitter_instances = {};
     std::vector<Triangle> triangles = {};
     std::vector<SceneInstance> instances = {};
+    PackedEmitterTopology emitter_topology = {};
   } internal_data;
 
   RaytracingImpl(TaskScheduler& s, Film& f)
@@ -134,11 +135,18 @@ struct RaytracingImpl {
                                          update_flags[UpdateFlags::Materials] || update_flags[UpdateFlags::Spectra] || update_flags[UpdateFlags::Emitters];
     if (packed_emitters_changed) {
       ETX_PROFILER_NAMED_SCOPE("update_instances_triangles_and_emitters");
-      PackedEmitterData packed_emitters = build_packed_emitters(scene_data);
+      const bool transform_only = update_flags[UpdateFlags::Transforms] && (update_flags[UpdateFlags::VerticesPos] == false) && (update_flags[UpdateFlags::Triangles] == false) &&
+                                  (update_flags[UpdateFlags::Meshes] == false) && (update_flags[UpdateFlags::Hierarchy] == false) &&
+                                  (update_flags[UpdateFlags::Attachments] == false) && (update_flags[UpdateFlags::Materials] == false) &&
+                                  (update_flags[UpdateFlags::Spectra] == false) && (update_flags[UpdateFlags::Emitters] == false);
+      PackedEmitterData packed_emitters =
+        transform_only ? build_packed_emitters_for_transforms(scene_data, internal_data.emitter_topology) : build_packed_emitters(scene_data, internal_data.emitter_topology);
       internal_data.emitters_distribution_storage = build_packed_emitter_distribution(packed_emitters);
       internal_data.emitter_profiles = std::move(packed_emitters.emitter_profiles);
       internal_data.emitter_instances = std::move(packed_emitters.emitter_instances);
-      internal_data.triangles = std::move(packed_emitters.triangles);
+      if (transform_only == false) {
+        internal_data.triangles = std::move(packed_emitters.triangles);
+      }
       internal_data.instances = std::move(packed_emitters.instances);
       scene.environment_emitters = packed_emitters.environment_emitters;
 

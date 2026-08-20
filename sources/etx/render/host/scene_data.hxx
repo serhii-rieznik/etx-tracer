@@ -15,6 +15,12 @@
 #include <etx/render/host/scene_hierarchy.hxx>
 namespace etx {
 
+enum class SceneUpdateScope : uint32_t {
+  None = 0u,
+  Transforms = 1u,
+  Full = 2u,
+};
+
 struct AtmosphereEmitterParameters {
   scattering::Parameters scattering = {};
   float quality = 0.125f;
@@ -188,6 +194,7 @@ struct SceneData {
 
   BoundingBox compute_bounding_volumes() const;
 
+  uint64_t compute_transforms_hash() const;
   SceneHashes compute_hashes() const;
 
   void clear(TaskScheduler& scheduler);

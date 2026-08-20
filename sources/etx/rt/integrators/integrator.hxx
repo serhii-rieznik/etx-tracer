@@ -7,6 +7,8 @@
 #include <etx/render/shared/math.hxx>
 namespace etx {
 
+enum class SceneUpdateScope : uint32_t;
+
 struct Integrator {
   enum class Type : uint32_t {
     Debug = 0,
@@ -119,6 +121,8 @@ struct IntegratorThread {
   void terminate();
 
   void update();
+  bool update_integrator();
+  void commit_scene_changes();
 
   Integrator* integrator() const;
   void set_integrator(Integrator*);
@@ -131,7 +135,8 @@ struct IntegratorThread {
   void restart();
 
   void reset_scene_hashes();
-  void request_scene_check();
+  void request_scene_check(SceneUpdateScope scope);
+  bool scene_changes_pending() const;
 
  private:
   ETX_DECLARE_PIMPL(IntegratorThread, 1024);

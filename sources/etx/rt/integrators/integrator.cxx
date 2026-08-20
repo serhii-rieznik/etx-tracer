@@ -28,7 +28,7 @@ struct IntegratorThreadImpl {
   Integrator* integrator = nullptr;
   Integrator::State latest_state = Integrator::State::Stopped;
   Integrator::Status latest_status = {};
-  std::atomic<bool> scene_check_requested = {true};
+  std::atomic<SceneUpdateScope> scene_update_scope = {SceneUpdateScope::Full};
 
   IntegratorThreadImpl(SceneRepresentation& scene_rep, Raytracing& rt)
     : scene_representation(scene_rep)
@@ -49,28 +49,37 @@ struct IntegratorThreadImpl {
   void reset_scene_hashes() {
     current_scene_hashes = {};
     current_camera_hash = 0;
-    scene_check_requested.store(true);
+    scene_update_scope.store(SceneUpdateScope::Full);
   }
 
-  void request_scene_check() {
-    scene_check_requested.store(true);
+  void request_scene_check(SceneUpdateScope requested_scope) {
+    SceneUpdateScope current_scope = scene_update_scope.load();
+    while ((static_cast<uint32_t>(current_scope) < static_cast<uint32_t>(requested_scope)) && (scene_update_scope.compare_exchange_weak(current_scope, requested_scope) == false)) {
+    }
   }
 
   void check_and_commit_scene_changes() {
-    const bool has_pending_scene_check = scene_check_requested.exchange(false);
+    const SceneUpdateScope pending_scope = scene_update_scope.exchange(SceneUpdateScope::None);
     SceneHashes new_hashes = current_scene_hashes;
     UpdateFlags changes = {};
 
-    if (has_pending_scene_check) {
-      if (ensure_energy_compensation_interfaces(scene_representation.data(), raytracing.scheduler()) == false) {
-        log::error("Failed to ensure BSDF energy-compensation interfaces before CPU render commit");
+    if (pending_scope != SceneUpdateScope::None) {
+      if (pending_scope == SceneUpdateScope::Full) {
+        if (ensure_energy_compensation_interfaces(scene_representation.data(), raytracing.scheduler()) == false) {
+          log::error("Failed to ensure BSDF energy-compensation interfaces before CPU render commit");
+        }
+        scene_representation.data().images.load_images(raytracing.scheduler());
       }
-      scene_representation.data().images.load_images(raytracing.scheduler());
       if (scene_representation.data().resolve_hierarchy() == false) {
         log::error("Failed to resolve scene hierarchy before CPU render commit");
+        request_scene_check(pending_scope);
         return;
       }
-      new_hashes = scene_representation.data().compute_hashes();
+      if (pending_scope == SceneUpdateScope::Full) {
+        new_hashes = scene_representation.data().compute_hashes();
+      } else {
+        new_hashes.transforms_hash = scene_representation.data().compute_transforms_hash();
+      }
       changes = new_hashes.compare(current_scene_hashes);
       current_scene_hashes = new_hashes;
     }
@@ -180,9 +189,9 @@ void IntegratorThread::stop(Integrator::Stop st) {
   _private->post_message({.cls = ITMessage::Cls::Stop, .stop_option = st});
 
   if (st == Integrator::Stop::Immediate) {
-    while (_private->latest_state != Integrator::State::Stopped) {
-      update();  // External control mode - call update directly
-    }
+    do {
+      update_integrator();
+    } while (_private->latest_state != Integrator::State::Stopped);
   }
 }
 
@@ -197,24 +206,41 @@ void IntegratorThread::reset_scene_hashes() {
   _private->reset_scene_hashes();
 }
 
-void IntegratorThread::request_scene_check() {
-  _private->request_scene_check();
+void IntegratorThread::request_scene_check(SceneUpdateScope scope) {
+  _private->request_scene_check(scope);
+}
+
+bool IntegratorThread::scene_changes_pending() const {
+  return _private->scene_update_scope.load() != SceneUpdateScope::None;
+}
+
+bool IntegratorThread::update_integrator() {
+  if (_private->integrator == nullptr) {
+    _private->process_messages();
+    return false;
+  }
+
+  const uint32_t completed_iterations = _private->latest_status.completed_iterations;
+  _private->process_messages();
+  _private->integrator->update();
+  _private->latest_state = _private->integrator->state();
+  _private->latest_status = _private->integrator->status();
+  return _private->latest_status.completed_iterations > completed_iterations;
+}
+
+void IntegratorThread::commit_scene_changes() {
+  _private->check_and_commit_scene_changes();
+  if (_private->integrator != nullptr) {
+    _private->latest_state = _private->integrator->state();
+    _private->latest_status = _private->integrator->status();
+  }
 }
 
 void IntegratorThread::update() {
   ETX_PROFILER_SCOPE();
 
-  if (_private->integrator == nullptr) {
-    _private->process_messages();
-    return;
-  }
-
-  _private->check_and_commit_scene_changes();
-  _private->process_messages();
-
-  _private->integrator->update();
-  _private->latest_state = _private->integrator->state();
-  _private->latest_status = _private->integrator->status();
+  commit_scene_changes();
+  update_integrator();
 }
 
 }  // namespace etx

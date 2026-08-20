@@ -700,8 +700,8 @@ void CPUDebugIntegrator::stop(Stop st) {
   if (st == Stop::WaitForCompletion) {
     current_state = State::WaitingForCompletion;
   } else {
-    rt.scheduler().wait_and_release(_private->current_task);
     current_state = State::Stopped;
+    rt.scheduler().wait_and_release(_private->current_task);
   }
 }
 

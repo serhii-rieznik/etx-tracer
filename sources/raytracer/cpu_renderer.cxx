@@ -22,17 +22,48 @@ void CPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
 
 void CPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) {
   Renderer::update_camera(scene, frame_data.dt);
-  if (consume_scene_update_request()) {
-    _integrator_thread.request_scene_check();
+  const SceneUpdateScope scene_update_scope = consume_scene_update_request();
+  if (scene_update_scope != SceneUpdateScope::None) {
+    _integrator_thread.request_scene_check(scene_update_scope);
   }
-  _integrator_thread.update();
+
+  const bool preview_iteration_completed = _preview_active ? _integrator_thread.update_integrator() : false;
+  if (_preview_active == false) {
+    _integrator_thread.update();
+  }
+  const Integrator::Status& status = _integrator_thread.status();
+  const uint32_t view_layer = frame_data.view_parameters.view_layer;
+  const bool completed_iteration_available = _preview_active ? preview_iteration_completed : (status.completed_iterations > _last_uploaded_completed_iterations);
+  const bool view_layer_changed = (status.completed_iterations > 0u) && (view_layer != _last_uploaded_view_layer);
+  if (completed_iteration_available || view_layer_changed) {
+    const float4* film_layer_data = _raytracing.film().layer(view_layer, _raytracing.scene().options.radiance_clamp);
+    if (update_image(ctx, frame_data.cmd, film_layer_data)) {
+      _last_uploaded_completed_iterations = status.completed_iterations;
+      _last_uploaded_view_layer = view_layer;
+    }
+  }
+
+  if (_preview_active) {
+    bool preview_resolution_changed = false;
+    if (preview_iteration_completed) {
+      preview_resolution_changed = _preview_resolution.update(status.last_iteration_time, true);
+      if (preview_resolution_changed) {
+        _raytracing.film().set_pixel_size(_preview_resolution.pixel_size());
+      }
+    }
+
+    const bool scene_changes_pending = _integrator_thread.scene_changes_pending();
+    if (scene_changes_pending && (preview_iteration_completed || (_integrator_thread.running() == false))) {
+      _integrator_thread.commit_scene_changes();
+    } else if (preview_resolution_changed) {
+      restart_render_at_pixel_size(_preview_resolution.pixel_size());
+    }
+  }
+
   const Integrator* integrator = current_integrator();
   if (_render_timing_active && (integrator != nullptr) && (integrator->state() == Integrator::State::Stopped)) {
     stop_render_timing();
   }
-
-  const auto film_layer_data = _raytracing.film().layer(frame_data.view_parameters.view_layer, _raytracing.scene().options.radiance_clamp);
-  update_image(ctx, film_layer_data);
 }
 
 void CPURaytracingRenderer::cleanup(RHIContext& ctx) {
@@ -41,6 +72,16 @@ void CPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _camera_controller.reset();
 
   ctx.device().destroy_texture(_output_texture);
+  for (uint32_t i = 0u; i < kRHIMaxFrames; ++i) {
+    ctx.device().destroy_buffer(_output_staging_buffers[i]);
+    _output_staging_buffers[i] = {};
+    _output_staging_buffer_sizes[i] = 0u;
+  }
+  _output_texture = {};
+  _output_texture_state = RHIResourceState::Undefined;
+  _last_uploaded_completed_iterations = 0u;
+  _last_uploaded_view_layer = kInvalidIndex;
+  reset_preview_state();
 }
 
 bool CPURaytracingRenderer::is_running() const {
@@ -113,7 +154,10 @@ RendererControlState CPURaytracingRenderer::control_state() const {
 }
 
 void CPURaytracingRenderer::start() {
+  reset_preview_state();
+  _raytracing.film().set_pixel_size(1u);
   _raytracing.film().clear(Film::ClearEverything);
+  _last_uploaded_completed_iterations = 0u;
   start_render_timing();
   _integrator_thread.run();
 }
@@ -128,25 +172,73 @@ void CPURaytracingRenderer::finish() {
 }
 
 void CPURaytracingRenderer::restart() {
+  _last_uploaded_completed_iterations = 0u;
   start_render_timing();
   _integrator_thread.restart();
 }
 
 void CPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
-  _raytracing.film().set_pixel_size(8u);
+  (void)scene;
+  _preview_camera_active = true;
+  if (update_preview_active_state()) {
+    _raytracing.film().set_pixel_size(_preview_resolution.pixel_size());
+    _integrator_thread.stop(Integrator::Stop::Immediate);
+  }
+  _last_uploaded_completed_iterations = 0u;
   start_render_timing();
-  _integrator_thread.restart();
 }
 
 void CPURaytracingRenderer::on_camera_become_steady(SceneRepresentation& scene) {
-  _raytracing.film().set_pixel_size(1u);
-  start_render_timing();
-  _integrator_thread.restart();
+  (void)scene;
+  _preview_camera_active = false;
+  if (update_preview_active_state() && (_preview_active == false)) {
+    restart_render_at_pixel_size(1u);
+  }
 }
 
 void CPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
   Renderer::on_scene_changed(scene);
+  _last_uploaded_completed_iterations = 0u;
   start_render_timing();
+}
+
+void CPURaytracingRenderer::on_scene_transforms_changed(SceneRepresentation& scene) {
+  Renderer::on_scene_transforms_changed(scene);
+  if (_preview_active && (_integrator_thread.running() == false)) {
+    _integrator_thread.request_scene_check(SceneUpdateScope::Transforms);
+    _integrator_thread.commit_scene_changes();
+  }
+  _last_uploaded_completed_iterations = 0u;
+  start_render_timing();
+}
+
+void CPURaytracingRenderer::on_scene_transform_interaction_started(SceneRepresentation& scene) {
+  (void)scene;
+  _preview_transform_active = true;
+  if (update_preview_active_state()) {
+    _raytracing.film().set_pixel_size(_preview_resolution.pixel_size());
+    _integrator_thread.stop(Integrator::Stop::Immediate);
+    _last_uploaded_completed_iterations = 0u;
+    start_render_timing();
+  }
+}
+
+void CPURaytracingRenderer::on_scene_transform_interaction_finished(SceneRepresentation& scene) {
+  (void)scene;
+  _preview_transform_active = false;
+  if (update_preview_active_state() && (_preview_active == false)) {
+    _integrator_thread.request_scene_check(SceneUpdateScope::Transforms);
+    restart_render_at_pixel_size(1u);
+  }
+}
+
+void CPURaytracingRenderer::restart_render_at_pixel_size(uint32_t pixel_size) {
+  _integrator_thread.stop(Integrator::Stop::Immediate);
+  _raytracing.film().set_pixel_size(pixel_size);
+  _last_uploaded_completed_iterations = 0u;
+  start_render_timing();
+  _integrator_thread.run();
+  _integrator_thread.update();
 }
 
 Integrator* CPURaytracingRenderer::current_integrator() const {
@@ -155,6 +247,7 @@ Integrator* CPURaytracingRenderer::current_integrator() const {
 
 void CPURaytracingRenderer::set_integrator(Integrator* i) {
   _integrator_thread.set_integrator(i);
+  _last_uploaded_completed_iterations = 0u;
   reset_render_timing();
 }
 
@@ -185,8 +278,18 @@ void CPURaytracingRenderer::reset_render_timing() {
   _render_timing_active = false;
 }
 
-void CPURaytracingRenderer::update_image(RHIContext& ctx, const float4* camera) {
+bool CPURaytracingRenderer::update_image(RHIContext& ctx, RHICommandBuffer cmd, const float4* camera) {
   ETX_PROFILER_SCOPE();
+
+  if ((_output_texture.valid() == false) || (cmd.valid() == false)) {
+    return false;
+  }
+
+  const uint64_t output_pixel_count = static_cast<uint64_t>(_output_dimensions.x) * static_cast<uint64_t>(_output_dimensions.y);
+  if (output_pixel_count != _raytracing.film().total_pixel_count()) {
+    log::error("CPU renderer output dimensions do not match the film dimensions");
+    return false;
+  }
 
   std::vector<float4> black_image;
 
@@ -196,9 +299,42 @@ void CPURaytracingRenderer::update_image(RHIContext& ctx, const float4* camera) 
     data_ptr = black_image.data();
   }
 
-  if (_output_texture.valid()) {
-    ctx.device().update_texture(_output_texture, data_ptr, 0, 0);
+  const uint64_t upload_size = output_pixel_count * sizeof(float4);
+  const uint32_t frame_index = ctx.get_current_frame_index();
+  RHIBindlessHandle& staging_buffer = _output_staging_buffers[frame_index];
+  uint64_t& staging_buffer_size = _output_staging_buffer_sizes[frame_index];
+  if ((staging_buffer.valid() == false) || (staging_buffer_size != upload_size)) {
+    if (staging_buffer.valid()) {
+      ctx.device().destroy_buffer(staging_buffer);
+      staging_buffer = {};
+      staging_buffer_size = 0u;
+    }
+
+    const RHIBufferDesc desc = {
+      .size = upload_size,
+      .usage = RHIBufferUsage::TransferSrc,
+      .host_visible = true,
+    };
+    const RHICreateBindlessResult create_result = ctx.device().create_buffer(desc);
+    if ((create_result.result != RHIResult::Success) || (create_result.handle.valid() == false)) {
+      log::error("Failed to create CPU renderer output staging buffer (%u)", static_cast<uint32_t>(create_result.result));
+      return false;
+    }
+    staging_buffer = create_result.handle;
+    staging_buffer_size = upload_size;
   }
+
+  const RHIResult update_result = ctx.device().update_buffer(staging_buffer, data_ptr, upload_size);
+  if (update_result != RHIResult::Success) {
+    log::error("Failed to update CPU renderer output staging buffer (%u)", static_cast<uint32_t>(update_result));
+    return false;
+  }
+
+  ctx.cmd_texture_barrier(cmd, _output_texture, _output_texture_state, RHIResourceState::TransferDst);
+  ctx.cmd_copy_buffer_to_texture(cmd, staging_buffer, _output_texture, _output_dimensions.x, _output_dimensions.y);
+  ctx.cmd_texture_barrier(cmd, _output_texture, RHIResourceState::TransferDst, RHIResourceState::ShaderReadOnly);
+  _output_texture_state = RHIResourceState::ShaderReadOnly;
+  return true;
 }
 
 void CPURaytracingRenderer::set_output_dimensions(RHIContext& ctx, const uint2& dim) {
@@ -217,6 +353,7 @@ void CPURaytracingRenderer::set_output_dimensions(RHIContext& ctx, const uint2& 
     }
     ctx.device().destroy_texture(_output_texture);
     _output_texture = {};
+    _output_texture_state = RHIResourceState::Undefined;
   }
 
   _output_dimensions = output_dimensions;
@@ -231,6 +368,9 @@ void CPURaytracingRenderer::set_output_dimensions(RHIContext& ctx, const uint2& 
     .usage = RHITextureUsage::Sampled | RHITextureUsage::TransferDst,
   };
   _output_texture = ctx.device().create_texture(desc).handle;
+  _output_texture_state = RHIResourceState::Undefined;
+  _last_uploaded_completed_iterations = 0u;
+  _last_uploaded_view_layer = kInvalidIndex;
 }
 
 }  // namespace etx

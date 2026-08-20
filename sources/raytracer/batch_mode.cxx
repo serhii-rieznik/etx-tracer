@@ -2395,7 +2395,7 @@ bool configure_preloaded_scene_for_full_comparison(const BatchRenderOptions& opt
   if (session.gpu_renderer.camera_controller() == nullptr) {
     session.gpu_renderer.init(session.render_context.context(), session.scene);
   }
-  session.cpu_renderer.integrator_thread().request_scene_check();
+  session.cpu_renderer.integrator_thread().request_scene_check(SceneUpdateScope::Full);
   session.gpu_renderer.on_scene_changed(session.scene);
   return true;
 }

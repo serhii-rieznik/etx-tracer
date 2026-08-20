@@ -1517,8 +1517,8 @@ void CPUBidirectional::stop(Stop st) {
   }
 
   if (st == Stop::Immediate) {
-    rt.scheduler().wait_and_release(_private->current_task);
     current_state = State::Stopped;
+    rt.scheduler().wait_and_release(_private->current_task);
   } else {
     current_state = State::WaitingForCompletion;
   }

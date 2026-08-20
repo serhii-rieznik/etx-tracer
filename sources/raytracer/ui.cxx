@@ -1527,6 +1527,7 @@ constexpr uint32_t kCompactWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindow
 void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ETX_PROFILER_SCOPE();
   ImGuizmo::BeginFrame();
+  _node_transform_editor_interaction_rendered_this_frame = false;
 
   if (_selection.kind == SelectionKind::None) {
     set_selection(SelectionKind::Rendering, 0);
@@ -1597,6 +1598,10 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   _pending_selection = {};
 
   validate_selections(scene_rep);
+  if (_node_transform_editor_interaction_active &&
+      ((_selection.kind != SelectionKind::Node) || (_selection.index != _node_transform_editor_interaction_node_index))) {
+    finish_node_transform_editor_interaction();
+  }
 
   if (_embedded_menu_enabled) {
     build_main_menu_bar(data.recent_files);
@@ -1610,6 +1615,9 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   build_node_properties_window(scene_rep, ctx, data);
   build_properties_window(scene_rep, ctx, data);
   build_transform_gizmo(scene_rep, data);
+  if (_node_transform_editor_interaction_active && (_node_transform_editor_interaction_rendered_this_frame == false)) {
+    finish_node_transform_editor_interaction();
+  }
   build_memory_diagnostics(scene_rep, data.film);
   build_renderer_preparation_modal();
 
@@ -1682,8 +1690,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
 }
 
 bool UI::handle_event(const sapp_event* e) {
-  if ((e->type == SAPP_EVENTTYPE_MOUSE_DOWN) || (e->type == SAPP_EVENTTYPE_MOUSE_UP) || (e->type == SAPP_EVENTTYPE_MOUSE_MOVE) ||
-      (e->type == SAPP_EVENTTYPE_MOUSE_SCROLL)) {
+  if ((e->type == SAPP_EVENTTYPE_MOUSE_DOWN) || (e->type == SAPP_EVENTTYPE_MOUSE_UP) || (e->type == SAPP_EVENTTYPE_MOUSE_MOVE) || (e->type == SAPP_EVENTTYPE_MOUSE_SCROLL)) {
     return _gizmo_captures_mouse;
   }
   if (e->type != SAPP_EVENTTYPE_KEY_DOWN) {
@@ -2172,8 +2179,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
         ImGui::TextUnformatted("Opacity");
         full_width_item();
         changed |= mixed_control(opacity_mixed, [&]() {
-          return ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, opacity_mixed ? "mixed" : "%.3f",
-            ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+          return ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, opacity_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
         });
         if (uses_roughness()) {
           ImGui::Spacing();
@@ -2213,8 +2219,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           ImGui::TextUnformatted(anisotropic ? "Roughness U" : "Roughness");
           full_width_item();
           const bool rough_u_changed = mixed_control(rough_u_mixed, [&]() {
-            return ImGui::SliderFloat("##rough_u", &rough_u, 0.0f, 1.0f, rough_u_mixed ? "mixed" : "%.3f",
-              ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+            return ImGui::SliderFloat("##rough_u", &rough_u, 0.0f, 1.0f, rough_u_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
           });
           if (rough_u_changed) {
             if (anisotropic == false) {
@@ -2231,8 +2236,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             ImGui::TextUnformatted("Roughness V");
             full_width_item();
             const bool rough_v_changed = mixed_control(rough_v_mixed, [&]() {
-              return ImGui::SliderFloat("##rough_v", &rough_v, 0.0f, 1.0f, rough_v_mixed ? "mixed" : "%.3f",
-                ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+              return ImGui::SliderFloat("##rough_v", &rough_v, 0.0f, 1.0f, rough_v_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
             });
             if (rough_v_changed) {
               changed = true;
@@ -2258,8 +2262,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           ImGui::TextUnformatted("Metalness");
           full_width_item();
           const bool metalness_changed = mixed_control(metalness_mixed, [&]() {
-            return ImGui::SliderFloat("##metalness", &metal, 0.0f, 1.0f, metalness_mixed ? "mixed" : "%.3f",
-              ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+            return ImGui::SliderFloat("##metalness", &metal, 0.0f, 1.0f, metalness_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
           });
           if (metalness_changed) {
             material.metalness.value = {metal, metal, metal, metal};
@@ -2281,8 +2284,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           ImGui::TextUnformatted("Transmission");
           full_width_item();
           const bool transmission_changed = mixed_control(transmission_mixed, [&]() {
-            return ImGui::SliderFloat("##transmission", &trans, 0.0f, 1.0f, transmission_mixed ? "mixed" : "%.3f",
-              ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+            return ImGui::SliderFloat("##transmission", &trans, 0.0f, 1.0f, transmission_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
           });
           if (transmission_changed) {
             material.transmission.value = {trans, trans, trans, trans};
@@ -2573,8 +2575,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       ImGui::TextUnformatted("Collimation");
       full_width_item();
       const bool collimation_changed = mixed_control(collimation_mixed, [&]() {
-        return ImGui::SliderFloat("##material_emission_collimation", &collimation, 0.0f, 1.0f, collimation_mixed ? "mixed" : "%.2f",
-          ImGuiSliderFlags_AlwaysClamp);
+        return ImGui::SliderFloat("##material_emission_collimation", &collimation, 0.0f, 1.0f, collimation_mixed ? "mixed" : "%.2f", ImGuiSliderFlags_AlwaysClamp);
       });
       if (collimation_changed) {
         material.emission_collimation = std::clamp(collimation, 0.0f, 1.0f);
@@ -3713,7 +3714,8 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
     }
 
     const float tree_height = 14.0f * ImGui::GetTextLineHeightWithSpacing();
-    if (ImGui::BeginChild("##scene_tree", ImVec2(-FLT_MIN, tree_height), ImGuiChildFlags_Borders)) {
+    ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 0.75f * ImGui::GetFontSize());
+    if (ImGui::BeginChild("##scene_tree", ImVec2(-FLT_MIN, tree_height), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
       const ImGuiTreeNodeFlags scene_flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
       const bool scene_open = ImGui::TreeNodeEx("##scene_root", scene_flags, "Scene (%zu)", hierarchy.nodes.size());
       if (scene_open) {
@@ -3780,9 +3782,8 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
           } else if (contains_active_camera) {
             ImGui::PushStyleColor(ImGuiCol_Text, kCameraTextColor);
           }
-          const char* node_name = (node_index < hierarchy.node_names.size() && hierarchy.node_names[node_index].empty() == false)
-                                    ? hierarchy.node_names[node_index].c_str()
-                                    : format_string("Node %u", node_index);
+          const char* node_name = (node_index < hierarchy.node_names.size() && hierarchy.node_names[node_index].empty() == false) ? hierarchy.node_names[node_index].c_str()
+                                                                                                                                  : format_string("Node %u", node_index);
           std::string node_symbols;
           if (has_camera_attachment) {
             node_symbols += kCameraSymbol;
@@ -3820,6 +3821,7 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
       }
     }
     ImGui::EndChild();
+    ImGui::PopStyleVar();
   });
 }
 
@@ -3938,6 +3940,12 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
   }
 
   const uint32_t node_index = static_cast<uint32_t>(_selection.index);
+  if (_node_transform_editor_interaction_active && (_node_transform_editor_interaction_node_index != static_cast<int32_t>(node_index))) {
+    finish_node_transform_editor_interaction();
+  }
+  if (_node_transform_editor_interaction_active) {
+    _node_transform_editor_interaction_rendered_this_frame = true;
+  }
   SceneNode& node = hierarchy.nodes[node_index];
   if (_node_geometry_edit_result_node != static_cast<int32_t>(node_index)) {
     _node_geometry_edit_result_node = static_cast<int32_t>(node_index);
@@ -3972,14 +3980,18 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
     }
     return false;
   };
-  auto resolve_node_change = [&]() {
+  auto resolve_node_change = [&](bool transforms_only) {
     if (scene_rep.data().resolve_hierarchy() == false) {
       return false;
     }
-    scene_rep.update_medium_bounds();
     scene_rep.update_active_camera();
-    if (callbacks.scene_settings_changed) {
-      callbacks.scene_settings_changed();
+    if (transforms_only && callbacks.scene_transforms_changed) {
+      callbacks.scene_transforms_changed();
+    } else {
+      scene_rep.update_medium_bounds();
+      if (callbacks.scene_settings_changed) {
+        callbacks.scene_settings_changed();
+      }
     }
     return true;
   };
@@ -4002,8 +4014,8 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
   }
   if (ImGui::Checkbox("Enabled", &enabled)) {
     if (hierarchy.set_enabled(node_index, enabled)) {
-      if (resolve_node_change() == false) {
-        hierarchy.set_enabled(node_index, !enabled);
+      if (resolve_node_change(true) == false) {
+        hierarchy.set_enabled(node_index, enabled == false);
         if (scene_rep.data().resolve_hierarchy() == false) {
           log::error("Failed to restore scene hierarchy after rejecting an invalid node visibility edit");
         }
@@ -4027,7 +4039,7 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
     bool parent_changed = false;
     if (ImGui::Selectable("None", node.parent_index == kInvalidIndex)) {
       if ((node.parent_index != kInvalidIndex) && hierarchy.reparent_preserve_world(node_index, kInvalidIndex)) {
-        parent_changed = resolve_node_change();
+        parent_changed = resolve_node_change(false);
       }
     }
     const bool traversal_valid = (node_index < hierarchy.order_position.size()) && (node_index < hierarchy.subtree_end_position.size());
@@ -4040,8 +4052,8 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
                                  (traversal_valid && (candidate_position != kInvalidIndex) && (candidate_position >= subtree_begin) && (candidate_position < subtree_end));
       AffineTransform inverse_parent = {};
       double parent_determinant = 0.0;
-      const bool singular_parent = (candidate_index >= hierarchy.world_transforms.size()) ||
-                                   (invert_affine(hierarchy.world_transforms[candidate_index], inverse_parent, parent_determinant) == false);
+      const bool singular_parent =
+        (candidate_index >= hierarchy.world_transforms.size()) || (invert_affine(hierarchy.world_transforms[candidate_index], inverse_parent, parent_determinant) == false);
       const bool invalid_parent = creates_cycle || singular_parent;
       if (invalid_parent) {
         ImGui::BeginDisabled();
@@ -4049,7 +4061,7 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
       const char* candidate_name = candidate_index < hierarchy.node_names.size() ? hierarchy.node_names[candidate_index].c_str() : "Unnamed node";
       if (ImGui::Selectable(candidate_name, node.parent_index == candidate_index) && (invalid_parent == false)) {
         if ((node.parent_index != candidate_index) && hierarchy.reparent_preserve_world(node_index, candidate_index)) {
-          parent_changed = resolve_node_change();
+          parent_changed = resolve_node_change(false);
         }
       }
       if (invalid_parent) {
@@ -4111,16 +4123,25 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
   }
 
   bool transform_changed = false;
+  bool transform_interaction_started = false;
+  bool transform_interaction_finished = false;
+  auto collect_transform_interaction = [&]() {
+    transform_interaction_started = transform_interaction_started || ImGui::IsItemActivated();
+    transform_interaction_finished = transform_interaction_finished || ImGui::IsItemDeactivated();
+  };
   ImGui::TextUnformatted("Position");
   full_width_item();
   transform_changed = ImGui::DragFloat3("##node_position", &_node_transform_editor.trs.translation.x, 0.01f, 0.0f, 0.0f, "%.3f") || transform_changed;
+  collect_transform_interaction();
   if (_node_transform_editor.decomposable) {
     ImGui::TextUnformatted("Rotation");
     full_width_item();
     transform_changed = ImGui::DragFloat3("##node_rotation", &_node_transform_editor.rotation_degrees.x, 0.25f, 0.0f, 0.0f, "%.2f°") || transform_changed;
+    collect_transform_interaction();
     ImGui::TextUnformatted("Scale");
     full_width_item();
     transform_changed = ImGui::DragFloat3("##node_scale", &_node_transform_editor.trs.scale.x, 0.01f, 0.0f, 0.0f, "%.3f") || transform_changed;
+    collect_transform_interaction();
     _node_transform_editor.trs.rotation_radians = _node_transform_editor.rotation_degrees * (kPi / 180.0f);
   } else {
     ImGui::TextWrapped("Transform contains shear or zero scale. Reset it to edit rotation and scale.");
@@ -4132,6 +4153,14 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
       transform_changed = true;
     }
   }
+  if (transform_interaction_started && (_node_transform_editor_interaction_active == false)) {
+    _node_transform_editor_interaction_active = true;
+    _node_transform_editor_interaction_rendered_this_frame = true;
+    _node_transform_editor_interaction_node_index = static_cast<int32_t>(node_index);
+    if (callbacks.scene_transform_interaction_started) {
+      callbacks.scene_transform_interaction_started();
+    }
+  }
   if (transform_changed) {
     AffineTransform transform = _node_transform_editor.decomposable ? affine_from_trs(_node_transform_editor.trs) : _node_transform_editor.source_transform;
     if (_node_transform_editor.decomposable == false) {
@@ -4141,10 +4170,13 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
     }
     if (hierarchy.set_local_transform(node_index, transform)) {
       _node_transform_editor.source_transform = transform;
-      resolve_node_change();
+      resolve_node_change(true);
     } else {
       refresh_transform_editor();
     }
+  }
+  if (transform_interaction_finished && _node_transform_editor_interaction_active) {
+    finish_node_transform_editor_interaction();
   }
 
   const NodeGeometryEditResult bake_status = scene_rep.validate_node_geometry_edit(node_index, NodeGeometryOperation::BakeLocalTransform);
@@ -4236,14 +4268,36 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
   }
 }
 
+void UI::finish_node_transform_editor_interaction() {
+  if (_node_transform_editor_interaction_active == false) {
+    return;
+  }
+
+  _node_transform_editor_interaction_active = false;
+  _node_transform_editor_interaction_rendered_this_frame = false;
+  _node_transform_editor_interaction_node_index = -1;
+  if (callbacks.scene_transform_interaction_finished) {
+    callbacks.scene_transform_interaction_finished();
+  }
+}
+
 void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& data) {
   _gizmo_captures_mouse = false;
+  auto notify_transform_change = [&]() {
+    if (callbacks.scene_transforms_changed) {
+      callbacks.scene_transforms_changed();
+    } else {
+      scene_rep.update_medium_bounds();
+      if (callbacks.scene_settings_changed) {
+        callbacks.scene_settings_changed();
+      }
+    }
+  };
   auto finish_interaction = [&]() {
-    if (_gizmo_changed_during_interaction && callbacks.scene_settings_changed) {
-      callbacks.scene_settings_changed();
+    if (_gizmo_was_using && callbacks.scene_transform_interaction_finished) {
+      callbacks.scene_transform_interaction_finished();
     }
     _gizmo_was_using = false;
-    _gizmo_changed_during_interaction = false;
   };
   if ((_selection.kind != SelectionKind::Node) || (_selection.index < 0)) {
     finish_interaction();
@@ -4276,8 +4330,7 @@ void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& 
   const SceneNode& node = hierarchy.nodes[node_index];
   if (node.parent_index != kInvalidIndex) {
     double determinant = 0.0;
-    if ((node.parent_index >= hierarchy.world_transforms.size()) ||
-        (invert_affine(hierarchy.world_transforms[node.parent_index], inverse_parent, determinant) == false)) {
+    if ((node.parent_index >= hierarchy.world_transforms.size()) || (invert_affine(hierarchy.world_transforms[node.parent_index], inverse_parent, determinant) == false)) {
       finish_interaction();
       return;
     }
@@ -4324,23 +4377,24 @@ void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& 
   const ImGuizmo::MODE mode = (_gizmo_mode == GizmoMode::Local) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
   const bool transform_changed = ImGuizmo::Manipulate(&view.col[0].x, &projection.col[0].x, operation, mode, &world_matrix.col[0].x);
   const bool gizmo_using = ImGuizmo::IsUsing();
+  const bool interaction_started = (_gizmo_was_using == false) && gizmo_using;
   const bool interaction_finished = _gizmo_was_using && (gizmo_using == false);
   _gizmo_captures_mouse = ImGuizmo::IsOver() || gizmo_using;
   _gizmo_was_using = gizmo_using;
 
   ImGuizmo::PopID();
 
+  if (interaction_started && callbacks.scene_transform_interaction_started) {
+    callbacks.scene_transform_interaction_started();
+  }
+
   if (transform_changed) {
     const AffineTransform previous_local_transform = node.local_transform;
     const AffineTransform edited_world_transform = affine_from_matrix(world_matrix);
     const AffineTransform edited_local_transform = (node.parent_index == kInvalidIndex) ? edited_world_transform : multiply_affine(inverse_parent, edited_world_transform);
     if (hierarchy.set_local_transform(node_index, edited_local_transform) && scene_rep.data().resolve_hierarchy()) {
-      scene_rep.update_medium_bounds();
       scene_rep.update_active_camera();
-      _gizmo_changed_during_interaction = _gizmo_changed_during_interaction || gizmo_using;
-      if (callbacks.scene_settings_changed) {
-        callbacks.scene_settings_changed();
-      }
+      notify_transform_change();
     } else {
       hierarchy.set_local_transform(node_index, previous_local_transform);
       if (scene_rep.data().resolve_hierarchy() == false) {
@@ -4350,10 +4404,9 @@ void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& 
   }
 
   if (interaction_finished) {
-    if (_gizmo_changed_during_interaction && callbacks.scene_settings_changed) {
-      callbacks.scene_settings_changed();
+    if (callbacks.scene_transform_interaction_finished) {
+      callbacks.scene_transform_interaction_finished();
     }
-    _gizmo_changed_during_interaction = false;
   }
 }
 

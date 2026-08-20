@@ -46,7 +46,7 @@ float4 tonemap(float4 value) {
 
 struct VSOutput {
   float4 pos : SV_Position;
-  float2 uv  : TEXCOORD0;
+  float2 uv : TEXCOORD0;
 };
 
 VSOutput vertex_main(uint vertexIndex : SV_VertexID) {
@@ -59,7 +59,8 @@ VSOutput vertex_main(uint vertexIndex : SV_VertexID) {
   return output;
 }
 
-float4 fragment_main(in VSOutput input) : SV_Target0 {
+float4 fragment_main(in VSOutput input)
+  : SV_Target0 {
   float2 offset = 0.5f * (options.dimensions.xy - options.dimensions.zw);
 
   int2 coord = int2(floor(input.pos.xy - offset));
@@ -70,9 +71,13 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
     return float4(1.0f, 0.0f, 1.0f, 1.0f);
   }
 
-  int3 load_coord = int3(clamped, 0);
-
   const Texture2D sample_image = bindless_textures[options.sample_image_index];
+  uint sample_width = 0;
+  uint sample_height = 0;
+  sample_image.GetDimensions(sample_width, sample_height);
+  float2 sample_uv = (float2(clamped) + 0.5f) / options.dimensions.zw;
+  int2 sample_coord = min(int2(sample_uv * float2(sample_width, sample_height)), int2(sample_width, sample_height) - 1);
+  int3 load_coord = int3(sample_coord, 0);
   float4 c_image = sample_image.Load(load_coord);
 
   if (options.view.view_image == OutputView::AlphaChannel)
@@ -94,13 +99,13 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
     }
     case OutputView::ReferenceImage: {
       const Texture2D reference_image = bindless_textures[options.reference_image_index];
-      float4 r_image = reference_image.Load(load_coord);
+      float4 r_image = reference_image.Load(int3(clamped, 0));
       result = tonemap(r_image);
       break;
     }
     case OutputView::RelativeDifference: {
       const Texture2D reference_image = bindless_textures[options.reference_image_index];
-      float4 r_image = reference_image.Load(load_coord);
+      float4 r_image = reference_image.Load(int3(clamped, 0));
       float r_lum = dot(r_image.xyz, lum);
       result.x = options.view.exposure * max(0.0f, r_lum - c_lum);
       result.y = options.view.exposure * max(0.0f, c_lum - r_lum);
@@ -109,7 +114,7 @@ float4 fragment_main(in VSOutput input) : SV_Target0 {
     }
     case OutputView::AbsoluteDifference: {
       const Texture2D reference_image = bindless_textures[options.reference_image_index];
-      float4 r_image = reference_image.Load(load_coord);
+      float4 r_image = reference_image.Load(int3(clamped, 0));
       float r_lum = dot(r_image.xyz, lum);
       result.x = float(max(0.0f, r_lum - c_lum) > c_treshold);
       result.y = float(max(0.0f, c_lum - r_lum) > c_treshold);

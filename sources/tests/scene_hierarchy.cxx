@@ -9,13 +9,46 @@
 #include <etx/render/shared/medium.hxx>
 #include <etx/render/shared/sampler.hxx>
 #include <etx/rt/rt.hxx>
+#include <etx/rt/integrators/integrator.hxx>
 #include <etx/rt/shared/vcm_shared.hxx>
+#include <raytracer/renderer.hxx>
 
 #include <cstdio>
 
 namespace {
 
 constexpr float kTestEpsilon = 1.0e-5f;
+
+struct RendererProbe : etx::Renderer {
+  using Renderer::Renderer;
+
+  void initialize_camera(etx::SceneRepresentation& scene) {
+    _camera_controller = std::make_unique<etx::CameraController>(scene.mutable_camera());
+    _camera_controller->enable_inertia = false;
+    reset_preview_state();
+  }
+
+  void on_camera_changed(etx::SceneRepresentation& scene) override {
+    (void)scene;
+    camera_changed_count += 1u;
+  }
+
+  void on_camera_become_steady(etx::SceneRepresentation& scene) override {
+    (void)scene;
+    camera_steady_count += 1u;
+  }
+
+  const char* name() const override {
+    return "probe";
+  }
+
+  etx::RendererMode mode() const override {
+    return etx::RendererMode::CPURaytracing;
+  }
+
+  uint32_t camera_changed_count = 0u;
+  uint32_t camera_steady_count = 0u;
+};
 
 bool check_condition(bool condition, const char* message) {
   if (condition == false) {
@@ -206,8 +239,8 @@ bool test_affine_inverse_is_scale_aware() {
     }
     const float3 point = {2.0f, -3.0f, 4.0f};
     const float3 round_trip = etx::transform_point(inverse, etx::transform_point(transform, point));
-    if (check_condition(nearly_equal(round_trip.x, point.x) && nearly_equal(round_trip.y, point.y) && nearly_equal(round_trip.z, point.z),
-          "scale-aware inverse round trip") == false) {
+    if (check_condition(nearly_equal(round_trip.x, point.x) && nearly_equal(round_trip.y, point.y) && nearly_equal(round_trip.z, point.z), "scale-aware inverse round trip") ==
+        false) {
       return false;
     }
   }
@@ -328,7 +361,7 @@ bool test_shading_frame_finalization() {
   const float3 missing_hint = {};
   scene_math_shared_build_sampling_frame(geo_normal, missing_hint, missing_hint, normal, tangent, bitangent);
   if (check_condition(nearly_equal(dot(normal, tangent), 0.0f) && nearly_equal(dot(normal, bitangent), 0.0f) && nearly_equal(dot(tangent, bitangent), 0.0f) &&
-        nearly_equal(dot(tangent, tangent), 1.0f) && nearly_equal(dot(bitangent, bitangent), 1.0f),
+                        nearly_equal(dot(tangent, tangent), 1.0f) && nearly_equal(dot(bitangent, bitangent), 1.0f),
         "missing tangent data receives a valid fallback frame") == false) {
     return false;
   }
@@ -481,7 +514,8 @@ bool test_directional_and_area_emitters_use_node_transforms() {
   if (check_condition(scene_data.resolve_hierarchy(), "emitter hierarchy resolves") == false) {
     return false;
   }
-  const etx::PackedEmitterData packed = etx::build_packed_emitters(scene_data);
+  etx::PackedEmitterTopology topology = {};
+  const etx::PackedEmitterData packed = etx::build_packed_emitters(scene_data, topology);
   if (check_condition(packed.emitter_instances.size() == 2u, "directional and area emitters are packed") == false) {
     return false;
   }
@@ -493,7 +527,77 @@ bool test_directional_and_area_emitters_use_node_transforms() {
         "directional emitter composes node rotations without scale-induced skew") == false) {
     return false;
   }
-  return check_condition(nearly_equal(packed.emitter_instances[1].triangle_area, 3.0f), "area emitter sampling area uses transformed triangle");
+  if (check_condition(nearly_equal(packed.emitter_instances[1].triangle_area, 3.0f), "area emitter sampling area uses transformed triangle") == false) {
+    return false;
+  }
+
+  scene_data.hierarchy.set_local_transform(area_node, make_translation_scale({}, {4.0f, 3.0f, 1.0f}));
+  if (check_condition(scene_data.resolve_hierarchy(), "transformed area emitter hierarchy resolves") == false) {
+    return false;
+  }
+  const etx::PackedEmitterData transform_packed = etx::build_packed_emitters_for_transforms(scene_data, topology);
+  const etx::PackedEmitterData reference_packed = etx::build_packed_emitters(scene_data);
+  if (check_condition(transform_packed.triangles.empty(), "transform-only emitter packing does not copy static triangles") == false) {
+    return false;
+  }
+  if (check_condition(
+        (transform_packed.instances.size() == reference_packed.instances.size()) && (transform_packed.emitter_instances.size() == reference_packed.emitter_instances.size()),
+        "transform-only emitter packing preserves instance and emitter counts") == false) {
+    return false;
+  }
+  if (check_condition(affine_nearly_equal(transform_packed.instances[0].object_to_world, reference_packed.instances[0].object_to_world),
+        "transform-only emitter packing preserves instance transforms") == false) {
+    return false;
+  }
+  return check_condition(nearly_equal(transform_packed.emitter_instances[1].triangle_area, reference_packed.emitter_instances[1].triangle_area) &&
+                           nearly_equal(transform_packed.emitter_instances[1].triangle_area, 6.0f),
+    "transform-only emitter packing recomputes transformed area-light weights");
+}
+
+bool test_scene_update_scope_coalescing() {
+  etx::TaskScheduler scheduler = {};
+  RendererProbe renderer(scheduler);
+  if (check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::Full, "renderer starts with a full scene update") == false) {
+    return false;
+  }
+  renderer.request_scene_transform_update();
+  if (check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::Transforms, "transform request selects the fast update scope") == false) {
+    return false;
+  }
+  renderer.request_scene_transform_update();
+  renderer.request_scene_update();
+  renderer.request_scene_transform_update();
+  if (check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::Full, "transform requests cannot downgrade a pending full update") == false) {
+    return false;
+  }
+  return check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::None, "consuming an update request clears the pending scope");
+}
+
+bool test_camera_interaction_queues_updates_until_input_released() {
+  etx::TaskScheduler scheduler = {};
+  etx::IORDatabase ior_database = {};
+  etx::SceneRepresentation scene(scheduler, ior_database);
+  RendererProbe renderer(scheduler);
+  renderer.initialize_camera(scene);
+  renderer.consume_scene_update_request();
+
+  etx::CameraController* controller = renderer.camera_controller();
+  controller->set_mouse_button_state(etx::CameraController::MouseLeft, true);
+  controller->add_mouse_delta(8.0f, 0.0f);
+  renderer.update_camera(scene, 1.0f / 60.0f);
+  if (check_condition((renderer.camera_changed_count == 1u) && (renderer.camera_steady_count == 0u), "camera motion starts one preview interaction") == false ||
+      check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::Transforms, "camera motion always queues a renderer update") == false) {
+    return false;
+  }
+
+  renderer.update_camera(scene, 1.0f / 60.0f);
+  if (check_condition(renderer.camera_steady_count == 0u, "held navigation input keeps the preview interaction active between mouse deltas") == false) {
+    return false;
+  }
+
+  controller->set_mouse_button_state(etx::CameraController::MouseLeft, false);
+  renderer.update_camera(scene, 1.0f / 60.0f);
+  return check_condition(renderer.camera_steady_count == 1u, "releasing navigation input finishes the preview interaction");
 }
 
 bool test_environment_emitter_uses_node_rotation() {
@@ -557,6 +661,10 @@ bool test_active_camera_uses_node_transform() {
   camera_trs.rotation_radians.y = 0.25f * kPi;
   const uint32_t node_index = data.hierarchy.add_node("camera", parent_index, etx::affine_from_trs(camera_trs));
   data.hierarchy.add_attachment(node_index, {etx::SceneAttachment::Type::Camera, 0u, 0u, 0u});
+  etx::Medium& camera_medium = data.mediums_vector.emplace_back();
+  camera_medium.bounds = {{-1.0f, -1.0f, -1.0f}, 0.0f, {1.0f, 1.0f, 1.0f}, 0.0f};
+  const uint32_t medium_node_index = data.hierarchy.add_node("camera-medium", node_index, {});
+  data.hierarchy.add_attachment(medium_node_index, {etx::SceneAttachment::Type::Medium, 0u, 0u, 0u});
   if (check_condition(data.resolve_hierarchy(), "camera hierarchy resolves") == false) {
     return false;
   }
@@ -584,9 +692,13 @@ bool test_active_camera_uses_node_transform() {
   const float3 edited_direction = normalize(float3{-0.25f, 0.1f, -1.0f});
   etx::build_camera(scene.mutable_camera(), edited_position, edited_direction, {0.0f, 1.0f, 0.0f}, {64u, 32u}, 55.0f);
   const Camera expected_world_camera = scene.camera();
-  scene.store_active_camera();
+  if (check_condition(scene.store_active_camera(), "camera navigation reports transform-dependent rig resources") == false) {
+    return false;
+  }
+  scene.update_medium_bounds();
   const Camera& edited_local_camera = data.cameras[0].cam;
-  if (check_condition(nearly_equal(edited_local_camera.position.x, 0.0f) && nearly_equal(edited_local_camera.position.y, 0.0f) && nearly_equal(edited_local_camera.position.z, 0.0f),
+  if (check_condition(
+        nearly_equal(edited_local_camera.position.x, 0.0f) && nearly_equal(edited_local_camera.position.y, 0.0f) && nearly_equal(edited_local_camera.position.z, 0.0f),
         "viewport navigation keeps the canonical camera pose in the resource") == false) {
     return false;
   }
@@ -596,15 +708,19 @@ bool test_active_camera_uses_node_transform() {
         "viewport navigation writes the attached camera node transform through its parent") == false) {
     return false;
   }
+  const etx::Medium& moved_medium = data.mediums_vector[0];
+  const float3 moved_medium_center = 0.5f * (moved_medium.bounds.p_min + moved_medium.bounds.p_max);
+  if (check_condition(nearly_equal(moved_medium_center, edited_position), "camera-driven transform refreshes descendant medium bounds") == false) {
+    return false;
+  }
   scene.update_active_camera();
   const Camera& restored_world_camera = scene.camera();
-  const bool world_edit_preserved = nearly_equal(restored_world_camera.position.x, expected_world_camera.position.x) &&
-                                    nearly_equal(restored_world_camera.position.y, expected_world_camera.position.y) &&
-                                    nearly_equal(restored_world_camera.position.z, expected_world_camera.position.z) &&
-                                    nearly_equal(restored_world_camera.direction.x, expected_world_camera.direction.x) &&
-                                    nearly_equal(restored_world_camera.direction.y, expected_world_camera.direction.y) &&
-                                    nearly_equal(restored_world_camera.direction.z, expected_world_camera.direction.z) && nearly_equal(restored_world_camera.up.x, expected_world_camera.up.x) &&
-                                    nearly_equal(restored_world_camera.up.y, expected_world_camera.up.y) && nearly_equal(restored_world_camera.up.z, expected_world_camera.up.z);
+  const bool world_edit_preserved =
+    nearly_equal(restored_world_camera.position.x, expected_world_camera.position.x) && nearly_equal(restored_world_camera.position.y, expected_world_camera.position.y) &&
+    nearly_equal(restored_world_camera.position.z, expected_world_camera.position.z) && nearly_equal(restored_world_camera.direction.x, expected_world_camera.direction.x) &&
+    nearly_equal(restored_world_camera.direction.y, expected_world_camera.direction.y) && nearly_equal(restored_world_camera.direction.z, expected_world_camera.direction.z) &&
+    nearly_equal(restored_world_camera.up.x, expected_world_camera.up.x) && nearly_equal(restored_world_camera.up.y, expected_world_camera.up.y) &&
+    nearly_equal(restored_world_camera.up.z, expected_world_camera.up.z);
   return check_condition(world_edit_preserved, "editing an attached active camera round-trips through local storage without a second node transform");
 }
 
@@ -614,9 +730,7 @@ bool test_hierarchy_hashes_content() {
   etx::SceneData second(scheduler);
   first.hierarchy.add_node("node", kInvalidIndex, make_translation_scale({1.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}));
   second.hierarchy.add_node("node", kInvalidIndex, make_translation_scale({2.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 1.0f}));
-  const etx::SceneHashes first_hashes = first.compute_hashes();
-  const etx::SceneHashes second_hashes = second.compute_hashes();
-  return check_condition(first_hashes.transforms_hash != second_hashes.transforms_hash, "equal revision counts cannot hide different hierarchy transform content");
+  return check_condition(first.compute_transforms_hash() != second.compute_transforms_hash(), "equal revision counts cannot hide different hierarchy transform content");
 }
 
 bool test_enabled_state_is_an_instance_update() {
@@ -630,7 +744,9 @@ bool test_enabled_state_is_an_instance_update() {
   if (check_condition(data.hierarchy.set_enabled(0u, false) && data.resolve_hierarchy(), "disabled hierarchy resolves") == false) {
     return false;
   }
-  const etx::UpdateFlags changes = data.compute_hashes().compare(enabled_hashes);
+  etx::SceneHashes disabled_hashes = enabled_hashes;
+  disabled_hashes.transforms_hash = data.compute_transforms_hash();
+  const etx::UpdateFlags changes = disabled_hashes.compare(enabled_hashes);
   return check_condition(changes[etx::UpdateFlags::Transforms] && (changes[etx::UpdateFlags::AnyGeometryStructure] == false) && changes[etx::UpdateFlags::EmbreeScene],
     "enabled-state changes update instance masks without rebuilding geometry structure");
 }
@@ -737,8 +853,8 @@ bool test_attached_medium_bounds_follow_visibility_and_transform() {
   }
   scene.update_medium_bounds();
   const etx::Medium& disabled = data.mediums_vector[0];
-  return check_condition(nearly_equal(disabled.bounds.p_min.x, -1.0f) && nearly_equal(disabled.bounds.p_max.z, 3.0f) &&
-                           nearly_equal(disabled.world_to_object.rows[0].x, 1.0f) && nearly_equal(disabled.world_to_object.rows[0].w, 0.0f),
+  return check_condition(nearly_equal(disabled.bounds.p_min.x, -1.0f) && nearly_equal(disabled.bounds.p_max.z, 3.0f) && nearly_equal(disabled.world_to_object.rows[0].x, 1.0f) &&
+                           nearly_equal(disabled.world_to_object.rows[0].w, 0.0f),
     "disabled medium attachment restores authored bounds and identity mapping");
 }
 
@@ -933,7 +1049,8 @@ bool test_embree_transform_only_commit() {
   if (check_condition(scene_data.hierarchy.set_local_transform(0u, translated) && scene_data.resolve_hierarchy(), "transformed Embree hierarchy resolves") == false) {
     return false;
   }
-  const etx::SceneHashes transformed_hashes = scene_data.compute_hashes();
+  etx::SceneHashes transformed_hashes = initial_hashes;
+  transformed_hashes.transforms_hash = scene_data.compute_transforms_hash();
   const etx::UpdateFlags transform_changes = transformed_hashes.compare(initial_hashes);
   if (check_condition(transform_changes[etx::UpdateFlags::Transforms] && (transform_changes[etx::UpdateFlags::AnyGeometryStructure] == false),
         "transform-only update classified for refit") == false) {
@@ -957,7 +1074,8 @@ bool test_embree_transform_only_commit() {
   if (check_condition(scene_data.hierarchy.set_enabled(0u, false) && scene_data.resolve_hierarchy(), "disabled Embree hierarchy resolves") == false) {
     return false;
   }
-  const etx::SceneHashes disabled_hashes = scene_data.compute_hashes();
+  etx::SceneHashes disabled_hashes = transformed_hashes;
+  disabled_hashes.transforms_hash = scene_data.compute_transforms_hash();
   const etx::UpdateFlags visibility_changes = disabled_hashes.compare(transformed_hashes);
   if (check_condition(visibility_changes[etx::UpdateFlags::Transforms] && (visibility_changes[etx::UpdateFlags::AnyGeometryStructure] == false),
         "visibility-only Embree update is classified as an instance refit") == false) {
@@ -968,6 +1086,95 @@ bool test_embree_transform_only_commit() {
   Intersection disabled_intersection = {};
   return check_condition(raytracing.trace(raytracing.scene(), Ray{{3.0f, 0.0f, 1.0f}, {0.0f, 0.0f, -1.0f}}, disabled_intersection, disabled_sampler) == false,
     "Embree instance-mask update hides a disabled node without rebuilding geometry");
+}
+
+bool test_preview_resolution_adapts_with_hysteresis() {
+  etx::PreviewResolutionController controller(4u, 4u);
+  controller.begin();
+  if (check_condition(controller.active() && (controller.pixel_size() == 4u), "preview adaptation starts at its retained resolution") == false ||
+      check_condition(controller.update(0.050, true) == false, "one slow output does not immediately reduce preview resolution") == false ||
+      check_condition((controller.update(0.050, true) == false) && (controller.pixel_size() == 4u), "slow output cannot exceed the maximum preview pixel block") == false) {
+    return false;
+  }
+
+  for (uint32_t sample = 0u; sample < 5u; ++sample) {
+    if (check_condition(controller.update(0.010, true) == false, "fast preview output respects refinement hysteresis") == false) {
+      return false;
+    }
+  }
+  if (check_condition(controller.update(0.010, true) && (controller.pixel_size() == 2u), "sustained fast output refines preview resolution") == false) {
+    return false;
+  }
+
+  controller.end();
+  controller.begin();
+  if (check_condition(controller.pixel_size() == 4u, "each preview interaction starts with the configured coarse pixel block") == false ||
+      check_condition(controller.update(0.050, true) == false, "one slow output at maximum keeps the preview resolution") == false ||
+      check_condition((controller.update(0.050, true) == false) && (controller.pixel_size() == 4u), "preview coarsening remains capped at a four-pixel block") == false) {
+    return false;
+  }
+
+  controller.end();
+  return check_condition((controller.active() == false) && (controller.update(1.0, false) == false) && (controller.pixel_size() == 4u), "inactive preview does not adapt");
+}
+
+bool test_preview_iteration_completes_before_pending_scene_commit() {
+  struct IntegratorProbe : etx::Integrator {
+    using Integrator::Integrator;
+
+    void run() override {
+      current_state = State::Running;
+      current_status = {};
+      update_count = 0u;
+    }
+
+    void update() override {
+      if ((current_state != State::Running) || (update_count >= 2u)) {
+        return;
+      }
+      update_count += 1u;
+      if (update_count == 2u) {
+        current_status.completed_iterations = 1u;
+        current_status.last_iteration_time = 0.01;
+      }
+    }
+
+    void stop(Stop) override {
+      current_state = State::Stopped;
+    }
+
+    const Status& status() const override {
+      return current_status;
+    }
+
+    Status current_status = {};
+    uint32_t update_count = 0u;
+  };
+
+  etx::TaskScheduler scheduler = {};
+  etx::IORDatabase ior_database = {};
+  etx::SceneRepresentation scene(scheduler, ior_database);
+  etx::Film film(scheduler);
+  etx::Raytracing raytracing(scheduler, film);
+  IntegratorProbe integrator(raytracing);
+  etx::IntegratorThread integrator_thread(scene, raytracing);
+  integrator_thread.start(&integrator);
+  integrator_thread.run();
+
+  if (check_condition(integrator_thread.update_integrator() == false, "preview polling starts the coarse iteration without reporting an output") == false ||
+      check_condition(integrator_thread.scene_changes_pending(), "initial scene commit remains queued while the coarse iteration runs") == false) {
+    return false;
+  }
+
+  if (check_condition(integrator_thread.update_integrator(), "completed coarse iteration is observable before scene changes are committed") == false) {
+    return false;
+  }
+  if (check_condition(integrator_thread.scene_changes_pending(), "completed coarse output remains publishable while the newest scene commit stays queued") == false) {
+    return false;
+  }
+
+  integrator_thread.stop(etx::Integrator::Stop::Immediate);
+  return check_condition(integrator.state() == etx::Integrator::State::Stopped, "immediate stop is consumed without committing a queued scene update");
 }
 
 }  // namespace
@@ -992,6 +1199,8 @@ int main() {
     {"equirectangular_camera_uses_orientation", test_equirectangular_camera_uses_orientation},
     {"disabled_attached_emitter_is_not_global", test_disabled_attached_emitter_is_not_global},
     {"directional_and_area_emitters_use_node_transforms", test_directional_and_area_emitters_use_node_transforms},
+    {"scene_update_scope_coalescing", test_scene_update_scope_coalescing},
+    {"camera_interaction_queues_updates_until_input_released", test_camera_interaction_queues_updates_until_input_released},
     {"environment_emitter_uses_node_rotation", test_environment_emitter_uses_node_rotation},
     {"active_camera_uses_node_transform", test_active_camera_uses_node_transform},
     {"hierarchy_hashes_content", test_hierarchy_hashes_content},
@@ -1004,6 +1213,8 @@ int main() {
     {"center_node_pivot_preserves_geometry_and_children", test_center_node_pivot_preserves_geometry_and_children},
     {"node_geometry_edits_reject_mixed_attachments", test_node_geometry_edits_reject_mixed_attachments},
     {"embree_transform_only_commit", test_embree_transform_only_commit},
+    {"preview_resolution_adapts_with_hysteresis", test_preview_resolution_adapts_with_hysteresis},
+    {"preview_iteration_completes_before_pending_scene_commit", test_preview_iteration_completes_before_pending_scene_commit},
   };
 
   uint32_t passed = 0u;

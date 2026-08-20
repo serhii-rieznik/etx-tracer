@@ -94,21 +94,47 @@ void collect_active_and_environment_emitters(PackedEmitterData& result) {
   }
 }
 
-}  // namespace
+PackedEmitterTopology build_packed_emitter_topology(const SceneData& scene_data) {
+  PackedEmitterTopology result = {};
+  result.mesh_area_triangle_offsets.resize(scene_data.meshes.size() + 1u);
 
-PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
+  for (uint32_t mesh_index = 0u; mesh_index < static_cast<uint32_t>(scene_data.meshes.size()); ++mesh_index) {
+    result.mesh_area_triangle_offsets[mesh_index] = static_cast<uint32_t>(result.area_triangle_indices.size());
+    const Mesh& mesh = scene_data.meshes[mesh_index];
+    const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
+    if (triangle_end > scene_data.triangles.size()) {
+      continue;
+    }
+    for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+      const Triangle& triangle = scene_data.triangles[triangle_index];
+      if ((triangle.emitter_index >= scene_data.emitter_profiles.size()) || (scene_data.emitter_profiles[triangle.emitter_index].cls != EmitterProfile::Class::Area)) {
+        continue;
+      }
+      result.area_triangle_indices.push_back(triangle_index);
+    }
+  }
+
+  result.mesh_area_triangle_offsets.back() = static_cast<uint32_t>(result.area_triangle_indices.size());
+  return result;
+}
+
+PackedEmitterData build_packed_emitters_impl(const SceneData& scene_data, const PackedEmitterTopology& topology, bool include_triangles) {
   ETX_PROFILER_SCOPE();
 
   PackedEmitterData result = {};
-  result.triangles = scene_data.triangles;
+  if (include_triangles) {
+    result.triangles = scene_data.triangles;
+  }
   const BoundingBox bbox = scene_data.compute_bounding_volumes();
   const float3 bounding_sphere_center = 0.5f * (bbox.p_min + bbox.p_max);
   const float bounding_sphere_radius = length(bbox.p_max - bounding_sphere_center);
 
   {
     ETX_PROFILER_NAMED_SCOPE("pack_emitters_reset_triangle_emitter_indices");
-    for (auto& triangle : result.triangles) {
-      triangle.emitter_index = kInvalidIndex;
+    if (include_triangles) {
+      for (auto& triangle : result.triangles) {
+        triangle.emitter_index = kInvalidIndex;
+      }
     }
   }
 
@@ -214,13 +240,20 @@ PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
         continue;
       }
 
-      const Mesh& mesh = scene_data.meshes[resolved.mesh_index];
-      const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
-      if (triangle_end > scene_data.triangles.size()) {
+      if ((resolved.mesh_index + 1u) >= topology.mesh_area_triangle_offsets.size()) {
         continue;
       }
 
-      for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+      const uint32_t triangle_begin = topology.mesh_area_triangle_offsets[resolved.mesh_index];
+      const uint32_t triangle_end = topology.mesh_area_triangle_offsets[resolved.mesh_index + 1u];
+      if ((triangle_end < triangle_begin) || (triangle_end > topology.area_triangle_indices.size())) {
+        continue;
+      }
+      for (uint32_t area_triangle_index = triangle_begin; area_triangle_index < triangle_end; ++area_triangle_index) {
+        const uint32_t triangle_index = topology.area_triangle_indices[area_triangle_index];
+        if (triangle_index >= scene_data.triangles.size()) {
+          continue;
+        }
         const Triangle& triangle = scene_data.triangles[triangle_index];
         if ((triangle.emitter_index == kInvalidIndex) || (triangle.emitter_index >= static_cast<uint32_t>(result.emitter_profiles.size()))) {
           continue;
@@ -259,6 +292,26 @@ PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
 
   collect_active_and_environment_emitters(result);
   return result;
+}
+
+}  // namespace
+
+PackedEmitterData build_packed_emitters(const SceneData& scene_data) {
+  PackedEmitterTopology topology = build_packed_emitter_topology(scene_data);
+  return build_packed_emitters_impl(scene_data, topology, true);
+}
+
+PackedEmitterData build_packed_emitters(const SceneData& scene_data, PackedEmitterTopology& topology) {
+  topology = build_packed_emitter_topology(scene_data);
+  return build_packed_emitters_impl(scene_data, topology, true);
+}
+
+PackedEmitterData build_packed_emitters_for_transforms(const SceneData& scene_data, const PackedEmitterTopology& topology) {
+  if (topology.mesh_area_triangle_offsets.size() != (scene_data.meshes.size() + 1u)) {
+    const PackedEmitterTopology rebuilt_topology = build_packed_emitter_topology(scene_data);
+    return build_packed_emitters_impl(scene_data, rebuilt_topology, false);
+  }
+  return build_packed_emitters_impl(scene_data, topology, false);
 }
 
 uint32_t fill_packed_emitter_distribution_entries(const std::vector<Emitter>& emitter_instances, const std::vector<uint32_t>& active_emitter_indices, Distribution::Entry* entries,

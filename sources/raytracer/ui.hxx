@@ -215,6 +215,9 @@ struct UI {
     std::function<bool(uint32_t)> emitter_deleted;
     std::function<void(uint2 /* viewport */, uint32_t /* pixel size*/)> camera_changed;
     std::function<void()> scene_settings_changed;
+    std::function<void()> scene_transforms_changed;
+    std::function<void()> scene_transform_interaction_started;
+    std::function<void()> scene_transform_interaction_finished;
     std::function<void()> denoise_selected;
     std::function<void(uint32_t direction)> view_scene;
     std::function<void(Integrator::Type)> integrator_selected;
@@ -293,6 +296,7 @@ struct UI {
   void build_scene_tree_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_node_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& data);
+  void finish_node_transform_editor_interaction();
   void build_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
 
   bool build_material_class_selector(Material& material);
@@ -427,7 +431,9 @@ struct UI {
 
   bool _gizmo_captures_mouse = false;
   bool _gizmo_was_using = false;
-  bool _gizmo_changed_during_interaction = false;
+  bool _node_transform_editor_interaction_active = false;
+  bool _node_transform_editor_interaction_rendered_this_frame = false;
+  int32_t _node_transform_editor_interaction_node_index = -1;
 
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;

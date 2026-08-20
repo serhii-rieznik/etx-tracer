@@ -34,6 +34,15 @@ struct CPURaytracingRenderer : public Renderer {
   bool is_running() const override;
   RendererStatus status() const override;
   RendererControlState control_state() const override;
+  RHITexture output_texture() const override {
+    if (_preview_active || (_last_uploaded_completed_iterations == 0u) || (_output_texture_state != RHIResourceState::ShaderReadOnly)) {
+      return {};
+    }
+    return _output_texture;
+  }
+  RHITexture display_texture() const override {
+    return (_output_texture_state == RHIResourceState::ShaderReadOnly) ? _output_texture : RHITexture{};
+  }
   void start() override;
   void stop() override;
   void finish() override;
@@ -43,6 +52,9 @@ struct CPURaytracingRenderer : public Renderer {
   void on_camera_changed(SceneRepresentation& scene) override;
   void on_camera_become_steady(SceneRepresentation& scene) override;
   void on_scene_changed(SceneRepresentation& scene) override;
+  void on_scene_transforms_changed(SceneRepresentation& scene) override;
+  void on_scene_transform_interaction_started(SceneRepresentation& scene) override;
+  void on_scene_transform_interaction_finished(SceneRepresentation& scene) override;
 
   Integrator* current_integrator() const;
   void set_integrator(Integrator*);
@@ -62,10 +74,11 @@ struct CPURaytracingRenderer : public Renderer {
   }
 
  private:
+  void restart_render_at_pixel_size(uint32_t pixel_size);
   void start_render_timing();
   void stop_render_timing();
   void reset_render_timing();
-  void update_image(RHIContext& ctx, const float4* camera);
+  bool update_image(RHIContext& ctx, RHICommandBuffer cmd, const float4* camera);
 
  private:
   Raytracing& _raytracing;
@@ -86,6 +99,12 @@ struct CPURaytracingRenderer : public Renderer {
   std::chrono::steady_clock::time_point _render_started_at = {};
   double _last_render_elapsed_seconds = 0.0;
   bool _render_timing_active = false;
+
+  RHIBindlessHandle _output_staging_buffers[kRHIMaxFrames] = {};
+  uint64_t _output_staging_buffer_sizes[kRHIMaxFrames] = {};
+  RHIResourceState _output_texture_state = RHIResourceState::Undefined;
+  uint32_t _last_uploaded_completed_iterations = 0u;
+  uint32_t _last_uploaded_view_layer = kInvalidIndex;
 
   RHIPipeline rhi_pipeline = {};
 };

@@ -134,6 +134,115 @@ struct RendererControlState {
   bool can_restart = false;
 };
 
+struct PreviewResolutionController {
+  PreviewResolutionController(uint32_t initial_pixel_size, uint32_t maximum_pixel_size)
+    : _pixel_size(initial_pixel_size > 0u ? initial_pixel_size : 1u)
+    , _initial_pixel_size(_pixel_size)
+    , _maximum_pixel_size(maximum_pixel_size > _pixel_size ? maximum_pixel_size : _pixel_size) {
+  }
+
+  void begin() {
+    _pixel_size = _initial_pixel_size;
+    _active = true;
+    reset_observations();
+  }
+
+  void end() {
+    _active = false;
+    reset_observations();
+  }
+
+  bool active() const {
+    return _active;
+  }
+
+  uint32_t pixel_size() const {
+    return _pixel_size;
+  }
+
+  bool update(double elapsed_seconds, bool output_completed) {
+    if ((_active == false) || (elapsed_seconds <= 0.0)) {
+      return false;
+    }
+
+    if (output_completed == false) {
+      _seconds_without_output += elapsed_seconds;
+      if (_seconds_without_output < kMaximumOutputLatencySeconds) {
+        return false;
+      }
+
+      reset_observations();
+      return increase_pixel_size();
+    }
+
+    _seconds_without_output = 0.0;
+    if (elapsed_seconds > kSlowOutputSeconds) {
+      _slow_output_count += 1u;
+      _fast_output_count = 0u;
+      if (_slow_output_count < kSlowOutputThreshold) {
+        return false;
+      }
+
+      reset_observations();
+      return increase_pixel_size();
+    }
+
+    if (elapsed_seconds < kFastOutputSeconds) {
+      _fast_output_count += 1u;
+      _slow_output_count = 0u;
+      if (_fast_output_count < kFastOutputThreshold) {
+        return false;
+      }
+
+      reset_observations();
+      return decrease_pixel_size();
+    }
+
+    _slow_output_count = 0u;
+    _fast_output_count = 0u;
+    return false;
+  }
+
+ private:
+  bool increase_pixel_size() {
+    if (_pixel_size >= _maximum_pixel_size) {
+      return false;
+    }
+    _pixel_size = (_pixel_size > (_maximum_pixel_size / 2u)) ? _maximum_pixel_size : (_pixel_size * 2u);
+    return true;
+  }
+
+  bool decrease_pixel_size() {
+    if (_pixel_size <= 1u) {
+      return false;
+    }
+    _pixel_size = (_pixel_size + 1u) / 2u;
+    return true;
+  }
+
+  void reset_observations() {
+    _seconds_without_output = 0.0;
+    _slow_output_count = 0u;
+    _fast_output_count = 0u;
+  }
+
+ private:
+  static constexpr double kTargetOutputSeconds = 1.0 / 30.0;
+  static constexpr double kSlowOutputSeconds = kTargetOutputSeconds * 1.25;
+  static constexpr double kFastOutputSeconds = kTargetOutputSeconds * 0.60;
+  static constexpr double kMaximumOutputLatencySeconds = kTargetOutputSeconds * 2.0;
+  static constexpr uint32_t kSlowOutputThreshold = 2u;
+  static constexpr uint32_t kFastOutputThreshold = 6u;
+
+  double _seconds_without_output = 0.0;
+  uint32_t _pixel_size = 1u;
+  uint32_t _initial_pixel_size = 1u;
+  uint32_t _maximum_pixel_size = 1u;
+  uint32_t _slow_output_count = 0u;
+  uint32_t _fast_output_count = 0u;
+  bool _active = false;
+};
+
 struct Renderer {
   struct FrameData {
     ViewParameters view_parameters = {};
@@ -152,21 +261,28 @@ struct Renderer {
     ETX_CRITICAL(_camera_controller == nullptr);
     _camera_controller.reset(new CameraController(scene.mutable_camera()));
     _camera_controller->enable_inertia = false;
+    reset_preview_state();
   }
 
   virtual void update_camera(SceneRepresentation& scene, float dt) {
     ETX_CRITICAL(_camera_controller);
 
-    bool camera_updated = _camera_controller->update(dt);
+    const bool camera_updated = _camera_controller->update(dt);
+    const bool camera_input_active = _camera_controller->camera_navigation_input_active();
     if (camera_updated) {
       if (scene.store_active_camera()) {
-        request_scene_update();
+        scene.update_medium_bounds();
       }
+      request_scene_transform_update();
+      _camera_interaction_active = true;
       on_camera_changed(scene);
-    } else if (camera_updated != last_camera_update_state) {
+      return;
+    }
+
+    if (_camera_interaction_active && (camera_input_active == false)) {
+      _camera_interaction_active = false;
       on_camera_become_steady(scene);
     }
-    last_camera_update_state = camera_updated;
   }
 
   virtual void render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& data) {
@@ -177,6 +293,9 @@ struct Renderer {
 
   virtual RHITexture output_texture() const {
     return _output_texture;
+  }
+  virtual RHITexture display_texture() const {
+    return output_texture();
   }
   virtual uint2 output_size() const {
     return _output_dimensions;
@@ -202,13 +321,32 @@ struct Renderer {
     request_scene_update();
   }
 
-  void request_scene_update() {
-    _scene_update_requested = true;
+  virtual void on_scene_transforms_changed(SceneRepresentation& scene) {
+    (void)scene;
+    request_scene_transform_update();
   }
 
-  bool consume_scene_update_request() {
-    const bool result = _scene_update_requested;
-    _scene_update_requested = false;
+  virtual void on_scene_transform_interaction_started(SceneRepresentation& scene) {
+    (void)scene;
+  }
+
+  virtual void on_scene_transform_interaction_finished(SceneRepresentation& scene) {
+    (void)scene;
+  }
+
+  void request_scene_update() {
+    _scene_update_scope = SceneUpdateScope::Full;
+  }
+
+  void request_scene_transform_update() {
+    if (_scene_update_scope == SceneUpdateScope::None) {
+      _scene_update_scope = SceneUpdateScope::Transforms;
+    }
+  }
+
+  SceneUpdateScope consume_scene_update_request() {
+    const SceneUpdateScope result = _scene_update_scope;
+    _scene_update_scope = SceneUpdateScope::None;
     return result;
   }
 
@@ -254,12 +392,39 @@ struct Renderer {
   }
 
  protected:
+  bool update_preview_active_state() {
+    const bool preview_active = _preview_camera_active || _preview_transform_active;
+    if (preview_active == _preview_active) {
+      return false;
+    }
+
+    _preview_active = preview_active;
+    if (_preview_active) {
+      _preview_resolution.begin();
+    } else {
+      _preview_resolution.end();
+    }
+    return true;
+  }
+
+  void reset_preview_state() {
+    _preview_camera_active = false;
+    _preview_transform_active = false;
+    _preview_active = false;
+    _camera_interaction_active = false;
+    _preview_resolution.end();
+  }
+
   TaskScheduler& scheduler;
   std::unique_ptr<CameraController> _camera_controller = nullptr;
   uint2 _output_dimensions = {};
   RHITexture _output_texture = {};
-  bool last_camera_update_state = false;
-  bool _scene_update_requested = true;
+  PreviewResolutionController _preview_resolution = {4u, 4u};
+  bool _preview_camera_active = false;
+  bool _preview_transform_active = false;
+  bool _preview_active = false;
+  bool _camera_interaction_active = false;
+  SceneUpdateScope _scene_update_scope = SceneUpdateScope::Full;
 };
 
 }  // namespace etx

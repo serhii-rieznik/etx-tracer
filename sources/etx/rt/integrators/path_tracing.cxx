@@ -137,8 +137,8 @@ void CPUPathTracing::stop(Stop st) {
   if (st == Stop::WaitForCompletion) {
     current_state = State::WaitingForCompletion;
   } else {
-    _private->scheduler.wait_and_release(_private->current_task);
     current_state = State::Stopped;
+    _private->scheduler.wait_and_release(_private->current_task);
   }
 }
 

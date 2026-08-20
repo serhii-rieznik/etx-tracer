@@ -33,7 +33,7 @@ constexpr size_t kRetainedApplicationCommandResultLimit = 256u;
 bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const uint2 image_size, std::vector<float4>& output) {
   output.clear();
   if ((texture.valid() == false) || (image_size.x == 0u) || (image_size.y == 0u)) {
-    log::warning("No GPU output image is available for capture");
+    log::warning("No renderer output image is available for capture");
     return false;
   }
 
@@ -46,20 +46,20 @@ bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const ui
 
   auto readback_result = ctx.device().create_buffer(readback_desc);
   if ((readback_result.result != RHIResult::Success) || (readback_result.handle.valid() == false)) {
-    log::error("Failed to create GPU image capture buffer (%u)", static_cast<uint32_t>(readback_result.result));
+    log::error("Failed to create renderer image capture buffer (%u)", static_cast<uint32_t>(readback_result.result));
     return false;
   }
 
   const RHIResult idle_wait = ctx.wait_idle();
   if (idle_wait != RHIResult::Success) {
-    log::error("Failed to wait before GPU image capture (%u)", static_cast<uint32_t>(idle_wait));
+    log::error("Failed to wait before renderer image capture (%u)", static_cast<uint32_t>(idle_wait));
     ctx.device().destroy_buffer(readback_result.handle);
     return false;
   }
 
   RHICommandBuffer cmd = ctx.get_command_buffer();
   if (cmd.valid() == false) {
-    log::error("Failed to get command buffer for GPU image capture");
+    log::error("Failed to get command buffer for renderer image capture");
     ctx.device().destroy_buffer(readback_result.handle);
     return false;
   }
@@ -73,7 +73,7 @@ bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const ui
 
   const RHIResult capture_wait = ctx.wait_for_command_buffer(cmd);
   if (capture_wait != RHIResult::Success) {
-    log::error("GPU image capture wait failed (%u)", static_cast<uint32_t>(capture_wait));
+    log::error("Renderer image capture wait failed (%u)", static_cast<uint32_t>(capture_wait));
     ctx.destroy_command_buffer(cmd);
     ctx.device().destroy_buffer(readback_result.handle);
     return false;
@@ -84,11 +84,11 @@ bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const ui
   const RHIResult read_result = ctx.device().read_buffer(readback_result.handle, output.data(), buffer_size, 0u);
   const RHIResult destroy_result = ctx.device().destroy_buffer(readback_result.handle);
   if (destroy_result != RHIResult::Success) {
-    log::warning("Failed to destroy GPU image capture buffer (%u)", static_cast<uint32_t>(destroy_result));
+    log::warning("Failed to destroy renderer image capture buffer (%u)", static_cast<uint32_t>(destroy_result));
   }
 
   if (read_result != RHIResult::Success) {
-    log::error("Failed to read GPU image capture buffer (%u)", static_cast<uint32_t>(read_result));
+    log::error("Failed to read renderer image capture buffer (%u)", static_cast<uint32_t>(read_result));
     output.clear();
     return false;
   }
@@ -190,7 +190,7 @@ bool RTApplication::initialized() const {
 }
 
 bool RTApplication::capture_output_png(std::vector<uint8_t>& png_data, uint32_t& width, uint32_t& height) {
-  if (_current_scene_file.empty() || (_active_renderer == nullptr) || !_active_renderer->output_texture().valid()) {
+  if (_current_scene_file.empty() || (_active_renderer == nullptr) || (_active_renderer->display_texture().valid() == false)) {
     png_data.clear();
     width = 0u;
     height = 0u;
@@ -325,6 +325,9 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.emitter_deleted = std::bind(&RTApplication::on_emitter_deleted, this, std::placeholders::_1);
     ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
+    ui.callbacks.scene_transforms_changed = std::bind(&RTApplication::on_scene_transforms_changed, this);
+    ui.callbacks.scene_transform_interaction_started = std::bind(&RTApplication::on_scene_transform_interaction_started, this);
+    ui.callbacks.scene_transform_interaction_finished = std::bind(&RTApplication::on_scene_transform_interaction_finished, this);
     ui.callbacks.denoise_selected = [this]() {
       submit_command({.type = ApplicationCommandType::Denoise});
     };
@@ -514,6 +517,10 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
   if (next_renderer == _active_renderer) {
     sync_ui_renderer_state();
     return;
+  }
+
+  if (_scene_transform_interaction_active && (_scene_transform_interaction_renderer != next_renderer)) {
+    on_scene_transform_interaction_finished();
   }
 
   if (_active_renderer != nullptr) {
@@ -823,21 +830,21 @@ void RTApplication::on_referenece_image_selected(std::string file_name) {
   _pending_reference_file_load = true;
 }
 
-bool RTApplication::read_active_gpu_output(std::vector<float4>& output, uint2& image_size) {
+bool RTApplication::read_active_renderer_output(std::vector<float4>& output, uint2& image_size) {
   output.clear();
   image_size = {};
 
   if (render_context.valid() == false) {
-    log::warning("Cannot capture GPU output: render context is not initialized");
+    log::warning("Cannot capture renderer output: render context is not initialized");
     return false;
   }
 
-  if ((_active_renderer == nullptr) || (_active_renderer->mode() != RendererMode::GPURaytracing)) {
-    log::warning("Cannot capture GPU output: GPU renderer is not active");
+  if (_active_renderer == nullptr) {
+    log::warning("Cannot capture renderer output: no renderer is active");
     return false;
   }
 
-  RHITexture texture = _active_renderer->output_texture();
+  const RHITexture texture = _active_renderer->output_texture();
   image_size = _active_renderer->output_size();
   return read_texture_to_float4_buffer(render_context.get_context(), texture, image_size, output);
 }
@@ -857,48 +864,72 @@ void RTApplication::process_pending_image_requests() {
   std::vector<float4> output = {};
   uint2 image_size = {};
   bool capture_succeeded = false;
+  bool capture_attempted = false;
   const bool gpu_renderer_active = (_active_renderer != nullptr) && (_active_renderer->mode() == RendererMode::GPURaytracing);
-  const bool needs_gpu_capture = gpu_renderer_active && (_pending_current_image_reference_capture || _pending_gpu_save_image);
-  if (needs_gpu_capture) {
-    capture_succeeded = read_active_gpu_output(output, image_size);
+  if (_pending_current_image_reference_capture && (_pending_reference_capture_renderer != _active_renderer)) {
+    log::warning("Reference capture canceled because the active renderer changed");
+    _pending_current_image_reference_capture = false;
+    _pending_reference_capture_renderer = nullptr;
   }
 
+  const bool reference_output_available = _pending_current_image_reference_capture && (_active_renderer != nullptr) && _active_renderer->output_texture().valid();
+  const bool gpu_save_output_available = gpu_renderer_active && _pending_gpu_save_image && _active_renderer->output_texture().valid();
+  const bool needs_renderer_capture = reference_output_available || gpu_save_output_available;
+  if (needs_renderer_capture) {
+    capture_attempted = true;
+    capture_succeeded = read_active_renderer_output(output, image_size);
+  }
+  const bool reference_capture_attempted = reference_output_available && capture_attempted;
+
   if (_pending_current_image_reference_capture) {
-    if (gpu_renderer_active) {
+    if (reference_capture_attempted) {
       if (capture_succeeded) {
         render_context.set_reference_image(output.data(), image_size);
+        _options.set_string("ref", {}, "Reference");
+        save_options();
+      } else {
+        log::warning("Failed to use the current renderer output as a reference image");
       }
-    } else {
-      const float4* data = cpu_renderer.film().layer(ViewLayer::Result, cpu_renderer.scene().options.radiance_clamp);
-      const uint2 size = cpu_renderer.film().base_dimensions();
-      render_context.set_reference_image(data, size);
+      _pending_current_image_reference_capture = false;
+      _pending_reference_capture_renderer = nullptr;
     }
-    _pending_current_image_reference_capture = false;
   }
 
   if (_pending_gpu_save_image) {
-    if ((needs_gpu_capture == false) && gpu_renderer_active) {
-      capture_succeeded = read_active_gpu_output(output, image_size);
+    if (gpu_renderer_active == false) {
+      log::warning("GPU image save canceled because the active renderer changed");
+      _pending_gpu_save_image_file.clear();
+      _pending_gpu_save_image = false;
+    } else if (gpu_save_output_available) {
+      if (capture_attempted == false) {
+        capture_succeeded = read_active_renderer_output(output, image_size);
+      }
+      if (capture_succeeded && (_pending_gpu_save_image_file.empty() == false)) {
+        ImageOutputParameters params = {
+          .mode = _pending_gpu_save_image_mode,
+          .exposure = _view_parameters.exposure,
+        };
+        save_image_to_file(_pending_gpu_save_image_file, output.data(), image_size, params);
+      }
+      _pending_gpu_save_image_file.clear();
+      _pending_gpu_save_image = false;
     }
-    if ((capture_succeeded) && (_pending_gpu_save_image_file.empty() == false)) {
-      ImageOutputParameters params = {
-        .mode = _pending_gpu_save_image_mode,
-        .exposure = _view_parameters.exposure,
-      };
-      save_image_to_file(_pending_gpu_save_image_file, output.data(), image_size, params);
-    }
-    _pending_gpu_save_image_file.clear();
-    _pending_gpu_save_image = false;
   }
 }
 
 void RTApplication::on_use_image_as_reference() {
   ETX_PROFILER_SCOPE();
 
-  _options.set_string("ref", {}, "Reference");
-  save_options();
+  if ((_active_renderer == nullptr) || ((_active_renderer->mode() != RendererMode::CPURaytracing) && (_active_renderer->mode() != RendererMode::GPURaytracing))) {
+    log::warning("A CPU or GPU ray-tracing output is required for reference capture");
+    return;
+  }
 
   _pending_current_image_reference_capture = true;
+  _pending_reference_capture_renderer = _active_renderer;
+  if (_active_renderer->output_texture().valid() == false) {
+    log::info("Reference capture is waiting for the active renderer to complete an output image");
+  }
 }
 
 void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode mode) {
@@ -1155,6 +1186,42 @@ void RTApplication::on_scene_settings_changed() {
   notify_scene_might_have_changed();
 }
 
+void RTApplication::on_scene_transforms_changed() {
+  if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
+    _active_renderer->camera_controller()->sync_from_camera();
+  }
+  notify_scene_transforms_changed();
+}
+
+void RTApplication::on_scene_transform_interaction_started() {
+  if (_scene_transform_interaction_active) {
+    return;
+  }
+
+  if (_active_renderer == nullptr) {
+    return;
+  }
+
+  _scene_transform_interaction_active = true;
+  _scene_transform_interaction_renderer = _active_renderer;
+  _scene_transform_interaction_renderer->on_scene_transform_interaction_started(scene);
+}
+
+void RTApplication::on_scene_transform_interaction_finished() {
+  if (_scene_transform_interaction_active == false) {
+    return;
+  }
+
+  _scene_transform_interaction_active = false;
+  Renderer* const interaction_renderer = _scene_transform_interaction_renderer;
+  _scene_transform_interaction_renderer = nullptr;
+  scene.update_medium_bounds();
+  if (interaction_renderer != nullptr) {
+    interaction_renderer->on_scene_transform_interaction_finished(scene);
+  }
+  notify_scene_might_have_changed();
+}
+
 void RTApplication::on_denoise_selected() {
   ETX_PROFILER_SCOPE();
   cpu_renderer.film().denoise(_view_parameters.view_layer, cpu_renderer.scene().options.radiance_clamp);
@@ -1215,6 +1282,15 @@ void RTApplication::notify_scene_might_have_changed() {
   cpu_renderer.on_scene_changed(scene);
   raster_renderer.on_scene_changed(scene);
   gpu_renderer.on_scene_changed(scene);
+}
+
+void RTApplication::notify_scene_transforms_changed() {
+  if (_scene_transform_interaction_active == false) {
+    scene.update_medium_bounds();
+  }
+  cpu_renderer.on_scene_transforms_changed(scene);
+  raster_renderer.on_scene_transforms_changed(scene);
+  gpu_renderer.on_scene_transforms_changed(scene);
 }
 
 void RTApplication::sync_ui_renderer_state() {

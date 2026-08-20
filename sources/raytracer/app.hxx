@@ -92,6 +92,9 @@ struct RTApplication {
   bool on_emitter_deleted(uint32_t index);
   void on_camera_changed(uint2 viewport, uint32_t pixel_size);
   void on_scene_settings_changed();
+  void on_scene_transforms_changed();
+  void on_scene_transform_interaction_started();
+  void on_scene_transform_interaction_finished();
   void on_denoise_selected();
   void on_view_scene(uint32_t direction);
   void on_clear_recent_files();
@@ -103,10 +106,11 @@ struct RTApplication {
   void add_to_recent(const std::string&);
   bool ensure_gpu_renderer_initialized();
   void process_pending_image_requests();
-  bool read_active_gpu_output(std::vector<float4>& output, uint2& image_size);
+  bool read_active_renderer_output(std::vector<float4>& output, uint2& image_size);
   void save_options();
   void update_camera_to_fit_scene(const float3& view_direction);
   void notify_scene_might_have_changed();
+  void notify_scene_transforms_changed();
   void sync_ui_renderer_state();
   void process_application_commands();
   bool execute_application_command(const ApplicationCommand& command, std::string& message);
@@ -128,6 +132,8 @@ struct RTApplication {
   RasterizationRenderer raster_renderer;
   GPURaytracingRenderer gpu_renderer;
   Renderer* _active_renderer = nullptr;
+  Renderer* _scene_transform_interaction_renderer = nullptr;
+  Renderer* _pending_reference_capture_renderer = nullptr;
   bool _gpu_renderer_initialized = false;
   bool _gpu_renderer_supported = false;
   bool _quit_preparation_cancel_requested = false;
@@ -138,6 +144,7 @@ struct RTApplication {
   bool _initialization_started = false;
   std::atomic<bool> _initialized = false;
   bool _scene_global_initialized = false;
+  bool _scene_transform_interaction_active = false;
   bool _platform_color_scheme_initialized = false;
   PlatformColorScheme _platform_color_scheme = PlatformColorScheme::Dark;
   SaveImageMode _pending_gpu_save_image_mode = SaveImageMode::RGB;
