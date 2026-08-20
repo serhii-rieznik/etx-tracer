@@ -5196,18 +5196,32 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
 
   const bool gpu_renderer_mode = _current_renderer_mode == RendererMode::GPURaytracing;
   const auto gpu_integrator_supported = [](Integrator::Type type) {
-    return (type == Integrator::Type::PathTracing) || (type == Integrator::Type::Bidirectional);
+    return (type == Integrator::Type::PathTracing) || (type == Integrator::Type::Bidirectional) || (type == Integrator::Type::VCM);
   };
+  const auto gpu_integrator_name = [](Integrator* integrator) {
+    switch (integrator->type()) {
+      case Integrator::Type::PathTracing:
+        return "Path Tracing";
+      case Integrator::Type::Bidirectional:
+        return "Bidirectional";
+      case Integrator::Type::VCM:
+        return "VCM";
+      default:
+        return integrator->name();
+    }
+  };
+  const char* current_integrator_name = gpu_renderer_mode ? gpu_integrator_name(_current_integrator) : _current_integrator->name();
 
-  if (ImGui::BeginCombo("##integrator_type", _current_integrator->name())) {
+  if (ImGui::BeginCombo("##integrator_type", current_integrator_name)) {
     for (uint64_t i = 0; i < _integrators.count; ++i) {
       const bool is_selected = (_integrators[i] == _current_integrator);
       const bool supported_by_gpu = gpu_integrator_supported(_integrators[i]->type());
       const bool selectable_enabled = (gpu_renderer_mode == false) || supported_by_gpu;
+      const char* integrator_name = (gpu_renderer_mode && supported_by_gpu) ? gpu_integrator_name(_integrators[i]) : _integrators[i]->name();
       if (selectable_enabled == false) {
         ImGui::BeginDisabled();
       }
-      if (ImGui::Selectable(_integrators[i]->name(), is_selected) && selectable_enabled) {
+      if (ImGui::Selectable(integrator_name, is_selected) && selectable_enabled) {
         if (callbacks.integrator_selected) {
           callbacks.integrator_selected(_integrators[i]->type());
           set_current_integrator(_integrators[i]);

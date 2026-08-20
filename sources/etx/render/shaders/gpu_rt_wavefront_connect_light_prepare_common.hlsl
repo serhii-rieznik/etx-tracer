@@ -210,6 +210,10 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
       (input_value.light_vertex_length > input_value.path_meta.light_path_length)) {
     return false;
   }
+  const uint target_path_length = input_value.path_meta.camera_path_length + input_value.light_vertex_length + 1u;
+  if ((target_path_length < load_scene_options_min_path_length()) || (target_path_length > load_scene_options_max_path_length())) {
+    return false;
+  }
 
   if (input_value.resources.camera_state_buffer != kInvalidIndex) {
     GPUWavefrontPathState camera_state = wavefront_load_path_state(input_value.resources.camera_state_buffer, input_value.path_index);
@@ -285,12 +289,17 @@ void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput
   float z_prev_pdf = wavefront_convert_solid_angle_pdf_to_area(z_prev_pdf_dir, input_value.camera_vertex.position, input_value.camera_previous_vertex.position,
     wavefront_path_vertex_is_surface(input_value.camera_previous_vertex), input_value.camera_previous_vertex.normal);
 
+  const GPUWavefrontConnectLightTask vertex_indices =
+    wavefront_load_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index);
   GPUWavefrontConnectLightTask task = (GPUWavefrontConnectLightTask)0;
   task.contribution = camera_eval.bsdf;
   task.mis_weight = camera_eval.pdf;
   task.flags = GPUWavefrontConnectLightTaskFlags::CameraPrepared;
   task.path_index = input_value.path_index;
   task.reserved0 = asuint(z_prev_pdf);
+  task.reserved1 = vertex_indices.reserved1;
+  task.reserved2 = vertex_indices.reserved2;
+  task.reserved3 = asuint(z_prev_pdf_dir);
   task.sampler_seed = input_value.camera_sampler_seed;
   wavefront_store_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index, task);
 }
@@ -345,6 +354,7 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   }
 
   float z_prev_pdf = asfloat(camera_task.reserved0);
+  float z_prev_pdf_dir = asfloat(camera_task.reserved3);
   float y_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(camera_task.mis_weight, input_value.camera_vertex.position, input_value.light_vertex.position,
     wavefront_path_vertex_is_surface(input_value.light_vertex), input_value.light_vertex.normal);
 
@@ -363,7 +373,17 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   float z_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(light_eval.pdf, input_value.light_vertex.position, input_value.camera_vertex.position,
     wavefront_path_vertex_is_surface(input_value.camera_vertex), input_value.camera_vertex.normal);
 
-  float weight = wavefront_connect_light_weight(input_value, z_curr_pdf, z_prev_pdf, y_curr_pdf, y_prev_pdf);
+  float weight = 1.0f;
+  if (scene_multiple_importance_sampling_enabled()) {
+    if (scene_path_mode_is_vcm()) {
+      float vm_pair = (wavefront_path_vertex_is_medium(input_value.camera_vertex) || wavefront_path_vertex_is_medium(input_value.light_vertex)) ? 0.0f : constants.vcm_vm_weight;
+      float w_light = y_curr_pdf * (vm_pair + input_value.light_vertex.forward_pdf + input_value.light_vertex.reverse_pdf * y_prev_pdf_dir);
+      float w_camera = z_curr_pdf * (vm_pair + input_value.camera_vertex.forward_pdf + input_value.camera_vertex.reverse_pdf * z_prev_pdf_dir);
+      weight = 1.0f / (1.0f + w_light + w_camera);
+    } else {
+      weight = wavefront_connect_light_weight(input_value, z_curr_pdf, z_prev_pdf, y_curr_pdf, y_prev_pdf);
+    }
+  }
   SpectralResponse contribution = spectral_response_mul(input_value.camera_vertex.throughput, spectral_response_mul(connection, weight * geometry_term));
   if (gpu_valid_spectral_response(contribution) == false) {
     return;

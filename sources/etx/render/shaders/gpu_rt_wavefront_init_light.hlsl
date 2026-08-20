@@ -20,7 +20,15 @@
   uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
   uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
   SpectralQuery spect = spectral_query_sample();
-  if (scene_uses_spectral_mode()) {
+  if (scene_path_mode_is_vcm()) {
+    spect = wavefront_vcm_iteration_spectral_query();
+    if (scene_uses_spectral_mode()) {
+      rnd01(seed);
+    } else if (scene_has_diffraction_grating()) {
+      rnd01(seed);
+      rnd01(seed);
+    }
+  } else if (scene_uses_spectral_mode()) {
     spect = spectral_query_spectral_sample(rnd01(seed));
   } else if (scene_has_diffraction_grating()) {
     spect = diffraction_transport_sample_query(false, true, rnd01(seed), rnd01(seed));
@@ -59,7 +67,16 @@
 
   float cosine_term = dot(emitter_sample.direction, emitter_sample.normal);
   GPUWavefrontPathState state = (GPUWavefrontPathState)0;
-  state.ray.o = offset_ray(emitter_sample.origin, emitter_sample.normal);
+  state.ray.o = emitter_sample.origin;
+  if (emitter_sample.triangle_index != kInvalidIndex) {
+    GPUWavefrontHit emitter_hit = (GPUWavefrontHit)0;
+    emitter_hit.vertex.pos = emitter_sample.origin;
+    emitter_hit.vertex.nrm = emitter_sample.normal;
+    emitter_hit.triangle_index = emitter_sample.triangle_index;
+    emitter_hit.instance_index = emitter_sample.instance_index;
+    emitter_hit.barycentric = emitter_sample.barycentric.yz;
+    state.ray.o = wavefront_surface_shading_position(emitter_hit, emitter_sample.direction);
+  }
   state.ray.d = emitter_sample.direction;
   state.ray.min_t = kRayEpsilon;
   state.ray.max_t = kMaxFloat;
@@ -73,6 +90,7 @@
     float reverse_numerator = (emitter_sample.is_distant != 0u) ? 1.0f : cosine_term;
     state.reverse_pdf = wavefront_safe_div(reverse_numerator, emission_pdf);
   }
+  state.d_vm = scene_path_mode_is_vcm() ? (state.reverse_pdf * constants.vcm_vc_weight) : 0.0f;
   state.medium_index = emitter_sample.medium_index;
   state.path_length = 1u;
   state.pixel_index = output_pixel_index;

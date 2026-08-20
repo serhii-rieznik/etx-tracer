@@ -19,7 +19,15 @@
   uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
   uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
   SpectralQuery spect = spectral_query_sample();
-  if (scene_uses_spectral_mode()) {
+  if (scene_path_mode_is_vcm()) {
+    spect = wavefront_vcm_iteration_spectral_query();
+    if (scene_uses_spectral_mode()) {
+      rnd01(seed);
+    } else if (scene_has_diffraction_grating()) {
+      rnd01(seed);
+      rnd01(seed);
+    }
+  } else if (scene_uses_spectral_mode()) {
     spect = spectral_query_spectral_sample(rnd01(seed));
   } else if (scene_has_diffraction_grating()) {
     spect = diffraction_transport_sample_query(false, true, rnd01(seed), rnd01(seed));
@@ -35,6 +43,7 @@
   state.sampled_bsdf_pdf = camera_film_shared_evaluate_out(camera, state.ray).pdf_dir;
   state.forward_pdf = wavefront_safe_div(1.0f, state.sampled_bsdf_pdf);
   state.reverse_pdf = 0.0f;
+  state.d_vm = 0.0f;
   state.medium_index = camera.medium_index;
   state.path_length = 1u;
   state.pixel_index = output_pixel_index;

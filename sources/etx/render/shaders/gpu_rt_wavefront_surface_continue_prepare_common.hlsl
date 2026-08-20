@@ -268,6 +268,7 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   uint current_medium_index = (sample_valid && ((bsdf_sample.properties & BSDFSample::MediumChanged) != 0u)) ? bsdf_sample.medium_index : state.medium_index;
   float current_d_vcm = current_vertex.forward_pdf;
   float current_d_vc = current_vertex.reverse_pdf;
+  float current_d_vm = current_vertex.d_vm;
 
   if (subsurface_medium_walk) {
     current_vertex.material_index = hit.material_index;
@@ -346,9 +347,14 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     if (bsdf_sample_is_delta(bsdf_sample)) {
       state.forward_pdf = 0.0f;
       state.reverse_pdf = current_d_vc * cos_theta_bsdf;
+      state.d_vm = scene_path_mode_is_vcm() ? (current_d_vm * cos_theta_bsdf) : 0.0f;
     } else {
       state.forward_pdf = wavefront_safe_div(1.0f, selected_sample_pdf);
-      state.reverse_pdf = wavefront_safe_div(cos_theta_bsdf * ((current_d_vc * reverse_bsdf_pdf) + current_d_vcm), selected_sample_pdf);
+      float vcm_connection_term = scene_path_mode_is_vcm() ? constants.vcm_vm_weight : 0.0f;
+      state.reverse_pdf = wavefront_safe_div(cos_theta_bsdf * ((current_d_vc * reverse_bsdf_pdf) + current_d_vcm + vcm_connection_term), selected_sample_pdf);
+      state.d_vm = scene_path_mode_is_vcm()
+                     ? wavefront_safe_div(cos_theta_bsdf * ((current_d_vm * reverse_bsdf_pdf) + (current_d_vcm * constants.vcm_vc_weight) + 1.0f), selected_sample_pdf)
+                     : 0.0f;
     }
     SpectralResponse next_throughput = spectral_response_mul(state.throughput, bsdf_sample.weight);
     if (from_camera == false) {

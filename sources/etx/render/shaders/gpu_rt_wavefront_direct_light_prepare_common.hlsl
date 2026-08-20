@@ -163,6 +163,18 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
   reverse_data.path_source = PathSource::Light;
   float3 previous_direction = normalize(input_value.previous_vertex.position - input_value.current_vertex.position);
   float reverse_pdf = wavefront_direct_light_stage_bsdf_pdf(wavefront_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
+  if (scene_path_mode_is_vcm()) {
+    float w_light = sampled_light_is_delta ? 0.0f : wavefront_safe_div(bsdf_eval.pdf, sampling_pdf);
+    float camera_factor = wavefront_path_vertex_is_surface(input_value.current_vertex)
+                            ? abs(dot(input_value.sample_value.direction, input_value.current_vertex.geo_normal))
+                            : 1.0f;
+    float emitter_cosine = abs(dot(input_value.sample_value.direction, input_value.sample_value.normal));
+    float density_ratio = wavefront_safe_div(input_value.sample_value.pdf_dir * emitter_cosine, input_value.sample_value.pdf_dir_out * camera_factor);
+    float w_camera = (density_ratio > 0.0f)
+                       ? wavefront_safe_div(constants.vcm_vm_weight + input_value.current_vertex.forward_pdf + input_value.current_vertex.reverse_pdf * reverse_pdf, density_ratio)
+                       : 0.0f;
+    return 1.0f / (1.0f + w_light + w_camera);
+  }
   float z_prev_backward_pdf = wavefront_convert_solid_angle_pdf_to_area(reverse_pdf, input_value.current_vertex.position, input_value.previous_vertex.position,
     wavefront_path_vertex_is_surface(input_value.previous_vertex), input_value.previous_vertex.normal);
   float p_bck = input_value.previous_vertex.pdf_history * ((input_value.camera_path_length > 1u) ? z_prev_backward_pdf : 1.0f);

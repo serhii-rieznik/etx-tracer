@@ -155,7 +155,7 @@ bool wavefront_connect_camera_stage_matches_material(uint material_class) {
 
   Sampler bsdf_sampler = wavefront_connect_camera_make_bsdf_sampler(input_value.state.sampler_seed);
   BSDFData bsdf_data =
-    wavefront_connect_camera_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.current_vertex.medium_index, input_value.current_vertex.w_i);
+    wavefront_connect_camera_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.hit.medium_index, input_value.current_vertex.w_i);
   BSDFEval bsdf_eval = wavefront_connect_camera_stage_bsdf_eval(wavefront_connect_camera_make_scene_bsdf_resource_gpu_context(), bsdf_data, input_value.camera_sample.direction,
     input_value.material, bsdf_sampler);
   float shading_fix = bsdf_fix_shading_normal(input_value.hit.geo_normal, input_value.hit.vertex.nrm, input_value.current_vertex.w_i, input_value.camera_sample.direction);

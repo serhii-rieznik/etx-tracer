@@ -96,7 +96,10 @@ struct ETX_ALIGNED GPUWavefrontPathState {
   SpectralQuery spect ETX_INIT({});
   float2 film_uv ETX_INIT({});
   uint32_t last_vertex_index ETX_INIT(kInvalidIndex);
+  float d_vm ETX_INIT(0.0f);
   uint32_t reserved0 ETX_INIT(0u);
+  uint32_t reserved1 ETX_INIT(0u);
+  uint32_t reserved2 ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontHit {
@@ -141,6 +144,7 @@ struct ETX_ALIGNED GPUWavefrontPathVertex {
   uint32_t inline_medium_flags ETX_INIT(0u);
   uint32_t instance_index ETX_INIT(kInvalidIndex);
   uint32_t reserved0 ETX_INIT(0u);
+  float d_vm ETX_INIT(0.0f);
 };
 
 struct ETX_ALIGNED GPUWavefrontLightPathVertex {
@@ -168,6 +172,10 @@ struct ETX_ALIGNED GPUWavefrontLightPathVertex {
   float2 barycentric ETX_INIT({});
   uint32_t previous_vertex_index ETX_INIT(kInvalidIndex);
   uint32_t instance_index ETX_INIT(kInvalidIndex);
+  float d_vm ETX_INIT(0.0f);
+  uint32_t reserved0 ETX_INIT(0u);
+  uint32_t reserved1 ETX_INIT(0u);
+  uint32_t reserved2 ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontFastLightEndpoint {
@@ -214,7 +222,7 @@ struct ETX_ALIGNED GPUWavefrontDirectLightSample {
   uint32_t emitter_index ETX_INIT(kInvalidIndex);
   uint32_t triangle_index ETX_INIT(kInvalidIndex);
   uint32_t flags ETX_INIT(0u);
-  uint32_t reserved0 ETX_INIT(0u);
+  float pdf_dir_out ETX_INIT(0.0f);
   uint32_t reserved1 ETX_INIT(0u);
   uint32_t reserved2 ETX_INIT(0u);
 };
@@ -323,4 +331,8 @@ struct ETX_ALIGNED GPUWavefrontResources {
   uint32_t shadow_queue_buffer ETX_INIT(kInvalidIndex);
   uint32_t light_vertex_counter_buffer ETX_INIT(kInvalidIndex);
   uint32_t fast_light_endpoint_buffer ETX_INIT(kInvalidIndex);
+  uint32_t vcm_grid_heads_buffer ETX_INIT(kInvalidIndex);
+  uint32_t vcm_grid_next_buffer ETX_INIT(kInvalidIndex);
+  uint32_t reserved0 ETX_INIT(0u);
+  uint32_t reserved1 ETX_INIT(0u);
 };

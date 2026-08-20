@@ -33,8 +33,7 @@ bool wavefront_connect_camera_try_load_material_full(uint material_index, out Ma
 }
 
 BSDFData wavefront_connect_camera_make_surface_bsdf_data(Vertex vertex, SpectralQuery spect, uint medium_index, float3 incoming_direction) {
-  (void)medium_index;
-  return bsdf_data_make(vertex, spect, kInvalidIndex, PathSource::Light, incoming_direction);
+  return bsdf_data_make(vertex, spect, medium_index, PathSource::Light, incoming_direction);
 }
 
 Sampler wavefront_connect_camera_make_bsdf_sampler(uint seed) {
@@ -74,7 +73,7 @@ float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_v
     wavefront_path_vertex_is_surface(input_value.current_vertex), input_value.current_vertex.normal);
 
   BSDFData reverse_data =
-    wavefront_connect_camera_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.current_vertex.medium_index, -input_value.camera_sample.direction);
+    wavefront_connect_camera_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.hit.medium_index, -input_value.camera_sample.direction);
   reverse_data.path_source = PathSource::Camera;
   float3 previous_direction = normalize(input_value.previous_vertex.position - input_value.current_vertex.position);
   float previous_from_current_dir =
@@ -83,6 +82,12 @@ float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_v
                                   ? previous_from_current_dir
                                   : wavefront_convert_solid_angle_pdf_to_area(previous_from_current_dir, input_value.current_vertex.position, input_value.previous_vertex.position,
                                       wavefront_path_vertex_is_surface(input_value.previous_vertex), input_value.previous_vertex.normal);
+
+  if (scene_path_mode_is_vcm()) {
+    float vm_camera = wavefront_path_vertex_is_medium(input_value.current_vertex) ? 0.0f : constants.vcm_vm_weight;
+    float w_light = current_from_camera * (vm_camera + input_value.current_vertex.forward_pdf + input_value.current_vertex.reverse_pdf * previous_from_current_dir);
+    return 1.0f / (1.0f + w_light);
+  }
 
   if (scene_path_mode_uses_bdpt_fast()) {
     if (input_value.path_meta.light_path_length == 0u) {
@@ -173,7 +178,8 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
     return false;
   }
   uint target_path_length = input_value.path_meta.light_path_length + 1u;
-  if ((scene_strategy_enabled(kSceneStrategyConnectToCamera) == false) || (target_path_length < load_scene_options_min_path_length())) {
+  if ((scene_strategy_enabled(kSceneStrategyConnectToCamera) == false) || (target_path_length < load_scene_options_min_path_length()) ||
+      (target_path_length > load_scene_options_max_path_length())) {
     return false;
   }
 
@@ -199,14 +205,6 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
   float3 lens_point = camera_film_shared_lens_point(input_value.camera, sensor_sample);
   input_value.camera_sample = camera_film_shared_evaluate(input_value.camera, input_value.current_vertex.position, lens_point);
   if ((input_value.camera_sample.pdf_dir <= 0.0f) || (input_value.camera_sample.weight <= 0.0f)) {
-    return false;
-  }
-
-  float len = length(input_value.camera_sample.position - input_value.current_vertex.position);
-  float direction_scale = camera_shared_clip_direction_scale(input_value.camera, input_value.camera_sample.direction);
-  float near_extent = (input_value.camera.clip_near > 0.0f) ? input_value.camera.clip_near / direction_scale : 0.0f;
-  float far_extent = (input_value.camera.clip_far > 0.0f) ? input_value.camera.clip_far / direction_scale : kMaxFloat;
-  if ((len < near_extent) || (len > far_extent)) {
     return false;
   }
 
@@ -253,12 +251,11 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   if (wavefront_connect_camera_valid_spectral_response(contribution) == false) {
     return;
   }
-
   float direction_scale = camera_shared_clip_direction_scale(input_value.camera, input_value.camera_sample.direction);
   float near_extent = (input_value.camera.clip_near > 0.0f) ? input_value.camera.clip_near / direction_scale : 0.0f;
-  float surface_len = length(input_value.camera_sample.position - input_value.hit.vertex.pos);
   float3 shadow_origin = wavefront_surface_shading_position(input_value.hit, input_value.camera_sample.direction);
-  float3 clip_pos = input_value.hit.vertex.pos + input_value.camera_sample.direction * max(0.0f, surface_len - near_extent);
+  float surface_len = length(input_value.camera_sample.position - shadow_origin);
+  float3 clip_pos = shadow_origin + input_value.camera_sample.direction * max(0.0f, surface_len - near_extent);
   float3 shadow_delta = clip_pos - shadow_origin;
   float shadow_distance = length(shadow_delta);
   if (shadow_distance <= kRayEpsilon) {
@@ -274,7 +271,7 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   task.contribution = contribution;
   task.mis_weight = mis_weight;
   task.pixel_index = pixel_index;
-  task.medium_index = ((bsdf_eval.properties & BSDFSample::MediumChanged) != 0u) ? bsdf_eval.medium_index : input_value.current_vertex.medium_index;
+  task.medium_index = ((bsdf_eval.properties & BSDFSample::MediumChanged) != 0u) ? bsdf_eval.medium_index : input_value.hit.medium_index;
   task.flags = 1u;
   task.path_index = input_value.path_index;
   task.sampler_seed = sampler.seed;

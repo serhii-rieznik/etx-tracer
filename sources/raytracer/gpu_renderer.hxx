@@ -65,7 +65,13 @@ struct GPURaytracingRenderer : public Renderer {
     CameraConnectLightClear = 45u,
     LightConnectCameraClear = 46u,
     BuildDispatchArgs = 47u,
-    Count = 48u,
+    VCMGridClear = 48u,
+    VCMGridBuild = 49u,
+    VCMMergeDiffuse = 50u,
+    VCMMergePlastic = 51u,
+    VCMMergeConductor = 52u,
+    VCMMergeDielectric = 53u,
+    Count = 54u,
   };
 
   GPURaytracingRenderer(TaskScheduler&);
@@ -299,6 +305,8 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _fast_light_endpoint_buffer = {};
   RHIBindlessHandle _light_vertex_counter_buffer = {};
   RHIBindlessHandle _light_vertex_counter_readback_buffer = {};
+  RHIBindlessHandle _vcm_grid_heads_buffer = {};
+  RHIBindlessHandle _vcm_grid_next_buffer = {};
   RHIBindlessHandle _film_buffer = {};
   RHIBindlessHandle _path_meta_buffer = {};
   RHIBindlessHandle _direct_light_sample_buffer = {};
@@ -325,6 +333,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _spectrums_buffer_size = 0;
   uint64_t _energy_compensation_interfaces_buffer_size = 0;
   uint64_t _scene_globals_buffer_size = 0;
+  float _scene_bounding_sphere_radius = 0.0f;
   uint64_t _scene_options_buffer_size = 0;
   uint64_t _emitters_distribution_buffer_size = 0;
   uint64_t _camera_buffer_size = 0;
@@ -348,6 +357,8 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _fast_light_endpoint_buffer_size = 0;
   uint64_t _light_vertex_counter_buffer_size = 0;
   uint64_t _light_vertex_counter_readback_buffer_size = 0;
+  uint64_t _vcm_grid_heads_buffer_size = 0;
+  uint64_t _vcm_grid_next_buffer_size = 0;
   uint64_t _film_buffer_size = 0;
   uint64_t _path_meta_buffer_size = 0;
   uint64_t _direct_light_sample_buffer_size = 0;
@@ -380,6 +391,8 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _fast_light_endpoint_buffer_descriptor_index = ~0u;
   uint32_t _light_vertex_counter_buffer_descriptor_index = ~0u;
   uint32_t _light_vertex_counter_readback_buffer_descriptor_index = ~0u;
+  uint32_t _vcm_grid_heads_buffer_descriptor_index = ~0u;
+  uint32_t _vcm_grid_next_buffer_descriptor_index = ~0u;
   uint32_t _film_buffer_descriptor_index = ~0u;
   uint32_t _path_meta_buffer_descriptor_index = ~0u;
   uint32_t _direct_light_sample_buffer_descriptor_index = ~0u;

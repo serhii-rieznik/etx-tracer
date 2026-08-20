@@ -1031,6 +1031,13 @@ struct ETX_ALIGNED VCMSpatialGridData {
 
     float3 merged = {};
     for (uint32_t i = 0; i < 8; ++i) {
+      bool duplicate_index = false;
+      for (uint32_t j = 0; j < i; ++j) {
+        duplicate_index = duplicate_index || (cell_indices[j] == cell_indices[i]);
+      }
+      if (duplicate_index) {
+        continue;
+      }
       merged += gather_index(scene, intersection, options, vc_weight, cell_indices[i], state);
     }
 

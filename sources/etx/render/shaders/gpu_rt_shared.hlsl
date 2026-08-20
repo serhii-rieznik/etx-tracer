@@ -338,7 +338,12 @@ bool scene_path_mode_uses_bdpt_fast() {
 }
 
 bool scene_path_mode_is_bdpt_full() {
-  return load_scene_options_path_mode() == kScenePathModeBDPTFull;
+  uint path_mode = load_scene_options_path_mode();
+  return (path_mode == kScenePathModeBDPTFull) || (path_mode == kScenePathModeVCM);
+}
+
+bool scene_path_mode_is_vcm() {
+  return load_scene_options_path_mode() == kScenePathModeVCM;
 }
 
 #include <access/medium_access_gpu.hxx>

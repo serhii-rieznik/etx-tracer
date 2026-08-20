@@ -184,8 +184,12 @@ SpectralResponse wavefront_compute_environment_direct_hit_contribution(SpectralQ
   float mis_weight = 1.0f;
   if (scene_multiple_importance_sampling_enabled() && (state.path_length > 1u) && (scene_path_mode_is_path_tracing() == false)) {
     float2 emitter_pdfs = wavefront_environment_emitter_pdf(state.ray.d, previous_vertex);
-    mis_weight = wavefront_direct_hit_weight(state.path_length, state.sampled_bsdf_pdf, previous_vertex.pdf_from_prev, previous_vertex.pdf_history,
-      wavefront_path_vertex_connectible(previous_vertex), wavefront_path_vertex_mis_connectible(previous_vertex), emitter_pdfs.y, emitter_pdfs.x);
+    if (scene_path_mode_is_vcm()) {
+      mis_weight = 1.0f / (1.0f + state.forward_pdf * emitter_pdfs.y + state.reverse_pdf * emitter_pdfs.x);
+    } else {
+      mis_weight = wavefront_direct_hit_weight(state.path_length, state.sampled_bsdf_pdf, previous_vertex.pdf_from_prev, previous_vertex.pdf_history,
+        wavefront_path_vertex_connectible(previous_vertex), wavefront_path_vertex_mis_connectible(previous_vertex), emitter_pdfs.y, emitter_pdfs.x);
+    }
   }
 
   return spectral_response_mul(spectral_response_mul(state.throughput, accumulated), mis_weight);
@@ -346,7 +350,11 @@ SpectralResponse wavefront_compute_local_direct_hit_contribution(SpectralQuery s
   float mis_weight = 1.0f;
   if ((scene_multiple_importance_sampling_enabled()) && (camera_path_length > 1u)) {
     bool previous_connectible = wavefront_path_vertex_connectible(previous_vertex);
-    if (scene_path_mode_is_path_tracing()) {
+    if (scene_path_mode_is_vcm()) {
+      float emitter_sample_pdf = emitter_discrete_pdf(emitter_index);
+      float w_camera = current_vertex.forward_pdf * pdf_area * emitter_sample_pdf + current_vertex.reverse_pdf * pdf_dir_out * emitter_sample_pdf;
+      mis_weight = 1.0f / (1.0f + w_camera);
+    } else if (scene_path_mode_is_path_tracing()) {
       float p_connect = emitter_discrete_pdf(emitter_index) * pdf_dir;
       mis_weight = previous_connectible ? power_heuristic(previous_vertex.sampled_bsdf_pdf, p_connect) : 1.0f;
     } else {
@@ -454,7 +462,7 @@ void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_i
   }
 
   uint target_path_length = path_meta.light_path_length + 1u;
-  if (target_path_length < load_scene_options_min_path_length()) {
+  if ((target_path_length < load_scene_options_min_path_length()) || (target_path_length > load_scene_options_max_path_length())) {
     return;
   }
 
@@ -481,14 +489,6 @@ void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_i
     return;
   }
 
-  float len = length(camera_sample.position - current_vertex.position);
-  float direction_scale = camera_shared_clip_direction_scale(camera, camera_sample.direction);
-  float near_extent = (camera.clip_near > 0.0f) ? (camera.clip_near / direction_scale) : 0.0f;
-  float far_extent = (camera.clip_far > 0.0f) ? (camera.clip_far / direction_scale) : kMaxFloat;
-  if ((len < near_extent) || (len > far_extent)) {
-    return;
-  }
-
   uint pixel_index = 0u;
   if (wavefront_camera_ndc_to_pixel_index(camera, camera_sample.uv, pixel_index) == false) {
     return;
@@ -505,6 +505,9 @@ void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_i
     return;
   }
 
+  float len = length(camera_sample.position - current_vertex.position);
+  float direction_scale = camera_shared_clip_direction_scale(camera, camera_sample.direction);
+  float near_extent = (camera.clip_near > 0.0f) ? (camera.clip_near / direction_scale) : 0.0f;
   float3 clip_pos = current_vertex.position + camera_sample.direction * max(0.0f, len - near_extent);
   float3 shadow_delta = clip_pos - current_vertex.position;
   float shadow_distance = length(shadow_delta);
@@ -526,6 +529,7 @@ void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_i
   task.path_index = path_index;
   task.sampler_seed = state.sampler_seed;
   wavefront_store_connect_camera_task(resources.connect_camera_task_buffer, dispatch_index, task);
+  wavefront_shadow_queue_append(resources, kGPUWavefrontShadowQueueConnectCamera, dispatch_index);
 }
 
 void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
@@ -609,6 +613,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     current_vertex.pdf_from_prev = wavefront_vertex_to_vertex_area_pdf(state.sampled_bsdf_pdf, previous_vertex, current_vertex);
     current_vertex.forward_pdf = state.forward_pdf * hit.hit_t * hit.hit_t;
     current_vertex.reverse_pdf = state.reverse_pdf;
+    current_vertex.d_vm = state.d_vm;
     if ((from_camera == false) && (state.path_length == 1u) && (previous_vertex.emitter_index != kInvalidIndex)) {
       GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
       if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_instance.emitter_class != EmitterClass::Area)) {
@@ -649,6 +654,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
 
     float current_d_vcm = current_vertex.forward_pdf;
     float current_d_vc = current_vertex.reverse_pdf;
+    float current_d_vm = current_vertex.d_vm;
     float reverse_phase_pdf = gpu_medium_phase_function(medium_access, sampled_direction, current_vertex.w_i);
     previous_vertex.pdf_from_next = wavefront_vertex_to_vertex_area_pdf(reverse_phase_pdf, current_vertex, previous_vertex);
 
@@ -671,6 +677,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     current_vertex.sampled_bsdf_pdf = phase_pdf;
     state.forward_pdf = wavefront_safe_div(1.0f, phase_pdf);
     state.reverse_pdf = wavefront_safe_div((current_d_vc * reverse_phase_pdf) + current_d_vcm, phase_pdf);
+    state.d_vm = scene_path_mode_is_vcm() ? wavefront_safe_div(current_d_vm * reverse_phase_pdf, phase_pdf) : 0.0f;
     state.sampled_bsdf_pdf = phase_pdf;
     state.ray.o = current_vertex.position;
     state.ray.d = normalize(sampled_direction);
@@ -704,13 +711,21 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     if (cos_to_prev > 0.0f) {
       current_vertex.forward_pdf = wavefront_safe_div(state.forward_pdf * hit.hit_t * hit.hit_t, cos_to_prev);
       current_vertex.reverse_pdf = wavefront_safe_div(state.reverse_pdf, cos_to_prev);
+      current_vertex.d_vm = wavefront_safe_div(state.d_vm, cos_to_prev);
       state.forward_pdf = current_vertex.forward_pdf;
       state.reverse_pdf = current_vertex.reverse_pdf;
+      state.d_vm = current_vertex.d_vm;
     }
     if ((from_camera == false) && (state.path_length == 1u) && (previous_vertex.emitter_index != kInvalidIndex)) {
       GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
       if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_instance.emitter_class != EmitterClass::Area)) {
         previous_vertex.pdf_from_prev = wavefront_distant_emitter_sample_pdf(previous_vertex.emitter_index, -previous_vertex.w_i);
+        if (scene_path_mode_is_vcm() && (cos_to_prev > 0.0f)) {
+          // CPU VCM's first distant-emitter segment has no finite-distance
+          // squared Jacobian; only its surface cosine is folded into d_vcm.
+          current_vertex.forward_pdf = wavefront_safe_div(state.forward_pdf, hit.hit_t * hit.hit_t);
+          state.forward_pdf = current_vertex.forward_pdf;
+        }
         if ((emitter_instance.emitter_class == EmitterClass::Directional) || (emitter_instance.emitter_class == EmitterClass::Environment)) {
           current_vertex.pdf_from_prev = wavefront_distant_emitter_area_pdf(previous_vertex.w_i, current_vertex);
         }

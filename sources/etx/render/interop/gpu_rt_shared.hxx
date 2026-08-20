@@ -20,5 +20,13 @@ struct ETX_ALIGNED GPURTConstants {
   uint32_t dispatch_item_offset;
   uint32_t dispatch_item_count;
   uint32_t work_queue_index;
+  float vcm_radius;
+  float vcm_vm_weight;
+  float vcm_vc_weight;
+  float vcm_vm_normalization;
+  uint32_t vcm_grid_mask;
+  uint32_t vcm_kernel;
+  uint32_t vcm_light_vertex_count;
+  uint32_t vcm_pad0;
   GPUScene scene;
 };

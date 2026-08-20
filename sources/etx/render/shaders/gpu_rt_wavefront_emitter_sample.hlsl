@@ -222,7 +222,7 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
     float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
     sample_value.origin = vertex.pos;
     sample_value.normal = vertex.nrm;
-    sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), sample_value.normal, exponent);
+    sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), sample_value.normal, vertex.tan, vertex.btn, exponent);
     sample_value.image_uv = vertex.tex;
     sample_value.pdf_area = (emitter_instance.triangle_area > 0.0f) ? (1.0f / emitter_instance.triangle_area) : 0.0f;
     float cos_t = max(0.0f, dot(sample_value.normal, sample_value.direction));

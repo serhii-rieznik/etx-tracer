@@ -244,7 +244,8 @@ float wavefront_medium_direct_light_weight(GPUWavefrontResources resources, uint
     return;
   }
   uint connection_length = meta.camera_path_length + 1u;
-  if ((scene_strategy_enabled(kSceneStrategyConnectToLight) == false) || (connection_length < load_scene_options_min_path_length())) {
+  if ((scene_strategy_enabled(kSceneStrategyConnectToLight) == false) || (connection_length < load_scene_options_min_path_length()) ||
+      (connection_length > load_scene_options_max_path_length())) {
     return;
   }
 
@@ -318,6 +319,7 @@ float wavefront_medium_direct_light_weight(GPUWavefrontResources resources, uint
   sample_value.pdf_area = emitter_sample.pdf_area;
   sample_value.normal = emitter_sample.normal;
   sample_value.pdf_dir = emitter_sample.pdf_dir;
+  sample_value.pdf_dir_out = emitter_sample.pdf_dir_out;
   sample_value.texcoord = emitter_sample.image_uv;
   sample_value.emitter_index = emitter_sample.emitter_index;
   sample_value.triangle_index = emitter_sample.triangle_index;
