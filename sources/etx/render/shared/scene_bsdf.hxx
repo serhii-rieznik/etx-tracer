@@ -150,6 +150,9 @@ ETX_SHARED_INLINE BSDFResourceContext make_interop_context() {
   BSDFResourceContext context = make_interop_context();
   ::Sampler interop_sampler = make_interop_sampler(smp);
   ::BSDFSample result = ::bsdf_sample(context, make_interop_data(data), mtl, interop_sampler);
+  if (::spectral_query_is_packet(data.spectrum_sample) && ::bsdf_sample_requires_secondary_termination(mtl.cls, result)) {
+    ::spectral_response_terminate_secondary(result.weight);
+  }
   copy_interop_sampler_back(interop_sampler, smp);
   return make_public_sample(result);
 }

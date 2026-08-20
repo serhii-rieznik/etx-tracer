@@ -46,5 +46,5 @@
   SpectralQuery spect = (SpectralQuery)0;
   spect.wavelength = value.wavelength;
   spect.flags = value.flags;
-  wavefront_film_add(task.pixel_index, spectral_response_to_rgb(value) * wavefront_spectral_weight(spect));
+  wavefront_film_add(task.pixel_index, wavefront_spectral_estimate(value, spect));
 }

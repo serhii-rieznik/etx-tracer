@@ -375,9 +375,9 @@ void wavefront_film_add(uint pixel_index, float3 value) {
   wavefront_film_store(pixel_index, current);
 }
 
-float wavefront_spectral_weight(SpectralQuery spect) {
-  float spectral_pdf = spectral_query_sampling_pdf(spect);
-  return (spectral_pdf > 0.0f) ? (1.0f / spectral_pdf) : 0.0f;
+float3 wavefront_spectral_estimate(SpectralResponse value, SpectralQuery spect) {
+  float branch_pdf = diffraction_transport_branch_pdf(diffraction_transport_partition_enabled(scene_uses_spectral_mode(), scene_has_diffraction_grating()), spect);
+  return (branch_pdf > 0.0f) ? (spectral_response_to_rgb_estimate(value) / branch_pdf) : float3(0.0f, 0.0f, 0.0f);
 }
 
 bool wavefront_path_state_valid(GPUWavefrontPathState state) {
@@ -987,7 +987,7 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
   SpectralQuery spect = spectral_query_sample();
   if (scene_uses_spectral_mode()) {
-    spect = spectral_query_spectral_sample(rnd01(seed));
+    spect = spectral_query_packet_sample(rnd01(seed));
   }
   float2 film_sample_rnd = float2(rnd01(seed), rnd01(seed));
   float2 uv = camera_sample_film_uv(dtid.xy, camera.film_size, film_sample_rnd);
@@ -1028,7 +1028,7 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   uint seed = scene_random_seed(path_index, constants.sample_index ^ 0x9e3779b9u);
   SpectralQuery spect = spectral_query_sample();
   if (scene_uses_spectral_mode()) {
-    spect = spectral_query_spectral_sample(rnd01(seed));
+    spect = spectral_query_packet_sample(rnd01(seed));
   }
   WavefrontEmitterSample emitter_sample = (WavefrontEmitterSample)0;
   if (wavefront_sample_light_emission(spect, seed, emitter_sample) == false) {
@@ -1257,7 +1257,7 @@ void wavefront_camera_direct_light_accumulate_stage(uint dispatch_index) {
   SpectralQuery spect = (SpectralQuery)0;
   spect.wavelength = value.wavelength;
   spect.flags = value.flags;
-  wavefront_film_add(task.pixel_index, spectral_response_to_rgb(value) * wavefront_spectral_weight(spect));
+  wavefront_film_add(task.pixel_index, wavefront_spectral_estimate(value, spect));
 }
 
 [numthreads(64, 1, 1)] void wavefront_direct_light_camera_main(uint3 dtid : SV_DispatchThreadID) {
@@ -1288,8 +1288,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     if (from_camera && scene_strategy_enabled(kSceneStrategyDirectHit) && (state.path_length >= load_scene_options_min_path_length()) &&
         (state.path_length <= load_scene_options_max_path_length())) {
       wavefront_film_add(state.pixel_index,
-        spectral_response_to_rgb(spectral_response_mul(state.throughput, gpu_evaluate_distant_emission_spectral_all(state.ray.d, state.spect))) *
-          wavefront_spectral_weight(state.spect));
+        wavefront_spectral_estimate(spectral_response_mul(state.throughput, gpu_evaluate_distant_emission_spectral_all(state.ray.d, state.spect)), state.spect));
     }
     state.flags = 0u;
     wavefront_store_path_state(state_descriptor, path_index, state);
@@ -1299,8 +1298,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
   if (from_camera && scene_strategy_enabled(kSceneStrategyDirectHit) && (state.path_length >= load_scene_options_min_path_length()) &&
       (state.path_length <= load_scene_options_max_path_length()) && (hit.emitter_index != kInvalidIndex)) {
     wavefront_film_add(state.pixel_index,
-      spectral_response_to_rgb(spectral_response_mul(state.throughput, gpu_evaluate_local_emission_spectral(hit.emitter_index, hit.vertex.tex, state.spect))) *
-        wavefront_spectral_weight(state.spect));
+      wavefront_spectral_estimate(spectral_response_mul(state.throughput, gpu_evaluate_local_emission_spectral(hit.emitter_index, hit.vertex.tex, state.spect)), state.spect));
   }
 
   wavefront_write_vertex(from_camera, path_index, state, hit);
@@ -1344,6 +1342,9 @@ void wavefront_surface_continue(bool from_camera, uint dispatch_index) {
     bsdf_data.path_source = PathSource::Light;
   }
   BSDFSample bsdf_sample = gpu_sample_material_bsdf(make_scene_bsdf_resource_gpu_context(), bsdf_data, material, bsdf_sampler);
+  if (spectral_query_is_packet(state.spect) && bsdf_sample_requires_secondary_termination(material.cls, bsdf_sample)) {
+    spectral_response_terminate_secondary(bsdf_sample.weight);
+  }
   state.sampler_seed = bsdf_sampler.seed;
   if ((bsdf_sample_valid(bsdf_sample) == false) || (gpu_valid_direction(bsdf_sample.w_o) == false) || (gpu_valid_spectral_response(bsdf_sample.weight) == false)) {
     state.flags = 0u;

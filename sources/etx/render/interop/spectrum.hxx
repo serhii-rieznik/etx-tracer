@@ -29,8 +29,12 @@ ETX_STATIC_CONST float3 kRGBResponse[RGBResponseWavelengthCount] = {
 struct SpectralFlags {
   enum : uint32_t {
     Spectral = 1u << 0u,
+    Packet = 1u << 1u,
+    HeroOnly = 1u << 2u,
   };
 };
+
+ETX_STATIC_CONST uint32_t kSpectralPacketSize = 4u;
 
 struct ETX_ALIGNED SpectralDistribution {
   using Class = uint32_t;
@@ -84,6 +88,7 @@ ETX_SHARED_INLINE bool spectral_response_is_spectral(ETX_IN(SpectralResponse, va
 ETX_SHARED_INLINE SpectralResponse spectral_response_make(float wavelength, float spectral_val);
 ETX_SHARED_INLINE SpectralResponse spectral_response_make(ETX_IN(SpectralQuery, query), float spectral_val);
 ETX_SHARED_INLINE SpectralResponse spectral_response_make(ETX_IN(SpectralQuery, query), ETX_IN(float3, integrated_val));
+ETX_SHARED_INLINE SpectralQuery spectral_response_as_query(ETX_IN(SpectralResponse, value));
 
 ETX_SHARED_INLINE float3 spectral_xyz(uint32_t index) {
 #if defined(__cplusplus)
@@ -104,6 +109,14 @@ ETX_SHARED_INLINE float3 spectral_rgb_to_xyz(ETX_IN(float3, rgb)) {
 
 ETX_SHARED_INLINE bool spectral_query_is_spectral(ETX_IN(SpectralQuery, query)) {
   return (query.flags & SpectralFlags::Spectral) != 0u;
+}
+
+ETX_SHARED_INLINE bool spectral_query_is_packet(ETX_IN(SpectralQuery, query)) {
+  return (query.flags & SpectralFlags::Packet) != 0u;
+}
+
+ETX_SHARED_INLINE bool spectral_query_is_hero_only(ETX_IN(SpectralQuery, query)) {
+  return (query.flags & SpectralFlags::HeroOnly) != 0u;
 }
 
 ETX_SHARED_INLINE float spectral_query_wavelength_pdf(float wavelength) {
@@ -139,20 +152,58 @@ ETX_SHARED_INLINE SpectralQuery spectral_query_spectral_sample(float rnd) {
   return result;
 }
 
-ETX_SHARED_INLINE SpectralResponse spectral_distribution_query(ETX_IN(SpectralDistribution, distribution), ETX_IN(SpectralQuery, query)) {
-  if (spectral_query_is_spectral(query) == false) {
-    return spectral_response_make(query, distribution.integrated_value);
+ETX_SHARED_INLINE SpectralQuery spectral_query_packet_sample(float rnd) {
+  SpectralQuery result = spectral_query_spectral_sample(rnd);
+  result.flags |= SpectralFlags::Packet;
+  return result;
+}
+
+ETX_SHARED_INLINE float spectral_query_sample_coordinate(float wavelength) {
+  const float kSamplingOffset = 0.03781818226f;
+  const float kSamplingScale = 1.0f - kSamplingOffset;
+  const float inverse_hyperbolic_tangent = (538.0f - wavelength) / 138.888889f;
+  const float x = tanh(inverse_hyperbolic_tangent);
+  return clamp((((0.85691062f - x) / 1.82750197f) - kSamplingOffset) / kSamplingScale, 0.0f, 1.0f - kEpsilon);
+}
+
+ETX_SHARED_INLINE SpectralQuery spectral_query_packet_lane(ETX_IN(SpectralQuery, query), uint32_t lane) {
+  SpectralQuery result = query;
+  if ((spectral_query_is_packet(query) == false) || (lane == 0u)) {
+    result.flags = SpectralFlags::Spectral;
+    return result;
   }
 
+  float sample = spectral_query_sample_coordinate(query.wavelength) + float(lane) / float(kSpectralPacketSize);
+  sample -= floor(sample);
+  result = spectral_query_spectral_sample(sample);
+  return result;
+}
+
+ETX_SHARED_INLINE float spectral_query_packet_lane_pdf(ETX_IN(SpectralQuery, query), uint32_t lane) {
+  return spectral_query_wavelength_pdf(spectral_query_packet_lane(query, lane).wavelength);
+}
+
+ETX_SHARED_INLINE void spectral_query_terminate_secondary(ETX_INOUT(SpectralQuery, query)) {
+  if (spectral_query_is_packet(query)) {
+    query.flags |= SpectralFlags::HeroOnly;
+  }
+}
+
+ETX_SHARED_INLINE bool spectral_query_compatible(ETX_IN(SpectralQuery, a), ETX_IN(SpectralQuery, b)) {
+  const uint32_t relevant_flags = SpectralFlags::Spectral | SpectralFlags::Packet;
+  return ((a.flags & relevant_flags) == (b.flags & relevant_flags)) && (((a.flags & SpectralFlags::Spectral) == 0u) || (a.wavelength == b.wavelength));
+}
+
+ETX_SHARED_INLINE float spectral_distribution_evaluate_wavelength(ETX_IN(SpectralDistribution, distribution), float wavelength) {
   if (distribution.spectral_entry_count == 0u) {
-    return spectral_response_make(query, 0.0f);
+    return 0.0f;
   }
 
   uint32_t begin = 0u;
   uint32_t end = distribution.spectral_entry_count;
   while ((end - begin) > 1u) {
     uint32_t middle = begin + (end - begin) / 2u;
-    if (distribution.spectral_entries[middle].wavelength > query.wavelength) {
+    if (distribution.spectral_entries[middle].wavelength > wavelength) {
       end = middle;
     } else {
       begin = middle;
@@ -161,23 +212,35 @@ ETX_SHARED_INLINE SpectralResponse spectral_distribution_query(ETX_IN(SpectralDi
 
   uint32_t i = begin;
   if (i >= distribution.spectral_entry_count) {
-    return spectral_response_make(query, 0.0f);
+    return 0.0f;
   }
 
-  if ((i == 0u) && (query.wavelength < distribution.spectral_entries[i].wavelength)) {
-    return spectral_response_make(query, 0.0f);
+  if ((i == 0u) && (wavelength < distribution.spectral_entries[i].wavelength)) {
+    return 0.0f;
   }
 
-  if (((i + 1u) == distribution.spectral_entry_count) && (query.wavelength > distribution.spectral_entries[i].wavelength)) {
-    return spectral_response_make(query, 0.0f);
+  if (((i + 1u) == distribution.spectral_entry_count) && (wavelength > distribution.spectral_entries[i].wavelength)) {
+    return 0.0f;
   }
 
   uint32_t j = min(i + 1u, distribution.spectral_entry_count - 1u);
-  float t = (i == j)
-              ? 0.0f
-              : (query.wavelength - distribution.spectral_entries[i].wavelength) / (distribution.spectral_entries[j].wavelength - distribution.spectral_entries[i].wavelength);
-  float power = distribution.spectral_entries[i].power + (distribution.spectral_entries[j].power - distribution.spectral_entries[i].power) * t;
-  return spectral_response_make(query, power);
+  float t =
+    (i == j) ? 0.0f : (wavelength - distribution.spectral_entries[i].wavelength) / (distribution.spectral_entries[j].wavelength - distribution.spectral_entries[i].wavelength);
+  return distribution.spectral_entries[i].power + (distribution.spectral_entries[j].power - distribution.spectral_entries[i].power) * t;
+}
+
+ETX_SHARED_INLINE SpectralResponse spectral_distribution_query(ETX_IN(SpectralDistribution, distribution), ETX_IN(SpectralQuery, query)) {
+  if (spectral_query_is_spectral(query) == false) {
+    return spectral_response_make(query, distribution.integrated_value);
+  }
+
+  SpectralResponse result = spectral_response_make(query, spectral_distribution_evaluate_wavelength(distribution, query.wavelength));
+  if (spectral_query_is_packet(query) && (spectral_query_is_hero_only(query) == false)) {
+    result.integrated.x = spectral_distribution_evaluate_wavelength(distribution, spectral_query_packet_lane(query, 1u).wavelength);
+    result.integrated.y = spectral_distribution_evaluate_wavelength(distribution, spectral_query_packet_lane(query, 2u).wavelength);
+    result.integrated.z = spectral_distribution_evaluate_wavelength(distribution, spectral_query_packet_lane(query, 3u).wavelength);
+  }
+  return result;
 }
 
 ETX_SHARED_INLINE float3 spectral_response_to_xyz(ETX_IN(SpectralResponse, response)) {
@@ -199,8 +262,77 @@ ETX_SHARED_INLINE float3 spectral_response_to_xyz(ETX_IN(SpectralResponse, respo
   return xyz * (response.value * kInvCIEYIntegral);
 }
 
+ETX_SHARED_INLINE float spectral_response_packet_lane(ETX_IN(SpectralResponse, response), uint32_t lane) {
+  if (lane == 0u) {
+    return response.value;
+  }
+  if (lane == 1u) {
+    return response.integrated.x;
+  }
+  if (lane == 2u) {
+    return response.integrated.y;
+  }
+  return response.integrated.z;
+}
+
+ETX_SHARED_INLINE void spectral_response_set_packet_lane(ETX_INOUT(SpectralResponse, response), uint32_t lane, float value) {
+  if (lane == 0u) {
+    response.value = value;
+  } else if (lane == 1u) {
+    response.integrated.x = value;
+  } else if (lane == 2u) {
+    response.integrated.y = value;
+  } else {
+    response.integrated.z = value;
+  }
+}
+
+ETX_SHARED_INLINE float3 spectral_response_to_xyz_estimate(ETX_IN(SpectralResponse, response)) {
+  if (spectral_response_is_spectral(response) == false) {
+    return spectral_rgb_to_xyz(response.integrated);
+  }
+
+  const SpectralQuery query = spectral_response_as_query(response);
+  if ((spectral_query_is_packet(query) == false) || spectral_query_is_hero_only(query)) {
+    const float pdf = spectral_query_sampling_pdf(query);
+    return (pdf > 0.0f) ? (spectral_response_to_xyz(response) / pdf) : make_float3(0.0f, 0.0f, 0.0f);
+  }
+
+  float3 result = make_float3(0.0f, 0.0f, 0.0f);
+  for (uint32_t lane = 0u; lane < kSpectralPacketSize; ++lane) {
+    const SpectralQuery lane_query = spectral_query_packet_lane(query, lane);
+    const float pdf = spectral_query_wavelength_pdf(lane_query.wavelength);
+    if (pdf > 0.0f) {
+      const SpectralResponse lane_response = spectral_response_make(lane_query, spectral_response_packet_lane(response, lane));
+      result += spectral_response_to_xyz(lane_response) / pdf;
+    }
+  }
+  return result / float(kSpectralPacketSize);
+}
+
+ETX_SHARED_INLINE float3 spectral_response_to_rgb_estimate(ETX_IN(SpectralResponse, response)) {
+  return spectral_response_is_spectral(response) ? spectral_xyz_to_rgb(spectral_response_to_xyz_estimate(response)) : response.integrated;
+}
+
 ETX_SHARED_INLINE float3 spectral_response_to_rgb(ETX_IN(SpectralResponse, response)) {
   return spectral_response_is_spectral(response) ? spectral_xyz_to_rgb(spectral_response_to_xyz(response)) : response.integrated;
+}
+
+ETX_SHARED_INLINE float spectral_rgb_evaluate_wavelength(float wavelength, ETX_IN(float3, rgb)) {
+  float rgb_luminance = rgb.x * 0.212671f + rgb.y * 0.715160f + rgb.z * 0.072169f;
+  if (rgb_luminance <= 0.0f) {
+    return 0.0f;
+  }
+
+  if ((wavelength < kRGBResponseShortestWavelength) || (wavelength > kRGBResponseLongestWavelength)) {
+    return 0.0f;
+  }
+
+  uint32_t wi = uint32_t(wavelength - kRGBResponseShortestWavelength);
+  uint32_t wj = min(wi + 1u, RGBResponseWavelengthCount - 1u);
+  float dw = wavelength - floor(wavelength);
+  float3 weight = lerp(kRGBResponse[wi], kRGBResponse[wj], dw);
+  return rgb.x * weight.x + rgb.y * weight.y + rgb.z * weight.z;
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_rgb_response(ETX_IN(SpectralQuery, query), ETX_IN(float3, rgb)) {
@@ -208,21 +340,13 @@ ETX_SHARED_INLINE SpectralResponse spectral_rgb_response(ETX_IN(SpectralQuery, q
     return spectral_response_make(query, rgb);
   }
 
-  float rgb_luminance = rgb.x * 0.212671f + rgb.y * 0.715160f + rgb.z * 0.072169f;
-  if (rgb_luminance <= 0.0f) {
-    return spectral_response_make(query, 0.0f);
+  SpectralResponse result = spectral_response_make(query, spectral_rgb_evaluate_wavelength(query.wavelength, rgb));
+  if (spectral_query_is_packet(query) && (spectral_query_is_hero_only(query) == false)) {
+    result.integrated.x = spectral_rgb_evaluate_wavelength(spectral_query_packet_lane(query, 1u).wavelength, rgb);
+    result.integrated.y = spectral_rgb_evaluate_wavelength(spectral_query_packet_lane(query, 2u).wavelength, rgb);
+    result.integrated.z = spectral_rgb_evaluate_wavelength(spectral_query_packet_lane(query, 3u).wavelength, rgb);
   }
-
-  if ((query.wavelength < kRGBResponseShortestWavelength) || (query.wavelength > kRGBResponseLongestWavelength)) {
-    return spectral_response_make(query, 0.0f);
-  }
-
-  uint32_t wi = uint32_t(query.wavelength - kRGBResponseShortestWavelength);
-  uint32_t wj = min(wi + 1u, RGBResponseWavelengthCount - 1u);
-  float dw = query.wavelength - floor(query.wavelength);
-  float3 weight = lerp(kRGBResponse[wi], kRGBResponse[wj], dw);
-  float value = rgb.x * weight.x + rgb.y * weight.y + rgb.z * weight.z;
-  return spectral_response_make(query, value);
+  return result;
 }
 
 ETX_SHARED_INLINE float luminance(ETX_IN(float3, value)) {
@@ -245,8 +369,12 @@ ETX_SHARED_INLINE SpectralQuery spectral_response_as_query(ETX_IN(SpectralRespon
 }
 
 ETX_SHARED_INLINE bool spectral_response_is_zero(ETX_IN(SpectralResponse, value)) {
-  return spectral_response_is_spectral(value) ? (value.value <= kEpsilon)
-                                              : (value.integrated.x <= kEpsilon) && (value.integrated.y <= kEpsilon) && (value.integrated.z <= kEpsilon);
+  if (spectral_response_is_spectral(value) == false) {
+    return (value.integrated.x <= kEpsilon) && (value.integrated.y <= kEpsilon) && (value.integrated.z <= kEpsilon);
+  }
+  const SpectralQuery query = spectral_response_as_query(value);
+  return (value.value <= kEpsilon) && ((spectral_query_is_packet(query) == false) || spectral_query_is_hero_only(query) ||
+                                        ((value.integrated.x <= kEpsilon) && (value.integrated.y <= kEpsilon) && (value.integrated.z <= kEpsilon)));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_make(float wavelength, float spectral_val) {
@@ -272,7 +400,7 @@ ETX_SHARED_INLINE SpectralResponse spectral_response_make(ETX_IN(SpectralQuery, 
   result.flags = query.flags;
   result.wavelength = query.wavelength;
   result.value = spectral_val;
-  result.integrated = make_float3(spectral_val, spectral_val, spectral_val);
+  result.integrated = spectral_query_is_hero_only(query) ? make_float3(0.0f, 0.0f, 0.0f) : make_float3(spectral_val, spectral_val, spectral_val);
   return result;
 }
 
@@ -285,171 +413,208 @@ ETX_SHARED_INLINE SpectralResponse spectral_response_make(ETX_IN(SpectralQuery, 
   return result;
 }
 
+ETX_SHARED_INLINE SpectralResponse spectral_response_make_packet(ETX_IN(SpectralQuery, query), ETX_IN(float3, secondary), float hero) {
+  SpectralResponse result;
+  result.flags = query.flags;
+  result.wavelength = query.wavelength;
+  result.value = hero;
+  result.integrated = spectral_query_is_hero_only(query) ? make_float3(0.0f, 0.0f, 0.0f) : secondary;
+  return result;
+}
+
+ETX_SHARED_INLINE void spectral_response_terminate_secondary(ETX_INOUT(SpectralResponse, response)) {
+  if (spectral_query_is_packet(spectral_response_as_query(response))) {
+    response.flags |= SpectralFlags::HeroOnly;
+    response.integrated = make_float3(0.0f, 0.0f, 0.0f);
+  }
+}
+
 ETX_SHARED_INLINE SpectralResponse spectral_response_add(ETX_IN(SpectralResponse, a), ETX_IN(SpectralResponse, b)) {
-  if (spectral_response_is_spectral(a) && spectral_response_is_spectral(b))
-    return spectral_response_make(a.wavelength, a.value + b.value);
+  if (spectral_response_is_spectral(a) && spectral_response_is_spectral(b)) {
+    SpectralQuery query = spectral_response_as_query(a);
+    if (spectral_query_is_hero_only(spectral_response_as_query(b))) {
+      spectral_query_terminate_secondary(query);
+    }
+    return spectral_response_make_packet(query, a.integrated + b.integrated, a.value + b.value);
+  }
 
   return spectral_response_make(a.integrated + b.integrated);
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_sub(ETX_IN(SpectralResponse, a), ETX_IN(SpectralResponse, b)) {
-  if (spectral_response_is_spectral(a) && spectral_response_is_spectral(b))
-    return spectral_response_make(a.wavelength, a.value - b.value);
+  if (spectral_response_is_spectral(a) && spectral_response_is_spectral(b)) {
+    SpectralQuery query = spectral_response_as_query(a);
+    if (spectral_query_is_hero_only(spectral_response_as_query(b))) {
+      spectral_query_terminate_secondary(query);
+    }
+    return spectral_response_make_packet(query, a.integrated - b.integrated, a.value - b.value);
+  }
 
   return spectral_response_make(a.integrated - b.integrated);
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_mul(ETX_IN(SpectralResponse, a), ETX_IN(SpectralResponse, b)) {
-  if (spectral_response_is_spectral(a) && spectral_response_is_spectral(b))
-    return spectral_response_make(a.wavelength, a.value * b.value);
+  if (spectral_response_is_spectral(a) && spectral_response_is_spectral(b)) {
+    SpectralQuery query = spectral_response_as_query(a);
+    if (spectral_query_is_hero_only(spectral_response_as_query(b))) {
+      spectral_query_terminate_secondary(query);
+    }
+    return spectral_response_make_packet(query, a.integrated * b.integrated, a.value * b.value);
+  }
 
   return spectral_response_make(a.integrated * b.integrated);
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_div(ETX_IN(SpectralResponse, a), ETX_IN(SpectralResponse, b)) {
-  if (spectral_response_is_spectral(a) && spectral_response_is_spectral(b))
-    return spectral_response_make(a.wavelength, a.value / b.value);
+  if (spectral_response_is_spectral(a) && spectral_response_is_spectral(b)) {
+    SpectralQuery query = spectral_response_as_query(a);
+    if (spectral_query_is_hero_only(spectral_response_as_query(b))) {
+      spectral_query_terminate_secondary(query);
+    }
+    return spectral_response_make_packet(query, a.integrated / b.integrated, a.value / b.value);
+  }
 
   return spectral_response_make(a.integrated / b.integrated);
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_add(ETX_IN(SpectralResponse, a), float b) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, a.value + b);
+    return spectral_response_make_packet(spectral_response_as_query(a), a.integrated + b, a.value + b);
 
   return spectral_response_make(a.integrated + b);
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_sub(ETX_IN(SpectralResponse, a), float b) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, a.value - b);
+    return spectral_response_make_packet(spectral_response_as_query(a), a.integrated - b, a.value - b);
 
   return spectral_response_make(a.integrated - b);
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_mul(ETX_IN(SpectralResponse, a), float b) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, a.value * b);
+    return spectral_response_make_packet(spectral_response_as_query(a), a.integrated * b, a.value * b);
 
   return spectral_response_make(a.integrated * b);
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_div(ETX_IN(SpectralResponse, a), float b) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, a.value / b);
+    return spectral_response_make_packet(spectral_response_as_query(a), a.integrated / b, a.value / b);
 
   return spectral_response_make(a.integrated / b);
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_exp(ETX_IN(SpectralResponse, a)) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, exp(a.value));
+    return spectral_response_make_packet(spectral_response_as_query(a), exp(a.integrated), exp(a.value));
 
   return spectral_response_make(exp(a.integrated));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_sqrt(ETX_IN(SpectralResponse, a)) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, sqrt(a.value));
+    return spectral_response_make_packet(spectral_response_as_query(a), sqrt(a.integrated), sqrt(a.value));
 
   return spectral_response_make(sqrt(a.integrated));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_cos(ETX_IN(SpectralResponse, a)) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, cos(a.value));
+    return spectral_response_make_packet(spectral_response_as_query(a), cos(a.integrated), cos(a.value));
 
   return spectral_response_make(cos(a.integrated));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_abs(ETX_IN(SpectralResponse, a)) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, abs(a.value));
+    return spectral_response_make_packet(spectral_response_as_query(a), abs(a.integrated), abs(a.value));
 
   return spectral_response_make(abs(a.integrated));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_saturate(ETX_IN(SpectralResponse, a)) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, saturate(a.value));
+    return spectral_response_make_packet(spectral_response_as_query(a), saturate(a.integrated), saturate(a.value));
 
   return spectral_response_make(saturate(a.integrated));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_sign(ETX_IN(SpectralResponse, a)) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, sign(a.value));
+    return spectral_response_make_packet(spectral_response_as_query(a), sign(a.integrated), sign(a.value));
 
   return spectral_response_make(sign(a.integrated));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_atan(ETX_IN(SpectralResponse, a)) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, atan(a.value));
+    return spectral_response_make_packet(spectral_response_as_query(a), atan(a.integrated), atan(a.value));
 
   return spectral_response_make(atan(a.integrated));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_pow(ETX_IN(SpectralResponse, a), float b) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, pow(a.value, b));
+    return spectral_response_make_packet(spectral_response_as_query(a), pow(a.integrated, b), pow(a.value, b));
 
   return spectral_response_make(pow(a.integrated, b));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_pow(ETX_IN(SpectralResponse, a), ETX_IN(SpectralResponse, b)) {
-  if (spectral_response_is_spectral(a) && spectral_response_is_spectral(b))
-    return spectral_response_make(a.wavelength, pow(a.value, b.value));
+  if (spectral_response_is_spectral(a) && spectral_response_is_spectral(b)) {
+    SpectralQuery query = spectral_response_as_query(a);
+    if (spectral_query_is_hero_only(spectral_response_as_query(b))) {
+      spectral_query_terminate_secondary(query);
+    }
+    return spectral_response_make_packet(query, pow(a.integrated, b.integrated), pow(a.value, b.value));
+  }
 
   return spectral_response_make(pow(a.integrated, b.integrated));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_max(ETX_IN(SpectralResponse, a), float b) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, max(a.value, b));
+    return spectral_response_make_packet(spectral_response_as_query(a), max(a.integrated, b), max(a.value, b));
 
   return spectral_response_make(max(a.integrated, b));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_max(float a, ETX_IN(SpectralResponse, b)) {
   if (spectral_response_is_spectral(b))
-    return spectral_response_make(b.wavelength, max(a, b.value));
+    return spectral_response_make_packet(spectral_response_as_query(b), max(b.integrated, a), max(a, b.value));
 
   return spectral_response_make(max(b.integrated, a));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_min(ETX_IN(SpectralResponse, a), float b) {
   if (spectral_response_is_spectral(a))
-    return spectral_response_make(a.wavelength, min(a.value, b));
+    return spectral_response_make_packet(spectral_response_as_query(a), min(a.integrated, b), min(a.value, b));
 
   return spectral_response_make(min(a.integrated, b));
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_min(float a, ETX_IN(SpectralResponse, b)) {
   if (spectral_response_is_spectral(b))
-    return spectral_response_make(b.wavelength, min(a, b.value));
+    return spectral_response_make_packet(spectral_response_as_query(b), min(b.integrated, a), min(a, b.value));
 
   return spectral_response_make(min(b.integrated, a));
 }
 
 ETX_SHARED_INLINE void spectral_response_add_assign(ETX_INOUT(SpectralResponse, a), ETX_IN(SpectralResponse, b)) {
-  a.integrated += b.integrated;
-  a.value += b.value;
+  a = spectral_response_add(a, b);
 }
 
 ETX_SHARED_INLINE void spectral_response_sub_assign(ETX_INOUT(SpectralResponse, a), ETX_IN(SpectralResponse, b)) {
-  a.integrated -= b.integrated;
-  a.value -= b.value;
+  a = spectral_response_sub(a, b);
 }
 
 ETX_SHARED_INLINE void spectral_response_mul_assign(ETX_INOUT(SpectralResponse, a), ETX_IN(SpectralResponse, b)) {
-  a.integrated *= b.integrated;
-  a.value *= b.value;
+  a = spectral_response_mul(a, b);
 }
 
 ETX_SHARED_INLINE void spectral_response_div_assign(ETX_INOUT(SpectralResponse, a), ETX_IN(SpectralResponse, b)) {
-  a.integrated /= b.integrated;
-  a.value /= b.value;
+  a = spectral_response_div(a, b);
 }
 
 ETX_SHARED_INLINE void spectral_response_add_assign(ETX_INOUT(SpectralResponse, a), float b) {
@@ -500,7 +665,7 @@ ETX_SHARED_INLINE SpectralResponse spectral_response_clamp_non_negative(ETX_IN(S
   SpectralResponse result = value;
   if (spectral_response_is_spectral(result)) {
     result.value = max(result.value, 0.0f);
-    result.integrated = make_float3(result.value, result.value, result.value);
+    result.integrated = max(result.integrated, make_float3(0.0f, 0.0f, 0.0f));
   } else {
     result.integrated = spectral_rgb_clamp_non_negative(result.integrated);
   }
@@ -509,8 +674,11 @@ ETX_SHARED_INLINE SpectralResponse spectral_response_clamp_non_negative(ETX_IN(S
 }
 
 ETX_SHARED_INLINE float spectral_response_maximum(ETX_IN(SpectralResponse, val)) {
-  if (spectral_response_is_spectral(val))
-    return val.value;
+  if (spectral_response_is_spectral(val)) {
+    const SpectralQuery query = spectral_response_as_query(val);
+    return ((spectral_query_is_packet(query) == false) || spectral_query_is_hero_only(query)) ? val.value
+                                                                                              : max(val.value, max(val.integrated.x, max(val.integrated.y, val.integrated.z)));
+  }
 
   return max(val.integrated.x, max(val.integrated.y, val.integrated.z));
 }

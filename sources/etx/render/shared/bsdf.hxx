@@ -314,9 +314,9 @@ ETX_SHARED_INLINE SpectralResponse calculate(SpectralQuery spect, float cos_thet
   ETX_ASSERT(spect.wavelength == int_ior.eta.wavelength);
   ETX_ASSERT(spect.wavelength == int_ior.k.wavelength);
 
-  const ::SpectralResponse shared_result = ::bsdf_fresnel_calculate(static_cast<const ::SpectralQuery&>(spect), cos_theta,
-    static_cast<const ::RefractiveIndexSample&>(ext_ior), static_cast<const ::RefractiveIndexSample&>(int_ior), thinfilm);
-  return spect.spectral() ? SpectralResponse{spect, shared_result.value} : SpectralResponse{spect, shared_result.integrated};
+  const ::SpectralResponse shared_result = ::bsdf_fresnel_calculate(static_cast<const ::SpectralQuery&>(spect), cos_theta, static_cast<const ::RefractiveIndexSample&>(ext_ior),
+    static_cast<const ::RefractiveIndexSample&>(int_ior), thinfilm);
+  return SpectralResponse{shared_result};
 }
 
 }  // namespace fresnel

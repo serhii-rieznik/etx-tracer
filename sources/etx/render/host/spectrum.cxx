@@ -346,8 +346,8 @@ float SpectralDistribution::maximum_spectral_power() const {
 
 float3 SpectralDistribution::integrate_to_xyz() const {
   float3 result = {};
-  SpectralResponse s_begin = {{0.0f, SpectralFlags::Spectral}};
-  SpectralResponse s_end = {{0.0f, SpectralFlags::Spectral}};
+  SpectralResponse s_begin = {SpectralQuery{0.0f, SpectralFlags::Spectral}};
+  SpectralResponse s_end = {SpectralQuery{0.0f, SpectralFlags::Spectral}};
 
   for (uint32_t index = 0; index + 1 < spectral_entry_count; ++index) {
     float l0 = spectral_entries[index + 0].wavelength;

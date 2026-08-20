@@ -60,11 +60,10 @@ struct CPUPathTracingImpl : public Task {
         ETX_VALIDATE(payload.accumulated);
       }
 
-      auto albedo = path_tracing_contribution_enabled(payload, payload.view_albedo_contains_diffraction)
-                      ? (payload.view_albedo / (payload.spect.sampling_pdf() * path_tracing_branch_pdf(payload))).to_rgb()
-                      : float3{};
+      auto albedo =
+        path_tracing_contribution_enabled(payload, payload.view_albedo_contains_diffraction) ? payload.view_albedo.to_rgb_estimate() / path_tracing_branch_pdf(payload) : float3{};
       ETX_CHECK_FINITE(albedo);
-      auto color = (payload.accumulated / (payload.spect.sampling_pdf() * path_tracing_branch_pdf(payload))).to_rgb();
+      auto color = payload.accumulated.to_rgb_estimate() / path_tracing_branch_pdf(payload);
       ETX_CHECK_FINITE(color);
       film.submit(color, payload.view_normal, albedo, pixel);
     }

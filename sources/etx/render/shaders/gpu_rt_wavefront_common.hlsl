@@ -778,17 +778,16 @@ void wavefront_film_add(uint pixel_index, float3 value) {
   buffer.Store(base_offset + 12u, asuint(1.0f));
 }
 
-float wavefront_spectral_weight(SpectralQuery spect) {
-  float spectral_pdf = spectral_query_sampling_pdf(spect);
+float3 wavefront_spectral_estimate(SpectralResponse value, SpectralQuery spect) {
   float branch_pdf = diffraction_transport_branch_pdf(diffraction_transport_partition_enabled(scene_uses_spectral_mode(), scene_has_diffraction_grating()), spect);
-  return (spectral_pdf > 0.0f) ? (1.0f / (spectral_pdf * branch_pdf)) : 0.0f;
+  return (branch_pdf > 0.0f) ? (spectral_response_to_rgb_estimate(value) / branch_pdf) : float3(0.0f, 0.0f, 0.0f);
 }
 
 SpectralQuery wavefront_vcm_iteration_spectral_query() {
   SpectralQuery spect = spectral_query_sample();
   uint iteration_seed = scene_random_seed(0u, constants.sample_index);
   if (scene_uses_spectral_mode()) {
-    spect = spectral_query_spectral_sample(rnd01(iteration_seed));
+    spect = spectral_query_packet_sample(rnd01(iteration_seed));
   } else if (scene_has_diffraction_grating()) {
     spect = diffraction_transport_sample_query(false, true, rnd01(iteration_seed), rnd01(iteration_seed));
   }

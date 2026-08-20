@@ -9,8 +9,8 @@ uint wavefront_vcm_merge_hash_cell(int3 cell) {
   return ((uint(cell.x) * 73856093u) ^ (uint(cell.y) * 19349663u) ^ (uint(cell.z) * 83492791u)) & constants.vcm_grid_mask;
 }
 
-bool wavefront_vcm_merge_load_input(uint dispatch_index, out GPUWavefrontResources resources, out uint path_index, out GPUWavefrontPathState state,
-  out GPUWavefrontHit hit, out GPUWavefrontPathVertex camera_vertex, out Material material) {
+bool wavefront_vcm_merge_load_input(uint dispatch_index, out GPUWavefrontResources resources, out uint path_index, out GPUWavefrontPathState state, out GPUWavefrontHit hit,
+  out GPUWavefrontPathVertex camera_vertex, out Material material) {
   resources = wavefront_load_resources();
   path_index = 0u;
   state = (GPUWavefrontPathState)0;
@@ -64,16 +64,13 @@ void wavefront_vcm_merge(uint dispatch_index) {
   float3 fraction = grid_position - base_float;
   int3 base_cell = int3(base_float);
   int3 adjacent = base_cell + int3(fraction.x < 0.5f ? -1 : 1, fraction.y < 0.5f ? -1 : 1, fraction.z < 0.5f ? -1 : 1);
-  int3 cells[8] = {
-    int3(base_cell.x, base_cell.y, base_cell.z), int3(adjacent.x, base_cell.y, base_cell.z),
-    int3(base_cell.x, adjacent.y, base_cell.z), int3(adjacent.x, adjacent.y, base_cell.z),
-    int3(base_cell.x, base_cell.y, adjacent.z), int3(adjacent.x, base_cell.y, adjacent.z),
-    int3(base_cell.x, adjacent.y, adjacent.z), int3(adjacent.x, adjacent.y, adjacent.z)
-  };
+  int3 cells[8] = {int3(base_cell.x, base_cell.y, base_cell.z), int3(adjacent.x, base_cell.y, base_cell.z), int3(base_cell.x, adjacent.y, base_cell.z),
+    int3(adjacent.x, adjacent.y, base_cell.z), int3(base_cell.x, base_cell.y, adjacent.z), int3(adjacent.x, base_cell.y, adjacent.z), int3(base_cell.x, adjacent.y, adjacent.z),
+    int3(adjacent.x, adjacent.y, adjacent.z)};
   uint cell_hashes[8];
 
-  BSDFResourceContext bsdf_context = make_bsdf_resource_gpu_context(
-    constants.scene.images, constants.scene.spectrums, constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
+  BSDFResourceContext bsdf_context =
+    make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
   BSDFData camera_data = bsdf_data_make(hit.vertex, state.spect, hit.medium_index, PathSource::Camera, camera_vertex.w_i);
   Sampler sampler = (Sampler)0;
   sampler.seed = state.sampler_seed;
@@ -83,13 +80,11 @@ void wavefront_vcm_merge(uint dispatch_index) {
   ByteAddressBuffer heads = WAVEFRONT_RO_BUFFER(resources.vcm_grid_heads_buffer);
   ByteAddressBuffer next_indices = WAVEFRONT_RO_BUFFER(resources.vcm_grid_next_buffer);
 
-  [unroll]
-  for (uint cell_offset = 0u; cell_offset < 8u; ++cell_offset) {
+  [unroll] for (uint cell_offset = 0u; cell_offset < 8u; ++cell_offset) {
     uint cell_hash = wavefront_vcm_merge_hash_cell(cells[cell_offset]);
     cell_hashes[cell_offset] = cell_hash;
     bool duplicate_hash = false;
-    [unroll]
-    for (uint previous_offset = 0u; previous_offset < cell_offset; ++previous_offset) {
+    [unroll] for (uint previous_offset = 0u; previous_offset < cell_offset; ++previous_offset) {
       duplicate_hash = duplicate_hash || (cell_hashes[previous_offset] == cell_hash);
     }
     if (duplicate_hash) {
@@ -109,10 +104,9 @@ void wavefront_vcm_merge(uint dispatch_index) {
           (vcm_light_path_length + state.path_length + 1u <= resources.max_path_length)) {
         float3 delta = light_vertex.position - camera_vertex.position;
         float distance_squared = dot(delta, delta);
-        bool query_matches = (light_vertex.throughput.flags == state.spect.flags) &&
-                             ((state.spect.flags & SpectralFlags::Spectral) == 0u || (light_vertex.throughput.wavelength == state.spect.wavelength));
-        bool contains_diffraction = wavefront_vertex_contains_diffraction(camera_vertex) || wavefront_vertex_contains_diffraction(light_vertex) ||
-                                    (material.cls == MaterialClass::DiffractionGrating);
+        bool query_matches = spectral_query_compatible(spectral_response_as_query(light_vertex.throughput), state.spect);
+        bool contains_diffraction =
+          wavefront_vertex_contains_diffraction(camera_vertex) || wavefront_vertex_contains_diffraction(light_vertex) || (material.cls == MaterialClass::DiffractionGrating);
         if (query_matches && (distance_squared <= radius_squared) && (dot(camera_vertex.normal, light_vertex.normal) > kEpsilon) &&
             wavefront_diffraction_contribution_enabled(state.spect, contains_diffraction)) {
           float3 outgoing_direction = -light_vertex.w_i;
@@ -126,9 +120,8 @@ void wavefront_vcm_merge(uint dispatch_index) {
             if (constants.vcm_kernel != 0u) {
               kernel_weight = max(2.0f * (1.0f - distance_squared * inv_radius_squared), 0.0f);
             }
-            SpectralResponse value = spectral_response_mul(camera_eval.func,
-              spectral_response_mul(camera_vertex.throughput, light_vertex.throughput));
-            merged += spectral_response_to_rgb(value) * wavefront_spectral_weight(state.spect) * (kernel_weight * mis_weight * constants.vcm_vm_normalization);
+            SpectralResponse value = spectral_response_mul(camera_eval.func, spectral_response_mul(camera_vertex.throughput, light_vertex.throughput));
+            merged += wavefront_spectral_estimate(value, state.spect) * (kernel_weight * mis_weight * constants.vcm_vm_normalization);
           }
         }
       }

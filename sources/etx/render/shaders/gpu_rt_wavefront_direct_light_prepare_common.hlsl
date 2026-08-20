@@ -74,8 +74,7 @@ bool wavefront_scene_multiple_importance_sampling_enabled() {
 }
 
 bool wavefront_valid_spectral_response(SpectralResponse value) {
-  float3 rgb = spectral_response_to_rgb(value);
-  return all(isfinite(rgb));
+  return isfinite(value.value) && all(isfinite(value.integrated));
 }
 
 float wavefront_direct_light_sampling_pdf(GPUWavefrontDirectLightSample sample_value) {
@@ -165,9 +164,7 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
   float reverse_pdf = wavefront_direct_light_stage_bsdf_pdf(wavefront_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
   if (scene_path_mode_is_vcm()) {
     float w_light = sampled_light_is_delta ? 0.0f : wavefront_safe_div(bsdf_eval.pdf, sampling_pdf);
-    float camera_factor = wavefront_path_vertex_is_surface(input_value.current_vertex)
-                            ? abs(dot(input_value.sample_value.direction, input_value.current_vertex.geo_normal))
-                            : 1.0f;
+    float camera_factor = wavefront_path_vertex_is_surface(input_value.current_vertex) ? abs(dot(input_value.sample_value.direction, input_value.current_vertex.geo_normal)) : 1.0f;
     float emitter_cosine = abs(dot(input_value.sample_value.direction, input_value.sample_value.normal));
     float density_ratio = wavefront_safe_div(input_value.sample_value.pdf_dir * emitter_cosine, input_value.sample_value.pdf_dir_out * camera_factor);
     float w_camera = (density_ratio > 0.0f)

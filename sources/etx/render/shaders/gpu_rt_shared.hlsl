@@ -681,8 +681,8 @@ void surface_point_apply_material_normal_map(inout SurfacePoint surface_point, M
 
   const float3 tangent_space_normal = float3(material.normal_scale * (normal_value.x * 2.0f - 1.0f), material.normal_scale * (normal_value.y * 2.0f - 1.0f),
     material.normal_scale * (normal_value.z * 2.0f - 1.0f) + (1.0f - material.normal_scale));
-  const float3 mapped_normal_value = surface_point.vertex.tan * tangent_space_normal.x + surface_point.vertex.btn * tangent_space_normal.y +
-                                     surface_point.vertex.nrm * tangent_space_normal.z;
+  const float3 mapped_normal_value =
+    surface_point.vertex.tan * tangent_space_normal.x + surface_point.vertex.btn * tangent_space_normal.y + surface_point.vertex.nrm * tangent_space_normal.z;
   const float mapped_normal_length_sq = dot(mapped_normal_value, mapped_normal_value);
   if (mapped_normal_length_sq > kEpsilon) {
     const float3 mapped_normal = mapped_normal_value / sqrt(mapped_normal_length_sq);
@@ -1256,8 +1256,7 @@ bool gpu_valid_direction(float3 direction) {
 }
 
 bool gpu_valid_spectral_response(SpectralResponse value) {
-  float3 rgb = spectral_response_to_rgb(value);
-  return all(isfinite(rgb));
+  return isfinite(value.value) && all(isfinite(value.integrated));
 }
 
 [noinline] BSDFSample gpu_diffuse_bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {

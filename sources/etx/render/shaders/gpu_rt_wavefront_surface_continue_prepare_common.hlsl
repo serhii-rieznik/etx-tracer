@@ -26,26 +26,27 @@ void wavefront_subsurface_remap_channel(float color, float scattering_distance, 
 
 void wavefront_subsurface_remap(SpectralQuery spect, SpectralResponse color, SpectralResponse distances, out SpectralResponse albedo, out SpectralResponse extinction,
   out SpectralResponse scattering) {
+  float3 albedo_secondary = float3(0.0f, 0.0f, 0.0f);
+  float3 extinction_secondary = float3(0.0f, 0.0f, 0.0f);
+  float3 scattering_secondary = float3(0.0f, 0.0f, 0.0f);
+  wavefront_subsurface_remap_channel(color.integrated.x, distances.integrated.x, albedo_secondary.x, extinction_secondary.x, scattering_secondary.x);
+  wavefront_subsurface_remap_channel(color.integrated.y, distances.integrated.y, albedo_secondary.y, extinction_secondary.y, scattering_secondary.y);
+  wavefront_subsurface_remap_channel(color.integrated.z, distances.integrated.z, albedo_secondary.z, extinction_secondary.z, scattering_secondary.z);
+
   if (spectral_query_is_spectral(spect)) {
     float albedo_value = 0.0f;
     float extinction_value = 0.0f;
     float scattering_value = 0.0f;
     wavefront_subsurface_remap_channel(color.value, distances.value, albedo_value, extinction_value, scattering_value);
-    albedo = spectral_response_make(spect, albedo_value);
-    extinction = spectral_response_make(spect, extinction_value);
-    scattering = spectral_response_make(spect, scattering_value);
+    albedo = spectral_response_make_packet(spect, albedo_secondary, albedo_value);
+    extinction = spectral_response_make_packet(spect, extinction_secondary, extinction_value);
+    scattering = spectral_response_make_packet(spect, scattering_secondary, scattering_value);
     return;
   }
 
-  float3 albedo_rgb = float3(0.0f, 0.0f, 0.0f);
-  float3 extinction_rgb = float3(0.0f, 0.0f, 0.0f);
-  float3 scattering_rgb = float3(0.0f, 0.0f, 0.0f);
-  wavefront_subsurface_remap_channel(color.integrated.x, distances.integrated.x, albedo_rgb.x, extinction_rgb.x, scattering_rgb.x);
-  wavefront_subsurface_remap_channel(color.integrated.y, distances.integrated.y, albedo_rgb.y, extinction_rgb.y, scattering_rgb.y);
-  wavefront_subsurface_remap_channel(color.integrated.z, distances.integrated.z, albedo_rgb.z, extinction_rgb.z, scattering_rgb.z);
-  albedo = spectral_response_make(spect, albedo_rgb);
-  extinction = spectral_response_make(spect, extinction_rgb);
-  scattering = spectral_response_make(spect, scattering_rgb);
+  albedo = spectral_response_make(spect, albedo_secondary);
+  extinction = spectral_response_make(spect, extinction_secondary);
+  scattering = spectral_response_make(spect, scattering_secondary);
 }
 
 bool wavefront_subsurface_random_walk_applicable(Material material, BSDFSample bsdf_sample) {
@@ -158,6 +159,9 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   bsdf_sampler_push_fixed(bsdf_sampler, bsdf_rnd.x, bsdf_rnd.y, support_rnd.x);
   BSDFSample bsdf_sample = wavefront_surface_continue_stage_bsdf_sample(make_scene_bsdf_resource_gpu_context(), bsdf_data, material, bsdf_sampler);
   bsdf_sampler_pop_fixed(bsdf_sampler);
+  if (spectral_query_is_packet(state.spect) && bsdf_sample_requires_secondary_termination(material.cls, bsdf_sample)) {
+    spectral_response_terminate_secondary(bsdf_sample.weight);
+  }
   bool sample_valid = bsdf_sample_valid(bsdf_sample);
   bool sample_direction_valid = sample_valid ? gpu_valid_direction(bsdf_sample.w_o) : true;
   bool sample_finite = sample_direction_valid && gpu_valid_spectral_response(bsdf_sample.weight) && isfinite(bsdf_sample.pdf) && isfinite(bsdf_sample.eta);

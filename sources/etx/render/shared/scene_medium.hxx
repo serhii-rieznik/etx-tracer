@@ -28,12 +28,7 @@ ETX_SHARED_INLINE float medium_shared_density(ETX_INOUT(MediumSharedContext, con
 }
 
 ETX_SHARED_INLINE SpectralResponse medium_transmittance_shared_to_spectral_response(ETX_IN(::SpectralResponse, response)) {
-  SpectralQuery query = {response.wavelength, response.flags};
-  if (::spectral_response_is_spectral(response)) {
-    return {query, response.value};
-  }
-
-  return {query, response.integrated};
+  return SpectralResponse{response};
 }
 
 #include <etx/render/interop/medium_transmittance_shared.hxx>

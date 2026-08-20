@@ -67,7 +67,7 @@ float3 sample_uniform_sphere(etx::Sampler& sampler) {
 
 bool finite_response(const etx::SpectralResponse& value) {
   if (value.spectral()) {
-    return std::isfinite(value.value);
+    return std::isfinite(value.value) && ((value.packet() == false) || value.hero_only() || etx::valid_value(value.integrated));
   }
 
   return (std::isfinite(value.integrated.x)) && (std::isfinite(value.integrated.y)) && (std::isfinite(value.integrated.z));
@@ -75,7 +75,8 @@ bool finite_response(const etx::SpectralResponse& value) {
 
 bool non_negative_response(const etx::SpectralResponse& value) {
   if (value.spectral()) {
-    return value.value >= -kEpsilon;
+    return (value.value >= -kEpsilon) &&
+           ((value.packet() == false) || value.hero_only() || ((value.integrated.x >= -kEpsilon) && (value.integrated.y >= -kEpsilon) && (value.integrated.z >= -kEpsilon)));
   }
 
   return (value.integrated.x >= -kEpsilon) && (value.integrated.y >= -kEpsilon) && (value.integrated.z >= -kEpsilon);
@@ -99,6 +100,42 @@ bool validate_sample(const etx::BSDFSample& sample) {
 
 bool close_value(const float a, const float b, const float tolerance) {
   return fabsf(a - b) <= tolerance;
+}
+
+bool validate_spectral_packet_invariants() {
+  const etx::SpectralQuery query = etx::SpectralQuery::packet_sample(0.371f);
+  const float3 secondary = {0.5f, 1.5f, 2.0f};
+  const etx::SpectralResponse response{::spectral_response_make_packet(query, secondary, 1.0f)};
+
+  float3 expected_rgb = {};
+  for (uint32_t lane = 0u; lane < kSpectralPacketSize; ++lane) {
+    const ::SpectralQuery lane_query = ::spectral_query_packet_lane(query, lane);
+    const ::SpectralResponse lane_response = ::spectral_response_make(lane_query, ::spectral_response_packet_lane(response, lane));
+    expected_rgb += ::spectral_response_to_rgb(lane_response) / ::spectral_query_sampling_pdf(lane_query);
+  }
+  expected_rgb /= float(kSpectralPacketSize);
+
+  const float3 actual_rgb = response.to_rgb_estimate();
+  bool valid = query.spectral() && query.packet() && (query.hero_only() == false);
+  valid = close_value(actual_rgb.x, expected_rgb.x, 1.0e-5f) && close_value(actual_rgb.y, expected_rgb.y, 1.0e-5f) && close_value(actual_rgb.z, expected_rgb.z, 1.0e-5f) && valid;
+  valid = (response.component_count() == float(kSpectralPacketSize)) && close_value(response.sum(), 5.0f, 1.0e-6f) && close_value(response.maximum(), 2.0f, 1.0e-6f) && valid;
+
+  ::SpectralResponse hero_response = response;
+  ::spectral_response_terminate_secondary(hero_response);
+  const etx::SpectralResponse accumulated{::spectral_response_add(response, hero_response)};
+  valid = accumulated.hero_only() && close_value(accumulated.value, 2.0f, 1.0e-6f) && close_value(accumulated.integrated.x, 0.0f, 1.0e-6f) &&
+          close_value(accumulated.integrated.y, 0.0f, 1.0e-6f) && close_value(accumulated.integrated.z, 0.0f, 1.0e-6f) && valid;
+  valid = ::spectral_query_compatible(query, ::spectral_response_as_query(hero_response)) && valid;
+
+  ::BSDFSample refracted_sample = {};
+  refracted_sample.properties = BSDFSample::Delta | BSDFSample::Transmission;
+  refracted_sample.eta = 1.5f;
+  valid = ::bsdf_sample_requires_secondary_termination(MaterialClass::Dielectric, refracted_sample) && valid;
+  refracted_sample.properties = BSDFSample::Transmission;
+  valid = (::bsdf_sample_requires_secondary_termination(MaterialClass::Dielectric, refracted_sample) == false) && valid;
+
+  std::printf("spectral packet invariants %s\n", valid ? "valid" : "failed");
+  return valid;
 }
 
 bool validate_diffraction_transport_partition() {
@@ -128,8 +165,7 @@ bool validate_diffraction_transport_partition() {
   const float no_diffraction_radiance = 3.0f;
   const float diffraction_radiance = 5.0f;
   const float expected = no_diffraction_radiance + diffraction_radiance;
-  const float partition_expectation = rgb_branch_pdf * (no_diffraction_radiance / rgb_branch_pdf) +
-                                      spectral_branch_pdf * (diffraction_radiance / spectral_branch_pdf);
+  const float partition_expectation = rgb_branch_pdf * (no_diffraction_radiance / rgb_branch_pdf) + spectral_branch_pdf * (diffraction_radiance / spectral_branch_pdf);
   valid = close_value(partition_expectation, expected, 1.0e-6f) && valid;
 
   std::printf("diffraction RGB/spectral transport partition %s\n", valid ? "valid" : "failed");
@@ -680,6 +716,17 @@ bool validate_spectral_energy_compensation_lut_sampling() {
       interface_data.spectral_wavelength_count, interface_data.thinfilm_slice_count, interface_data.spectral_shortest_wavelength, interface_data.spectral_longest_wavelength);
   if (close_value(exact_layer_value, 1100.0f, 1.0e-6f) == false) {
     std::printf("Spectral energy-compensation LUT exact packed layer failed %.6f\n", exact_layer_value);
+    valid = false;
+  }
+
+  etx::Material material = {};
+  material.energy_compensation_interface_index = 0u;
+  const etx::SpectralQuery packet = etx::SpectralQuery::packet_sample(0.0f);
+  const ::SpectralResponse packet_value = bsdf_energy_compensated_lut_response(context, packet, material, image_index, float2{0.0f, 0.0f}, 1u, 1u, 0.0f);
+  if ((close_value(packet_value.value, 0.0f, 1.0e-5f) == false) || (close_value(packet_value.integrated.x, 1.0f, 1.0e-5f) == false) ||
+      (close_value(packet_value.integrated.y, 1.0f, 1.0e-5f) == false) || (close_value(packet_value.integrated.z, 1.0f, 1.0e-5f) == false)) {
+    std::printf("Spectral energy-compensation LUT packet sampling failed %.6f %.6f %.6f %.6f\n", packet_value.value, packet_value.integrated.x, packet_value.integrated.y,
+      packet_value.integrated.z);
     valid = false;
   }
 
@@ -3355,6 +3402,9 @@ bool validate_openpbr_parameter_sweeps(etx::Scene& scene, const etx::SpectralDis
 int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
   etx::env().setup("bin/bsdf_validation.exe");
+  if (validate_spectral_packet_invariants() == false) {
+    return 1;
+  }
   bool runtime_only = false;
   bool thinfilm_optics_only = false;
   bool thinfilm_validation_only = false;
@@ -3382,7 +3432,7 @@ int main(int argc, char** argv) {
   }
 
   if (energy_compensation_parity_only) {
-    const bool valid = validate_energy_compensation_gpu_shader_compile() && validate_energy_compensation_gpu_lut_parity();
+    const bool valid = validate_spectral_energy_compensation_lut_sampling() && validate_energy_compensation_gpu_shader_compile() && validate_energy_compensation_gpu_lut_parity();
     return valid ? 0 : 1;
   }
 
@@ -3415,8 +3465,9 @@ int main(int argc, char** argv) {
   etx::scene_global_init();
   etx::scene_global_publish(&scene, &scene);
   if (diffraction_validation_only) {
-    const bool diffraction_valid = validate_diffraction_transport_partition() && validate_diffraction_grating_serialization() && validate_diffraction_grating_gpu_shader_compile() &&
-                                   validate_diffraction_grating_contract(scene) && validate_bsdf_runtime_numeric_harness(scene, spectra, SpectrumCount, true);
+    const bool diffraction_valid = validate_diffraction_transport_partition() && validate_diffraction_grating_serialization() &&
+                                   validate_diffraction_grating_gpu_shader_compile() && validate_diffraction_grating_contract(scene) &&
+                                   validate_bsdf_runtime_numeric_harness(scene, spectra, SpectrumCount, true);
     etx::scene_global_clear(&scene);
     etx::scene_global_deinit();
     return diffraction_valid ? 0 : 1;

@@ -61,12 +61,10 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
   bool spectral_mode = scene_uses_spectral_mode();
   SpectralQuery spectral_query = spectral_query_sample();
   if (spectral_mode) {
-    spectral_query = spectral_query_spectral_sample(rnd01(seed));
+    spectral_query = spectral_query_packet_sample(rnd01(seed));
   }
   float2 film_sample_rnd = float2(rnd01(seed), rnd01(seed));
   float2 ndc = camera_sample_film_uv(dtid.xy, film_size, film_sample_rnd);
-  float spectral_pdf = spectral_query_sampling_pdf(spectral_query);
-  float spectral_weight = (spectral_pdf > 0.0f) ? (1.0f / spectral_pdf) : 0.0f;
 
   float2 lens_rnd = float2(0.0f, 0.0f);
   if (camera_lens_sampling_enabled(camera.lens_radius, camera.focal_distance)) {
@@ -108,6 +106,9 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
       Sampler bsdf_sampler = make_bsdf_sampler(seed);
       BSDFData bsdf_data = make_surface_bsdf_data(surface_hit.surface_point.vertex, spectral_query, current_medium, path_ray.Direction);
       BSDFSample sample_value = gpu_sample_material_bsdf(bsdf_context, bsdf_data, surface_hit.material, bsdf_sampler);
+      if (spectral_query_is_packet(spectral_query) && bsdf_sample_requires_secondary_termination(surface_hit.material.cls, sample_value)) {
+        spectral_response_terminate_secondary(sample_value.weight);
+      }
       seed = bsdf_sampler.seed;
       if (bsdf_sample_valid(sample_value) && gpu_valid_direction(sample_value.w_o) && gpu_valid_spectral_response(sample_value.weight)) {
         SpectralResponse sampled_weight = spectral_response_mul(throughput, sample_value.weight);
@@ -132,7 +133,7 @@ float evaluate_ao(RaytracingAccelerationStructure as, float3 position, float3 no
     }
   }
 
-  float3 shaded = spectral_response_to_rgb(accumulated) * spectral_weight;
+  float3 shaded = spectral_response_to_rgb_estimate(accumulated);
   float4 color = float4(max(shaded, float3(0.0f, 0.0f, 0.0f)), 1.0f);
 
   bindless_storage_textures[constants.output_image_index][dtid.xy] = color;

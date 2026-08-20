@@ -118,8 +118,7 @@ ETX_SHARED_INLINE SpectralResponse medium_access_load_absorption_spectral(ETX_IN
 
   SpectrumAccessCPUContext spectrum_context = make_spectrum_access_cpu_context(context.scene->spectrums.a, static_cast<uint32_t>(context.scene->spectrums.count));
   const ::SpectralResponse response = spectrum_access_evaluate(spectrum_context, access.absorption_spectrum_index, static_cast<const ::SpectralQuery&>(spect));
-  SpectralQuery response_query = {response.wavelength, response.flags};
-  return ::spectral_response_is_spectral(response) ? SpectralResponse{response_query, response.value} : SpectralResponse{response_query, response.integrated};
+  return SpectralResponse{response};
 }
 
 ETX_SHARED_INLINE SpectralResponse medium_access_load_scattering_spectral(ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(SpectralQuery, spect)) {
@@ -129,8 +128,7 @@ ETX_SHARED_INLINE SpectralResponse medium_access_load_scattering_spectral(ETX_IN
 
   SpectrumAccessCPUContext spectrum_context = make_spectrum_access_cpu_context(context.scene->spectrums.a, static_cast<uint32_t>(context.scene->spectrums.count));
   const ::SpectralResponse response = spectrum_access_evaluate(spectrum_context, access.scattering_spectrum_index, static_cast<const ::SpectralQuery&>(spect));
-  SpectralQuery response_query = {response.wavelength, response.flags};
-  return ::spectral_response_is_spectral(response) ? SpectralResponse{response_query, response.value} : SpectralResponse{response_query, response.integrated};
+  return SpectralResponse{response};
 }
 
 ETX_SHARED_INLINE SpectralResponse medium_access_load_extinction_spectral(ETX_IN(MediumAccessCPUContext, context), ETX_IN(MediumAccess, access), ETX_IN(SpectralQuery, spect)) {

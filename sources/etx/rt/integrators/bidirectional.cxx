@@ -316,7 +316,7 @@ struct CPUBidirectionalImpl : public Task {
       SpectralQuery spect = SpectralQuery::sample();
       if (mode != Mode::PathTracing) {
         if (scene.spectral()) {
-          spect = SpectralQuery::spectral_sample(light_smp.next());
+          spect = SpectralQuery::packet_sample(light_smp.next());
           camera_smp.next();
         } else if (diffraction_partition) {
           const auto query = diffraction_transport_sample_query(false, true, light_smp.next(), light_smp.next());
@@ -327,7 +327,7 @@ struct CPUBidirectionalImpl : public Task {
         build_emitter_path(light_smp, spect, path_data);
       } else {
         if (scene.spectral()) {
-          spect = SpectralQuery::spectral_sample(camera_smp.next());
+          spect = SpectralQuery::packet_sample(camera_smp.next());
         } else if (diffraction_partition) {
           const auto query = diffraction_transport_sample_query(false, true, camera_smp.next(), camera_smp.next());
           spect = SpectralQuery{query.wavelength, query.flags};
@@ -342,8 +342,8 @@ struct CPUBidirectionalImpl : public Task {
         result = build_camera_path(camera_smp, spect, uv, path_data, gbuffer, pixel, status.current_iteration);
       }
 
-      auto xyz = (result / (spect.sampling_pdf() * branch_pdf(spect))).to_rgb();
-      auto albedo = contribution_enabled(spect, gbuffer.contains_diffraction) ? (gbuffer.albedo / (spect.sampling_pdf() * branch_pdf(spect))).to_rgb() : float3{};
+      auto xyz = result.to_rgb_estimate() / branch_pdf(spect);
+      auto albedo = contribution_enabled(spect, gbuffer.contains_diffraction) ? gbuffer.albedo.to_rgb_estimate() / branch_pdf(spect) : float3{};
       film.submit(xyz, gbuffer.normal, albedo, pixel);
     }
   }
@@ -467,7 +467,7 @@ struct CPUBidirectionalImpl : public Task {
       if (curr.connectible && contribution_enabled(payload.spect, scattering_path_contains_diffraction(curr))) {
         CameraSample camera_sample = {};
         auto splat = connect_light_to_camera(smp, path_data, curr, prev, payload.spect, camera_sample);
-        rt.film().submit(splat.to_rgb() / branch_pdf(payload.spect), camera_sample.uv);
+        rt.film().submit(splat.to_rgb_estimate() / branch_pdf(payload.spect), camera_sample.uv);
       }
     } else if (payload.mode == PathSource::Camera) {
       smp.push_fixed(smp_fixed.x, smp_fixed.y, smp_fixed.z);
@@ -1415,7 +1415,7 @@ struct CPUBidirectionalImpl : public Task {
     }
     float weight = mis_weight_light_to_camera(spect, path_data, y_curr, y_prev, sampled_vertex, smp);
 
-    SpectralResponse splat = y_curr.throughput * bsdf * (camera_sample.weight * weight / spect.sampling_pdf());
+    SpectralResponse splat = y_curr.throughput * bsdf * (camera_sample.weight * weight);
     ETX_VALIDATE(splat);
 
     if (splat.is_zero() == false) {

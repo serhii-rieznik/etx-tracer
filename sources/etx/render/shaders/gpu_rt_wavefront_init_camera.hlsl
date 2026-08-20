@@ -28,7 +28,7 @@
       rnd01(seed);
     }
   } else if (scene_uses_spectral_mode()) {
-    spect = spectral_query_spectral_sample(rnd01(seed));
+    spect = spectral_query_packet_sample(rnd01(seed));
   } else if (scene_has_diffraction_grating()) {
     spect = diffraction_transport_sample_query(false, true, rnd01(seed), rnd01(seed));
   }

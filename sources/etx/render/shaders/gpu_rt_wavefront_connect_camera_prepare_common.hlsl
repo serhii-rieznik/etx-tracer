@@ -48,8 +48,7 @@ bool wavefront_connect_camera_scene_mis_enabled() {
 }
 
 bool wavefront_connect_camera_valid_spectral_response(SpectralResponse value) {
-  float3 rgb = spectral_response_to_rgb(value);
-  return all(isfinite(rgb));
+  return isfinite(value.value) && all(isfinite(value.integrated));
 }
 
 float wavefront_connect_camera_mis_light(GPUWavefrontPathVertex current_vertex, GPUWavefrontPathVertex previous_vertex, float current_backward_pdf, float previous_backward_pdf) {

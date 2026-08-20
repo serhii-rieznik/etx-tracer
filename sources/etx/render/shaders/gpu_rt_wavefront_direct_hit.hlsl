@@ -55,5 +55,5 @@
     return;
   }
 
-  wavefront_film_add(state.pixel_index, spectral_response_to_rgb(contribution) * wavefront_spectral_weight(state.spect));
+  wavefront_film_add(state.pixel_index, wavefront_spectral_estimate(contribution, state.spect));
 }

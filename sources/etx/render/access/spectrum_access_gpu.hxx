@@ -47,6 +47,45 @@ float3 spectrum_access_load_integrated(SpectrumAccessGPUContext context, uint sp
   return spectrum_access_gpu_integrated(context, spectrum_index);
 }
 
+float spectrum_access_evaluate_wavelength(SpectrumAccessGPUContext context, uint spectrum_index, float wavelength) {
+  uint entry_count = spectrum_access_gpu_entry_count_internal(context, spectrum_index);
+  if (entry_count == 0u) {
+    return 0.0f;
+  }
+
+  uint begin = 0u;
+  uint end = entry_count;
+  while ((end - begin) > 1u) {
+    uint middle = begin + ((end - begin) / 2u);
+    float middle_wavelength = spectrum_access_gpu_entry_wavelength_internal(context, spectrum_index, middle);
+    if (middle_wavelength > wavelength) {
+      end = middle;
+    } else {
+      begin = middle;
+    }
+  }
+
+  uint i = begin;
+  if (i >= entry_count) {
+    return 0.0f;
+  }
+
+  float wi = spectrum_access_gpu_entry_wavelength_internal(context, spectrum_index, i);
+  if ((i == 0u) && (wavelength < wi)) {
+    return 0.0f;
+  }
+  if (((i + 1u) == entry_count) && (wavelength > wi)) {
+    return 0.0f;
+  }
+
+  uint j = min(i + 1u, entry_count - 1u);
+  float wj = spectrum_access_gpu_entry_wavelength_internal(context, spectrum_index, j);
+  float pi = spectrum_access_gpu_entry_power_internal(context, spectrum_index, i);
+  float pj = spectrum_access_gpu_entry_power_internal(context, spectrum_index, j);
+  float t = (i == j) ? 0.0f : ((wavelength - wi) / (wj - wi));
+  return lerp(pi, pj, t);
+}
+
 SpectralResponse spectrum_access_evaluate(SpectrumAccessGPUContext context, uint spectrum_index, SpectralQuery spect) {
   if (spectrum_access_can_evaluate(context, spectrum_index) == false) {
     return spectral_response_zero(spect);
@@ -56,42 +95,13 @@ SpectralResponse spectrum_access_evaluate(SpectrumAccessGPUContext context, uint
     return spectral_response_make(spect, spectrum_access_gpu_integrated(context, spectrum_index));
   }
 
-  uint entry_count = spectrum_access_gpu_entry_count_internal(context, spectrum_index);
-  if (entry_count == 0u) {
-    return spectral_response_make(spect, 0.0f);
+  SpectralResponse result = spectral_response_make(spect, spectrum_access_evaluate_wavelength(context, spectrum_index, spect.wavelength));
+  if (spectral_query_is_packet(spect) && (spectral_query_is_hero_only(spect) == false)) {
+    result.integrated.x = spectrum_access_evaluate_wavelength(context, spectrum_index, spectral_query_packet_lane(spect, 1u).wavelength);
+    result.integrated.y = spectrum_access_evaluate_wavelength(context, spectrum_index, spectral_query_packet_lane(spect, 2u).wavelength);
+    result.integrated.z = spectrum_access_evaluate_wavelength(context, spectrum_index, spectral_query_packet_lane(spect, 3u).wavelength);
   }
-
-  uint begin = 0u;
-  uint end = entry_count;
-  while ((end - begin) > 1u) {
-    uint middle = begin + ((end - begin) / 2u);
-    float middle_wavelength = spectrum_access_gpu_entry_wavelength_internal(context, spectrum_index, middle);
-    if (middle_wavelength > spect.wavelength) {
-      end = middle;
-    } else {
-      begin = middle;
-    }
-  }
-
-  uint i = begin;
-  if (i >= entry_count) {
-    return spectral_response_make(spect, 0.0f);
-  }
-
-  float wi = spectrum_access_gpu_entry_wavelength_internal(context, spectrum_index, i);
-  if ((i == 0u) && (spect.wavelength < wi)) {
-    return spectral_response_make(spect, 0.0f);
-  }
-  if (((i + 1u) == entry_count) && (spect.wavelength > wi)) {
-    return spectral_response_make(spect, 0.0f);
-  }
-
-  uint j = min(i + 1u, entry_count - 1u);
-  float wj = spectrum_access_gpu_entry_wavelength_internal(context, spectrum_index, j);
-  float pi = spectrum_access_gpu_entry_power_internal(context, spectrum_index, i);
-  float pj = spectrum_access_gpu_entry_power_internal(context, spectrum_index, j);
-  float t = (i == j) ? 0.0f : ((spect.wavelength - wi) / (wj - wi));
-  return spectral_response_make(spect, lerp(pi, pj, t));
+  return result;
 }
 
 uint spectrum_access_entry_count(SpectrumAccessGPUContext context, uint spectrum_index) {

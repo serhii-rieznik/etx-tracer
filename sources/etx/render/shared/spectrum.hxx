@@ -81,6 +81,14 @@ struct SpectralQuery : public ::SpectralQuery {
     return (flags & SpectralFlags::Spectral) != 0;
   };
 
+  bool packet() const {
+    return (flags & SpectralFlags::Packet) != 0;
+  }
+
+  bool hero_only() const {
+    return (flags & SpectralFlags::HeroOnly) != 0;
+  }
+
   float sampling_pdf() const {
     return spectral() ? ::spectral_query_wavelength_pdf(wavelength) : 1.0f;
   }
@@ -99,6 +107,11 @@ struct SpectralQuery : public ::SpectralQuery {
     return SpectralQuery{query.wavelength, query.flags};
   }
 
+  static SpectralQuery packet_sample(float rnd) {
+    const ::SpectralQuery query = ::spectral_query_packet_sample(rnd);
+    return SpectralQuery{query.wavelength, query.flags};
+  }
+
   float static const spectral_sample_pdf(float wavelength) {
     return ::spectral_query_wavelength_pdf(wavelength);
   }
@@ -112,11 +125,11 @@ struct SpectralResponse : public ::SpectralResponse {
   }
 
   SpectralResponse(const SpectralQuery q, float a)
-    : ::SpectralResponse({a, a, a}, a, q.wavelength, q.flags) {
+    : ::SpectralResponse(q.hero_only() ? float3{} : float3{a, a, a}, a, q.wavelength, q.flags) {
   }
 
   SpectralResponse(const SpectralResponse q, float a)
-    : ::SpectralResponse({a, a, a}, a, q.wavelength, q.flags) {
+    : ::SpectralResponse((q.flags & SpectralFlags::HeroOnly) != 0u ? float3{} : float3{a, a, a}, a, q.wavelength, q.flags) {
   }
 
   SpectralResponse(const SpectralQuery q, const float3& c)
@@ -127,12 +140,24 @@ struct SpectralResponse : public ::SpectralResponse {
     : ::SpectralResponse(c, 0.0f, q.wavelength, q.flags) {
   }
 
+  SpectralResponse(const ::SpectralResponse& response)
+    : ::SpectralResponse(response) {
+  }
+
   bool spectral() const {
     return (flags & SpectralFlags::Spectral) != 0;
   }
 
+  bool packet() const {
+    return (flags & SpectralFlags::Packet) != 0;
+  }
+
+  bool hero_only() const {
+    return (flags & SpectralFlags::HeroOnly) != 0;
+  }
+
   float component_count() const {
-    return spectral() ? 1.0f : 3.0f;
+    return spectral() ? (packet() && (hero_only() == false) ? float(kSpectralPacketSize) : 1.0f) : 3.0f;
   }
 
   float sampling_pdf() const {
@@ -151,12 +176,17 @@ struct SpectralResponse : public ::SpectralResponse {
     return ::spectral_response_to_rgb(static_cast<const ::SpectralResponse&>(*this));
   }
 
+  ETX_SHARED_INLINE float3 to_rgb_estimate() const {
+    return ::spectral_response_to_rgb_estimate(static_cast<const ::SpectralResponse&>(*this));
+  }
+
   ETX_SHARED_INLINE float minimum() const {
-    return spectral() ? value : min(integrated.x, min(integrated.y, integrated.z));
+    return spectral() ? (packet() && (hero_only() == false) ? min(value, min(integrated.x, min(integrated.y, integrated.z))) : value)
+                      : min(integrated.x, min(integrated.y, integrated.z));
   }
 
   ETX_SHARED_INLINE float maximum() const {
-    return spectral() ? value : max(integrated.x, max(integrated.y, integrated.z));
+    return ::spectral_response_maximum(static_cast<const ::SpectralResponse&>(*this));
   }
 
   ETX_SHARED_INLINE float monochromatic() const {
@@ -164,11 +194,11 @@ struct SpectralResponse : public ::SpectralResponse {
   }
 
   ETX_SHARED_INLINE float sum() const {
-    return spectral() ? value : integrated.x + integrated.y + integrated.z;
+    return spectral() ? (packet() && (hero_only() == false) ? value + integrated.x + integrated.y + integrated.z : value) : integrated.x + integrated.y + integrated.z;
   }
 
   ETX_SHARED_INLINE float average() const {
-    return spectral() ? value : (integrated.x + integrated.y + integrated.z) / 3.0f;
+    return sum() / component_count();
   }
 
   ETX_SHARED_INLINE float luminance() const {
@@ -176,63 +206,61 @@ struct SpectralResponse : public ::SpectralResponse {
   }
 
   ETX_SHARED_INLINE float component(uint32_t i) const {
-    ETX_ASSERT(i < 3);
-    return spectral() ? value : *(&integrated.x + i);
+    ETX_ASSERT(i < uint32_t(component_count()));
+    return spectral() ? ::spectral_response_packet_lane(static_cast<const ::SpectralResponse&>(*this), i) : *(&integrated.x + i);
   }
 
   ETX_SHARED_INLINE bool valid() const {
-    return spectral() ? valid_value(value) : valid_value(integrated);
+    return spectral() ? (valid_value(value) && ((packet() == false) || hero_only() || valid_value(integrated))) : valid_value(integrated);
   }
 
   ETX_SHARED_INLINE bool is_zero() const {
     return spectral_response_is_zero(*this);
   }
 
-#define SPECTRAL_OP(OP)                                                            \
-  ETX_SHARED_INLINE SpectralResponse& operator OP(const SpectralResponse& other) { \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                                \
-    integrated OP other.integrated;                                                \
-    value OP other.value;                                                          \
-    return *this;                                                                  \
+#define SPECTRAL_OP(OP, FUNCTION)                                                                                                                       \
+  ETX_SHARED_INLINE SpectralResponse& operator OP(const SpectralResponse& other) {                                                                      \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                                                                                                     \
+    static_cast<::SpectralResponse&>(*this) = ::FUNCTION(static_cast<const ::SpectralResponse&>(*this), static_cast<const ::SpectralResponse&>(other)); \
+    return *this;                                                                                                                                       \
   }
-  SPECTRAL_OP(+=)
-  SPECTRAL_OP(-=)
-  SPECTRAL_OP(*=)
-  SPECTRAL_OP(/=)
+  SPECTRAL_OP(+=, spectral_response_add)
+  SPECTRAL_OP(-=, spectral_response_sub)
+  SPECTRAL_OP(*=, spectral_response_mul)
+  SPECTRAL_OP(/=, spectral_response_div)
 #undef SPECTRAL_OP
 
-#define SPECTRAL_OP(OP)                                                                                                                    \
-  ETX_SHARED_INLINE SpectralResponse operator OP(const SpectralResponse& other) const {                                                    \
-    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                                                                                        \
-    ETX_ASSERT((spectral() && other.spectral()) || ((spectral() == false) && (other.spectral() == false)));                                \
-    return spectral() ? SpectralResponse{as_query(), value OP other.value} : SpectralResponse{as_query(), integrated OP other.integrated}; \
+#define SPECTRAL_OP(OP, FUNCTION)                                                                                                      \
+  ETX_SHARED_INLINE SpectralResponse operator OP(const SpectralResponse& other) const {                                                \
+    ETX_ASSERT_EQUAL(wavelength, other.wavelength);                                                                                    \
+    ETX_ASSERT((spectral() && other.spectral()) || ((spectral() == false) && (other.spectral() == false)));                            \
+    return SpectralResponse{::FUNCTION(static_cast<const ::SpectralResponse&>(*this), static_cast<const ::SpectralResponse&>(other))}; \
   }
-  SPECTRAL_OP(+)
-  SPECTRAL_OP(-)
-  SPECTRAL_OP(*)
-  SPECTRAL_OP(/)
+  SPECTRAL_OP(+, spectral_response_add)
+  SPECTRAL_OP(-, spectral_response_sub)
+  SPECTRAL_OP(*, spectral_response_mul)
+  SPECTRAL_OP(/, spectral_response_div)
 #undef SPECTRAL_OP
 
-#define SPECTRAL_OP(OP)                                          \
-  ETX_SHARED_INLINE SpectralResponse& operator OP(float other) { \
-    integrated OP other;                                         \
-    value OP other;                                              \
-    return *this;                                                \
+#define SPECTRAL_OP(OP, FUNCTION)                                                                               \
+  ETX_SHARED_INLINE SpectralResponse& operator OP(float other) {                                                \
+    static_cast<::SpectralResponse&>(*this) = ::FUNCTION(static_cast<const ::SpectralResponse&>(*this), other); \
+    return *this;                                                                                               \
   }
-  SPECTRAL_OP(+=)
-  SPECTRAL_OP(-=)
-  SPECTRAL_OP(*=)
-  SPECTRAL_OP(/=)
+  SPECTRAL_OP(+=, spectral_response_add)
+  SPECTRAL_OP(-=, spectral_response_sub)
+  SPECTRAL_OP(*=, spectral_response_mul)
+  SPECTRAL_OP(/=, spectral_response_div)
 #undef SPECTRAL_OP
 
-#define SPECTRAL_OP(OP)                                                                                                   \
-  ETX_SHARED_INLINE SpectralResponse operator OP(float other) const {                                                     \
-    return spectral() ? SpectralResponse{as_query(), value OP other} : SpectralResponse{as_query(), integrated OP other}; \
+#define SPECTRAL_OP(OP, FUNCTION)                                                              \
+  ETX_SHARED_INLINE SpectralResponse operator OP(float other) const {                          \
+    return SpectralResponse{::FUNCTION(static_cast<const ::SpectralResponse&>(*this), other)}; \
   }
-  SPECTRAL_OP(+)
-  SPECTRAL_OP(-)
-  SPECTRAL_OP(*)
-  SPECTRAL_OP(/)
+  SPECTRAL_OP(+, spectral_response_add)
+  SPECTRAL_OP(-, spectral_response_sub)
+  SPECTRAL_OP(*, spectral_response_mul)
+  SPECTRAL_OP(/, spectral_response_div)
 #undef SPECTRAL_OP
 };
 
@@ -240,67 +268,69 @@ ETX_SHARED_INLINE SpectralResponse operator*(float other, const SpectralResponse
   return s * other;
 }
 ETX_SHARED_INLINE SpectralResponse operator/(float other, const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.as_query(), other / s.value} : SpectralResponse{s.as_query(), other / s.integrated};
+  return s.spectral() ? SpectralResponse{::spectral_response_make_packet(s.as_query(), other / s.integrated, other / s.value)}
+                      : SpectralResponse{s.as_query(), other / s.integrated};
 }
 ETX_SHARED_INLINE SpectralResponse operator+(float other, const SpectralResponse& s) {
   return s + other;
 }
 ETX_SHARED_INLINE SpectralResponse operator-(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.as_query(), -s.value} : SpectralResponse{s.as_query(), -s.integrated};
+  return s.spectral() ? SpectralResponse{::spectral_response_make_packet(s.as_query(), -s.integrated, -s.value)} : SpectralResponse{s.as_query(), -s.integrated};
 }
 ETX_SHARED_INLINE SpectralResponse operator-(float other, const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.as_query(), other - s.value} : SpectralResponse{s.as_query(), other - s.integrated};
+  return s.spectral() ? SpectralResponse{::spectral_response_make_packet(s.as_query(), other - s.integrated, other - s.value)}
+                      : SpectralResponse{s.as_query(), other - s.integrated};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_exp(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.as_query(), expf(s.value)} : SpectralResponse{s.as_query(), exp(s.integrated)};
+  return SpectralResponse{::spectral_response_exp(static_cast<const ::SpectralResponse&>(s))};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_sqrt(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.as_query(), sqrtf(s.value)} : SpectralResponse{s.as_query(), sqrt(s.integrated)};
+  return SpectralResponse{::spectral_response_sqrt(static_cast<const ::SpectralResponse&>(s))};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_cos(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.as_query(), cosf(s.value)} : SpectralResponse{s.as_query(), cos(s.integrated)};
+  return SpectralResponse{::spectral_response_cos(static_cast<const ::SpectralResponse&>(s))};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_abs(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.as_query(), fabsf(s.value)} : SpectralResponse{s.as_query(), abs(s.integrated)};
+  return SpectralResponse{::spectral_response_abs(static_cast<const ::SpectralResponse&>(s))};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_saturate(const SpectralResponse& s) {
-  return s.spectral() ? SpectralResponse{s.as_query(), saturate(s.value)} : SpectralResponse{s.as_query(), saturate(s.integrated)};
+  return SpectralResponse{::spectral_response_saturate(static_cast<const ::SpectralResponse&>(s))};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_sign(const SpectralResponse& b) {
-  return b.spectral() ? SpectralResponse{b.as_query(), sign(b.value)} : SpectralResponse(b.as_query(), sign(b.integrated));
+  return SpectralResponse{::spectral_response_sign(static_cast<const ::SpectralResponse&>(b))};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_atan(const SpectralResponse& b) {
-  return b.spectral() ? SpectralResponse{b.as_query(), atanf(b.value)} : SpectralResponse(b.as_query(), atan(b.integrated));
+  return SpectralResponse{::spectral_response_atan(static_cast<const ::SpectralResponse&>(b))};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_pow(const SpectralResponse& a, float b) {
-  return a.spectral() ? SpectralResponse{a.as_query(), powf(a.value, b)} : SpectralResponse(a.as_query(), pow(a.integrated, b));
+  return SpectralResponse{::spectral_response_pow(static_cast<const ::SpectralResponse&>(a), b)};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_pow(const SpectralResponse& a, const SpectralResponse& b) {
-  return a.spectral() ? SpectralResponse{b.as_query(), powf(a.value, b.value)} : SpectralResponse(b.as_query(), pow(a.integrated, b.integrated));
+  return SpectralResponse{::spectral_response_pow(static_cast<const ::SpectralResponse&>(a), static_cast<const ::SpectralResponse&>(b))};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_max(const SpectralResponse& a, float b) {
-  return a.spectral() ? SpectralResponse{a.as_query(), fmaxf(a.value, b)} : SpectralResponse(a.as_query(), max(a.integrated, b));
+  return SpectralResponse{::spectral_response_max(static_cast<const ::SpectralResponse&>(a), b)};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_max(float a, const SpectralResponse& b) {
-  return b.spectral() ? SpectralResponse{b.as_query(), fmaxf(b.value, a)} : SpectralResponse(b.as_query(), max(b.integrated, a));
+  return SpectralResponse{::spectral_response_max(a, static_cast<const ::SpectralResponse&>(b))};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_min(const SpectralResponse& a, float b) {
-  return a.spectral() ? SpectralResponse{a.as_query(), fminf(a.value, b)} : SpectralResponse(a.as_query(), min(a.integrated, b));
+  return SpectralResponse{::spectral_response_min(static_cast<const ::SpectralResponse&>(a), b)};
 }
 ETX_SHARED_INLINE SpectralResponse spectrum_min(float a, const SpectralResponse& b) {
-  return b.spectral() ? SpectralResponse{b.as_query(), fminf(b.value, a)} : SpectralResponse(b.as_query(), min(b.integrated, a));
+  return SpectralResponse{::spectral_response_min(a, static_cast<const ::SpectralResponse&>(b))};
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_apply_rgb_scale(const SpectralQuery spect, const SpectralResponse& response, const float3& rgb) {
   const ::SpectralResponse result = ::spectral_response_apply_rgb_scale(static_cast<const ::SpectralQuery&>(spect), static_cast<const ::SpectralResponse&>(response), rgb);
   SpectralQuery result_query{result.wavelength, result.flags};
-  return ::spectral_response_is_spectral(result) ? SpectralResponse{result_query, result.value} : SpectralResponse{result_query, result.integrated};
+  return ::spectral_response_is_spectral(result) ? SpectralResponse{result} : SpectralResponse{result_query, result.integrated};
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_clamp_non_negative(const SpectralResponse& response) {
   const ::SpectralResponse result = ::spectral_response_clamp_non_negative(static_cast<const ::SpectralResponse&>(response));
   SpectralQuery result_query{result.wavelength, result.flags};
-  return ::spectral_response_is_spectral(result) ? SpectralResponse{result_query, result.value} : SpectralResponse{result_query, result.integrated};
+  return ::spectral_response_is_spectral(result) ? SpectralResponse{result} : SpectralResponse{result_query, result.integrated};
 }
 
 ETX_SHARED_INLINE bool valid_value(const SpectralResponse& v) {
@@ -341,9 +371,7 @@ struct SpectralDistribution : public ::SpectralDistribution {
 
     SpectrumAccessCPUContext access_context = make_spectrum_access_cpu_context(static_cast<const ::SpectralDistribution*>(this), 1u);
     const ::SpectralResponse shared_response = spectrum_access_evaluate(access_context, 0u, static_cast<const ::SpectralQuery&>(q));
-    SpectralQuery response_query{shared_response.wavelength, shared_response.flags};
-    SpectralResponse result =
-      ::spectral_response_is_spectral(shared_response) ? SpectralResponse{response_query, shared_response.value} : SpectralResponse{response_query, shared_response.integrated};
+    SpectralResponse result{shared_response};
     ETX_VALIDATE(result);
     return result;
   }

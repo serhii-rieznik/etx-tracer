@@ -581,7 +581,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
         }
         SpectralResponse contribution = wavefront_compute_environment_direct_hit_contribution(state.spect, state, previous_vertex);
         if (spectral_response_is_zero(contribution) == false) {
-          wavefront_film_add(state.pixel_index, spectral_response_to_rgb(contribution) * wavefront_spectral_weight(state.spect));
+          wavefront_film_add(state.pixel_index, wavefront_spectral_estimate(contribution, state.spect));
         }
       }
     }

@@ -63,9 +63,16 @@ inline SpectralResponse safe_mul(const SpectralResponse& a, const SpectralRespon
   ETX_ASSERT((a.spectral() && b.spectral()) || ((a.spectral() == false) && (b.spectral() == false)));
   ETX_ASSERT(a.wavelength == b.wavelength);
 
-  return a.spectral()
-           ? SpectralResponse{a.as_query(), safe_mul(a.value, b.value)}
-           : SpectralResponse{a.as_query(), {safe_mul(a.integrated.x, b.integrated.x), safe_mul(a.integrated.y, b.integrated.y), safe_mul(a.integrated.z, b.integrated.z)}};
+  if (a.spectral()) {
+    SpectralQuery query = a.as_query();
+    if (b.hero_only()) {
+      ::spectral_query_terminate_secondary(query);
+    }
+    return SpectralResponse{::spectral_response_make_packet(query,
+      {safe_mul(a.integrated.x, b.integrated.x), safe_mul(a.integrated.y, b.integrated.y), safe_mul(a.integrated.z, b.integrated.z)}, safe_mul(a.value, b.value))};
+  }
+
+  return SpectralResponse{a.as_query(), {safe_mul(a.integrated.x, b.integrated.x), safe_mul(a.integrated.y, b.integrated.y), safe_mul(a.integrated.z, b.integrated.z)}};
 }
 
 template <class RT>
@@ -165,7 +172,7 @@ ETX_SHARED_INLINE PTRayPayload make_ray_payload(const Scene& scene, const Camera
   payload.smp.init(pixel_index, payload.iteration ^ scene.options.random_seed);
   payload.diffraction_partition = scene.diffraction_transport_partition();
   if (spectral) {
-    payload.spect = SpectralQuery::spectral_sample(payload.smp.next());
+    payload.spect = SpectralQuery::packet_sample(payload.smp.next());
   } else if (payload.diffraction_partition) {
     const auto query = diffraction_transport_sample_query(false, true, payload.smp.next(), payload.smp.next());
     payload.spect = SpectralQuery{query.wavelength, query.flags};

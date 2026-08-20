@@ -177,7 +177,7 @@ ETX_SHARED_INLINE SpectralQuery vcm_iteration_spectral_query(const Scene& scene,
   Sampler sampler = {};
   sampler.init(0u, iteration.iteration ^ scene.options.random_seed);
   if (scene.spectral()) {
-    return SpectralQuery::spectral_sample(sampler.next());
+    return SpectralQuery::packet_sample(sampler.next());
   }
   if (scene.diffraction_transport_partition()) {
     const auto query = diffraction_transport_sample_query(false, true, sampler.next(), sampler.next());
@@ -420,7 +420,7 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, con
     state.sampler.next();
     state.spect = spect;
   } else {
-    auto sampled_spectrum = spect.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
+    auto sampled_spectrum = spect.spectral() ? SpectralQuery::packet_sample(state.sampler.next()) : SpectralQuery::sample();
     state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
   }
 
@@ -956,7 +956,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
       }
 
       const auto& light_throughput = throughputs[j];
-      const bool query_matches = (light_throughput.flags == state.spect.flags) && ((state.spect.spectral() == false) || (light_throughput.wavelength == state.spect.wavelength));
+      const bool query_matches = spectral_query_compatible(light_throughput.as_query(), state.spect);
       if (query_matches == false) {
         continue;
       }
@@ -991,8 +991,8 @@ struct ETX_ALIGNED VCMSpatialGridData {
 
       auto path_value = camera_bsdf.func * t_camera * light_throughput;
       ETX_VALIDATE(path_value);
-      merged += (path_value / state.spect.sampling_pdf()).to_rgb() * (kernel_weight * weight);
-      ETX_VALIDATE(merged);
+      merged += path_value.to_rgb_estimate() * (kernel_weight * weight);
+      ETX_CHECK_FINITE(merged);
     }
     return merged;
   }
