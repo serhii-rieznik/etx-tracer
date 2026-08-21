@@ -195,7 +195,97 @@ ETX_SHARED_INLINE bool bsdf_diffraction_grating_match_order(ETX_IN(float3, local
   return (tangent_error <= 1.0e-4f) && (abs(expected_direction.z - local_w_o.z) <= 1.0e-4f);
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_diffraction_grating_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+ETX_SHARED_INLINE float bsdf_diffraction_grating_rgb_component(ETX_IN(float3, value), uint32_t channel) {
+  if (channel == 0u) {
+    return value.x;
+  }
+  if (channel == 1u) {
+    return value.y;
+  }
+  return value.z;
+}
+
+ETX_SHARED_INLINE float3 bsdf_diffraction_grating_rgb_set_component(ETX_IN(float3, value), uint32_t channel, float component) {
+  float3 result = value;
+  if (channel == 0u) {
+    result.x = component;
+  } else if (channel == 1u) {
+    result.y = component;
+  } else {
+    result.z = component;
+  }
+  return result;
+}
+
+ETX_SHARED_INLINE float bsdf_diffraction_grating_rgb_wavelength(uint32_t channel) {
+  return bsdf_diffraction_grating_rgb_component(kRGBWavelengths, channel);
+}
+
+ETX_SHARED_INLINE float bsdf_diffraction_grating_rgb_wavelength_span(uint32_t channel) {
+  return bsdf_diffraction_grating_rgb_component(kRGBWavelengthsSpan, channel);
+}
+
+ETX_SHARED_INLINE float bsdf_diffraction_grating_rgb_sample_wavelength(uint32_t channel, float sample) {
+  const float wavelength = bsdf_diffraction_grating_rgb_wavelength(channel);
+  const float span = bsdf_diffraction_grating_rgb_wavelength_span(channel);
+  const float clamped_sample = clamp(sample, 0.0f, 1.0f - kEpsilon);
+  return wavelength + span * (2.0f * clamped_sample - 1.0f);
+}
+
+ETX_SHARED_INLINE float3 bsdf_diffraction_grating_rgb_efficiencies(ETX_IN(float3, local_w_i), ETX_IN(Material, material)) {
+  float3 result = float3(0.0f, 0.0f, 0.0f);
+  for (uint32_t channel = 0u; channel < 3u; ++channel) {
+    const float wavelength_nm = bsdf_diffraction_grating_rgb_wavelength(channel);
+    const BSDFDiffractionOrderRange range = bsdf_diffraction_grating_order_range(local_w_i, wavelength_nm, material.diffraction_grating.period_nm);
+    const float efficiency = bsdf_diffraction_grating_propagating_efficiency(range, local_w_i, wavelength_nm, material.diffraction_grating.period_nm, material);
+    result = bsdf_diffraction_grating_rgb_set_component(result, channel, efficiency);
+  }
+  return result;
+}
+
+struct BSDFDiffractionRGBEvaluation {
+  float3 value ETX_INIT({});
+  float pdf ETX_INIT(0.0f);
+};
+
+ETX_SHARED_INLINE BSDFDiffractionRGBEvaluation bsdf_diffraction_grating_rgb_evaluate_local(ETX_IN(float3, local_w_i), ETX_IN(float3, local_w_o), ETX_IN(float3, reflectance),
+  ETX_IN(Material, material)) {
+  BSDFDiffractionRGBEvaluation result = ETX_ZERO(BSDFDiffractionRGBEvaluation);
+  const float3 total_efficiency = bsdf_diffraction_grating_rgb_efficiencies(local_w_i, material);
+  const float3 channel_weight = reflectance * total_efficiency;
+  const float total_weight = channel_weight.x + channel_weight.y + channel_weight.z;
+  if (total_weight <= kEpsilon) {
+    return result;
+  }
+
+  for (uint32_t channel = 0u; channel < 3u; ++channel) {
+    const float channel_total_efficiency = bsdf_diffraction_grating_rgb_component(total_efficiency, channel);
+    const float channel_sampling_weight = bsdf_diffraction_grating_rgb_component(channel_weight, channel);
+    if ((channel_total_efficiency <= kEpsilon) || (channel_sampling_weight <= 0.0f)) {
+      continue;
+    }
+
+    const float wavelength_nm = bsdf_diffraction_grating_rgb_wavelength(channel);
+    const BSDFDiffractionOrderRange range = bsdf_diffraction_grating_order_range(local_w_i, wavelength_nm, material.diffraction_grating.period_nm);
+    int matched_order = 0;
+    if ((bsdf_diffraction_grating_match_order(local_w_i, local_w_o, wavelength_nm, material.diffraction_grating.period_nm, matched_order) == false) ||
+        (matched_order < range.minimum) || (matched_order > range.maximum)) {
+      continue;
+    }
+
+    const float efficiency = bsdf_diffraction_grating_order_efficiency(range, local_w_i, local_w_o, wavelength_nm, material.diffraction_grating.period_nm, matched_order, material);
+    if (efficiency <= 0.0f) {
+      continue;
+    }
+
+    const float channel_reflectance = bsdf_diffraction_grating_rgb_component(reflectance, channel);
+    result.value = bsdf_diffraction_grating_rgb_set_component(result.value, channel, channel_reflectance * efficiency);
+    result.pdf += (channel_sampling_weight / total_weight) * (efficiency / channel_total_efficiency);
+  }
+  return result;
+}
+
+ETX_SHARED_INLINE BSDFSample bsdf_diffraction_grating_sample_spectral(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
   if ((spectral_query_is_spectral(data.spectrum_sample) == false) || (bsdf_diffraction_grating_wavelength_valid(data.spectrum_sample.wavelength) == false) ||
       (bsdf_diffraction_grating_material_valid(material) == false)) {
@@ -260,7 +350,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_diffraction_grating_sample(ETX_IN(BSDFResource
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_diffraction_grating_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
+ETX_SHARED_INLINE BSDFEval bsdf_diffraction_grating_evaluate_spectral(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
   ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   BSDFEval result = bsdf_eval_zero(data.spectrum_sample);
@@ -301,8 +391,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_diffraction_grating_evaluate(ETX_IN(BSDFResource
   return result;
 }
 
-ETX_SHARED_INLINE float bsdf_diffraction_grating_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
-  ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE float bsdf_diffraction_grating_pdf_spectral(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
+  ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)context;
   (void)sampler;
   if ((spectral_query_is_spectral(data.spectrum_sample) == false) || (bsdf_diffraction_grating_wavelength_valid(data.spectrum_sample.wavelength) == false) ||
@@ -337,7 +427,7 @@ ETX_SHARED_INLINE bool bsdf_diffraction_grating_is_delta(ETX_IN(Material, materi
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_diffraction_grating_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+ETX_SHARED_INLINE SpectralResponse bsdf_diffraction_grating_albedo_spectral(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   if ((spectral_query_is_spectral(data.spectrum_sample) == false) || (bsdf_diffraction_grating_wavelength_valid(data.spectrum_sample.wavelength) == false) ||
@@ -352,4 +442,159 @@ ETX_SHARED_INLINE SpectralResponse bsdf_diffraction_grating_albedo(ETX_IN(BSDFRe
   const float total_efficiency = bsdf_diffraction_grating_propagating_efficiency(range, local_w_i, wavelength_nm, period_nm, material);
   const SpectralResponse reflectance = spectral_response_saturate(bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex));
   return spectral_response_mul(reflectance, total_efficiency);
+}
+
+ETX_SHARED_INLINE BSDFSample bsdf_diffraction_grating_sample_rgb(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
+  if (bsdf_diffraction_grating_material_valid(material) == false) {
+    return bsdf_sample_zero(data.spectrum_sample);
+  }
+
+  const LocalFrame frame = bsdf_diffraction_grating_frame(data, material);
+  const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
+  const SpectralResponse reflectance_response = spectral_response_saturate(bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex));
+  const float3 reflectance = reflectance_response.integrated;
+  const float total_reflectance = reflectance.x + reflectance.y + reflectance.z;
+  if (total_reflectance <= kEpsilon) {
+    return bsdf_sample_zero(data.spectrum_sample);
+  }
+
+  const float channel_target = min(bsdf_sampler_next(sampler), 1.0f - kEpsilon) * total_reflectance;
+  float accumulated_reflectance = 0.0f;
+  uint32_t selected_channel = 0u;
+  for (uint32_t channel = 0u; channel < 3u; ++channel) {
+    const float channel_reflectance = bsdf_diffraction_grating_rgb_component(reflectance, channel);
+    if (channel_reflectance <= 0.0f) {
+      continue;
+    }
+    selected_channel = channel;
+    accumulated_reflectance += channel_reflectance;
+    if (channel_target < accumulated_reflectance) {
+      break;
+    }
+  }
+
+  const float selected_reflectance = bsdf_diffraction_grating_rgb_component(reflectance, selected_channel);
+  const float selected_channel_probability = selected_reflectance / total_reflectance;
+  const float wavelength_nm = bsdf_diffraction_grating_rgb_sample_wavelength(selected_channel, bsdf_sampler_next(sampler));
+  const BSDFDiffractionOrderRange range = bsdf_diffraction_grating_order_range(local_w_i, wavelength_nm, material.diffraction_grating.period_nm);
+  const float channel_total_efficiency = bsdf_diffraction_grating_propagating_efficiency(range, local_w_i, wavelength_nm, material.diffraction_grating.period_nm, material);
+  if (channel_total_efficiency <= kEpsilon) {
+    return bsdf_sample_zero(data.spectrum_sample);
+  }
+  const float order_target = min(bsdf_sampler_next(sampler), 1.0f - kEpsilon) * channel_total_efficiency;
+  float accumulated_order_efficiency = 0.0f;
+  float selected_efficiency = 0.0f;
+  float3 selected_w_o = float3(0.0f, 0.0f, 0.0f);
+  float last_efficiency = 0.0f;
+  float3 last_w_o = float3(0.0f, 0.0f, 0.0f);
+  for (int order = range.minimum; order <= range.maximum; ++order) {
+    float3 local_w_o = float3(0.0f, 0.0f, 0.0f);
+    if (bsdf_diffraction_grating_order_direction(local_w_i, wavelength_nm, material.diffraction_grating.period_nm, order, local_w_o) == false) {
+      continue;
+    }
+    const float efficiency = bsdf_diffraction_grating_order_efficiency(range, local_w_i, local_w_o, wavelength_nm, material.diffraction_grating.period_nm, order, material);
+    if (efficiency <= 0.0f) {
+      continue;
+    }
+    last_efficiency = efficiency;
+    last_w_o = local_w_o;
+    accumulated_order_efficiency += efficiency;
+    if (order_target < accumulated_order_efficiency) {
+      selected_efficiency = efficiency;
+      selected_w_o = local_w_o;
+      break;
+    }
+  }
+
+  if ((selected_efficiency <= 0.0f) && (last_efficiency > 0.0f)) {
+    selected_efficiency = last_efficiency;
+    selected_w_o = last_w_o;
+  }
+  if (selected_efficiency <= 0.0f) {
+    return bsdf_sample_zero(data.spectrum_sample);
+  }
+
+  const float sample_pdf = selected_channel_probability * selected_efficiency / channel_total_efficiency;
+  if (sample_pdf <= kEpsilon) {
+    return bsdf_sample_zero(data.spectrum_sample);
+  }
+
+  BSDFSample result = ETX_ZERO(BSDFSample);
+  result.w_o = normalize(local_frame_from_local(frame, selected_w_o));
+  result.pdf = sample_pdf;
+  const float selected_weight = selected_reflectance * channel_total_efficiency / selected_channel_probability;
+  result.weight = spectral_response_make(data.spectrum_sample, bsdf_diffraction_grating_rgb_set_component(float3(0.0f, 0.0f, 0.0f), selected_channel, selected_weight));
+  result.properties = BSDFSample::Delta | BSDFSample::Reflection;
+  result.medium_index = data.current_medium;
+  result.eta = 1.0f;
+  return result;
+}
+
+ETX_SHARED_INLINE BSDFEval bsdf_diffraction_grating_evaluate_rgb(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
+  ETX_IN(Material, material)) {
+  BSDFEval result = bsdf_eval_zero(data.spectrum_sample);
+  if (bsdf_diffraction_grating_material_valid(material) == false) {
+    return result;
+  }
+
+  const LocalFrame frame = bsdf_diffraction_grating_frame(data, material);
+  const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
+  const float3 local_w_o = local_frame_to_local(frame, normalize(outgoing_direction));
+  if ((local_w_i.z <= kEpsilon) || (local_w_o.z <= kEpsilon)) {
+    return result;
+  }
+
+  const SpectralResponse reflectance_response = spectral_response_saturate(bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex));
+  const BSDFDiffractionRGBEvaluation evaluation = bsdf_diffraction_grating_rgb_evaluate_local(local_w_i, local_w_o, reflectance_response.integrated, material);
+  if (evaluation.pdf <= 0.0f) {
+    return result;
+  }
+
+  result.func = spectral_response_make(data.spectrum_sample, evaluation.value);
+  result.bsdf = result.func;
+  result.pdf = evaluation.pdf;
+  result.properties = BSDFSample::Delta | BSDFSample::Reflection;
+  result.medium_index = data.current_medium;
+  result.eta = 1.0f;
+  return result;
+}
+
+ETX_SHARED_INLINE BSDFSample bsdf_diffraction_grating_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
+  if (spectral_query_is_spectral(data.spectrum_sample)) {
+    return bsdf_diffraction_grating_sample_spectral(context, data, material, sampler);
+  }
+  return bsdf_diffraction_grating_sample_rgb(context, data, material, sampler);
+}
+
+ETX_SHARED_INLINE BSDFEval bsdf_diffraction_grating_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
+  ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  if (spectral_query_is_spectral(data.spectrum_sample)) {
+    return bsdf_diffraction_grating_evaluate_spectral(context, data, outgoing_direction, material, sampler);
+  }
+  return bsdf_diffraction_grating_evaluate_rgb(context, data, outgoing_direction, material);
+}
+
+ETX_SHARED_INLINE float bsdf_diffraction_grating_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
+  if (spectral_query_is_spectral(data.spectrum_sample)) {
+    return bsdf_diffraction_grating_pdf_spectral(context, data, outgoing_direction, material, sampler);
+  }
+  return bsdf_diffraction_grating_evaluate_rgb(context, data, outgoing_direction, material).pdf;
+}
+
+ETX_SHARED_INLINE SpectralResponse bsdf_diffraction_grating_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
+  if (spectral_query_is_spectral(data.spectrum_sample)) {
+    return bsdf_diffraction_grating_albedo_spectral(context, data, material, sampler);
+  }
+  if (bsdf_diffraction_grating_material_valid(material) == false) {
+    return spectral_response_zero(data.spectrum_sample);
+  }
+
+  const LocalFrame frame = bsdf_diffraction_grating_frame(data, material);
+  const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
+  const SpectralResponse reflectance = spectral_response_saturate(bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex));
+  return spectral_response_make(data.spectrum_sample, reflectance.integrated * bsdf_diffraction_grating_rgb_efficiencies(local_w_i, material));
 }

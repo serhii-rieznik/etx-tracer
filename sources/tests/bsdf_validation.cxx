@@ -138,40 +138,6 @@ bool validate_spectral_packet_invariants() {
   return valid;
 }
 
-bool validate_diffraction_transport_partition() {
-  const ::SpectralQuery rgb = diffraction_transport_sample_query(false, true, 0.75f, 0.25f);
-  const ::SpectralQuery spectral = diffraction_transport_sample_query(false, true, 0.25f, 0.75f);
-  const ::SpectralQuery native_spectral = diffraction_transport_sample_query(true, true, 0.75f, 0.25f);
-  const ::SpectralQuery ordinary_rgb = diffraction_transport_sample_query(false, false, 0.25f, 0.75f);
-
-  bool valid = true;
-  valid = diffraction_transport_partition_enabled(false, true) && valid;
-  valid = (diffraction_transport_partition_enabled(true, true) == false) && valid;
-  valid = (diffraction_transport_partition_enabled(false, false) == false) && valid;
-  valid = (spectral_query_is_spectral(rgb) == false) && valid;
-  valid = spectral_query_is_spectral(spectral) && valid;
-  valid = spectral_query_is_spectral(native_spectral) && valid;
-  valid = (spectral_query_is_spectral(ordinary_rgb) == false) && valid;
-
-  valid = diffraction_transport_contribution_enabled(true, rgb, false) && valid;
-  valid = (diffraction_transport_contribution_enabled(true, rgb, true) == false) && valid;
-  valid = diffraction_transport_contribution_enabled(true, spectral, true) && valid;
-  valid = (diffraction_transport_contribution_enabled(true, spectral, false) == false) && valid;
-
-  const float rgb_branch_pdf = diffraction_transport_branch_pdf(true, rgb);
-  const float spectral_branch_pdf = diffraction_transport_branch_pdf(true, spectral);
-  valid = close_value(diffraction_transport_branch_pdf(false, rgb), 1.0f, 1.0e-6f) && valid;
-  valid = close_value(rgb_branch_pdf + spectral_branch_pdf, 1.0f, 1.0e-6f) && valid;
-  const float no_diffraction_radiance = 3.0f;
-  const float diffraction_radiance = 5.0f;
-  const float expected = no_diffraction_radiance + diffraction_radiance;
-  const float partition_expectation = rgb_branch_pdf * (no_diffraction_radiance / rgb_branch_pdf) + spectral_branch_pdf * (diffraction_radiance / spectral_branch_pdf);
-  valid = close_value(partition_expectation, expected, 1.0e-6f) && valid;
-
-  std::printf("diffraction RGB/spectral transport partition %s\n", valid ? "valid" : "failed");
-  return valid;
-}
-
 ::RefractiveIndexSample make_spectral_ior(const etx::SpectralQuery& query, const float eta, const float k = 0.0f, const uint32_t cls = etx::SpectralDistribution::Dielectric) {
   ::RefractiveIndexSample result = {};
   result.cls = cls;
@@ -480,9 +446,77 @@ bool validate_diffraction_grating_contract(const etx::Scene& scene) {
 
   etx::BSDFData rgb_data = data;
   rgb_data.spectrum_sample = etx::SpectralQuery{};
-  etx::Sampler rgb_sampler(31u, 37u);
-  const etx::BSDFSample rgb_sample = etx::bsdf::sample(rgb_data, material, rgb_sampler);
-  require(rgb_sample.weight.maximum() == 0.0f, "RGB transport is explicitly disabled for the spectral-only implementation");
+  const ::BSDFData rgb_interop_data = etx::bsdf::detail::make_interop_data(rgb_data);
+  const LocalFrame rgb_frame = bsdf_diffraction_grating_frame(rgb_interop_data, material);
+  float3 rgb_efficiency = {};
+  constexpr uint32_t wavelength_integration_samples = 4096u;
+  for (uint32_t channel = 0u; channel < 3u; ++channel) {
+    float channel_efficiency = 0.0f;
+    for (uint32_t wavelength_index = 0u; wavelength_index < wavelength_integration_samples; ++wavelength_index) {
+      const float wavelength_sample = (static_cast<float>(wavelength_index) + 0.5f) / static_cast<float>(wavelength_integration_samples);
+      const float sampled_wavelength = bsdf_diffraction_grating_rgb_sample_wavelength(channel, wavelength_sample);
+      const BSDFDiffractionOrderRange sampled_range = bsdf_diffraction_grating_order_range(local_w_i, sampled_wavelength, period_nm);
+      channel_efficiency += bsdf_diffraction_grating_propagating_efficiency(sampled_range, local_w_i, sampled_wavelength, period_nm, material);
+    }
+    rgb_efficiency = bsdf_diffraction_grating_rgb_set_component(rgb_efficiency, channel, channel_efficiency / static_cast<float>(wavelength_integration_samples));
+  }
+  double rgb_mean_weight_x = 0.0;
+  double rgb_mean_weight_y = 0.0;
+  double rgb_mean_weight_z = 0.0;
+  bool sampled_between_representative_wavelengths = false;
+  for (uint32_t sample_index = 0u; sample_index < sample_count; ++sample_index) {
+    etx::Sampler rgb_sampler(0x8d41c3bu, sample_index + 1u);
+    const etx::BSDFSample rgb_sample = etx::bsdf::sample(rgb_data, material, rgb_sampler);
+    require(validate_sample(rgb_sample), "RGB diffraction sample is finite and non-negative");
+    require(rgb_sample.valid(), "RGB diffraction sample is valid");
+    require((rgb_sample.properties & BSDFSample::Delta) != 0u, "RGB diffraction sample is marked delta");
+    require((rgb_sample.properties & BSDFSample::Reflection) != 0u, "RGB diffraction sample is marked reflection");
+
+    uint32_t selected_channel = 0u;
+    uint32_t positive_channel_count = 0u;
+    for (uint32_t channel = 0u; channel < 3u; ++channel) {
+      if (bsdf_diffraction_grating_rgb_component(rgb_sample.weight.integrated, channel) > kEpsilon) {
+        selected_channel = channel;
+        positive_channel_count += 1u;
+      }
+    }
+    require(positive_channel_count == 1u, "RGB diffraction sample transports one stochastically selected channel");
+
+    bool matched_rgb_order = false;
+    const float3 local_rgb_w_o = local_frame_to_local(rgb_frame, rgb_sample.w_o);
+    const float grating_shift = (local_rgb_w_o.x + local_w_i.x) * period_nm;
+    if (fabsf(grating_shift) <= 1.0e-4f) {
+      matched_rgb_order = true;
+    } else {
+      const float wavelength_center = bsdf_diffraction_grating_rgb_wavelength(selected_channel);
+      const float wavelength_span = bsdf_diffraction_grating_rgb_wavelength_span(selected_channel);
+      for (int order = -64; order <= 64; ++order) {
+        if (order == 0) {
+          continue;
+        }
+        const float sampled_wavelength = grating_shift / static_cast<float>(order);
+        if ((sampled_wavelength < (wavelength_center - wavelength_span - 1.0e-3f)) || (sampled_wavelength > (wavelength_center + wavelength_span + 1.0e-3f))) {
+          continue;
+        }
+        int matched_order = 0;
+        if (bsdf_diffraction_grating_match_order(local_w_i, local_rgb_w_o, sampled_wavelength, period_nm, matched_order) && (matched_order == order)) {
+          matched_rgb_order = true;
+          sampled_between_representative_wavelengths = sampled_between_representative_wavelengths || (fabsf(sampled_wavelength - wavelength_center) > 0.1f);
+          break;
+        }
+      }
+    }
+    require(matched_rgb_order, "RGB diffraction sample follows a wavelength within the selected channel span");
+    rgb_mean_weight_x += rgb_sample.weight.integrated.x;
+    rgb_mean_weight_y += rgb_sample.weight.integrated.y;
+    rgb_mean_weight_z += rgb_sample.weight.integrated.z;
+  }
+  require(sampled_between_representative_wavelengths, "RGB diffraction samples continuous wavelengths instead of only three representatives");
+  const double inverse_rgb_sample_count = 1.0 / static_cast<double>(sample_count);
+  require(close_value(static_cast<float>(rgb_mean_weight_x * inverse_rgb_sample_count), rgb_efficiency.x, 0.01f) &&
+            close_value(static_cast<float>(rgb_mean_weight_y * inverse_rgb_sample_count), rgb_efficiency.y, 0.01f) &&
+            close_value(static_cast<float>(rgb_mean_weight_z * inverse_rgb_sample_count), rgb_efficiency.z, 0.01f),
+    "RGB diffraction estimator returns the three-channel propagating power");
 
   material.diffraction_grating.period_nm = kDiffractionGratingMaximumPeriodNm + 1.0f;
   etx::Sampler invalid_period_sampler(47u, 53u);
@@ -804,18 +838,24 @@ bool validate_diffraction_grating_gpu_shader_compile() {
     {"shaders/gpu_rt_wavefront_surface_continue_prepare_light_variant.hlsl", "wavefront_light_continue_prepare_diffuse_main"},
     {"shaders/gpu_rt_wavefront_connect_camera_prepare_variant.hlsl", "wavefront_light_connect_camera_prepare_diffuse_main"},
   };
-  for (const ProductionShaderVariant& variant : production_variants) {
-    const std::unordered_map<std::string, std::string> production_defines = {
-      {"ETX_BSDF_KIND", "1"},
-      {"ETX_STAGE_ENTRY", variant.entry_point},
-      {"ETX_WAVEFRONT_PATH_TRACING_ONLY", "0"},
-      {"ETX_DXC_OPT_LEVEL", "0"},
-      {"ETX_DXC_SPIRV_OPT_CONFIG", "--compact-ids"},
-    };
-    const auto production_compilation = compiler.compile(variant.source_file, {{variant.entry_point, etx::RHIShaderStage::Compute}}, production_defines, select_default_backend());
-    if ((production_compilation.result != etx::RHIResult::Success) || production_compilation.binaries.empty() || (production_compilation.binaries[0].spirv_size == 0u)) {
-      std::printf("Diffraction-grating production GPU shader compilation failed for %s: %s\n", variant.entry_point, production_compilation.error_message.c_str());
-      return false;
+  const char* spectral_modes[] = {"1", "2"};
+  for (const char* spectral_mode : spectral_modes) {
+    for (const ProductionShaderVariant& variant : production_variants) {
+      const std::unordered_map<std::string, std::string> production_defines = {
+        {"ETX_BSDF_KIND", "1"},
+        {"ETX_STAGE_ENTRY", variant.entry_point},
+        {"ETX_WAVEFRONT_PATH_TRACING_ONLY", "0"},
+        {"ETX_SPECTRAL_MODE", spectral_mode},
+        {"ETX_DXC_OPT_LEVEL", "0"},
+        {"ETX_DXC_SPIRV_OPT_CONFIG", "--compact-ids"},
+      };
+      const auto production_compilation =
+        compiler.compile(variant.source_file, {{variant.entry_point, etx::RHIShaderStage::Compute}}, production_defines, select_default_backend());
+      if ((production_compilation.result != etx::RHIResult::Success) || production_compilation.binaries.empty() || (production_compilation.binaries[0].spirv_size == 0u)) {
+        std::printf("Diffraction-grating production GPU shader compilation failed for %s in spectral mode %s: %s\n", variant.entry_point, spectral_mode,
+          production_compilation.error_message.c_str());
+        return false;
+      }
     }
   }
 
@@ -3465,9 +3505,8 @@ int main(int argc, char** argv) {
   etx::scene_global_init();
   etx::scene_global_publish(&scene, &scene);
   if (diffraction_validation_only) {
-    const bool diffraction_valid = validate_diffraction_transport_partition() && validate_diffraction_grating_serialization() &&
-                                   validate_diffraction_grating_gpu_shader_compile() && validate_diffraction_grating_contract(scene) &&
-                                   validate_bsdf_runtime_numeric_harness(scene, spectra, SpectrumCount, true);
+    const bool diffraction_valid = validate_diffraction_grating_serialization() && validate_diffraction_grating_gpu_shader_compile() &&
+                                   validate_diffraction_grating_contract(scene) && validate_bsdf_runtime_numeric_harness(scene, spectra, SpectrumCount, true);
     etx::scene_global_clear(&scene);
     etx::scene_global_deinit();
     return diffraction_valid ? 0 : 1;
@@ -3526,7 +3565,6 @@ int main(int argc, char** argv) {
   }
 
   bool valid = true;
-  valid = validate_diffraction_transport_partition() && valid;
   valid = validate_thinfilm_optical_invariants() && valid;
   valid = validate_image_3d_sampling() && valid;
   valid = validate_spectral_energy_compensation_lut_sampling() && valid;

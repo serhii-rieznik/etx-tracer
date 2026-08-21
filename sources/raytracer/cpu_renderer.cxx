@@ -81,6 +81,7 @@ void CPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _output_texture_state = RHIResourceState::Undefined;
   _last_uploaded_completed_iterations = 0u;
   _last_uploaded_view_layer = kInvalidIndex;
+  _display_output_valid = false;
   reset_preview_state();
 }
 
@@ -158,6 +159,7 @@ void CPURaytracingRenderer::start() {
   _raytracing.film().set_pixel_size(1u);
   _raytracing.film().clear(Film::ClearEverything);
   _last_uploaded_completed_iterations = 0u;
+  _display_output_valid = false;
   start_render_timing();
   _integrator_thread.run();
 }
@@ -173,6 +175,7 @@ void CPURaytracingRenderer::finish() {
 
 void CPURaytracingRenderer::restart() {
   _last_uploaded_completed_iterations = 0u;
+  _display_output_valid = false;
   start_render_timing();
   _integrator_thread.restart();
 }
@@ -248,6 +251,7 @@ Integrator* CPURaytracingRenderer::current_integrator() const {
 void CPURaytracingRenderer::set_integrator(Integrator* i) {
   _integrator_thread.set_integrator(i);
   _last_uploaded_completed_iterations = 0u;
+  _display_output_valid = false;
   reset_render_timing();
 }
 
@@ -334,6 +338,7 @@ bool CPURaytracingRenderer::update_image(RHIContext& ctx, RHICommandBuffer cmd, 
   ctx.cmd_copy_buffer_to_texture(cmd, staging_buffer, _output_texture, _output_dimensions.x, _output_dimensions.y);
   ctx.cmd_texture_barrier(cmd, _output_texture, RHIResourceState::TransferDst, RHIResourceState::ShaderReadOnly);
   _output_texture_state = RHIResourceState::ShaderReadOnly;
+  _display_output_valid = true;
   return true;
 }
 
@@ -371,6 +376,7 @@ void CPURaytracingRenderer::set_output_dimensions(RHIContext& ctx, const uint2& 
   _output_texture_state = RHIResourceState::Undefined;
   _last_uploaded_completed_iterations = 0u;
   _last_uploaded_view_layer = kInvalidIndex;
+  _display_output_valid = false;
 }
 
 }  // namespace etx

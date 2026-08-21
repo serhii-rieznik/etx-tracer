@@ -84,6 +84,13 @@ ETX_SHARED_INLINE RefractiveIndexSample bsdf_resource_evaluate_refractive_index(
   return result;
 }
 
+ETX_SHARED_INLINE float3 bsdf_resource_evaluate_refractive_index_integrated_eta(ETX_IN(BSDFResourceContext, context), ETX_IN(RefractiveIndex, refractive_index)) {
+  if (refractive_index.eta_index == kInvalidIndex) {
+    return float3(1.0f, 1.0f, 1.0f);
+  }
+  return bsdf_resource_load_spectrum_integrated(context, refractive_index.eta_index);
+}
+
 ETX_SHARED_INLINE bool bsdf_resource_thinfilm_enabled(ETX_IN(Thinfilm, film)) {
   const float maximum_thickness = max(max(film.min_thickness, 0.0f), max(film.max_thickness, 0.0f));
   return (clamp(film.weight, 0.0f, 1.0f) > 0.0f) && (maximum_thickness > 0.0f) && (film.ior.cls == SpectralDistribution::Dielectric);

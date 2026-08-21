@@ -214,7 +214,7 @@ void wavefront_path_tracing_update_refractive_depth(inout GPUWavefrontPathState 
 }
 
 uint wavefront_path_state_persistent_flags(GPUWavefrontPathState state) {
-  return state.flags & (GPUWavefrontPathFlags::Depth_limit_reached_while_refractive | GPUWavefrontPathFlags::Contains_diffraction);
+  return state.flags & GPUWavefrontPathFlags::Depth_limit_reached_while_refractive;
 }
 
 SpectralResponse wavefront_evaluate_local_direct_hit_radiance(uint emitter_index, SpectralQuery spect, float3 source_position, float3 target_position, float2 uv,
@@ -448,10 +448,6 @@ float wavefront_medium_connect_camera_weight(Camera camera, CameraFilmSampleShar
 
 void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_index, GPUWavefrontResources resources, inout GPUWavefrontPathState state,
   GPUWavefrontPathMeta path_meta, GPUWavefrontPathVertex current_vertex, GPUWavefrontPathVertex previous_vertex) {
-  if (wavefront_diffraction_contribution_enabled(state.spect, wavefront_vertex_contains_diffraction(current_vertex)) == false) {
-    return;
-  }
-
   if ((resources.connect_camera_task_buffer == kInvalidIndex) || (constants.camera_buffer_index == kInvalidIndex) ||
       (scene_strategy_enabled(kSceneStrategyConnectToCamera) == false) || (wavefront_path_vertex_connectible(current_vertex) == false)) {
     return;
@@ -573,11 +569,6 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
         if (scene_path_mode_is_path_tracing() == false) {
           GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
           wavefront_surface_precompute_camera_mis(true, state.path_length, meta, previous_vertex);
-        }
-        if (wavefront_diffraction_contribution_enabled(state.spect, wavefront_path_contains_diffraction(state)) == false) {
-          state.flags = 0u;
-          wavefront_store_path_state(state_descriptor, path_index, state);
-          return;
         }
         SpectralResponse contribution = wavefront_compute_environment_direct_hit_contribution(state.spect, state, previous_vertex);
         if (spectral_response_is_zero(contribution) == false) {

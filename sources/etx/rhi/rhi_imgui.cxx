@@ -120,6 +120,7 @@ void RHIImGui::set_theme(RHIImGuiTheme theme) {
     colors[ImGuiCol_TabActive] = ImVec4(0.18f, 0.28f, 0.42f, 1.00f);
     colors[ImGuiCol_TabUnfocused] = ImVec4(0.10f, 0.12f, 0.14f, 1.00f);
     colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.12f, 0.18f, 0.26f, 1.00f);
+    colors[ImGuiCol_TableHeaderBg] = ImVec4(0.13f, 0.15f, 0.18f, 1.00f);
     colors[ImGuiCol_PlotLines] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
     colors[ImGuiCol_PlotLinesHovered] = ImVec4(0.65f, 0.55f, 0.25f, 1.00f);
     colors[ImGuiCol_PlotHistogram] = ImVec4(0.55f, 0.45f, 0.20f, 1.00f);
@@ -169,6 +170,7 @@ void RHIImGui::set_theme(RHIImGuiTheme theme) {
     colors[ImGuiCol_TabActive] = ImVec4(0.70f, 0.80f, 0.92f, 1.00f);
     colors[ImGuiCol_TabUnfocused] = ImVec4(0.92f, 0.92f, 0.94f, 1.00f);
     colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.85f, 0.88f, 0.92f, 1.00f);
+    colors[ImGuiCol_TableHeaderBg] = ImVec4(0.85f, 0.88f, 0.92f, 1.00f);
     colors[ImGuiCol_PlotLines] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
     colors[ImGuiCol_PlotLinesHovered] = ImVec4(0.92f, 0.85f, 0.50f, 1.00f);
     colors[ImGuiCol_PlotHistogram] = ImVec4(0.85f, 0.78f, 0.45f, 1.00f);
@@ -420,6 +422,9 @@ RHIResult RHIImGui::create_pipeline() {
         .backend = result.binaries[0].backend,
         .format = result.binaries[0].format,
         .entry_point = "vs_main",
+        .cache_key = result.binaries[0].cache_key,
+        .content_hash = result.binaries[0].content_hash,
+        .metal_metadata = result.binaries[0].metal_metadata,
       },
     .fragment_shader =
       {
@@ -429,6 +434,9 @@ RHIResult RHIImGui::create_pipeline() {
         .backend = result.binaries[1].backend,
         .format = result.binaries[1].format,
         .entry_point = "ps_main",
+        .cache_key = result.binaries[1].cache_key,
+        .content_hash = result.binaries[1].content_hash,
+        .metal_metadata = result.binaries[1].metal_metadata,
       },
     .blend =
       {

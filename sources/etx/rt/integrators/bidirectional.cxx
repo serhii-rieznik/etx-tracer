@@ -36,7 +36,6 @@ struct PathVertex {
   Class cls = Class::Invalid;
   bool connectible = true;
   bool mis_connectible = true;
-  bool contains_diffraction = false;
 
   PathVertex() = default;
 
@@ -246,7 +245,6 @@ struct CPUBidirectionalImpl : public Task {
   bool enable_connect_vertices = true;
   bool enable_mis = true;
   bool enable_blue_noise = true;
-  bool diffraction_partition = false;
 
   using Mode = BDPTMode;
   Mode mode = Mode::BDPTFast;
@@ -255,7 +253,6 @@ struct CPUBidirectionalImpl : public Task {
     SpectralResponse albedo = {};
     float3 normal = {0.0f, 0.0f, 1.0f};
     bool recorded = false;
-    bool contains_diffraction = false;
   };
 
   enum class InteractionResult : uint32_t {
@@ -276,25 +273,12 @@ struct CPUBidirectionalImpl : public Task {
     uint2 pixel = {};
     uint32_t iteration = 0;
     bool use_blue_noise = false;
-    bool contains_diffraction = false;
   };
 
   CPUBidirectionalImpl(Raytracing& r, std::atomic<Integrator::State>* st)
     : rt(r)
     , per_thread_path_data(rt.scheduler().max_thread_count())
     , state(st) {
-  }
-
-  bool contribution_enabled(SpectralQuery spect, bool contains_diffraction) const {
-    return diffraction_transport_contribution_enabled(diffraction_partition, spect, contains_diffraction);
-  }
-
-  bool scattering_path_contains_diffraction(const PathVertex& vertex) const {
-    return vertex.contains_diffraction || (vertex.material == MaterialClass::DiffractionGrating);
-  }
-
-  float branch_pdf(SpectralQuery spect) const {
-    return diffraction_transport_branch_pdf(diffraction_partition, spect);
   }
 
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) {
@@ -318,19 +302,11 @@ struct CPUBidirectionalImpl : public Task {
         if (scene.spectral()) {
           spect = SpectralQuery::packet_sample(light_smp.next());
           camera_smp.next();
-        } else if (diffraction_partition) {
-          const auto query = diffraction_transport_sample_query(false, true, light_smp.next(), light_smp.next());
-          spect = SpectralQuery{query.wavelength, query.flags};
-          camera_smp.next();
-          camera_smp.next();
         }
         build_emitter_path(light_smp, spect, path_data);
       } else {
         if (scene.spectral()) {
           spect = SpectralQuery::packet_sample(camera_smp.next());
-        } else if (diffraction_partition) {
-          const auto query = diffraction_transport_sample_query(false, true, camera_smp.next(), camera_smp.next());
-          spect = SpectralQuery{query.wavelength, query.flags};
         }
       }
 
@@ -342,8 +318,8 @@ struct CPUBidirectionalImpl : public Task {
         result = build_camera_path(camera_smp, spect, uv, path_data, gbuffer, pixel, status.current_iteration);
       }
 
-      auto xyz = result.to_rgb_estimate() / branch_pdf(spect);
-      auto albedo = contribution_enabled(spect, gbuffer.contains_diffraction) ? gbuffer.albedo.to_rgb_estimate() / branch_pdf(spect) : float3{};
+      auto xyz = result.to_rgb_estimate();
+      auto albedo = gbuffer.albedo.to_rgb_estimate();
       film.submit(xyz, gbuffer.normal, albedo, pixel);
     }
   }
@@ -392,11 +368,6 @@ struct CPUBidirectionalImpl : public Task {
 
       const auto& y_i = path_data.emitter_path[light_s];
       if (y_i.connectible == false) {
-        continue;
-      }
-
-      const bool contains_diffraction = scattering_path_contains_diffraction(z_i) || scattering_path_contains_diffraction(y_i);
-      if (contribution_enabled(spect, contains_diffraction) == false) {
         continue;
       }
 
@@ -464,19 +435,17 @@ struct CPUBidirectionalImpl : public Task {
 
   void connect(Payload& payload, Sampler& smp, const float3& smp_fixed, PathData& path_data, PathVertex& curr, PathVertex& prev) const {
     if (payload.mode == PathSource::Light) {
-      if (curr.connectible && contribution_enabled(payload.spect, scattering_path_contains_diffraction(curr))) {
+      if (curr.connectible) {
         CameraSample camera_sample = {};
         auto splat = connect_light_to_camera(smp, path_data, curr, prev, payload.spect, camera_sample);
-        rt.film().submit(splat.to_rgb_estimate() / branch_pdf(payload.spect), camera_sample.uv);
+        rt.film().submit(splat.to_rgb_estimate(), camera_sample.uv);
       }
     } else if (payload.mode == PathSource::Camera) {
       smp.push_fixed(smp_fixed.x, smp_fixed.y, smp_fixed.z);
-      if (curr.connectible && contribution_enabled(payload.spect, scattering_path_contains_diffraction(curr))) {
+      if (curr.connectible) {
         payload.result += connect_camera_to_light(curr, prev, smp, path_data, payload.spect);
       }
-      if (contribution_enabled(payload.spect, curr.contains_diffraction)) {
-        payload.result += direct_hit_area_emitter(curr, prev, path_data, payload.spect, smp, false);
-      }
+      payload.result += direct_hit_area_emitter(curr, prev, path_data, payload.spect, smp, false);
       smp.pop_fixed();
       if (curr.connectible) {
         payload.result += connect_camera_to_light_path(curr, prev, smp, payload.spect, path_data);
@@ -509,7 +478,6 @@ struct CPUBidirectionalImpl : public Task {
 
     curr = PathVertex{medium_sample_pos, ray.d, medium_instance};
     curr.material = MaterialClass::Undefined;
-    curr.contains_diffraction = payload.contains_diffraction;
     curr.connectible = true;
     curr.mis_connectible = prev.connectible;
     curr.throughput = payload.throughput;
@@ -561,7 +529,6 @@ struct CPUBidirectionalImpl : public Task {
     if (gbuffer.recorded == false) {
       gbuffer.normal = a_intersection.nrm;
       gbuffer.albedo = bsdf::albedo(bsdf_data, scene.materials[a_intersection.material_index], smp);
-      gbuffer.contains_diffraction = scene.materials[a_intersection.material_index].cls == MaterialClass::DiffractionGrating;
       gbuffer.recorded = true;
     }
 
@@ -606,7 +573,6 @@ struct CPUBidirectionalImpl : public Task {
 
     curr = PathVertex{PathVertex::Class::Surface, a_intersection};
     curr.material = scene.materials[material_index].cls;
-    curr.contains_diffraction = payload.contains_diffraction;
     curr.throughput = payload.throughput;
     curr.intersection.material_index = material_index;
     curr.medium = medium_instance;
@@ -632,10 +598,6 @@ struct CPUBidirectionalImpl : public Task {
 
       payload.throughput *= bsdf_sample.weight;
       ETX_VALIDATE(payload.throughput);
-
-      if (scene.materials[a_intersection.material_index].cls == MaterialClass::DiffractionGrating) {
-        payload.contains_diffraction = true;
-      }
 
       const auto& tri = scene.triangles[a_intersection.triangle_index];
 
@@ -836,16 +798,13 @@ struct CPUBidirectionalImpl : public Task {
         curr.pdf.from_prev = payload.pdf_dir;
         curr.intersection.w_i = ray.d;
         curr.intersection.pos = ray.o;  // Store ray origin, direction is in w_i
-        curr.contains_diffraction = payload.contains_diffraction;
         path_data.camera_path_size += 1u;
         precompute_camera_mis(curr, prev, path_data);
 #if (ETX_INCLUDE_CAMERA_PATH)
         path_data.camera_path.back() = prev;
         path_data.camera_path.emplace_back(curr);
 #endif
-        if (contribution_enabled(payload.spect, curr.contains_diffraction)) {
-          payload.result += direct_hit_environment_emitter(curr, prev, path_data, payload.spect, smp, path_length == 0);
-        }
+        payload.result += direct_hit_environment_emitter(curr, prev, path_data, payload.spect, smp, path_length == 0);
       }
 
       if (should_break || random_continue(path_length, scene.options.random_path_termination, payload.eta, smp, payload.throughput) == false) {
@@ -1454,8 +1413,6 @@ struct CPUBidirectionalImpl : public Task {
     enable_connect_vertices = scene.strategy_enabled(Scene::Strategy::ConnectVertices);
     enable_mis = scene.multiple_importance_sampling();
     enable_blue_noise = scene.blue_noise();
-    diffraction_partition = scene.diffraction_transport_partition();
-
     for (auto& path_data : per_thread_path_data) {
       path_data.emitter_path.reserve(2llu + rt.scene().options.max_path_length);
     }

@@ -105,10 +105,7 @@ void wavefront_vcm_merge(uint dispatch_index) {
         float3 delta = light_vertex.position - camera_vertex.position;
         float distance_squared = dot(delta, delta);
         bool query_matches = spectral_query_compatible(spectral_response_as_query(light_vertex.throughput), state.spect);
-        bool contains_diffraction =
-          wavefront_vertex_contains_diffraction(camera_vertex) || wavefront_vertex_contains_diffraction(light_vertex) || (material.cls == MaterialClass::DiffractionGrating);
-        if (query_matches && (distance_squared <= radius_squared) && (dot(camera_vertex.normal, light_vertex.normal) > kEpsilon) &&
-            wavefront_diffraction_contribution_enabled(state.spect, contains_diffraction)) {
+        if (query_matches && (distance_squared <= radius_squared) && (dot(camera_vertex.normal, light_vertex.normal) > kEpsilon)) {
           float3 outgoing_direction = -light_vertex.w_i;
           BSDFEval camera_eval = wavefront_vcm_merge_stage_bsdf_eval(bsdf_context, camera_data, outgoing_direction, material, sampler);
           if (bsdf_eval_valid(camera_eval)) {

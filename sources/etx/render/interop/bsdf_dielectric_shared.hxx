@@ -18,14 +18,16 @@ ETX_SHARED_INLINE bool bsdf_dielectric_equal_eta(ETX_IN(RefractiveIndexSample, e
   return abs(eta_ext - eta_int) <= tolerance;
 }
 
-ETX_SHARED_INLINE bool bsdf_dielectric_equal_eta_with_context(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(SpectralQuery, spect)) {
+ETX_SHARED_INLINE bool bsdf_dielectric_equal_eta_with_context(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material)) {
   if (bsdf_dielectric_has_thinfilm(material)) {
     return false;
   }
 
-  const RefractiveIndexSample ext_ior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, spect);
-  const RefractiveIndexSample int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, spect);
-  return bsdf_dielectric_equal_eta(ext_ior, int_ior);
+  const float eta_ext = max(kEpsilon, luminance(bsdf_resource_evaluate_refractive_index_integrated_eta(context, material.ext_ior)));
+  const float eta_int = max(kEpsilon, luminance(bsdf_resource_evaluate_refractive_index_integrated_eta(context, material.int_ior)));
+  const float eta_scale = max(eta_ext, eta_int);
+  const float tolerance = max(kEpsilon, 16.0f * kEpsilon * eta_scale);
+  return abs(eta_ext - eta_int) <= tolerance;
 }
 
 ETX_SHARED_INLINE BSDFSample bsdf_dielectric_equal_eta_sample(ETX_IN(BSDFData, data), ETX_IN(Material, material)) {
@@ -239,9 +241,8 @@ ETX_SHARED_INLINE bool bsdf_dielectric_is_delta(ETX_IN(Material, material), ETX_
 }
 
 ETX_SHARED_INLINE bool bsdf_dielectric_is_delta_with_context(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, tex)) {
-  float2 roughness = bsdf_resource_evaluate_roughness(context, material, tex);
-  SpectralQuery spect = ETX_ZERO(SpectralQuery);
-  return ((max(roughness.x, roughness.y) <= kDeltaAlphaTreshold) || bsdf_dielectric_equal_eta_with_context(context, material, spect));
+  const float2 roughness = bsdf_resource_evaluate_roughness(context, material, tex);
+  return ((max(roughness.x, roughness.y) <= kDeltaAlphaTreshold) || bsdf_dielectric_equal_eta_with_context(context, material));
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_dielectric_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {

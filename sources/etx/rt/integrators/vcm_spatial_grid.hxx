@@ -16,7 +16,6 @@ struct VCMSpatialGrid {
   std::vector<float> _d_vcm;
   std::vector<float> _d_vm;
   std::vector<uint32_t> _path_lengths;
-  std::vector<uint32_t> _contains_diffraction;
   std::vector<SpectralResponse> _throughputs;
 };
 

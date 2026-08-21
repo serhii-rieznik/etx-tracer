@@ -41,7 +41,10 @@ struct CPURaytracingRenderer : public Renderer {
     return _output_texture;
   }
   RHITexture display_texture() const override {
-    return (_output_texture_state == RHIResourceState::ShaderReadOnly) ? _output_texture : RHITexture{};
+    if ((_display_output_valid == false) || (_output_texture_state != RHIResourceState::ShaderReadOnly)) {
+      return {};
+    }
+    return _output_texture;
   }
   void start() override;
   void stop() override;
@@ -105,6 +108,7 @@ struct CPURaytracingRenderer : public Renderer {
   RHIResourceState _output_texture_state = RHIResourceState::Undefined;
   uint32_t _last_uploaded_completed_iterations = 0u;
   uint32_t _last_uploaded_view_layer = kInvalidIndex;
+  bool _display_output_valid = false;
 
   RHIPipeline rhi_pipeline = {};
 };

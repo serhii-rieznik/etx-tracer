@@ -83,7 +83,6 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   _d_vcm.clear();
   _d_vm.clear();
   _path_lengths.clear();
-  _contains_diffraction.clear();
   _throughputs.clear();
   _cell_ends.resize(hash_table_size);
   memset(_cell_ends.data(), 0, sizeof(uint32_t) * hash_table_size);
@@ -116,7 +115,6 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   _d_vcm.resize(total);
   _d_vm.resize(total);
   _path_lengths.resize(total);
-  _contains_diffraction.resize(total);
   _throughputs.resize(total);
 
   ptr = reinterpret_cast<int32_t*>(_cell_ends.data());
@@ -134,7 +132,6 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
       _d_vcm[dst] = s.d_vcm;
       _d_vm[dst] = s.d_vm;
       _path_lengths[dst] = s.path_length;
-      _contains_diffraction[dst] = s.contains_diffraction ? 1u : 0u;
       _throughputs[dst] = s.throughput;
     }
   });
@@ -146,7 +143,6 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   data.d_vcm = make_array_view<float>(_d_vcm.data(), _d_vcm.size());
   data.d_vm = make_array_view<float>(_d_vm.data(), _d_vm.size());
   data.path_lengths = make_array_view<uint32_t>(_path_lengths.data(), _path_lengths.size());
-  data.contains_diffraction = make_array_view<uint32_t>(_contains_diffraction.data(), _contains_diffraction.size());
   data.throughputs = make_array_view<SpectralResponse>(_throughputs.data(), _throughputs.size());
 }
 

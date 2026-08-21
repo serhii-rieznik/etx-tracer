@@ -29,6 +29,16 @@ ETX_SHARED_INLINE SpectralResponse bsdf_resource_load_spectrum(ETX_IN(BSDFResour
   return etx::spectrum_access_evaluate(spectrum_context, spectrum_index, spect);
 }
 
+ETX_SHARED_INLINE float3 bsdf_resource_load_spectrum_integrated(ETX_IN(BSDFResourceContext, context), uint32_t spectrum_index) {
+  if ((spectrum_index == kInvalidIndex) || (spectrum_index >= context.scene->spectrums.count)) {
+    return float3{0.0f, 0.0f, 0.0f};
+  }
+
+  const etx::SpectrumAccessCPUContext spectrum_context =
+    etx::make_spectrum_access_cpu_context(reinterpret_cast<const ::SpectralDistribution*>(context.scene->spectrums.a), static_cast<uint32_t>(context.scene->spectrums.count));
+  return etx::spectrum_access_load_integrated(spectrum_context, spectrum_index);
+}
+
 ETX_SHARED_INLINE bool bsdf_resource_image_has_alpha(ETX_IN(BSDFResourceContext, context), uint32_t image_index) {
   etx::ImageAccessCPUContext image_access = etx::make_image_access_cpu_context(*context.scene);
   return etx::image_access_has_alpha(image_access, image_index);

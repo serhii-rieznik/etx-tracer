@@ -227,7 +227,8 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
     wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length));
   input_value.camera_previous_vertex =
     wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
-  const GPUWavefrontConnectLightTask vertex_indices = wavefront_load_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index);
+  const GPUWavefrontConnectLightTask vertex_indices =
+    wavefront_load_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index);
   if ((vertex_indices.reserved1 == kInvalidIndex) || (vertex_indices.reserved2 == kInvalidIndex)) {
     return false;
   }
@@ -244,14 +245,6 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
     return false;
   }
   if (wavefront_path_vertex_is_surface(input_value.light_vertex) && (try_load_material_full(input_value.light_vertex.material_index, input_value.light_material) == false)) {
-    return false;
-  }
-
-  bool contains_diffraction = wavefront_vertex_contains_diffraction(input_value.camera_vertex) || wavefront_vertex_contains_diffraction(input_value.light_vertex) ||
-                              (wavefront_path_vertex_is_surface(input_value.camera_vertex) && (input_value.camera_material.cls == MaterialClass::DiffractionGrating)) ||
-                              (wavefront_path_vertex_is_surface(input_value.light_vertex) && (input_value.light_material.cls == MaterialClass::DiffractionGrating));
-  SpectralQuery spect = spectral_response_as_query(input_value.camera_vertex.throughput);
-  if (wavefront_diffraction_contribution_enabled(spect, contains_diffraction) == false) {
     return false;
   }
 
@@ -289,8 +282,7 @@ void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput
   float z_prev_pdf = wavefront_convert_solid_angle_pdf_to_area(z_prev_pdf_dir, input_value.camera_vertex.position, input_value.camera_previous_vertex.position,
     wavefront_path_vertex_is_surface(input_value.camera_previous_vertex), input_value.camera_previous_vertex.normal);
 
-  const GPUWavefrontConnectLightTask vertex_indices =
-    wavefront_load_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index);
+  const GPUWavefrontConnectLightTask vertex_indices = wavefront_load_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index);
   GPUWavefrontConnectLightTask task = (GPUWavefrontConnectLightTask)0;
   task.contribution = camera_eval.bsdf;
   task.mis_weight = camera_eval.pdf;

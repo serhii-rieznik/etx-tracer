@@ -9,6 +9,7 @@
 #include <interop/gpu_wavefront_shared.hxx>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -135,13 +136,17 @@ struct GPURaytracingRenderer : public Renderer {
     if (_preview_visible && (_preview_texture_state == RHIResourceState::ShaderReadOnly)) {
       return _preview_texture;
     }
-    return (_output_texture_state == RHIResourceState::ShaderReadOnly) ? _output_texture : RHITexture{};
+    if ((_display_output_valid == false) || (_output_texture_state != RHIResourceState::ShaderReadOnly)) {
+      return {};
+    }
+    return _output_texture;
   }
   RendererPreparationStatus preparation_status() const override;
   RendererStatus status() const override;
   RendererMemoryStats memory_stats() const override;
   RendererControlState control_state() const override;
   bool is_running() const override;
+  void invalidate_output();
   void start() override;
   void cancel_preparation() override;
   void stop() override;
@@ -167,6 +172,7 @@ struct GPURaytracingRenderer : public Renderer {
 
   struct CompiledStageBinary {
     PipelineStage stage = PipelineStage::PrepareSample;
+    uint64_t variant_key = 0u;
     std::string entry_point = {};
     std::string source_file = {};
     std::string optimization_level = {};
@@ -193,6 +199,7 @@ struct GPURaytracingRenderer : public Renderer {
     uint32_t integrator_features = 0u;
     uint32_t material_compile_mask = 0u;
     uint32_t spectral_mode = 0u;
+    uint64_t requested_stage_mask = 0u;
     std::string compile_stage_filter = {};
     uint32_t total_steps = 0u;
     uint32_t total_compile_groups = 0u;
@@ -200,9 +207,14 @@ struct GPURaytracingRenderer : public Renderer {
     std::atomic<uint32_t> completed_compile_groups = 0u;
     std::atomic<uint32_t> completed_pipelines = 0u;
     std::atomic<uint32_t> compile_worker_count = 0u;
+    std::atomic<bool> initialization_complete = false;
+    std::atomic<bool> compilation_complete = false;
+    std::atomic<bool> publish_started = false;
     std::vector<CompiledStageBinary> compiled_stages = {};
+    std::vector<uint32_t> ready_pipeline_indices = {};
     std::vector<PipelinePublishTiming> publish_timings = {};
     mutable std::mutex progress_mutex = {};
+    std::condition_variable progress_condition = {};
     std::vector<RendererPreparationStepStatus> pipeline_progress = {};
     std::string error_message = {};
     bool compile_filter_matched = false;
@@ -221,7 +233,7 @@ struct GPURaytracingRenderer : public Renderer {
     Task::Handle handle = {};
     std::shared_ptr<PendingPipelinePreparation> preparation = {};
     std::vector<RHICreatePipelineBatchEntry> results = {};
-    uint32_t first_pipeline = 0u;
+    std::vector<uint32_t> pipeline_indices = {};
     uint32_t pipeline_count = 0u;
     uint32_t worker_count = 0u;
     std::chrono::steady_clock::time_point started_at = {};
@@ -248,7 +260,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
   bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t path_capacity, uint32_t active_path_capacity, bool allow_light_history_shrink);
   bool ensure_light_vertex_capacity(RHIContext& ctx, uint32_t required_vertex_capacity);
-  void request_pipeline_preparation(const SceneRepresentation& scene, const char* reason);
+  void request_pipeline_preparation(const SceneRepresentation& scene, const char* reason, bool force_reload);
   void poll_preparation_tasks(RHIContext& ctx, bool wait_for_active = false);
   bool begin_pipeline_publish(std::shared_ptr<PendingPipelinePreparation> result);
   bool advance_pipeline_publish(RHIContext& ctx, uint32_t max_pipelines, bool wait_for_batch);
@@ -272,6 +284,7 @@ struct GPURaytracingRenderer : public Renderer {
 
  private:
   RHIPipeline _pipelines[static_cast<uint32_t>(PipelineStage::Count)] = {};
+  uint64_t _pipeline_variant_keys[static_cast<uint32_t>(PipelineStage::Count)] = {};
   RHITexture _preview_texture = {};
   uint2 _preview_texture_dimensions = {};
   RHIResourceState _preview_texture_state = RHIResourceState::Undefined;
@@ -503,6 +516,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool _preparation_canceled = false;
   bool _pipeline_publish_logged = false;
   bool _preview_visible = false;
+  bool _display_output_valid = false;
   bool _cleanup_wait_succeeded = false;
   bool _render_timing_active = false;
   bool _kernel_timing_enabled = false;

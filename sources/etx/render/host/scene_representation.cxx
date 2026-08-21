@@ -532,7 +532,6 @@ struct SceneRepresentationImpl {
     data.options.properties[Scene::Properties::Spectral] = false;
     data.options.properties[Scene::Properties::MultipleImportanceSampling] = true;
     data.options.properties[Scene::Properties::BlueNoise] = true;
-    data.options.properties[Scene::Properties::DiffractionGrating] = false;
 
     data.defaults.subsurface_scatter_material = data.add_material("etx::subsurface-scatter");
     data.materials[data.defaults.subsurface_scatter_material].reflectance = {.spectrum_index = data.defaults.black_spectrum};
@@ -682,9 +681,6 @@ struct SceneRepresentationImpl {
           }
         }
       }
-    });
-    data.options.properties[Scene::Properties::DiffractionGrating] = std::any_of(data.materials.begin(), data.materials.end(), [](const Material& material) {
-      return material.cls == MaterialClass::DiffractionGrating;
     });
   }
 

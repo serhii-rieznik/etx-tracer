@@ -76,13 +76,13 @@ enum class GPUIntegratorMode : uint32_t {
 };
 
 enum class GPUSpectralMode : uint32_t {
-  Runtime = 0u,
   RGB = 1u,
+  Spectral = 2u,
 };
 
 GPUSpectralMode gpu_spectral_mode(const SceneData& scene_data) {
-  if ((scene_data.options.properties[Scene::Properties::Spectral]) || (scene_data.options.properties[Scene::Properties::DiffractionGrating])) {
-    return GPUSpectralMode::Runtime;
+  if (scene_data.options.properties[Scene::Properties::Spectral]) {
+    return GPUSpectralMode::Spectral;
   }
   return GPUSpectralMode::RGB;
 }
@@ -712,6 +712,86 @@ uint32_t material_compile_mask_work_queue_count(uint32_t mask) {
   return static_cast<uint32_t>(material_compile_mask_has_various_continue(mask)) + static_cast<uint32_t>(material_compile_mask_has(mask, MaterialClass::Plastic)) +
          static_cast<uint32_t>(material_compile_mask_has_conductor_stage(mask)) + static_cast<uint32_t>(material_compile_mask_has(mask, MaterialClass::Dielectric)) +
          static_cast<uint32_t>(material_compile_mask_has(mask, MaterialClass::Thinfilm));
+}
+
+constexpr uint64_t pipeline_stage_bit(GPURaytracingRenderer::PipelineStage stage) {
+  return 1ull << static_cast<uint32_t>(stage);
+}
+
+static_assert(static_cast<uint32_t>(GPURaytracingRenderer::PipelineStage::Count) <= 64u);
+
+bool wavefront_stage_source_is(const WavefrontStage& stage, const char* source_file) {
+  return (stage.source_file != nullptr) && (std::strcmp(stage.source_file, source_file) == 0);
+}
+
+struct WavefrontStageCompileOptions {
+  bool path_tracing_only = false;
+  bool work_queues = false;
+  bool thinfilm = false;
+  bool velvet = false;
+};
+
+WavefrontStageCompileOptions wavefront_stage_compile_options(const WavefrontStage& stage, GPUIntegratorMode mode, uint32_t material_compile_mask) {
+  const bool diffuse_variant = (stage.bsdf_kind != nullptr) && (std::strcmp(stage.bsdf_kind, "1") == 0);
+  const bool surface_continue_variant = wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_surface_continue_prepare_camera_variant.hlsl") ||
+                                        wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_surface_continue_prepare_light_variant.hlsl");
+  const bool direct_light_variant = wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_direct_light_prepare_variant.hlsl");
+  const bool connect_light_prepare_variant = wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_connect_light_prepare_variant.hlsl");
+  const bool connect_light_resolve_variant = wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_connect_light_resolve_variant.hlsl");
+  const bool connect_camera_variant = wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_connect_camera_prepare_variant.hlsl");
+  const bool vcm_merge_variant = wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_vcm_merge_variant.hlsl");
+  const bool surface_classify =
+    wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_surface_camera.hlsl") || wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_surface_light.hlsl");
+
+  WavefrontStageCompileOptions result = {};
+  result.path_tracing_only = (mode == GPUIntegratorMode::PathTracing) && (surface_continue_variant || direct_light_variant);
+  result.work_queues = (material_compile_mask_work_queue_count(material_compile_mask) > 1u) &&
+                       (surface_classify || surface_continue_variant || direct_light_variant || connect_camera_variant || vcm_merge_variant);
+  result.thinfilm = diffuse_variant && material_compile_mask_has(material_compile_mask, MaterialClass::Thinfilm) &&
+                    (direct_light_variant || connect_light_prepare_variant || connect_light_resolve_variant || connect_camera_variant || vcm_merge_variant);
+  result.velvet =
+    diffuse_variant && material_compile_mask_has(material_compile_mask, MaterialClass::Velvet) &&
+    (surface_continue_variant || direct_light_variant || connect_light_prepare_variant || connect_light_resolve_variant || connect_camera_variant || vcm_merge_variant);
+  return result;
+}
+
+uint64_t wavefront_stage_variant_key(const WavefrontStage& stage, GPUIntegratorMode mode, uint32_t material_compile_mask, uint32_t spectral_mode) {
+  const WavefrontStageCompileOptions options = wavefront_stage_compile_options(stage, mode, material_compile_mask);
+  uint64_t result = spectral_mode;
+  result |= options.path_tracing_only ? (1ull << 8u) : 0ull;
+  result |= options.work_queues ? (1ull << 9u) : 0ull;
+  result |= options.thinfilm ? (1ull << 10u) : 0ull;
+  result |= options.velvet ? (1ull << 11u) : 0ull;
+  return result;
+}
+
+std::unordered_map<std::string, std::string> wavefront_stage_defines(const WavefrontStage& stage, GPUIntegratorMode mode, uint32_t material_compile_mask, uint32_t spectral_mode) {
+  std::unordered_map<std::string, std::string> result = {};
+  if (stage.optimization_level != nullptr) {
+    result["ETX_DXC_OPT_LEVEL"] = stage.optimization_level;
+  }
+  if (stage.bsdf_kind != nullptr) {
+    result["ETX_BSDF_KIND"] = stage.bsdf_kind;
+  }
+  result["ETX_SPECTRAL_MODE"] = std::to_string(spectral_mode);
+
+  const WavefrontStageCompileOptions options = wavefront_stage_compile_options(stage, mode, material_compile_mask);
+  if (options.path_tracing_only) {
+    result["ETX_WAVEFRONT_PATH_TRACING_ONLY"] = "1";
+  }
+  if (options.work_queues) {
+    result["ETX_ENABLE_WORK_QUEUES"] = "1";
+  }
+  if (options.thinfilm) {
+    result["ETX_ENABLE_THINFILM_STAGE"] = "1";
+  }
+  if (options.velvet) {
+    result["ETX_ENABLE_VELVET_STAGE"] = "1";
+  }
+  if (stage.uses_stage_entry_define) {
+    result["ETX_STAGE_ENTRY"] = stage.entry_point;
+  }
+  return result;
 }
 
 bool gpu_integrator_feature_enabled(uint32_t features, uint32_t feature) {
@@ -1568,7 +1648,7 @@ void GPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
 void GPURaytracingRenderer::reload_shaders(RHIContext& ctx, SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
   (void)ctx;
-  request_pipeline_preparation(scene, "reload");
+  request_pipeline_preparation(scene, "reload", true);
 }
 
 void GPURaytracingRenderer::set_compile_stage_filter(const std::string& value) {
@@ -1639,17 +1719,9 @@ RendererPreparationStatus GPURaytracingRenderer::preparation_status() const {
       std::lock_guard lock(active->progress_mutex);
       result.total_steps = active->total_steps;
       result.steps = active->pipeline_progress;
-      if (_publish_preparation) {
-        result.completed_steps = active->total_compile_groups + active->completed_pipelines.load();
-      } else {
-        result.completed_steps = active->completed_compile_groups.load();
-      }
+      result.completed_steps = active->completed_compile_groups.load() + active->completed_pipelines.load();
     }
-    if (_publish_preparation) {
-      result.worker_count = _pipeline_publish_task ? _pipeline_publish_task->worker_count : 0u;
-    } else {
-      result.worker_count = active->compile_worker_count.load();
-    }
+    result.worker_count = active->compile_worker_count.load() + (_pipeline_publish_task ? _pipeline_publish_task->worker_count : 0u);
     result.completed_steps = std::min(result.completed_steps, result.total_steps);
     result.elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - _preparation_started_at).count();
     result.cancelable = _preparation_canceled == false;
@@ -1808,14 +1880,20 @@ bool GPURaytracingRenderer::is_running() const {
   return (_run_state == RunState::Running) || (_run_state == RunState::Finishing);
 }
 
+void GPURaytracingRenderer::invalidate_output() {
+  _preview_visible = false;
+  _display_output_valid = false;
+}
+
 void GPURaytracingRenderer::start() {
   if ((_initialized == false) || (_scene_valid == false) || _runtime_failed) {
     return;
   }
 
+  _preparation_canceled = false;
   reset_render_progress();
   reset_preview_state();
-  _preview_visible = false;
+  invalidate_output();
   _run_state = RunState::Running;
   request_scene_update();
 }
@@ -1922,11 +2000,13 @@ void GPURaytracingRenderer::set_preparation_ready(const char* message) {
 }
 
 void GPURaytracingRenderer::destroy_pipelines(RHIDevice& device) {
-  for (auto& pipeline : _pipelines) {
+  for (uint32_t stage_index = 0u; stage_index < static_cast<uint32_t>(PipelineStage::Count); ++stage_index) {
+    auto& pipeline = _pipelines[stage_index];
     if (pipeline.valid()) {
       device.destroy_pipeline(pipeline);
       pipeline = {};
     }
+    _pipeline_variant_keys[stage_index] = 0u;
   }
 }
 
@@ -1935,6 +2015,7 @@ bool GPURaytracingRenderer::ensure_preview_texture(RHIDevice& device, const uint
     return true;
   }
 
+  _preview_visible = false;
   if (_preview_texture.valid()) {
     device.destroy_texture(_preview_texture);
     _preview_texture = {};
@@ -2053,6 +2134,9 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
   };
 
   for (const auto& stage_info : kWavefrontStages) {
+    if ((result->requested_stage_mask & pipeline_stage_bit(stage_info.stage)) == 0u) {
+      continue;
+    }
     if ((result->compile_stage_filter.empty() == false) && (result->compile_stage_filter != stage_info.entry_point)) {
       continue;
     }
@@ -2095,12 +2179,20 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
     result->error_message = "GPU RT compile stage filter '" + result->compile_stage_filter + "' did not match any pipeline entry point";
     log::error("%s", result->error_message.c_str());
     result->compile_finished_at = std::chrono::steady_clock::now();
+    result->compilation_complete.store(true, std::memory_order_release);
+    result->progress_condition.notify_all();
     return;
   }
+
+  result->compiled_stages.resize(result->total_pipelines);
+  result->initialization_complete.store(true, std::memory_order_release);
+  result->progress_condition.notify_all();
 
   if (compile_groups.empty()) {
     result->success = true;
     result->compile_finished_at = std::chrono::steady_clock::now();
+    result->compilation_complete.store(true, std::memory_order_release);
+    result->progress_condition.notify_all();
     log::info("GPU RT preparation background compile finished: generation=%u groups=0 stages=0 wall=0.00ms", result->generation);
     return;
   }
@@ -2124,59 +2216,56 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
       entry_points.push_back({stage_info->entry_point, RHIShaderStage::Compute});
     }
 
-    std::unordered_map<std::string, std::string> defines = {};
-    if (group.optimization_level.empty() == false) {
-      defines["ETX_DXC_OPT_LEVEL"] = group.optimization_level;
-    }
-    if (group.spirv_opt_config.empty() == false) {
-      defines["ETX_DXC_SPIRV_OPT_CONFIG"] = group.spirv_opt_config;
-    }
-    if (group.bsdf_kind.empty() == false) {
-      defines["ETX_BSDF_KIND"] = group.bsdf_kind;
-    }
-    defines["ETX_SPECTRAL_MODE"] = std::to_string(result->spectral_mode);
-    if (static_cast<GPUIntegratorMode>(result->integrator_mode) == GPUIntegratorMode::PathTracing) {
-      defines["ETX_WAVEFRONT_PATH_TRACING_ONLY"] = "1";
-    }
-    if (material_compile_mask_work_queue_count(result->material_compile_mask) > 1u) {
-      defines["ETX_ENABLE_WORK_QUEUES"] = "1";
-    }
-    // TODO(OpenPBR GPU parity): OpenPBR is intentionally not compiled into wavefront stages yet.
-    // The current OpenPBR sample path overflows DXC/SPIR-V legalization and is not parity-ready.
-    if (material_compile_mask_has(result->material_compile_mask, MaterialClass::Thinfilm)) {
-      defines["ETX_ENABLE_THINFILM_STAGE"] = "1";
-    }
-    if (material_compile_mask_has(result->material_compile_mask, MaterialClass::Velvet)) {
-      defines["ETX_ENABLE_VELVET_STAGE"] = "1";
-    }
-    if (material_compile_mask_has(result->material_compile_mask, MaterialClass::Plastic)) {
-      defines["ETX_ENABLE_PLASTIC_STAGE"] = "1";
-    }
-    if (material_compile_mask_has_conductor_stage(result->material_compile_mask)) {
-      defines["ETX_ENABLE_CONDUCTOR_STAGE"] = "1";
-    }
-    if (material_compile_mask_has(result->material_compile_mask, MaterialClass::Dielectric)) {
-      defines["ETX_ENABLE_DIELECTRIC_STAGE"] = "1";
-    }
-    if (group.stage_entry_define.empty() == false) {
-      defines["ETX_STAGE_ENTRY"] = group.stage_entry_define;
-    }
+    ETX_CRITICAL(group.stages.empty() == false);
+    std::unordered_map<std::string, std::string> defines =
+      wavefront_stage_defines(*group.stages.front(), static_cast<GPUIntegratorMode>(result->integrator_mode), result->material_compile_mask, result->spectral_mode);
 
     const auto group_compile_begin = std::chrono::steady_clock::now();
     group.compilation = compiler.compile(group.source_file, entry_points, defines, _backend);
     const auto group_compile_end = std::chrono::steady_clock::now();
     group.compile_time_ms = elapsed_ms(group_compile_begin, group_compile_end);
     const bool compile_succeeded = (group.compilation.result == RHIResult::Success) && (group.compilation.binaries.size() == group.stages.size());
+
+    std::vector<CompiledStageBinary> compiled_stages = {};
+    if (compile_succeeded) {
+      compiled_stages.reserve(group.stages.size());
+      for (size_t binary_index = 0u; binary_index < group.stages.size(); ++binary_index) {
+        const WavefrontStage& stage_info = *group.stages[binary_index];
+        CompiledStageBinary compiled_stage = {
+          .stage = stage_info.stage,
+          .variant_key = wavefront_stage_variant_key(stage_info, static_cast<GPUIntegratorMode>(result->integrator_mode), result->material_compile_mask, result->spectral_mode),
+          .entry_point = stage_info.entry_point ? stage_info.entry_point : "",
+          .source_file = stage_info.source_file ? stage_info.source_file : "",
+          .optimization_level = group.optimization_level,
+          .bsdf_kind = stage_info.bsdf_kind ? stage_info.bsdf_kind : "",
+          .uses_stage_entry_define = stage_info.uses_stage_entry_define,
+          .blob = {},
+          .binary = group.compilation.binaries[binary_index],
+        };
+        if ((compiled_stage.binary.spirv_data != nullptr) && (compiled_stage.binary.spirv_size > 0u)) {
+          const auto* binary_begin = compiled_stage.binary.spirv_data;
+          compiled_stage.blob.assign(binary_begin, binary_begin + compiled_stage.binary.spirv_size);
+          compiled_stage.binary.spirv_data = compiled_stage.blob.data();
+          compiled_stage.binary.spirv_size = compiled_stage.blob.size();
+        }
+        compiled_stages.push_back(std::move(compiled_stage));
+      }
+    }
+
     {
       std::lock_guard lock(result->progress_mutex);
       for (size_t stage_index = 0u; stage_index < group.progress_indices.size(); ++stage_index) {
-        auto& progress = result->pipeline_progress[group.progress_indices[stage_index]];
+        const uint32_t progress_index = group.progress_indices[stage_index];
+        auto& progress = result->pipeline_progress[progress_index];
         progress.state = compile_succeeded ? RendererPreparationStepState::QueuedForDriver : RendererPreparationStepState::Failed;
         if (compile_succeeded) {
           progress.spirv_size_bytes = group.compilation.binaries[stage_index].spirv_size;
+          result->compiled_stages[progress_index] = std::move(compiled_stages[stage_index]);
+          result->ready_pipeline_indices.push_back(progress_index);
         }
       }
     }
+    result->progress_condition.notify_all();
     result->completed_compile_groups.fetch_add(1u);
   };
 
@@ -2203,31 +2292,9 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
       log::error("Failed to compile GPU RT shader group rooted at '%s' after %.2fms: %s", failing_stage, group.compile_time_ms, group.compilation.error_message.c_str());
       compiler.log_statistics("GPU RT wavefront");
       result->compile_finished_at = std::chrono::steady_clock::now();
+      result->compilation_complete.store(true, std::memory_order_release);
+      result->progress_condition.notify_all();
       return;
-    }
-  }
-
-  result->compiled_stages.reserve(result->total_pipelines);
-  for (const auto& group : compile_groups) {
-    for (size_t binary_index = 0u; binary_index < group.stages.size(); ++binary_index) {
-      const WavefrontStage& stage_info = *group.stages[binary_index];
-      CompiledStageBinary compiled_stage = {
-        .stage = stage_info.stage,
-        .entry_point = stage_info.entry_point ? stage_info.entry_point : "",
-        .source_file = stage_info.source_file ? stage_info.source_file : "",
-        .optimization_level = group.optimization_level,
-        .bsdf_kind = stage_info.bsdf_kind ? stage_info.bsdf_kind : "",
-        .uses_stage_entry_define = stage_info.uses_stage_entry_define,
-        .blob = {},
-        .binary = group.compilation.binaries[binary_index],
-      };
-      if ((compiled_stage.binary.spirv_data != nullptr) && (compiled_stage.binary.spirv_size > 0u)) {
-        const auto* binary_begin = compiled_stage.binary.spirv_data;
-        compiled_stage.blob.assign(binary_begin, binary_begin + compiled_stage.binary.spirv_size);
-        compiled_stage.binary.spirv_data = compiled_stage.blob.data();
-        compiled_stage.binary.spirv_size = compiled_stage.blob.size();
-      }
-      result->compiled_stages.push_back(std::move(compiled_stage));
     }
   }
 
@@ -2244,9 +2311,11 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
 
   result->success = true;
   result->compile_finished_at = std::chrono::steady_clock::now();
+  result->compilation_complete.store(true, std::memory_order_release);
+  result->progress_condition.notify_all();
 }
 
-void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentation& scene, const char* reason) {
+void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentation& scene, const char* reason, bool force_reload) {
   if (_initialized == false) {
     return;
   }
@@ -2263,6 +2332,31 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
     return;
   }
 
+  const uint32_t integrator_mode = static_cast<uint32_t>(integrator_selection.mode);
+  const uint32_t spectral_mode = static_cast<uint32_t>(gpu_spectral_mode(scene.data()));
+  uint64_t requested_stage_mask = 0u;
+  uint32_t requested_stage_count = 0u;
+  for (const auto& stage_info : kWavefrontStages) {
+    const bool filter_matches = (_compile_stage_filter.empty() == false) && (_compile_stage_filter == stage_info.entry_point);
+    const bool stage_enabled = wavefront_stage_enabled(stage_info.stage, integrator_selection.mode, integrator_selection.features, material_compile_mask);
+    if (((_compile_stage_filter.empty() == false) && (filter_matches == false)) || (_compile_stage_filter.empty() && (stage_enabled == false))) {
+      continue;
+    }
+
+    const uint32_t stage_index = static_cast<uint32_t>(stage_info.stage);
+    const uint64_t variant_key = wavefront_stage_variant_key(stage_info, integrator_selection.mode, material_compile_mask, spectral_mode);
+    const bool stage_requires_preparation = force_reload || filter_matches || (_pipelines[stage_index].valid() == false) || (_pipeline_variant_keys[stage_index] != variant_key);
+    if (stage_requires_preparation) {
+      requested_stage_mask |= pipeline_stage_bit(stage_info.stage);
+      requested_stage_count += 1u;
+    }
+  }
+
+  if ((_compile_stage_filter.empty() == false) && (requested_stage_count == 0u)) {
+    set_runtime_failure("GPU RT compile stage filter '" + _compile_stage_filter + "' did not match any pipeline entry point");
+    return;
+  }
+
   if (_pipeline_publish_task) {
     _preparation_generation += 1u;
     _preparation_canceled = false;
@@ -2274,17 +2368,31 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
   reset_runtime_failure();
   _preparation_canceled = false;
   reset_render_progress();
-  _integrator_mode = static_cast<uint32_t>(integrator_selection.mode);
+  _integrator_mode = integrator_mode;
   _integrator_features = integrator_selection.features;
   _material_compile_mask = material_compile_mask;
-  _spectral_mode = static_cast<uint32_t>(gpu_spectral_mode(scene.data()));
+  _spectral_mode = spectral_mode;
   _preparation_generation += 1u;
+
+  if (requested_stage_count == 0u) {
+    _active_preparation.reset();
+    _publish_preparation.reset();
+    _published_pipeline_count = 0u;
+    _publish_pipeline_index = 0u;
+    _pipeline_publish_logged = false;
+    set_preparation_ready("Existing pipelines match the scene configuration");
+    log::info("GPU RT preparation reused existing pipelines: generation=%u integrator=%s features=0x%08x material_mask=0x%08x spectral_mode=%u", _preparation_generation,
+      gpu_integrator_mode_to_string(integrator_selection.mode), _integrator_features, _material_compile_mask, _spectral_mode);
+    return;
+  }
+
   _active_preparation = std::make_shared<PendingPipelinePreparation>();
   _active_preparation->generation = _preparation_generation;
   _active_preparation->integrator_mode = _integrator_mode;
   _active_preparation->integrator_features = _integrator_features;
   _active_preparation->material_compile_mask = _material_compile_mask;
   _active_preparation->spectral_mode = _spectral_mode;
+  _active_preparation->requested_stage_mask = requested_stage_mask;
   _active_preparation->compile_stage_filter = _compile_stage_filter;
   _active_preparation->queued_at = std::chrono::steady_clock::now();
   _publish_preparation.reset();
@@ -2304,6 +2412,14 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
 
 void GPURaytracingRenderer::poll_preparation_tasks(RHIContext& ctx, bool wait_for_active) {
   auto& device = ctx.device();
+  auto begin_available_publish = [&]() {
+    if ((_publish_preparation == nullptr) && _active_preparation && (_active_preparation->generation == _preparation_generation) &&
+        _active_preparation->initialization_complete.load(std::memory_order_acquire)) {
+      begin_pipeline_publish(_active_preparation);
+    }
+  };
+
+  begin_available_publish();
   for (size_t i = 0u; i < _inflight_preparation_tasks.size();) {
     auto& task = _inflight_preparation_tasks[i];
     const bool is_active_generation = task.result && (task.result->generation == _preparation_generation);
@@ -2336,16 +2452,23 @@ void GPURaytracingRenderer::poll_preparation_tasks(RHIContext& ctx, bool wait_fo
       set_preparation_failed(result->error_message, "Compile failed");
       log::error("GPU RT preparation failed: generation=%u phase=compile message=%s", result->generation, result->error_message.c_str());
       _publish_preparation.reset();
-      destroy_pipelines(device);
       continue;
     }
 
-    begin_pipeline_publish(result);
+    if (_publish_preparation != result) {
+      begin_pipeline_publish(result);
+    }
   }
+  begin_available_publish();
 }
 
 bool GPURaytracingRenderer::begin_pipeline_publish(std::shared_ptr<PendingPipelinePreparation> result) {
   if (result == nullptr) {
+    return false;
+  }
+
+  bool expected_publish_started = false;
+  if (result->publish_started.compare_exchange_strong(expected_publish_started, true) == false) {
     return false;
   }
 
@@ -2398,15 +2521,19 @@ bool GPURaytracingRenderer::finish_pipeline_publish_batch(RHIDevice& device, boo
   }
 
   if (task->results.size() != task->pipeline_count) {
+    for (const auto& pipeline_result : task->results) {
+      if (pipeline_result.handle.valid()) {
+        device.destroy_pipeline(pipeline_result.handle);
+      }
+    }
     set_runtime_failure("GPU pipeline batch creation returned an invalid result count");
-    destroy_pipelines(device);
     _publish_preparation.reset();
     return true;
   }
 
   bool batch_success = true;
   for (uint32_t batch_index = 0u; batch_index < task->pipeline_count; ++batch_index) {
-    const uint32_t pipeline_index = task->first_pipeline + batch_index;
+    const uint32_t pipeline_index = task->pipeline_indices[batch_index];
     const auto& stage = _publish_preparation->compiled_stages[pipeline_index];
     const auto& pipeline_result = task->results[batch_index];
     _publish_preparation->publish_timings.push_back({
@@ -2438,15 +2565,21 @@ bool GPURaytracingRenderer::finish_pipeline_publish_batch(RHIDevice& device, boo
     const std::string message = "GPU pipeline batch creation failed";
     set_runtime_failure(message);
     set_preparation_failed(message, "Pipeline creation failed");
-    log::error("GPU RT preparation failed: generation=%u phase=pipeline batch_start=%u", _publish_preparation->generation, task->first_pipeline);
-    destroy_pipelines(device);
+    const uint32_t first_pipeline = task->pipeline_indices.empty() ? 0u : task->pipeline_indices.front();
+    log::error("GPU RT preparation failed: generation=%u phase=pipeline batch_start=%u", _publish_preparation->generation, first_pipeline);
     _publish_preparation.reset();
     return true;
   }
 
   for (uint32_t batch_index = 0u; batch_index < task->pipeline_count; ++batch_index) {
-    const auto& stage = _publish_preparation->compiled_stages[task->first_pipeline + batch_index];
-    _pipelines[static_cast<uint32_t>(stage.stage)] = task->results[batch_index].handle;
+    const uint32_t pipeline_index = task->pipeline_indices[batch_index];
+    const auto& stage = _publish_preparation->compiled_stages[pipeline_index];
+    const uint32_t stage_index = static_cast<uint32_t>(stage.stage);
+    if (_pipelines[stage_index].valid()) {
+      device.destroy_pipeline(_pipelines[stage_index]);
+    }
+    _pipelines[stage_index] = task->results[batch_index].handle;
+    _pipeline_variant_keys[stage_index] = stage.variant_key;
   }
   _publish_pipeline_index += task->pipeline_count;
   _published_pipeline_count += task->pipeline_count;
@@ -2470,9 +2603,14 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
     }
   }
 
-  if (_publish_pipeline_index >= _publish_preparation->compiled_stages.size()) {
+  const bool compilation_complete = _publish_preparation->compilation_complete.load(std::memory_order_acquire);
+  if (compilation_complete && _publish_preparation->success && (_published_pipeline_count >= _publish_preparation->total_pipelines)) {
     const auto ready_at = std::chrono::steady_clock::now();
     std::vector<PipelinePublishTiming> slowest_pipelines = _publish_preparation->publish_timings;
+    double driver_work_ms = 0.0;
+    for (const auto& timing : slowest_pipelines) {
+      driver_work_ms += timing.elapsed_ms;
+    }
     std::sort(slowest_pipelines.begin(), slowest_pipelines.end(), [](const auto& lhs, const auto& rhs) {
       return lhs.elapsed_ms > rhs.elapsed_ms;
     });
@@ -2484,9 +2622,12 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
         bsdf_kind_to_string(timing.bsdf_kind), timing.optimization_level.empty() ? "-" : timing.optimization_level.c_str(), timing.uses_stage_entry_define ? "yes" : "no",
         static_cast<unsigned long long>(timing.spirv_size_bytes), timing.elapsed_ms);
     }
-    log::info("GPU RT preparation ready: generation=%u compile=%.2fms publish=%.2fms total=%.2fms", _publish_preparation->generation,
-      elapsed_ms(_publish_preparation->compile_started_at, _publish_preparation->compile_finished_at), elapsed_ms(_pipeline_publish_started_at, ready_at),
-      elapsed_ms(_preparation_started_at, ready_at));
+    const double compile_ms = elapsed_ms(_publish_preparation->compile_started_at, _publish_preparation->compile_finished_at);
+    const double pipeline_span_ms = elapsed_ms(_pipeline_publish_started_at, ready_at);
+    const double total_ms = elapsed_ms(_preparation_started_at, ready_at);
+    const double overlapped_work_ms = std::max(0.0, compile_ms + driver_work_ms - total_ms);
+    log::info("GPU RT preparation ready: generation=%u compile=%.2fms driver_work=%.2fms overlapped_work=%.2fms pipeline_span=%.2fms total=%.2fms",
+      _publish_preparation->generation, compile_ms, driver_work_ms, overlapped_work_ms, pipeline_span_ms, total_ms);
     device.persist_pipeline_cache();
     set_preparation_ready();
     _publish_preparation.reset();
@@ -2495,14 +2636,39 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
 
   if (_pipeline_publish_logged == false) {
     _pipeline_publish_logged = true;
-    destroy_pipelines(device);
     log::info("GPU RT preparation pipeline creation started: generation=%u stages=%u", _publish_preparation->generation, _publish_preparation->total_pipelines);
   }
 
-  const uint32_t remaining_pipeline_count = static_cast<uint32_t>(_publish_preparation->compiled_stages.size()) - _publish_pipeline_index;
-  const uint32_t requested_batch_pipeline_count = std::min(remaining_pipeline_count, std::max(1u, max_pipelines));
-  const uint32_t batch_pipeline_count =
-    (device.backend() == RHIBackend::Vulkan) ? std::min(requested_batch_pipeline_count, kVulkanPipelineMaxWorkerCount) : requested_batch_pipeline_count;
+  std::vector<uint32_t> pipeline_indices = {};
+  {
+    std::unique_lock lock(_publish_preparation->progress_mutex);
+    if (wait_for_batch && _publish_preparation->ready_pipeline_indices.empty() && (_publish_preparation->compilation_complete.load(std::memory_order_acquire) == false)) {
+      _publish_preparation->progress_condition.wait(lock, [&]() {
+        return (_publish_preparation->ready_pipeline_indices.empty() == false) || _publish_preparation->compilation_complete.load(std::memory_order_acquire) ||
+               (_publish_preparation->generation != _preparation_generation) || _preparation_canceled;
+      });
+    }
+
+    if (_publish_preparation->ready_pipeline_indices.empty()) {
+      return false;
+    }
+
+    const uint32_t available_pipeline_count = static_cast<uint32_t>(_publish_preparation->ready_pipeline_indices.size());
+    const uint32_t requested_batch_pipeline_count = std::min(available_pipeline_count, std::max(1u, max_pipelines));
+    uint32_t batch_pipeline_count = requested_batch_pipeline_count;
+    if (device.backend() == RHIBackend::Vulkan) {
+      batch_pipeline_count = std::min(requested_batch_pipeline_count, kVulkanPipelineMaxWorkerCount);
+    } else if (device.backend() == RHIBackend::Metal) {
+      // Metal creates this batch serially, and large batches can stall its synchronous compiler service.
+      batch_pipeline_count = 1u;
+    }
+
+    pipeline_indices.assign(_publish_preparation->ready_pipeline_indices.begin(), _publish_preparation->ready_pipeline_indices.begin() + batch_pipeline_count);
+    _publish_preparation->ready_pipeline_indices.erase(_publish_preparation->ready_pipeline_indices.begin(),
+      _publish_preparation->ready_pipeline_indices.begin() + batch_pipeline_count);
+  }
+
+  const uint32_t batch_pipeline_count = static_cast<uint32_t>(pipeline_indices.size());
   uint32_t pipeline_creation_worker_count = 1u;
   if (device.backend() == RHIBackend::Vulkan) {
     const uint32_t cpu_worker_limit = std::max(1u, (scheduler.max_thread_count() + 1u) / 2u);
@@ -2516,22 +2682,21 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
   }
   std::vector<RHIComputePipelineDesc> pipeline_descs = {};
   pipeline_descs.reserve(batch_pipeline_count);
-  for (uint32_t batch_index = 0u; batch_index < batch_pipeline_count; ++batch_index) {
-    const auto& stage = _publish_preparation->compiled_stages[_publish_pipeline_index + batch_index];
+  for (const uint32_t pipeline_index : pipeline_indices) {
+    const auto& stage = _publish_preparation->compiled_stages[pipeline_index];
     pipeline_descs.push_back(device.make_compute_pipeline_desc(stage.binary));
   }
 
   const auto publish_task = std::make_shared<InflightPipelinePublishTask>();
   publish_task->preparation = _publish_preparation;
-  publish_task->first_pipeline = _publish_pipeline_index;
+  publish_task->pipeline_indices = pipeline_indices;
   publish_task->pipeline_count = batch_pipeline_count;
   publish_task->worker_count = pipeline_creation_worker_count;
   publish_task->started_at = std::chrono::steady_clock::now();
-  const uint32_t first_pipeline = _publish_pipeline_index;
-  const auto progress_callback = [preparation = _publish_preparation, first_pipeline](uint32_t batch_index, const RHICreatePipelineBatchEntry& pipeline_result) {
+  const auto progress_callback = [preparation = _publish_preparation, pipeline_indices](uint32_t batch_index, const RHICreatePipelineBatchEntry& pipeline_result) {
     {
       std::lock_guard lock(preparation->progress_mutex);
-      auto& progress = preparation->pipeline_progress[first_pipeline + batch_index];
+      auto& progress = preparation->pipeline_progress[pipeline_indices[batch_index]];
       switch (pipeline_result.state) {
         case RHIPipelineBatchProgressState::Queued:
           progress.state = RendererPreparationStepState::QueuedForDriver;
@@ -2571,16 +2736,22 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
 }
 
 bool GPURaytracingRenderer::create_pipelines_sync(RHIContext& ctx, SceneRepresentation& scene, const char* reason) {
-  request_pipeline_preparation(scene, reason);
+  request_pipeline_preparation(scene, reason, true);
   return finish_preparation(ctx, scene);
 }
 
 bool GPURaytracingRenderer::finish_preparation(RHIContext& ctx, SceneRepresentation& scene) {
   (void)scene;
   while (_preparation_state == RendererPreparationState::Preparing) {
-    poll_preparation_tasks(ctx, true);
+    poll_preparation_tasks(ctx, false);
     if (_publish_preparation) {
       advance_pipeline_publish(ctx, std::max(1u, _publish_preparation->total_pipelines), true);
+    } else if (_active_preparation) {
+      std::unique_lock lock(_active_preparation->progress_mutex);
+      _active_preparation->progress_condition.wait(lock, [&]() {
+        return _active_preparation->initialization_complete.load(std::memory_order_acquire) || _active_preparation->compilation_complete.load(std::memory_order_acquire) ||
+               (_active_preparation->generation != _preparation_generation) || _preparation_canceled;
+      });
     }
   }
 
@@ -2616,7 +2787,9 @@ bool GPURaytracingRenderer::pipelines_valid() const {
     if (wavefront_stage_enabled(stage_info.stage, static_cast<GPUIntegratorMode>(_integrator_mode), _integrator_features, _material_compile_mask) == false) {
       continue;
     }
-    if (_pipelines[static_cast<uint32_t>(stage_info.stage)].valid() == false) {
+    const uint32_t stage_index = static_cast<uint32_t>(stage_info.stage);
+    const uint64_t variant_key = wavefront_stage_variant_key(stage_info, static_cast<GPUIntegratorMode>(_integrator_mode), _material_compile_mask, _spectral_mode);
+    if ((_pipelines[stage_index].valid() == false) || (_pipeline_variant_keys[stage_index] != variant_key)) {
       return false;
     }
   }
@@ -2631,16 +2804,23 @@ void GPURaytracingRenderer::cancel_preparation() {
 
   if (_pipeline_publish_task) {
     _preparation_canceled = true;
+    if (_active_preparation) {
+      _active_preparation->progress_condition.notify_all();
+    }
     set_preparation_state(RendererPreparationState::Preparing, "Canceling pipelines", "Waiting for the active driver compilation to finish");
     return;
   }
 
+  const auto canceled_preparation = _active_preparation;
   _preparation_generation += 1u;
   _active_preparation.reset();
   _publish_preparation.reset();
   _published_pipeline_count = 0u;
   _publish_pipeline_index = 0u;
   _preparation_canceled = true;
+  if (canceled_preparation) {
+    canceled_preparation->progress_condition.notify_all();
+  }
   log::info("GPU RT preparation canceled: generation=%u", _preparation_generation - 1u);
   set_preparation_failed("Preparation canceled", "Canceled");
 }
@@ -3044,10 +3224,10 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _light_vertex_buffer, _light_vertex_buffer_size, _light_vertex_buffer_descriptor_index);
   }
   if (enable_merge_vertices) {
-    if (ensure_storage_buffer(device, vcm_grid_heads_buffer_size, wavefront_usage, _vcm_grid_heads_buffer, _vcm_grid_heads_buffer_size,
-          _vcm_grid_heads_buffer_descriptor_index, "wavefront_vcm_grid_heads") == false ||
-        ensure_storage_buffer(device, vcm_grid_next_buffer_size, wavefront_usage, _vcm_grid_next_buffer, _vcm_grid_next_buffer_size,
-          _vcm_grid_next_buffer_descriptor_index, "wavefront_vcm_grid_next") == false) {
+    if (ensure_storage_buffer(device, vcm_grid_heads_buffer_size, wavefront_usage, _vcm_grid_heads_buffer, _vcm_grid_heads_buffer_size, _vcm_grid_heads_buffer_descriptor_index,
+          "wavefront_vcm_grid_heads") == false ||
+        ensure_storage_buffer(device, vcm_grid_next_buffer_size, wavefront_usage, _vcm_grid_next_buffer, _vcm_grid_next_buffer_size, _vcm_grid_next_buffer_descriptor_index,
+          "wavefront_vcm_grid_next") == false) {
       return false;
     }
   } else {
@@ -3399,7 +3579,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     integrator_selection.supported && material_configuration_supported && (pipeline_configuration_changed || missing_pipelines || failed_preparation_can_retry);
   if (should_request_prepare) {
     const auto pipeline_refresh_begin = std::chrono::steady_clock::now();
-    request_pipeline_preparation(scene, pipeline_configuration_changed ? "scene pipeline change" : "missing pipelines");
+    request_pipeline_preparation(scene, pipeline_configuration_changed ? "scene pipeline change" : "missing pipelines", false);
     const auto pipeline_refresh_end = std::chrono::steady_clock::now();
     pipeline_refresh_ms = elapsed_ms(pipeline_refresh_begin, pipeline_refresh_end);
   }
@@ -3668,6 +3848,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     _output_texture = output_texture_result.handle;
     _output_dimensions = full_dim;
     _output_texture_state = RHIResourceState::Undefined;
+    _display_output_valid = false;
     if (frame_data.cmd.valid()) {
       ctx.cmd_texture_barrier(frame_data.cmd, _output_texture, _output_texture_state, RHIResourceState::ShaderReadOnly);
       _output_texture_state = RHIResourceState::ShaderReadOnly;
@@ -3966,8 +4147,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     const bool enable_connect_vertices = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::ConnectVertices);
     const bool enable_merge_vertices = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::MergeVertices);
     const bool store_complete_light_history = enable_connect_vertices || enable_merge_vertices;
-    const bool phase_light_before_camera = ((integrator_mode == GPUIntegratorMode::BDPTFull) || (integrator_mode == GPUIntegratorMode::VCM)) && enable_camera_path &&
-                                           enable_light_path && store_complete_light_history;
+    const bool phase_light_before_camera =
+      ((integrator_mode == GPUIntegratorMode::BDPTFull) || (integrator_mode == GPUIntegratorMode::VCM)) && enable_camera_path && enable_light_path && store_complete_light_history;
     const bool has_various_continue = material_compile_mask_has_various_continue(_material_compile_mask);
     const bool has_various_connect = material_compile_mask_has_various_connect(_material_compile_mask);
     const bool has_plastic = material_compile_mask_has(_material_compile_mask, MaterialClass::Plastic);
@@ -4525,6 +4706,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     }
 
     _preview_visible = false;
+    _display_output_valid = true;
     _sample_index += 1u;
     const bool compact_light_history = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::LightPath) &&
                                        (gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::ConnectVertices) ||
@@ -4654,7 +4836,7 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _publish_pipeline_index = 0u;
   _pipeline_publish_logged = false;
   reset_preview_state();
-  _preview_visible = false;
+  invalidate_output();
   _preparation_canceled = false;
   reset_runtime_failure();
   set_preparation_ready();

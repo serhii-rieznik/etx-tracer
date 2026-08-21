@@ -539,9 +539,6 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
   }
 
   sync_ui_renderer_state();
-  if ((_active_renderer == &gpu_renderer) && _gpu_renderer_initialized) {
-    gpu_renderer.reload_shaders(render_context.get_context(), scene);
-  }
 }
 
 void RTApplication::sync_platform_color_scheme() {
@@ -787,10 +784,6 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   ui.set_current_integrator(integrator);
   notify_scene_might_have_changed();
 
-  if ((_active_renderer == &gpu_renderer) && _gpu_renderer_initialized) {
-    gpu_renderer.reload_shaders(render_context.get_context(), scene);
-  }
-
   add_to_recent(_current_scene_file);
   save_options();
 
@@ -960,6 +953,9 @@ void RTApplication::on_integrator_selected(Integrator::Type itype) {
   }
 
   cpu_renderer.set_integrator(i);
+  if (_active_renderer == &gpu_renderer) {
+    gpu_renderer.invalidate_output();
+  }
   sync_scene_integrator_data_from_current_integrator();
   _options.set_string("integrator", i->name(), "Integrator");
   save_options();

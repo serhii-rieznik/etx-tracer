@@ -28,7 +28,6 @@
 #include <interop/medium_phase_shared.hxx>
 #include <interop/surface_point_shared.hxx>
 #include <interop/scene_math_shared.hxx>
-#include <interop/diffraction_transport_shared.hxx>
 
 static const uint kSceneStrategyDirectHit = 1u << 0u;
 static const uint kSceneStrategyConnectToLight = 1u << 1u;
@@ -302,18 +301,14 @@ uint load_scene_options_path_mode() {
 }
 
 bool scene_uses_spectral_mode() {
+#if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
+  return true;
+#elif ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
+  return false;
+#else
   SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
   return scene_gpu_uses_spectral_mode(options);
-}
-
-bool scene_has_diffraction_grating() {
-  SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
-  return scene_gpu_has_diffraction_grating(options);
-}
-
-bool scene_diffraction_contribution_enabled(SpectralQuery spect, bool contains_diffraction) {
-  bool partition = diffraction_transport_partition_enabled(scene_uses_spectral_mode(), scene_has_diffraction_grating());
-  return diffraction_transport_contribution_enabled(partition, spect, contains_diffraction);
+#endif
 }
 
 bool scene_multiple_importance_sampling_enabled() {
@@ -587,6 +582,16 @@ SpectralResponse load_scene_spectrum_or_zero(uint spectrum_index, SpectralQuery 
   ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
   SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, constants.scene.spectrums);
   return spectrum_access_evaluate(spectrum_context, spectrum_index, spect);
+}
+
+float3 load_scene_spectrum_integrated_or_zero(uint spectrum_index) {
+  if (scene_gpu_can_sample_spectrum(constants.scene.spectrums, spectrum_index) == false) {
+    return float3(0.0f, 0.0f, 0.0f);
+  }
+
+  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
+  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, constants.scene.spectrums);
+  return spectrum_access_load_integrated(spectrum_context, spectrum_index);
 }
 
 SpectralImage make_spectral_image(uint spectrum_index, uint image_index) {
@@ -907,9 +912,17 @@ bool emitter_distribution_has_values() {
 }
 
 float3 evaluate_emission_integrated_source(uint emission_spectrum_index, uint emission_image_index, float2 uv) {
-  SpectralQuery integrated_query = spectral_query_sample();
-  SpectralImage emission = make_spectral_image(emission_spectrum_index, emission_image_index);
-  return apply_image(integrated_query, emission, uv).integrated;
+  float3 result = load_scene_spectrum_integrated_or_zero(emission_spectrum_index);
+  if (emission_image_index == kInvalidIndex) {
+    return result;
+  }
+
+  ImageEvaluateGPUContext image_context = make_image_evaluate_gpu_context(constants.scene.images);
+  float4 image_value = float4(1.0f, 1.0f, 1.0f, 1.0f);
+  if (image_evaluate_try_rgba_no_pdf(image_context, emission_image_index, uv, image_value) == false) {
+    return result;
+  }
+  return result * image_value.xyz;
 }
 
 SpectralResponse evaluate_emission_spectral_source(uint emission_spectrum_index, uint emission_image_index, float2 uv, SpectralQuery spect) {

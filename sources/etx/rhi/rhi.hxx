@@ -133,6 +133,9 @@ struct RHIDevice {
     final_desc.vertex_shader.local_size_x = vertex_shader.local_size_x;
     final_desc.vertex_shader.local_size_y = vertex_shader.local_size_y;
     final_desc.vertex_shader.local_size_z = vertex_shader.local_size_z;
+    final_desc.vertex_shader.cache_key = vertex_shader.cache_key;
+    final_desc.vertex_shader.content_hash = vertex_shader.content_hash;
+    final_desc.vertex_shader.metal_metadata = vertex_shader.metal_metadata;
     final_desc.fragment_shader.spirv_data = fragment_shader.spirv_data;
     final_desc.fragment_shader.spirv_size = fragment_shader.spirv_size;
     final_desc.fragment_shader.stage = fragment_shader.stage;
@@ -142,6 +145,9 @@ struct RHIDevice {
     final_desc.fragment_shader.local_size_x = fragment_shader.local_size_x;
     final_desc.fragment_shader.local_size_y = fragment_shader.local_size_y;
     final_desc.fragment_shader.local_size_z = fragment_shader.local_size_z;
+    final_desc.fragment_shader.cache_key = fragment_shader.cache_key;
+    final_desc.fragment_shader.content_hash = fragment_shader.content_hash;
+    final_desc.fragment_shader.metal_metadata = fragment_shader.metal_metadata;
     return create_graphics_pipeline(final_desc);
   }
 
@@ -155,7 +161,10 @@ struct RHIDevice {
         .entry_point = compute_shader.entry_point,
         .local_size_x = compute_shader.local_size_x,
         .local_size_y = compute_shader.local_size_y,
-        .local_size_z = compute_shader.local_size_z},
+        .local_size_z = compute_shader.local_size_z,
+        .cache_key = compute_shader.cache_key,
+        .content_hash = compute_shader.content_hash,
+        .metal_metadata = compute_shader.metal_metadata},
     };
     return desc;
   }

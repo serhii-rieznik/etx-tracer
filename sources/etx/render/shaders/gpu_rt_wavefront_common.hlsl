@@ -2,7 +2,6 @@
 
 #include <interop/gpu_rt_shared.hxx>
 #include <interop/gpu_wavefront_abi.hxx>
-#include <interop/diffraction_transport_shared.hxx>
 
 [[vk::push_constant]] GPURTConstants constants;
 #include "gpu_rt_shared.hlsl"
@@ -779,8 +778,8 @@ void wavefront_film_add(uint pixel_index, float3 value) {
 }
 
 float3 wavefront_spectral_estimate(SpectralResponse value, SpectralQuery spect) {
-  float branch_pdf = diffraction_transport_branch_pdf(diffraction_transport_partition_enabled(scene_uses_spectral_mode(), scene_has_diffraction_grating()), spect);
-  return (branch_pdf > 0.0f) ? (spectral_response_to_rgb_estimate(value) / branch_pdf) : float3(0.0f, 0.0f, 0.0f);
+  (void)spect;
+  return spectral_response_to_rgb_estimate(value);
 }
 
 SpectralQuery wavefront_vcm_iteration_spectral_query() {
@@ -789,22 +788,8 @@ SpectralQuery wavefront_vcm_iteration_spectral_query() {
   if (scene_uses_spectral_mode()) {
     SpectralQuery packet = spectral_query_packet_sample(rnd01(iteration_seed));
     spect = spectral_query_packet_lane(packet, constants.vcm_spectral_phase);
-  } else if (scene_has_diffraction_grating()) {
-    spect = diffraction_transport_sample_query(false, true, rnd01(iteration_seed), rnd01(iteration_seed));
   }
   return spect;
-}
-
-bool wavefront_diffraction_contribution_enabled(SpectralQuery spect, bool contains_diffraction) {
-  return scene_diffraction_contribution_enabled(spect, contains_diffraction);
-}
-
-bool wavefront_path_contains_diffraction(GPUWavefrontPathState state) {
-  return (state.flags & GPUWavefrontPathFlags::Contains_diffraction) != 0u;
-}
-
-bool wavefront_vertex_contains_diffraction(GPUWavefrontPathVertex vertex) {
-  return (vertex.flags & GPUWavefrontVertexFlags::Contains_diffraction) != 0u;
 }
 
 bool wavefront_path_state_valid(GPUWavefrontPathState state) {
@@ -1171,9 +1156,6 @@ void wavefront_write_vertex(bool from_camera, uint path_index, inout GPUWavefron
   if ((state.flags & GPUWavefrontPathFlags::Delta) != 0u) {
     vertex.flags |= GPUWavefrontVertexFlags::Delta;
   }
-  if (wavefront_path_contains_diffraction(state)) {
-    vertex.flags |= GPUWavefrontVertexFlags::Contains_diffraction;
-  }
 
   uint descriptor_index = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
   wavefront_store_path_vertex(descriptor_index, vertex_slot, vertex);
@@ -1214,9 +1196,6 @@ void wavefront_write_medium_vertex(bool from_camera, uint path_index, inout GPUW
   }
   if (wavefront_medium_explicit_connections_enabled(state.medium_index)) {
     vertex.flags |= GPUWavefrontVertexFlags::Connectible | GPUWavefrontVertexFlags::Mis_connectible;
-  }
-  if (wavefront_path_contains_diffraction(state)) {
-    vertex.flags |= GPUWavefrontVertexFlags::Contains_diffraction;
   }
 
   uint descriptor_index = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;

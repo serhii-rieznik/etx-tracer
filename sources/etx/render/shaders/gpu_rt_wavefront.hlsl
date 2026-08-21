@@ -376,8 +376,8 @@ void wavefront_film_add(uint pixel_index, float3 value) {
 }
 
 float3 wavefront_spectral_estimate(SpectralResponse value, SpectralQuery spect) {
-  float branch_pdf = diffraction_transport_branch_pdf(diffraction_transport_partition_enabled(scene_uses_spectral_mode(), scene_has_diffraction_grating()), spect);
-  return (branch_pdf > 0.0f) ? (spectral_response_to_rgb_estimate(value) / branch_pdf) : float3(0.0f, 0.0f, 0.0f);
+  (void)spect;
+  return spectral_response_to_rgb_estimate(value);
 }
 
 bool wavefront_path_state_valid(GPUWavefrontPathState state) {

@@ -10,7 +10,6 @@
 #include <map>
 #include <memory>
 #include <mutex>
-#include <regex>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -44,8 +43,10 @@ constexpr uint32_t kMetalBindlessAccelerationStructureBinding = 4u;
 constexpr uint32_t kMetalBindlessRWBufferBinding = 5u;
 constexpr uint32_t kMetalBindlessBindingCount = 6u;
 constexpr uint32_t kInvalidMetalBufferIndex = std::numeric_limits<uint32_t>::max();
+static_assert(kMetalBindlessBindingCount == kRHIMetalBindlessBindingCount);
+static_assert(kInvalidMetalBufferIndex == kRHIInvalidMetalBufferIndex);
 constexpr size_t kMetalMaxColorAttachments = 8u;
-constexpr uint32_t kMetalPipelineArchiveVersion = 1u;
+constexpr uint32_t kMetalShaderCacheVersion = 2u;
 constexpr uint32_t kRHIAccelerationStructureInstanceFlagDisableTriangleCulling = 1u << 0u;
 constexpr uint32_t kRHIAccelerationStructureInstanceFlagFrontFacingCCW = 1u << 1u;
 constexpr uint32_t kRHIAccelerationStructureInstanceFlagForceOpaque = 1u << 2u;
@@ -330,12 +331,22 @@ std::filesystem::path metal_pipeline_archive_root_directory() {
   std::filesystem::path root(env().cache_folder());
   root /= "metal";
   root /= "pipeline_archives";
-  root /= ("v" + std::to_string(kMetalPipelineArchiveVersion));
+  root /= ("v" + std::to_string(kMetalShaderCacheVersion));
   return root;
 }
 
-std::filesystem::path metal_pipeline_archive_path(id<MTLDevice> device) {
-  return metal_pipeline_archive_root_directory() / (metal_device_archive_suffix(device) + ".bin");
+static std::string format_hash_hex(uint64_t value) {
+  char buffer[17] = {};
+  std::snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(value));
+  return buffer;
+}
+
+std::filesystem::path metal_pipeline_archive_directory(id<MTLDevice> device) {
+  return metal_pipeline_archive_root_directory() / metal_device_archive_suffix(device);
+}
+
+std::filesystem::path metal_pipeline_archive_path(id<MTLDevice> device, uint64_t cache_key, uint64_t content_hash) {
+  return metal_pipeline_archive_directory(device) / (format_hash_hex(cache_key) + "_" + format_hash_hex(content_hash) + ".bin");
 }
 
 bool ensure_directory_exists(const std::filesystem::path& directory) {
@@ -624,17 +635,17 @@ struct MTPipelineData {
   MTPipelineStageData compute_stage = {};
 };
 
+struct MTLibraryCacheEntry {
+  uint64_t content_hash = 0u;
+  id<MTLLibrary> library = nil;
+};
+
 class MTDevice::Impl {
  public:
   id<MTLDevice> metal_device = nil;
   id<MTLCommandQueue> command_queue = nil;
-  id<MTLBinaryArchive> pipeline_binary_archive = nil;
   MTBindlessManager* bindless_manager = nullptr;
-  std::filesystem::path pipeline_binary_archive_path = {};
-  bool pipeline_binary_archive_append_enabled = false;
-  uint64_t pipeline_binary_archive_pending_writes = 0u;
-  uint64_t pipeline_binary_archive_serialized_writes = 0u;
-  std::unordered_map<uint64_t, id<MTLLibrary>> library_cache = {};
+  std::unordered_map<uint64_t, MTLibraryCacheEntry> library_cache = {};
 
   std::unordered_map<RHIBindlessHandle, MTBufferData> buffers = {};
   std::unordered_map<RHIBindlessHandle, MTTextureData> textures = {};
@@ -877,140 +888,53 @@ static bool wait_for_inflight_command_buffers(std::vector<MTInflightSubmission>&
   return success;
 }
 
-static void log_pipeline_archive_status(const char* action, const std::filesystem::path& path, NSError* error = nil) {
-  if (error != nil) {
-    log::warning("Metal RHI: pipeline archive %s failed for %s: %s", action, path.string().c_str(), safe_nsstring([error localizedDescription], "unknown error"));
-  } else {
-    log::info("Metal RHI: pipeline archive %s: %s", action, path.string().c_str());
-  }
-}
-
-static void initialize_pipeline_binary_archive(MTDevice::Impl* device) {
-  if ((device == nullptr) || (device->metal_device == nil)) {
+static void prune_cache_slot_versions(const std::filesystem::path& directory, const std::string& slot_prefix, const std::filesystem::path& current_path) {
+  std::error_code ec = {};
+  if (std::filesystem::exists(directory, ec) == false) {
     return;
   }
 
-  if (@available(macOS 11.0, *)) {
-    device->pipeline_binary_archive_path = metal_pipeline_archive_path(device->metal_device);
-    if (ensure_directory_exists(device->pipeline_binary_archive_path.parent_path()) == false) {
-      log::warning("Metal RHI: failed to create pipeline archive directory: %s", device->pipeline_binary_archive_path.parent_path().string().c_str());
-      device->pipeline_binary_archive_path.clear();
+  for (const auto& entry : std::filesystem::directory_iterator(directory, ec)) {
+    if (ec.value() != 0) {
       return;
     }
-
-    auto open_archive = [&](bool allow_existing_file) -> id<MTLBinaryArchive> {
-      MTLBinaryArchiveDescriptor* descriptor = [[MTLBinaryArchiveDescriptor alloc] init];
-      if (allow_existing_file) {
-        NSString* archive_path = [NSString stringWithUTF8String:device->pipeline_binary_archive_path.string().c_str()];
-        descriptor.url = [NSURL fileURLWithPath:archive_path];
-      }
-
-      NSError* error = nil;
-      id<MTLBinaryArchive> archive = [device->metal_device newBinaryArchiveWithDescriptor:descriptor error:&error];
-      [descriptor release];
-      if (archive == nil) {
-        log_pipeline_archive_status(allow_existing_file ? "open" : "create", device->pipeline_binary_archive_path, error);
-      }
-      return archive;
-    };
-
-    bool archive_file_exists = false;
-    std::error_code ec;
-    archive_file_exists = std::filesystem::exists(device->pipeline_binary_archive_path, ec) && (ec.value() == 0);
-
-    device->pipeline_binary_archive = open_archive(archive_file_exists);
-    if ((device->pipeline_binary_archive == nil) && archive_file_exists) {
-      std::filesystem::remove(device->pipeline_binary_archive_path, ec);
-      archive_file_exists = false;
-      device->pipeline_binary_archive = open_archive(false);
-    }
-
-    if (device->pipeline_binary_archive != nil) {
-      device->pipeline_binary_archive_append_enabled = (archive_file_exists == false);
-      log_pipeline_archive_status(archive_file_exists ? "loaded" : "created", device->pipeline_binary_archive_path);
+    const std::string file_name = entry.path().filename().string();
+    if (entry.is_regular_file() && (entry.path() != current_path) && (file_name.rfind(slot_prefix, 0u) == 0u)) {
+      std::filesystem::remove(entry.path(), ec);
+      ec.clear();
     }
   }
 }
 
-static void flush_pipeline_binary_archive(MTDevice::Impl* device, const char* reason) {
-  if ((device == nullptr) || (device->pipeline_binary_archive == nil) || (device->pipeline_binary_archive_pending_writes == 0u) || (device->pipeline_binary_archive_path.empty())) {
+static void prune_obsolete_metal_cache_versions(const std::filesystem::path& current_root) {
+  const std::filesystem::path parent = current_root.parent_path();
+  std::error_code ec = {};
+  if (std::filesystem::exists(parent, ec) == false) {
     return;
   }
 
-  if (@available(macOS 11.0, *)) {
-    if (ensure_directory_exists(device->pipeline_binary_archive_path.parent_path()) == false) {
-      log::warning("Metal RHI: failed to create pipeline archive directory before flush: %s", device->pipeline_binary_archive_path.parent_path().string().c_str());
+  for (const auto& entry : std::filesystem::directory_iterator(parent, ec)) {
+    if (ec.value() != 0) {
       return;
     }
-
-    NSString* archive_path = [NSString stringWithUTF8String:device->pipeline_binary_archive_path.string().c_str()];
-    NSError* error = nil;
-    if ([device->pipeline_binary_archive serializeToURL:[NSURL fileURLWithPath:archive_path] error:&error] == NO) {
-      log::warning("Metal RHI: failed to serialize pipeline archive (%s): %s", reason, safe_nsstring([error localizedDescription], "unknown error"));
-      return;
-    }
-
-    device->pipeline_binary_archive_serialized_writes += device->pipeline_binary_archive_pending_writes;
-    log::info("Metal RHI: serialized pipeline archive (%s), pending=%llu total=%llu path=%s", reason, static_cast<unsigned long long>(device->pipeline_binary_archive_pending_writes),
-      static_cast<unsigned long long>(device->pipeline_binary_archive_serialized_writes), device->pipeline_binary_archive_path.string().c_str());
-    device->pipeline_binary_archive_pending_writes = 0u;
-  }
-}
-
-static void append_compute_pipeline_to_binary_archive(MTDevice::Impl* device, MTLComputePipelineDescriptor* descriptor) {
-  if ((device == nullptr) || (device->pipeline_binary_archive == nil) || (descriptor == nil)) {
-    return;
-  }
-
-  if (@available(macOS 11.0, *)) {
-    descriptor.binaryArchives = @[ device->pipeline_binary_archive ];
-    if (device->pipeline_binary_archive_append_enabled == false) {
-      return;
-    }
-    NSError* error = nil;
-    if ([device->pipeline_binary_archive addComputePipelineFunctionsWithDescriptor:descriptor error:&error]) {
-      device->pipeline_binary_archive_pending_writes += 1u;
-    } else {
-      log::warning("Metal RHI: failed to append compute pipeline to binary archive: %s", safe_nsstring([error localizedDescription], "unknown error"));
+    const std::string directory_name = entry.path().filename().string();
+    if (entry.is_directory() && (entry.path() != current_root) && (directory_name.rfind("v", 0u) == 0u)) {
+      std::filesystem::remove_all(entry.path(), ec);
+      ec.clear();
     }
   }
-}
-
-static void append_render_pipeline_to_binary_archive(MTDevice::Impl* device, MTLRenderPipelineDescriptor* descriptor) {
-  if ((device == nullptr) || (device->pipeline_binary_archive == nil) || (descriptor == nil)) {
-    return;
-  }
-
-  if (@available(macOS 11.0, *)) {
-    descriptor.binaryArchives = @[ device->pipeline_binary_archive ];
-    if (device->pipeline_binary_archive_append_enabled == false) {
-      return;
-    }
-    NSError* error = nil;
-    if ([device->pipeline_binary_archive addRenderPipelineFunctionsWithDescriptor:descriptor error:&error]) {
-      device->pipeline_binary_archive_pending_writes += 1u;
-    } else {
-      log::warning("Metal RHI: failed to append render pipeline to binary archive: %s", safe_nsstring([error localizedDescription], "unknown error"));
-    }
-  }
-}
-
-static std::string format_hash_hex(uint64_t value) {
-  char buffer[17] = {};
-  std::snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(value));
-  return buffer;
 }
 
 static std::filesystem::path metal_library_cache_root_directory() {
   std::filesystem::path root(env().cache_folder());
   root /= "metal";
   root /= "libraries";
-  root /= "v1";
+  root /= ("v" + std::to_string(kMetalShaderCacheVersion));
   return root;
 }
 
-static std::filesystem::path metal_library_cache_path(uint64_t source_hash) {
-  return metal_library_cache_root_directory() / (format_hash_hex(source_hash) + ".metallib");
+static std::filesystem::path metal_library_cache_path(uint64_t cache_key, uint64_t content_hash) {
+  return metal_library_cache_root_directory() / (format_hash_hex(cache_key) + "_" + format_hash_hex(content_hash) + ".metallib");
 }
 
 static std::string shell_quote(const std::string& value) {
@@ -1083,13 +1007,16 @@ static bool compile_metal_source_to_metallib(const std::string& source_text, uin
     return false;
   }
 
-  const std::string hash_name = format_hash_hex(source_hash);
+  static std::atomic<uint64_t> next_temp_file_id = 0u;
+  const uint64_t process_id = static_cast<uint64_t>([[NSProcessInfo processInfo] processIdentifier]);
+  const std::string hash_name = format_hash_hex(source_hash) + "_" + std::to_string(process_id) + "_" + std::to_string(next_temp_file_id.fetch_add(1u));
   const std::filesystem::path source_path = temp_root / (hash_name + ".metal");
   const std::filesystem::path air_path = temp_root / (hash_name + ".air");
+  const std::filesystem::path temp_metallib_path = temp_root / (hash_name + ".metallib");
   std::error_code ec = {};
   std::filesystem::remove(source_path, ec);
   std::filesystem::remove(air_path, ec);
-  std::filesystem::remove(metallib_path, ec);
+  std::filesystem::remove(temp_metallib_path, ec);
 
   if (write_binary_file(source_path, source_text.data(), source_text.size()) == false) {
     out_error = "Failed to write temporary Metal source file.";
@@ -1106,32 +1033,51 @@ static bool compile_metal_source_to_metallib(const std::string& source_text, uin
     return false;
   }
 
-  const std::string metallib_command = "xcrun metallib " + shell_quote(air_path.string()) + " -o " + shell_quote(metallib_path.string()) + " 2>&1";
+  const std::string metallib_command = "xcrun metallib " + shell_quote(air_path.string()) + " -o " + shell_quote(temp_metallib_path.string()) + " 2>&1";
   if (run_shell_command_capture_output(metallib_command, exit_code, command_output) == false) {
     out_error = "metallib failed (" + std::to_string(exit_code) + "): " + command_output;
     std::filesystem::remove(source_path, ec);
     std::filesystem::remove(air_path, ec);
-    std::filesystem::remove(metallib_path, ec);
+    std::filesystem::remove(temp_metallib_path, ec);
     return false;
   }
 
   std::filesystem::remove(source_path, ec);
   std::filesystem::remove(air_path, ec);
+  std::filesystem::rename(temp_metallib_path, metallib_path, ec);
+  if (ec.value() != 0) {
+    std::filesystem::remove(temp_metallib_path, ec);
+    out_error = "Failed to publish compiled metallib cache file.";
+    return false;
+  }
   return true;
 }
 
-static id<MTLLibrary> load_or_create_cached_metal_library(MTDevice::Impl* device, const std::string& source_text, std::string& out_error) {
+static id<MTLLibrary> load_or_create_cached_metal_library(MTDevice::Impl* device, const std::string& source_text, uint64_t shader_cache_key, uint64_t shader_content_hash, std::string& out_error) {
   if ((device == nullptr) || (device->metal_device == nil) || source_text.empty()) {
     out_error = "Metal shader source is empty.";
     return nil;
   }
 
   const uint64_t source_hash = etx_hash64(source_text.data(), source_text.size());
-  if (auto it = device->library_cache.find(source_hash); it != device->library_cache.end()) {
-    return it->second;
+  const uint64_t cache_key = (shader_cache_key != 0u) ? shader_cache_key : source_hash;
+  const uint64_t content_hash = (shader_content_hash != 0u) ? shader_content_hash : source_hash;
+  const uint64_t memory_key = etx_hash64_continue(&content_hash, sizeof(content_hash), cache_key);
+  if (auto it = device->library_cache.find(cache_key); (it != device->library_cache.end()) && (it->second.content_hash == content_hash)) {
+    return it->second.library;
   }
 
-  const auto cached_metallib_path = metal_library_cache_path(source_hash);
+  const auto cached_metallib_path = metal_library_cache_path(cache_key, content_hash);
+  auto retain_current_library = [&](id<MTLLibrary> library) -> id<MTLLibrary> {
+    auto it = device->library_cache.find(cache_key);
+    if (it != device->library_cache.end()) {
+      [it->second.library release];
+      it->second = {content_hash, library};
+    } else {
+      device->library_cache.emplace(cache_key, MTLibraryCacheEntry{content_hash, library});
+    }
+    return library;
+  };
   auto load_metallib = [&](const std::filesystem::path& path) -> id<MTLLibrary> {
     NSString* library_path = [NSString stringWithUTF8String:path.string().c_str()];
     NSError* library_error = nil;
@@ -1145,17 +1091,15 @@ static id<MTLLibrary> load_or_create_cached_metal_library(MTDevice::Impl* device
   std::error_code ec = {};
   if (std::filesystem::exists(cached_metallib_path, ec) && (ec.value() == 0)) {
     if (id<MTLLibrary> library = load_metallib(cached_metallib_path)) {
-      device->library_cache.emplace(source_hash, library);
-      return library;
+      return retain_current_library(library);
     }
     std::filesystem::remove(cached_metallib_path, ec);
   }
 
   std::string compile_error = {};
-  if (compile_metal_source_to_metallib(source_text, source_hash, cached_metallib_path, compile_error)) {
+  if (compile_metal_source_to_metallib(source_text, memory_key, cached_metallib_path, compile_error)) {
     if (id<MTLLibrary> library = load_metallib(cached_metallib_path)) {
-      device->library_cache.emplace(source_hash, library);
-      return library;
+      return retain_current_library(library);
     }
     std::filesystem::remove(cached_metallib_path, ec);
   } else if (compile_error.empty() == false) {
@@ -1170,57 +1114,35 @@ static id<MTLLibrary> load_or_create_cached_metal_library(MTDevice::Impl* device
     return nil;
   }
 
-  device->library_cache.emplace(source_hash, fallback_library);
+  retain_current_library(fallback_library);
   out_error.clear();
   return fallback_library;
+}
+
+static void prune_metal_library_cache_slot(const RHIShaderDesc& shader_desc) {
+  const uint64_t content_hash = (shader_desc.content_hash != 0u) ? shader_desc.content_hash : etx_hash64(shader_desc.spirv_data, static_cast<size_t>(shader_desc.spirv_size));
+  const uint64_t cache_key = (shader_desc.cache_key != 0u) ? shader_desc.cache_key : content_hash;
+  const std::filesystem::path path = metal_library_cache_path(cache_key, content_hash);
+  std::error_code ec = {};
+  if (std::filesystem::exists(path, ec) == false) {
+    return;
+  }
+  prune_cache_slot_versions(path.parent_path(), format_hash_hex(cache_key) + "_", path);
 }
 
 static bool bindless_handle_matches(const MTBindlessManager::Impl::ResourceEntry& entry, RHIBindlessHandle handle) {
   return entry.valid && (entry.generation == get_bindless_generation(handle));
 }
 
-static bool parse_msl_buffer_index_for_symbol(const std::string& source_text, const std::string& symbol, uint32_t& out_buffer_index) {
-  const std::regex pattern("\\b" + symbol + R"(\s*\[\[buffer\((\d+)\)\]\])");
-  std::smatch match = {};
-  if (std::regex_search(source_text, match, pattern) == false) {
-    return false;
+static MTLBindingAccess to_metal_binding_access(RHIMetalBindingAccess access) {
+  switch (access) {
+    case RHIMetalBindingAccess::ReadOnly:
+      return MTLBindingAccessReadOnly;
+    case RHIMetalBindingAccess::WriteOnly:
+      return MTLBindingAccessWriteOnly;
+    case RHIMetalBindingAccess::ReadWrite:
+      return MTLBindingAccessReadWrite;
   }
-
-  if (match.size() != 2u) {
-    return false;
-  }
-
-  out_buffer_index = static_cast<uint32_t>(std::stoul(match[1].str()));
-  return true;
-}
-
-static bool parse_msl_push_constants_buffer_index(const std::string& source_text, uint32_t& out_buffer_index) {
-  static const std::regex pattern(R"(type_PushConstant_[A-Za-z0-9_]+\s*&\s*[A-Za-z_][A-Za-z0-9_]*\s*\[\[buffer\((\d+)\)\]\])");
-  std::smatch match = {};
-  if (std::regex_search(source_text, match, pattern) == false) {
-    return false;
-  }
-
-  if (match.size() != 2u) {
-    return false;
-  }
-
-  out_buffer_index = static_cast<uint32_t>(std::stoul(match[1].str()));
-  return true;
-}
-
-static MTLBindingAccess parse_msl_texture_binding_access(const std::string& source_text, uint32_t binding_index) {
-  const std::string symbol_name = "spvDescriptorSet0Binding" + std::to_string(binding_index);
-  const std::regex read_write_pattern("spvDescriptorArray<texture2d<[^>]+,\\s*access::read_write>>\\s+[A-Za-z_][A-Za-z0-9_]*\\s*\\{" + symbol_name + "\\}");
-  if (std::regex_search(source_text, read_write_pattern)) {
-    return MTLBindingAccessReadWrite;
-  }
-
-  const std::regex write_only_pattern("spvDescriptorArray<texture2d<[^>]+,\\s*access::write>>\\s+[A-Za-z_][A-Za-z0-9_]*\\s*\\{" + symbol_name + "\\}");
-  if (std::regex_search(source_text, write_only_pattern)) {
-    return MTLBindingAccessWriteOnly;
-  }
-
   return MTLBindingAccessReadOnly;
 }
 
@@ -1562,11 +1484,15 @@ static bool create_stage_resources(MTDevice::Impl* device, const MTBindlessManag
       "The current Metal RHI cannot safely encode mixed bindless resource classes yet.";
     return false;
   }
+  if (shader_desc.metal_metadata.valid == false) {
+    out_error = "Metal shader binding metadata is missing.";
+    return false;
+  }
 
   const char* utf8_source = [source_text UTF8String];
   const std::string source_string = (utf8_source != nullptr) ? utf8_source : std::string();
 
-  id<MTLLibrary> library = load_or_create_cached_metal_library(device, source_string, out_error);
+  id<MTLLibrary> library = load_or_create_cached_metal_library(device, source_string, shader_desc.cache_key, shader_desc.content_hash, out_error);
   if (library == nil) {
     return false;
   }
@@ -1580,17 +1506,14 @@ static bool create_stage_resources(MTDevice::Impl* device, const MTBindlessManag
 
   out_stage.function = function;
   for (uint32_t binding_index = 0; binding_index < kMetalBindlessBindingCount; ++binding_index) {
-    uint32_t metal_buffer_index = kInvalidMetalBufferIndex;
-    const std::string symbol_name = "spvDescriptorSet0Binding" + std::to_string(binding_index);
-    if (parse_msl_buffer_index_for_symbol(source_string, symbol_name, metal_buffer_index) == false) {
+    const uint32_t metal_buffer_index = shader_desc.metal_metadata.bindless_buffer_indices[binding_index];
+    if (metal_buffer_index == kInvalidMetalBufferIndex) {
       continue;
     }
 
     out_stage.uses_bindless_binding[binding_index] = true;
     out_stage.bindless_buffer_indices[binding_index] = metal_buffer_index;
-    if ((binding_index == kMetalBindlessTextureBinding) || (binding_index == kMetalBindlessStorageTextureBinding)) {
-      out_stage.bindless_binding_access[binding_index] = parse_msl_texture_binding_access(source_string, binding_index);
-    }
+    out_stage.bindless_binding_access[binding_index] = to_metal_binding_access(shader_desc.metal_metadata.bindless_binding_access[binding_index]);
 
     id<MTLArgumentEncoder> encoder = create_bindless_argument_encoder(device->metal_device, bindless, binding_index, out_stage.bindless_binding_access[binding_index]);
     if (encoder == nil) {
@@ -1607,7 +1530,8 @@ static bool create_stage_resources(MTDevice::Impl* device, const MTBindlessManag
     }
   }
 
-  out_stage.uses_push_constants = parse_msl_push_constants_buffer_index(source_string, out_stage.push_constants_buffer_index);
+  out_stage.push_constants_buffer_index = shader_desc.metal_metadata.push_constants_buffer_index;
+  out_stage.uses_push_constants = out_stage.push_constants_buffer_index != kInvalidMetalBufferIndex;
 
   return true;
 }
@@ -1653,7 +1577,8 @@ MTContext::MTContext()
   _impl->supports_ray_tracing = device_reports_raytracing(_impl->metal_device);
   _impl->device._impl->command_queue = _impl->command_queue;
   _impl->device._impl->bindless_manager = &_impl->bindless_manager;
-  initialize_pipeline_binary_archive(_impl->device._impl);
+  prune_obsolete_metal_cache_versions(metal_library_cache_root_directory());
+  prune_obsolete_metal_cache_versions(metal_pipeline_archive_root_directory());
 
   _impl->image_acquired = _impl->device.create_semaphore().handle;
   _impl->render_complete = _impl->device.create_semaphore().handle;
@@ -1708,7 +1633,6 @@ MTContext::MTContext(MTContext&& other) noexcept
 
 MTContext::~MTContext() {
   if (_impl != nullptr) {
-    flush_pipeline_binary_archive(_impl->device._impl, "context_shutdown");
     wait_for_inflight_command_buffers(_impl->inflight_command_buffers);
     for (auto& [handle, command_buffer] : _impl->command_buffers) {
       (void)handle;
@@ -1717,13 +1641,11 @@ MTContext::~MTContext() {
       }
     }
     _impl->command_buffers.clear();
-    for (auto& [hash, library] : _impl->device._impl->library_cache) {
+    for (auto& [hash, entry] : _impl->device._impl->library_cache) {
       (void)hash;
-      [library release];
+      [entry.library release];
     }
     _impl->device._impl->library_cache.clear();
-    [_impl->device._impl->pipeline_binary_archive release];
-    _impl->device._impl->pipeline_binary_archive = nil;
     [_impl->current_drawable release];
     _impl->current_drawable = nil;
     [_impl->metal_layer release];
@@ -1871,7 +1793,6 @@ void MTContext::present() {
 }
 
 RHIResult MTContext::wait_idle() {
-  flush_pipeline_binary_archive(_impl->device._impl, "wait_idle");
   return wait_for_inflight_command_buffers(_impl->inflight_command_buffers) ? RHIResult::Success : RHIResult::DeviceLost;
 }
 
@@ -2345,6 +2266,51 @@ RHICreateBindlessResult MTDevice::create_sampler(const RHISamplerDesc& desc) {
   return {RHIResult::Success, handle};
 }
 
+static id<MTLBinaryArchive> create_metal_binary_archive(id<MTLDevice> device, const std::filesystem::path* path);
+static bool serialize_metal_binary_archive(id<MTLBinaryArchive> archive, const std::filesystem::path& path);
+
+static uint64_t metal_graphics_pipeline_hash(const RHIGraphicsPipelineDesc& desc, bool content_hash) {
+  uint64_t hash = etx_hash64("graphics", 8u);
+  auto append = [&](const auto& value) {
+    hash = etx_hash64_continue(&value, sizeof(value), hash);
+  };
+  const uint64_t vertex_content_hash = (desc.vertex_shader.content_hash != 0u) ? desc.vertex_shader.content_hash : etx_hash64(desc.vertex_shader.spirv_data, static_cast<size_t>(desc.vertex_shader.spirv_size));
+  const uint64_t fragment_content_hash = (desc.fragment_shader.content_hash != 0u) ? desc.fragment_shader.content_hash : etx_hash64(desc.fragment_shader.spirv_data, static_cast<size_t>(desc.fragment_shader.spirv_size));
+  const uint64_t vertex_shader_hash = content_hash ? vertex_content_hash : ((desc.vertex_shader.cache_key != 0u) ? desc.vertex_shader.cache_key : vertex_content_hash);
+  const uint64_t fragment_shader_hash = content_hash ? fragment_content_hash : ((desc.fragment_shader.cache_key != 0u) ? desc.fragment_shader.cache_key : fragment_content_hash);
+  append(vertex_shader_hash);
+  append(fragment_shader_hash);
+  hash = etx_hash64_continue(desc.vertex_shader.entry_point.data(), desc.vertex_shader.entry_point.size(), hash);
+  hash = etx_hash64_continue(desc.fragment_shader.entry_point.data(), desc.fragment_shader.entry_point.size(), hash);
+  append(desc.sample_count);
+  append(desc.depth_format);
+  append(desc.color_attachment_count);
+  for (uint32_t i = 0u; i < desc.color_attachment_count; ++i) {
+    append(desc.color_formats[i]);
+  }
+  append(desc.blend.src_color_blend_factor);
+  append(desc.blend.dst_color_blend_factor);
+  append(desc.blend.color_blend_op);
+  append(desc.blend.src_alpha_blend_factor);
+  append(desc.blend.dst_alpha_blend_factor);
+  append(desc.blend.alpha_blend_op);
+  append(desc.blend.blend_enable);
+  append(desc.vertex_attribute_count);
+  for (uint32_t i = 0u; i < desc.vertex_attribute_count; ++i) {
+    append(desc.vertex_attributes[i].location);
+    append(desc.vertex_attributes[i].binding);
+    append(desc.vertex_attributes[i].format);
+    append(desc.vertex_attributes[i].offset);
+  }
+  append(desc.vertex_binding_count);
+  for (uint32_t i = 0u; i < desc.vertex_binding_count; ++i) {
+    append(desc.vertex_bindings[i].binding);
+    append(desc.vertex_bindings[i].stride);
+    append(desc.vertex_bindings[i].input_rate);
+  }
+  return hash;
+}
+
 RHICreatePipelineResult MTDevice::create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc) {
   if (_impl->metal_device == nil) {
     return {RHIResult::InvalidArgument, {}};
@@ -2405,10 +2371,47 @@ RHICreatePipelineResult MTDevice::create_graphics_pipeline(const RHIGraphicsPipe
     pipeline_desc.vertexDescriptor = vertex_desc;
   }
 
-  append_render_pipeline_to_binary_archive(_impl, pipeline_desc);
-
   NSError* pipeline_error = nil;
-  pipeline.render_pipeline = [_impl->metal_device newRenderPipelineStateWithDescriptor:pipeline_desc error:&pipeline_error];
+  if (@available(macOS 11.0, *)) {
+    const uint64_t cache_key = metal_graphics_pipeline_hash(desc, false);
+    const uint64_t content_hash = metal_graphics_pipeline_hash(desc, true);
+    const std::filesystem::path archive_path = metal_pipeline_archive_path(_impl->metal_device, cache_key, content_hash);
+    const std::string slot_prefix = format_hash_hex(cache_key) + "_";
+    std::error_code ec = {};
+    const bool archive_exists = std::filesystem::exists(archive_path, ec) && (ec.value() == 0);
+    if (archive_exists) {
+      id<MTLBinaryArchive> archive = create_metal_binary_archive(_impl->metal_device, &archive_path);
+      if (archive != nil) {
+        pipeline_desc.binaryArchives = @[ archive ];
+        pipeline.render_pipeline = [_impl->metal_device newRenderPipelineStateWithDescriptor:pipeline_desc options:MTLPipelineOptionFailOnBinaryArchiveMiss reflection:nil error:&pipeline_error];
+        pipeline_desc.binaryArchives = nil;
+        [archive release];
+      }
+    }
+
+    if (pipeline.render_pipeline == nil) {
+      id<MTLBinaryArchive> archive = create_metal_binary_archive(_impl->metal_device, nullptr);
+      if (archive != nil) {
+        pipeline_desc.binaryArchives = @[ archive ];
+        NSError* archive_error = nil;
+        const BOOL added = [archive addRenderPipelineFunctionsWithDescriptor:pipeline_desc error:&archive_error];
+        pipeline_error = nil;
+        pipeline.render_pipeline = [_impl->metal_device newRenderPipelineStateWithDescriptor:pipeline_desc options:MTLPipelineOptionNone reflection:nil error:&pipeline_error];
+        if ((added == YES) && (pipeline.render_pipeline != nil) && serialize_metal_binary_archive(archive, archive_path)) {
+          prune_cache_slot_versions(archive_path.parent_path(), slot_prefix, archive_path);
+        } else if ((added == NO) && (archive_error != nil)) {
+          log::warning("Metal RHI: failed to populate per-shader render pipeline archive: %s", safe_nsstring([archive_error localizedDescription], "unknown error"));
+        }
+        pipeline_desc.binaryArchives = nil;
+        [archive release];
+      }
+    }
+  }
+
+  if (pipeline.render_pipeline == nil) {
+    pipeline_error = nil;
+    pipeline.render_pipeline = [_impl->metal_device newRenderPipelineStateWithDescriptor:pipeline_desc error:&pipeline_error];
+  }
   [pipeline_desc release];
   if (pipeline.render_pipeline == nil) {
     log::error("Metal RHI: render pipeline creation failed: %s", pipeline_error ? [[pipeline_error localizedDescription] UTF8String] : "unknown error");
@@ -2416,6 +2419,8 @@ RHICreatePipelineResult MTDevice::create_graphics_pipeline(const RHIGraphicsPipe
     release_stage_resources(pipeline.fragment_stage);
     return {RHIResult::ValidationError, {}};
   }
+  prune_metal_library_cache_slot(desc.vertex_shader);
+  prune_metal_library_cache_slot(desc.fragment_shader);
 
   MTLDepthStencilDescriptor* depth_desc = [[MTLDepthStencilDescriptor alloc] init];
   depth_desc.depthCompareFunction = to_metal_compare(desc.depth_state.depth_compare_op);
@@ -2428,12 +2433,62 @@ RHICreatePipelineResult MTDevice::create_graphics_pipeline(const RHIGraphicsPipe
   return {RHIResult::Success, handle};
 }
 
-RHICreatePipelineResult MTDevice::create_compute_pipeline(const RHIComputePipelineDesc& desc) {
-  if (_impl->metal_device == nil) {
-    return {RHIResult::InvalidArgument, {}};
+struct MTComputePipelineCreationResult {
+  RHICreatePipelineResult result = {};
+  bool cache_hit = false;
+};
+
+static id<MTLBinaryArchive> create_metal_binary_archive(id<MTLDevice> device, const std::filesystem::path* path) {
+  if (device == nil) {
+    return nil;
+  }
+
+  MTLBinaryArchiveDescriptor* descriptor = [[MTLBinaryArchiveDescriptor alloc] init];
+  if (path != nullptr) {
+    NSString* path_text = [NSString stringWithUTF8String:path->string().c_str()];
+    descriptor.url = [NSURL fileURLWithPath:path_text];
+  }
+  NSError* error = nil;
+  id<MTLBinaryArchive> archive = [device newBinaryArchiveWithDescriptor:descriptor error:&error];
+  [descriptor release];
+  if ((archive == nil) && (error != nil)) {
+    log::warning("Metal RHI: failed to open per-shader pipeline archive: %s", safe_nsstring([error localizedDescription], "unknown error"));
+  }
+  return archive;
+}
+
+static bool serialize_metal_binary_archive(id<MTLBinaryArchive> archive, const std::filesystem::path& path) {
+  if ((archive == nil) || (ensure_directory_exists(path.parent_path()) == false)) {
+    return false;
+  }
+
+  static std::atomic<uint64_t> next_temp_file_id = 0u;
+  std::filesystem::path temp_path = path;
+  temp_path += ".tmp." + std::to_string(static_cast<uint64_t>([[NSProcessInfo processInfo] processIdentifier])) + "." + std::to_string(next_temp_file_id.fetch_add(1u));
+  std::error_code ec = {};
+  std::filesystem::remove(temp_path, ec);
+  NSString* temp_path_text = [NSString stringWithUTF8String:temp_path.string().c_str()];
+  NSError* error = nil;
+  if ([archive serializeToURL:[NSURL fileURLWithPath:temp_path_text] error:&error] == NO) {
+    std::filesystem::remove(temp_path, ec);
+    log::warning("Metal RHI: failed to serialize per-shader pipeline archive: %s", safe_nsstring([error localizedDescription], "unknown error"));
+    return false;
+  }
+
+  std::filesystem::rename(temp_path, path, ec);
+  if (ec.value() != 0) {
+    std::filesystem::remove(temp_path, ec);
+    return false;
+  }
+  return true;
+}
+
+static MTComputePipelineCreationResult create_metal_compute_pipeline(MTDevice::Impl* device, const RHIComputePipelineDesc& desc) {
+  if ((device == nullptr) || (device->metal_device == nil)) {
+    return {{RHIResult::InvalidArgument, {}}, false};
   }
   if ((desc.compute_shader.backend != RHIBackend::Metal) || (desc.compute_shader.format != RHIShaderBinaryFormat::MetalSource)) {
-    return {RHIResult::InvalidArgument, {}};
+    return {{RHIResult::InvalidArgument, {}}, false};
   }
 
   std::string error_message = {};
@@ -2441,27 +2496,71 @@ RHICreatePipelineResult MTDevice::create_compute_pipeline(const RHIComputePipeli
   pipeline.is_compute = true;
   pipeline.debug_name = desc.compute_shader.entry_point;
   pipeline.compute_desc = desc;
-  if (!create_stage_resources(_impl, _impl->bindless_manager->_impl, desc.compute_shader, pipeline.compute_stage, error_message)) {
+  if (create_stage_resources(device, device->bindless_manager->_impl, desc.compute_shader, pipeline.compute_stage, error_message) == false) {
     log::error("Metal RHI: compute shader stage creation failed: %s", error_message.c_str());
-    return {RHIResult::ValidationError, {}};
+    return {{RHIResult::ValidationError, {}}, false};
   }
 
   MTLComputePipelineDescriptor* pipeline_desc = [[MTLComputePipelineDescriptor alloc] init];
   pipeline_desc.computeFunction = pipeline.compute_stage.function;
-  append_compute_pipeline_to_binary_archive(_impl, pipeline_desc);
-
   NSError* pipeline_error = nil;
-  pipeline.compute_pipeline = [_impl->metal_device newComputePipelineStateWithDescriptor:pipeline_desc options:MTLPipelineOptionNone reflection:nil error:&pipeline_error];
+  bool cache_hit = false;
+  if (@available(macOS 11.0, *)) {
+    const uint64_t content_hash = (desc.compute_shader.content_hash != 0u) ? desc.compute_shader.content_hash : etx_hash64(desc.compute_shader.spirv_data, static_cast<size_t>(desc.compute_shader.spirv_size));
+    const uint64_t cache_key = (desc.compute_shader.cache_key != 0u) ? desc.compute_shader.cache_key : content_hash;
+    const std::filesystem::path archive_path = metal_pipeline_archive_path(device->metal_device, cache_key, content_hash);
+    const std::string slot_prefix = format_hash_hex(cache_key) + "_";
+    std::error_code ec = {};
+    const bool archive_exists = std::filesystem::exists(archive_path, ec) && (ec.value() == 0);
+    if (archive_exists) {
+      id<MTLBinaryArchive> archive = create_metal_binary_archive(device->metal_device, &archive_path);
+      if (archive != nil) {
+        pipeline_desc.binaryArchives = @[ archive ];
+        pipeline.compute_pipeline = [device->metal_device newComputePipelineStateWithDescriptor:pipeline_desc options:MTLPipelineOptionFailOnBinaryArchiveMiss reflection:nil error:&pipeline_error];
+        cache_hit = pipeline.compute_pipeline != nil;
+        pipeline_desc.binaryArchives = nil;
+        [archive release];
+      }
+    }
+
+    if (pipeline.compute_pipeline == nil) {
+      id<MTLBinaryArchive> archive = create_metal_binary_archive(device->metal_device, nullptr);
+      if (archive != nil) {
+        pipeline_desc.binaryArchives = @[ archive ];
+        NSError* archive_error = nil;
+        const BOOL added = [archive addComputePipelineFunctionsWithDescriptor:pipeline_desc error:&archive_error];
+        pipeline_error = nil;
+        pipeline.compute_pipeline = [device->metal_device newComputePipelineStateWithDescriptor:pipeline_desc options:MTLPipelineOptionNone reflection:nil error:&pipeline_error];
+        if ((added == YES) && (pipeline.compute_pipeline != nil) && serialize_metal_binary_archive(archive, archive_path)) {
+          prune_cache_slot_versions(archive_path.parent_path(), slot_prefix, archive_path);
+        } else if ((added == NO) && (archive_error != nil)) {
+          log::warning("Metal RHI: failed to populate per-shader pipeline archive: %s", safe_nsstring([archive_error localizedDescription], "unknown error"));
+        }
+        pipeline_desc.binaryArchives = nil;
+        [archive release];
+      }
+    }
+  }
+
+  if (pipeline.compute_pipeline == nil) {
+    pipeline_error = nil;
+    pipeline.compute_pipeline = [device->metal_device newComputePipelineStateWithDescriptor:pipeline_desc options:MTLPipelineOptionNone reflection:nil error:&pipeline_error];
+  }
   [pipeline_desc release];
   if (pipeline.compute_pipeline == nil) {
     log::error("Metal RHI: compute pipeline creation failed: %s", pipeline_error ? [[pipeline_error localizedDescription] UTF8String] : "unknown error");
     release_stage_resources(pipeline.compute_stage);
-    return {RHIResult::ValidationError, {}};
+    return {{RHIResult::ValidationError, {}}, false};
   }
+  prune_metal_library_cache_slot(desc.compute_shader);
 
-  const RHIPipeline handle = Handle::construct(0u, _impl->next_pipeline_index++, 1u);
-  _impl->pipelines.emplace(handle, std::move(pipeline));
-  return {RHIResult::Success, handle};
+  const RHIPipeline handle = Handle::construct(0u, device->next_pipeline_index++, 1u);
+  device->pipelines.emplace(handle, std::move(pipeline));
+  return {{RHIResult::Success, handle}, cache_hit};
+}
+
+RHICreatePipelineResult MTDevice::create_compute_pipeline(const RHIComputePipelineDesc& desc) {
+  return create_metal_compute_pipeline(_impl, desc).result;
 }
 
 std::vector<RHICreatePipelineBatchEntry> MTDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency, const RHIPipelineBatchProgressCallback& progress_callback) {
@@ -2473,13 +2572,13 @@ std::vector<RHICreatePipelineBatchEntry> MTDevice::create_compute_pipelines(cons
       progress_callback(static_cast<uint32_t>(i), results[i]);
     }
     const auto begin = std::chrono::steady_clock::now();
-    const RHICreatePipelineResult result = create_compute_pipeline(descs[i]);
+    const MTComputePipelineCreationResult result = create_metal_compute_pipeline(_impl, descs[i]);
     const auto end = std::chrono::steady_clock::now();
     results[i] = {
-      .result = result.result,
-      .handle = result.handle,
+      .result = result.result.result,
+      .handle = result.result.handle,
       .elapsed_ms = std::chrono::duration<double, std::milli>(end - begin).count(),
-      .cache_hit = false,
+      .cache_hit = result.cache_hit,
       .state = RHIPipelineBatchProgressState::Complete,
     };
     if (progress_callback) {
@@ -2490,7 +2589,6 @@ std::vector<RHICreatePipelineBatchEntry> MTDevice::create_compute_pipelines(cons
 }
 
 void MTDevice::persist_pipeline_cache() {
-  flush_pipeline_binary_archive(_impl, "pipeline_batch");
 }
 
 RHIResult MTDevice::destroy_buffer(RHIBuffer buffer) {
@@ -3303,9 +3401,7 @@ RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAcceler
     return {RHIResult::OutOfMemory, {}};
   }
 
-  const uint64_t instance_descriptor_buffer_size = (desc.type == RHIAccelerationStructureType::TopLevel)
-                                                      ? static_cast<uint64_t>(desc.instance_count) * sizeof(MTLAccelerationStructureUserIDInstanceDescriptor)
-                                                      : 0u;
+  const uint64_t instance_descriptor_buffer_size = (desc.type == RHIAccelerationStructureType::TopLevel) ? static_cast<uint64_t>(desc.instance_count) * sizeof(MTLAccelerationStructureUserIDInstanceDescriptor) : 0u;
   id<MTLBuffer> instance_descriptor_buffer = nil;
   if (instance_descriptor_buffer_size > 0u) {
     instance_descriptor_buffer = [_impl->metal_device newBufferWithLength:static_cast<NSUInteger>(instance_descriptor_buffer_size) options:MTLResourceStorageModeShared];

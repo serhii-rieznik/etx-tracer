@@ -2,8 +2,9 @@
 
 #include "interop.hxx"
 
-#define ETX_SPECTRAL_MODE_RUNTIME 0
-#define ETX_SPECTRAL_MODE_RGB     1
+#define ETX_SPECTRAL_MODE_RUNTIME  0
+#define ETX_SPECTRAL_MODE_RGB      1
+#define ETX_SPECTRAL_MODE_SPECTRAL 2
 
 #if defined(ETX_SPECTRAL_MODE) == false
 # define ETX_SPECTRAL_MODE ETX_SPECTRAL_MODE_RUNTIME
@@ -118,6 +119,9 @@ ETX_SHARED_INLINE bool spectral_query_is_spectral(ETX_IN(SpectralQuery, query)) 
 #if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
   (void)query;
   return false;
+#elif ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
+  (void)query;
+  return true;
 #else
   return (query.flags & SpectralFlags::Spectral) != 0u;
 #endif
@@ -379,6 +383,9 @@ ETX_SHARED_INLINE bool spectral_response_is_spectral(ETX_IN(SpectralResponse, va
 #if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
   (void)value;
   return false;
+#elif ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
+  (void)value;
+  return true;
 #else
   return value.flags & SpectralFlags::Spectral;
 #endif

@@ -2,6 +2,7 @@
 
 #include <etx/core/handle.hxx>
 
+#include <array>
 #include <functional>
 namespace etx {
 
@@ -92,6 +93,36 @@ enum class RHIShaderStage : uint32_t {
 enum class RHIShaderBinaryFormat : uint32_t {
   SpirV = 0,
   MetalSource = 1,
+};
+
+constexpr uint32_t kRHIMetalBindlessBindingCount = 6u;
+constexpr uint32_t kRHIInvalidMetalBufferIndex = ~0u;
+
+enum class RHIMetalBindingAccess : uint32_t {
+  ReadOnly = 0u,
+  WriteOnly = 1u,
+  ReadWrite = 2u,
+};
+
+struct RHIMetalShaderMetadata {
+  std::array<uint32_t, kRHIMetalBindlessBindingCount> bindless_buffer_indices = {
+    kRHIInvalidMetalBufferIndex,
+    kRHIInvalidMetalBufferIndex,
+    kRHIInvalidMetalBufferIndex,
+    kRHIInvalidMetalBufferIndex,
+    kRHIInvalidMetalBufferIndex,
+    kRHIInvalidMetalBufferIndex,
+  };
+  std::array<RHIMetalBindingAccess, kRHIMetalBindlessBindingCount> bindless_binding_access = {
+    RHIMetalBindingAccess::ReadOnly,
+    RHIMetalBindingAccess::ReadOnly,
+    RHIMetalBindingAccess::ReadOnly,
+    RHIMetalBindingAccess::ReadWrite,
+    RHIMetalBindingAccess::ReadOnly,
+    RHIMetalBindingAccess::ReadWrite,
+  };
+  uint32_t push_constants_buffer_index = kRHIInvalidMetalBufferIndex;
+  bool valid = false;
 };
 
 enum class RHIIndexType : uint32_t {
@@ -397,6 +428,10 @@ struct RHIShaderDesc {
   uint32_t local_size_x = 1;
   uint32_t local_size_y = 1;
   uint32_t local_size_z = 1;
+  // The cache key identifies a logical shader variant across source revisions; the content hash identifies its current backend binary.
+  uint64_t cache_key = 0u;
+  uint64_t content_hash = 0u;
+  RHIMetalShaderMetadata metal_metadata = {};
 };
 
 struct RHIShaderBinary {
@@ -409,6 +444,9 @@ struct RHIShaderBinary {
   uint32_t local_size_x = 1;
   uint32_t local_size_y = 1;
   uint32_t local_size_z = 1;
+  uint64_t cache_key = 0u;
+  uint64_t content_hash = 0u;
+  RHIMetalShaderMetadata metal_metadata = {};
 };
 
 struct RHIShaderVariantDesc {

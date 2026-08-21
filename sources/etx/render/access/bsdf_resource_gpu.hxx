@@ -33,6 +33,16 @@ SpectralResponse bsdf_resource_load_spectrum(BSDFResourceContext context, uint s
   return spectrum_access_evaluate(spectrum_context, spectrum_index, spect);
 }
 
+float3 bsdf_resource_load_spectrum_integrated(BSDFResourceContext context, uint spectrum_index) {
+  if ((scene_gpu_has_descriptor(context.spectrums_descriptor_index) == false) || (spectrum_index == kInvalidIndex)) {
+    return float3(0.0f, 0.0f, 0.0f);
+  }
+
+  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(context.spectrums_descriptor_index)];
+  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index);
+  return spectrum_access_load_integrated(spectrum_context, spectrum_index);
+}
+
 bool bsdf_resource_image_has_alpha(BSDFResourceContext context, uint image_index) {
   if (scene_gpu_has_descriptor(context.images_descriptor_index) == false) {
     return false;

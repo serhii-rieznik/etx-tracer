@@ -24,14 +24,9 @@
     spect = wavefront_vcm_iteration_spectral_query();
     if (scene_uses_spectral_mode()) {
       rnd01(seed);
-    } else if (scene_has_diffraction_grating()) {
-      rnd01(seed);
-      rnd01(seed);
     }
   } else if (scene_uses_spectral_mode()) {
     spect = spectral_query_packet_sample(rnd01(seed));
-  } else if (scene_has_diffraction_grating()) {
-    spect = diffraction_transport_sample_query(false, true, rnd01(seed), rnd01(seed));
   }
   GPUWavefrontResources resources = wavefront_load_resources();
   GPUWavefrontPathState cleared_state = (GPUWavefrontPathState)0;

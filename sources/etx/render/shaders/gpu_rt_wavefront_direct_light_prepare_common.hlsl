@@ -239,12 +239,6 @@ bool wavefront_load_direct_light_prepare_input(uint dispatch_index, out Wavefron
   if (wavefront_try_load_material_full(input_value.current_vertex.material_index, input_value.material) == false) {
     return false;
   }
-  bool contains_diffraction =
-    ((input_value.current_vertex.flags & GPUWavefrontVertexFlags::Contains_diffraction) != 0u) || (input_value.material.cls == MaterialClass::DiffractionGrating);
-  if (scene_diffraction_contribution_enabled(input_value.state.spect, contains_diffraction) == false) {
-    return false;
-  }
-
   return true;
 }
 

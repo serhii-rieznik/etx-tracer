@@ -15,7 +15,6 @@
 #include <fstream>
 #include <locale>
 #include <mutex>
-#include <regex>
 #include <sstream>
 #include <string_view>
 #include <thread>
@@ -32,6 +31,7 @@
 # include <combaseapi.h>
 #else
 # include <dlfcn.h>
+# include <unistd.h>
 #endif
 
 #include <dxc/dxcapi.h>
@@ -47,7 +47,7 @@ RHIResult initialize_dxc_interfaces_global();
 namespace {
 
 constexpr bool kEnableShaderDebugInfo = false;
-constexpr uint32_t kShaderCacheVersion = 3u;
+constexpr uint32_t kShaderCacheVersion = 6u;
 constexpr std::string_view kShaderVariantCacheMagic = "ETXSHV1";
 constexpr std::string_view kPreprocessedShaderCacheMagic = "ETXSHP1";
 
@@ -208,7 +208,98 @@ std::vector<std::string> build_shader_include_directories(const std::string& sou
   return include_directories;
 }
 
-bool translate_spirv_to_msl(const std::vector<uint8_t>& spirv_data, std::string& out_msl, std::string& error_message) {
+RHIMetalBindingAccess metal_storage_image_access(const spirv_cross::CompilerMSL& compiler, const spirv_cross::Resource& resource) {
+  const auto& type = compiler.get_type(resource.type_id);
+  switch (type.image.access) {
+    case spv::AccessQualifierReadOnly:
+      return RHIMetalBindingAccess::ReadOnly;
+    case spv::AccessQualifierWriteOnly:
+      return RHIMetalBindingAccess::WriteOnly;
+    case spv::AccessQualifierReadWrite:
+      return RHIMetalBindingAccess::ReadWrite;
+    default:
+      if (compiler.has_decoration(resource.id, spv::DecorationNonWritable)) {
+        return RHIMetalBindingAccess::ReadOnly;
+      }
+      return compiler.has_decoration(resource.id, spv::DecorationNonReadable) ? RHIMetalBindingAccess::WriteOnly : RHIMetalBindingAccess::ReadWrite;
+  }
+}
+
+bool record_metal_resource_binding(const spirv_cross::CompilerMSL& compiler, const spirv_cross::Resource& resource, RHIMetalShaderMetadata& metadata, std::string& error_message) {
+  if ((compiler.has_decoration(resource.id, spv::DecorationDescriptorSet) == false) || (compiler.has_decoration(resource.id, spv::DecorationBinding) == false)) {
+    return true;
+  }
+
+  const uint32_t descriptor_set = compiler.get_decoration(resource.id, spv::DecorationDescriptorSet);
+  const uint32_t binding_index = compiler.get_decoration(resource.id, spv::DecorationBinding);
+  if ((descriptor_set != 0u) || (binding_index >= kRHIMetalBindlessBindingCount)) {
+    return true;
+  }
+
+  const uint32_t metal_buffer_index = compiler.get_automatic_msl_resource_binding(resource.id);
+  if (metal_buffer_index == kRHIInvalidMetalBufferIndex) {
+    return true;
+  }
+
+  uint32_t& current_index = metadata.bindless_buffer_indices[binding_index];
+  if ((current_index != kRHIInvalidMetalBufferIndex) && (current_index != metal_buffer_index)) {
+    error_message = "SPIRV-Cross assigned conflicting Metal buffer indices to descriptor binding " + std::to_string(binding_index) + ".";
+    return false;
+  }
+
+  current_index = metal_buffer_index;
+  return true;
+}
+
+bool collect_metal_shader_metadata(const spirv_cross::CompilerMSL& compiler, RHIMetalShaderMetadata& out_metadata, std::string& error_message) {
+  const spirv_cross::ShaderResources resources = compiler.get_shader_resources();
+  RHIMetalShaderMetadata metadata = {};
+
+  const auto record_resources = [&](const auto& resource_list) {
+    for (const auto& resource : resource_list) {
+      if (record_metal_resource_binding(compiler, resource, metadata, error_message) == false) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  if ((record_resources(resources.uniform_buffers) == false) || (record_resources(resources.storage_buffers) == false) || (record_resources(resources.storage_images) == false) ||
+      (record_resources(resources.sampled_images) == false) || (record_resources(resources.atomic_counters) == false) ||
+      (record_resources(resources.acceleration_structures) == false) || (record_resources(resources.separate_images) == false) ||
+      (record_resources(resources.separate_samplers) == false)) {
+    return false;
+  }
+
+  for (const auto& resource : resources.storage_images) {
+    if ((compiler.has_decoration(resource.id, spv::DecorationDescriptorSet) == false) || (compiler.has_decoration(resource.id, spv::DecorationBinding) == false)) {
+      continue;
+    }
+    const uint32_t descriptor_set = compiler.get_decoration(resource.id, spv::DecorationDescriptorSet);
+    const uint32_t binding_index = compiler.get_decoration(resource.id, spv::DecorationBinding);
+    if ((descriptor_set == 0u) && (binding_index < kRHIMetalBindlessBindingCount)) {
+      metadata.bindless_binding_access[binding_index] = metal_storage_image_access(compiler, resource);
+    }
+  }
+
+  for (const auto& resource : resources.push_constant_buffers) {
+    const uint32_t metal_buffer_index = compiler.get_automatic_msl_resource_binding(resource.id);
+    if (metal_buffer_index == kRHIInvalidMetalBufferIndex) {
+      continue;
+    }
+    if ((metadata.push_constants_buffer_index != kRHIInvalidMetalBufferIndex) && (metadata.push_constants_buffer_index != metal_buffer_index)) {
+      error_message = "SPIRV-Cross assigned conflicting Metal buffer indices to push constants.";
+      return false;
+    }
+    metadata.push_constants_buffer_index = metal_buffer_index;
+  }
+
+  metadata.valid = true;
+  out_metadata = metadata;
+  return true;
+}
+
+bool translate_spirv_to_msl(const std::vector<uint8_t>& spirv_data, std::string& out_msl, RHIMetalShaderMetadata& out_metadata, std::string& error_message) {
   if ((spirv_data.empty()) || ((spirv_data.size() % sizeof(uint32_t)) != 0u)) {
     error_message = "SPIR-V payload is empty or not aligned to 32-bit words.";
     return false;
@@ -229,6 +320,9 @@ bool translate_spirv_to_msl(const std::vector<uint8_t>& spirv_data, std::string&
     compiler.add_discrete_descriptor_set(0u);
 
     out_msl = compiler.compile();
+    if (collect_metal_shader_metadata(compiler, out_metadata, error_message) == false) {
+      return false;
+    }
   } catch (const spirv_cross::CompilerError& error) {
     error_message = error.what();
     return false;
@@ -277,6 +371,9 @@ bool read_string(std::ifstream& stream, std::string& value) {
   if (read_pod(stream, size) == false) {
     return false;
   }
+  if (size > MAX_SHADER_FILE_SIZE) {
+    return false;
+  }
 
   value.resize(size);
   if (size == 0u) {
@@ -289,14 +386,13 @@ bool read_string(std::ifstream& stream, std::string& value) {
 
 bool translated_msl_has_unsafe_overlapping_bindless(const std::vector<uint8_t>& spirv_data, std::string& out_error_message) {
   std::string msl_source = {};
-  if (translate_spirv_to_msl(spirv_data, msl_source, out_error_message) == false) {
+  RHIMetalShaderMetadata metal_metadata = {};
+  if (translate_spirv_to_msl(spirv_data, msl_source, metal_metadata, out_error_message) == false) {
     return false;
   }
 
-  if ((msl_source.find("ETX_METAL_UNSUPPORTED_OVERLAPPING_BINDLESS") != std::string::npos) ||
-      (msl_source.find("Overlapping binding:") != std::string::npos)) {
-    out_error_message =
-      "Shader translation produced overlapping bindless descriptor layouts that are unsafe on macOS GPU backends.";
+  if ((msl_source.find("ETX_METAL_UNSUPPORTED_OVERLAPPING_BINDLESS") != std::string::npos) || (msl_source.find("Overlapping binding:") != std::string::npos)) {
+    out_error_message = "Shader translation produced overlapping bindless descriptor layouts that are unsafe on macOS GPU backends.";
     return true;
   }
 
@@ -363,24 +459,42 @@ bool contains_include_directive(const std::string& source) {
   return false;
 }
 
-void extract_compute_local_size(const std::string& source, const std::string& entry_point, RHIShaderStage stage, uint32_t& out_x, uint32_t& out_y, uint32_t& out_z) {
+bool extract_compute_local_size(const uint8_t* spirv_data, size_t spirv_size, RHIShaderStage stage, uint32_t& out_x, uint32_t& out_y, uint32_t& out_z, std::string& error_message) {
   out_x = 1;
   out_y = 1;
   out_z = 1;
 
   if (stage != RHIShaderStage::Compute) {
-    return;
+    return true;
   }
 
-  const std::string escaped_entry = std::regex_replace(entry_point, std::regex(R"([.^$|()\\[\]{}*+?])"), R"(\\$&)");
-  const std::regex entry_regex("\\[\\s*numthreads\\s*\\(\\s*(\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)\\s*\\)\\s*\\]\\s*[A-Za-z_][A-Za-z0-9_<>]*\\s+" + escaped_entry + "\\s*\\(",
-    std::regex::ECMAScript);
-  std::smatch match = {};
-  if (std::regex_search(source, match, entry_regex) && (match.size() == 4u)) {
-    out_x = static_cast<uint32_t>(std::stoul(match[1].str()));
-    out_y = static_cast<uint32_t>(std::stoul(match[2].str()));
-    out_z = static_cast<uint32_t>(std::stoul(match[3].str()));
+  if ((spirv_data == nullptr) || (spirv_size == 0u) || ((spirv_size % sizeof(uint32_t)) != 0u)) {
+    error_message = "SPIR-V payload is empty or not aligned to 32-bit words.";
+    return false;
   }
+
+  std::vector<uint32_t> spirv_words(spirv_size / sizeof(uint32_t));
+  std::memcpy(spirv_words.data(), spirv_data, spirv_size);
+
+  try {
+    spirv_cross::Compiler compiler(std::move(spirv_words));
+    out_x = compiler.get_execution_mode_argument(spv::ExecutionModeLocalSize, 0u);
+    out_y = compiler.get_execution_mode_argument(spv::ExecutionModeLocalSize, 1u);
+    out_z = compiler.get_execution_mode_argument(spv::ExecutionModeLocalSize, 2u);
+  } catch (const spirv_cross::CompilerError& error) {
+    error_message = error.what();
+    return false;
+  } catch (const std::exception& error) {
+    error_message = error.what();
+    return false;
+  }
+
+  if ((out_x == 0u) || (out_y == 0u) || (out_z == 0u)) {
+    error_message = "SPIR-V compute shader has an invalid local workgroup size.";
+    return false;
+  }
+
+  return true;
 }
 
 }  // namespace
@@ -486,6 +600,13 @@ struct ShaderVariantDiskCacheHeader {
   uint32_t format = 0u;
   uint64_t key_hash = 0u;
   uint64_t data_size = 0u;
+  uint32_t metal_metadata_valid = 0u;
+  uint32_t metal_bindless_buffer_indices[kRHIMetalBindlessBindingCount] = {};
+  uint32_t metal_bindless_binding_access[kRHIMetalBindlessBindingCount] = {};
+  uint32_t metal_push_constants_buffer_index = kRHIInvalidMetalBufferIndex;
+  uint32_t local_size_x = 1u;
+  uint32_t local_size_y = 1u;
+  uint32_t local_size_z = 1u;
 };
 
 struct PreprocessedShaderDiskCacheHeader {
@@ -501,8 +622,46 @@ uint64_t shader_variant_cache_hash(const ShaderVariantKey& key) {
   return static_cast<uint64_t>(ShaderVariantKeyHash{}(key));
 }
 
+uint64_t shader_variant_cache_slot_hash(const ShaderVariantKey& key) {
+  ShaderVariantKey slot_key = key;
+  slot_key.source_hash = 0u;
+  return shader_variant_cache_hash(slot_key);
+}
+
 uint64_t preprocessed_shader_cache_hash(const PreprocessedShaderKey& key) {
   return static_cast<uint64_t>(PreprocessedShaderKeyHash{}(key));
+}
+
+uint64_t preprocessed_shader_cache_slot_hash(const PreprocessedShaderKey& key) {
+  PreprocessedShaderKey slot_key = key;
+  slot_key.source_hash = 0u;
+  return preprocessed_shader_cache_hash(slot_key);
+}
+
+void retain_current_preprocessed_shader(std::unordered_map<PreprocessedShaderKey, PreprocessedShaderValue, PreprocessedShaderKeyHash>& cache, const PreprocessedShaderKey& key,
+  const PreprocessedShaderValue& value) {
+  const uint64_t slot_hash = preprocessed_shader_cache_slot_hash(key);
+  for (auto it = cache.begin(); it != cache.end();) {
+    if ((preprocessed_shader_cache_slot_hash(it->first) == slot_hash) && (it->first == key) == false) {
+      it = cache.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  cache[key] = value;
+}
+
+void retain_current_shader_variant(std::unordered_map<ShaderVariantKey, ShaderCompilationResult, ShaderVariantKeyHash>& cache, const ShaderVariantKey& key,
+  ShaderCompilationResult value) {
+  const uint64_t slot_hash = shader_variant_cache_slot_hash(key);
+  for (auto it = cache.begin(); it != cache.end();) {
+    if ((shader_variant_cache_slot_hash(it->first) == slot_hash) && (it->first == key) == false) {
+      it = cache.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  cache[key] = std::move(value);
 }
 
 std::filesystem::path shader_cache_root_directory() {
@@ -520,12 +679,63 @@ std::filesystem::path shader_preprocessed_cache_directory() {
   return shader_cache_root_directory() / "preprocessed";
 }
 
-std::filesystem::path shader_variant_cache_file_path(uint64_t key_hash) {
-  return shader_variant_cache_directory() / (format_hash_hex(key_hash) + ".bin");
+std::filesystem::path shader_variant_cache_file_path(uint64_t slot_hash) {
+  return shader_variant_cache_directory() / (format_hash_hex(slot_hash) + ".bin");
 }
 
-std::filesystem::path shader_preprocessed_cache_file_path(uint64_t key_hash) {
-  return shader_preprocessed_cache_directory() / (format_hash_hex(key_hash) + ".bin");
+std::filesystem::path shader_preprocessed_cache_file_path(uint64_t slot_hash) {
+  return shader_preprocessed_cache_directory() / (format_hash_hex(slot_hash) + ".bin");
+}
+
+bool replace_cache_file(const std::filesystem::path& temp_path, const std::filesystem::path& path) {
+  std::error_code ec = {};
+#if ETX_PLATFORM_WINDOWS
+  const std::wstring temp_path_text = temp_path.wstring();
+  const std::wstring path_text = path.wstring();
+  if (MoveFileExW(temp_path_text.c_str(), path_text.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) == 0) {
+    std::filesystem::remove(temp_path, ec);
+    return false;
+  }
+#else
+  std::filesystem::rename(temp_path, path, ec);
+  if (ec.value() != 0) {
+    std::filesystem::remove(temp_path, ec);
+    return false;
+  }
+#endif
+  return true;
+}
+
+std::filesystem::path shader_cache_temp_file_path(const std::filesystem::path& path) {
+  static std::atomic<uint64_t> next_temp_file_id = 0u;
+#if ETX_PLATFORM_WINDOWS
+  const uint64_t process_id = static_cast<uint64_t>(GetCurrentProcessId());
+#else
+  const uint64_t process_id = static_cast<uint64_t>(getpid());
+#endif
+  std::filesystem::path temp_path = path;
+  temp_path += ".tmp." + std::to_string(process_id) + "." + std::to_string(next_temp_file_id.fetch_add(1u));
+  return temp_path;
+}
+
+void prune_obsolete_shader_cache_versions() {
+  const std::filesystem::path current_root = shader_cache_root_directory();
+  const std::filesystem::path parent = current_root.parent_path();
+  std::error_code ec = {};
+  if (std::filesystem::exists(parent, ec) == false) {
+    return;
+  }
+
+  for (const auto& entry : std::filesystem::directory_iterator(parent, ec)) {
+    if (ec.value() != 0) {
+      return;
+    }
+    const std::string directory_name = entry.path().filename().string();
+    if (entry.is_directory() && (entry.path() != current_root) && (directory_name.rfind("v", 0u) == 0u)) {
+      std::filesystem::remove_all(entry.path(), ec);
+      ec.clear();
+    }
+  }
 }
 
 bool query_file_dependency_info(const std::string& path, FileDependencyInfo& out_info) {
@@ -575,8 +785,9 @@ bool ensure_cache_directory_exists(const std::filesystem::path& directory) {
   return ec.value() == 0;
 }
 
-bool load_shader_variant_from_disk(uint64_t key_hash, RHIShaderStage stage, RHIBackend backend, RHIShaderBinaryFormat format, std::vector<uint8_t>& out_binary) {
-  std::ifstream stream(shader_variant_cache_file_path(key_hash), std::ios::binary);
+bool load_shader_variant_from_disk(uint64_t slot_hash, uint64_t key_hash, RHIShaderStage stage, RHIBackend backend, RHIShaderBinaryFormat format,
+  ShaderCompilationResult& out_result) {
+  std::ifstream stream(shader_variant_cache_file_path(slot_hash), std::ios::binary);
   if (stream.is_open() == false) {
     return false;
   }
@@ -587,24 +798,55 @@ bool load_shader_variant_from_disk(uint64_t key_hash, RHIShaderStage stage, RHIB
   }
 
   if ((std::string_view(header.magic, kShaderVariantCacheMagic.size()) != kShaderVariantCacheMagic) || (header.version != kShaderCacheVersion) || (header.key_hash != key_hash) ||
-      (header.stage != static_cast<uint32_t>(stage)) || (header.backend != static_cast<uint32_t>(backend)) || (header.format != static_cast<uint32_t>(format))) {
+      (header.stage != static_cast<uint32_t>(stage)) || (header.backend != static_cast<uint32_t>(backend)) || (header.format != static_cast<uint32_t>(format)) ||
+      (header.data_size > MAX_SHADER_SOURCE_SIZE) || (header.local_size_x == 0u) || (header.local_size_y == 0u) || (header.local_size_z == 0u)) {
     return false;
   }
 
-  out_binary.resize(static_cast<size_t>(header.data_size));
-  if (header.data_size > 0u) {
-    stream.read(reinterpret_cast<char*>(out_binary.data()), static_cast<std::streamsize>(header.data_size));
+  RHIMetalShaderMetadata metal_metadata = {};
+  if (backend == RHIBackend::Metal) {
+    if (header.metal_metadata_valid != 1u) {
+      return false;
+    }
+    for (uint32_t binding_index = 0u; binding_index < kRHIMetalBindlessBindingCount; ++binding_index) {
+      if (header.metal_bindless_binding_access[binding_index] > static_cast<uint32_t>(RHIMetalBindingAccess::ReadWrite)) {
+        return false;
+      }
+      metal_metadata.bindless_buffer_indices[binding_index] = header.metal_bindless_buffer_indices[binding_index];
+      metal_metadata.bindless_binding_access[binding_index] = static_cast<RHIMetalBindingAccess>(header.metal_bindless_binding_access[binding_index]);
+    }
+    metal_metadata.push_constants_buffer_index = header.metal_push_constants_buffer_index;
+    metal_metadata.valid = true;
   }
 
-  return stream.good() || stream.eof();
+  out_result.spirv_data.resize(static_cast<size_t>(header.data_size));
+  if (header.data_size > 0u) {
+    stream.read(reinterpret_cast<char*>(out_result.spirv_data.data()), static_cast<std::streamsize>(header.data_size));
+    if (stream.gcount() != static_cast<std::streamsize>(header.data_size)) {
+      return false;
+    }
+  }
+
+  out_result.result = RHIResult::Success;
+  out_result.metal_metadata = metal_metadata;
+  out_result.local_size_x = header.local_size_x;
+  out_result.local_size_y = header.local_size_y;
+  out_result.local_size_z = header.local_size_z;
+  return true;
 }
 
-bool store_shader_variant_to_disk(uint64_t key_hash, RHIShaderStage stage, RHIBackend backend, RHIShaderBinaryFormat format, const std::vector<uint8_t>& binary) {
+bool store_shader_variant_to_disk(uint64_t slot_hash, uint64_t key_hash, RHIShaderStage stage, RHIBackend backend, RHIShaderBinaryFormat format, const std::vector<uint8_t>& binary,
+  const RHIMetalShaderMetadata& metal_metadata, uint32_t local_size_x, uint32_t local_size_y, uint32_t local_size_z) {
+  if ((backend == RHIBackend::Metal) && (metal_metadata.valid == false)) {
+    return false;
+  }
   if (ensure_cache_directory_exists(shader_variant_cache_directory()) == false) {
     return false;
   }
 
-  std::ofstream stream(shader_variant_cache_file_path(key_hash), std::ios::binary | std::ios::trunc);
+  const std::filesystem::path path = shader_variant_cache_file_path(slot_hash);
+  const std::filesystem::path temp_path = shader_cache_temp_file_path(path);
+  std::ofstream stream(temp_path, std::ios::binary | std::ios::trunc);
   if (stream.is_open() == false) {
     return false;
   }
@@ -617,8 +859,20 @@ bool store_shader_variant_to_disk(uint64_t key_hash, RHIShaderStage stage, RHIBa
   header.format = static_cast<uint32_t>(format);
   header.key_hash = key_hash;
   header.data_size = static_cast<uint64_t>(binary.size());
+  header.metal_metadata_valid = metal_metadata.valid ? 1u : 0u;
+  for (uint32_t binding_index = 0u; binding_index < kRHIMetalBindlessBindingCount; ++binding_index) {
+    header.metal_bindless_buffer_indices[binding_index] = metal_metadata.bindless_buffer_indices[binding_index];
+    header.metal_bindless_binding_access[binding_index] = static_cast<uint32_t>(metal_metadata.bindless_binding_access[binding_index]);
+  }
+  header.metal_push_constants_buffer_index = metal_metadata.push_constants_buffer_index;
+  header.local_size_x = local_size_x;
+  header.local_size_y = local_size_y;
+  header.local_size_z = local_size_z;
 
   if (write_pod(stream, header) == false) {
+    stream.close();
+    std::error_code ec = {};
+    std::filesystem::remove(temp_path, ec);
     return false;
   }
 
@@ -626,11 +880,18 @@ bool store_shader_variant_to_disk(uint64_t key_hash, RHIShaderStage stage, RHIBa
     stream.write(reinterpret_cast<const char*>(binary.data()), static_cast<std::streamsize>(binary.size()));
   }
 
-  return stream.good();
+  const bool write_succeeded = stream.good();
+  stream.close();
+  if (write_succeeded == false) {
+    std::error_code ec = {};
+    std::filesystem::remove(temp_path, ec);
+    return false;
+  }
+  return replace_cache_file(temp_path, path);
 }
 
-bool load_preprocessed_shader_from_disk(uint64_t key_hash, PreprocessedShaderValue& out_value) {
-  std::ifstream stream(shader_preprocessed_cache_file_path(key_hash), std::ios::binary);
+bool load_preprocessed_shader_from_disk(uint64_t slot_hash, uint64_t key_hash, PreprocessedShaderValue& out_value) {
+  std::ifstream stream(shader_preprocessed_cache_file_path(slot_hash), std::ios::binary);
   if (stream.is_open() == false) {
     return false;
   }
@@ -641,7 +902,7 @@ bool load_preprocessed_shader_from_disk(uint64_t key_hash, PreprocessedShaderVal
   }
 
   if ((std::string_view(header.magic, kPreprocessedShaderCacheMagic.size()) != kPreprocessedShaderCacheMagic) || (header.version != kShaderCacheVersion) ||
-      (header.key_hash != key_hash)) {
+      (header.key_hash != key_hash) || (header.dependency_count > 4096u) || (header.source_size > MAX_SHADER_SOURCE_SIZE)) {
     return false;
   }
 
@@ -669,12 +930,17 @@ bool load_preprocessed_shader_from_disk(uint64_t key_hash, PreprocessedShaderVal
   return true;
 }
 
-bool store_preprocessed_shader_to_disk(uint64_t key_hash, const PreprocessedShaderValue& value) {
+bool store_preprocessed_shader_to_disk(uint64_t slot_hash, uint64_t key_hash, const PreprocessedShaderValue& value) {
+  if (dependencies_are_current(value.dependencies) == false) {
+    return false;
+  }
   if (ensure_cache_directory_exists(shader_preprocessed_cache_directory()) == false) {
     return false;
   }
 
-  std::ofstream stream(shader_preprocessed_cache_file_path(key_hash), std::ios::binary | std::ios::trunc);
+  const std::filesystem::path path = shader_preprocessed_cache_file_path(slot_hash);
+  const std::filesystem::path temp_path = shader_cache_temp_file_path(path);
+  std::ofstream stream(temp_path, std::ios::binary | std::ios::trunc);
   if (stream.is_open() == false) {
     return false;
   }
@@ -688,11 +954,17 @@ bool store_preprocessed_shader_to_disk(uint64_t key_hash, const PreprocessedShad
   header.source_size = static_cast<uint64_t>(value.source.size());
 
   if (write_pod(stream, header) == false) {
+    stream.close();
+    std::error_code ec = {};
+    std::filesystem::remove(temp_path, ec);
     return false;
   }
 
   for (const auto& dependency : value.dependencies) {
     if (write_string(stream, dependency.path) == false || write_pod(stream, dependency.file_size) == false || write_pod(stream, dependency.timestamp_ticks) == false) {
+      stream.close();
+      std::error_code ec = {};
+      std::filesystem::remove(temp_path, ec);
       return false;
     }
   }
@@ -701,7 +973,14 @@ bool store_preprocessed_shader_to_disk(uint64_t key_hash, const PreprocessedShad
     stream.write(value.source.data(), static_cast<std::streamsize>(value.source.size()));
   }
 
-  return stream.good();
+  const bool write_succeeded = stream.good();
+  stream.close();
+  if (write_succeeded == false) {
+    std::error_code ec = {};
+    std::filesystem::remove(temp_path, ec);
+    return false;
+  }
+  return replace_cache_file(temp_path, path);
 }
 
 struct ShaderCompiler::Impl {
@@ -754,9 +1033,9 @@ std::mutex global_init_mutex;
 DxcComPtr<IDxcUtils> global_dxc_utils;
 DxcComPtr<IDxcCompiler3> global_dxc_compiler;
 DxcLibraryHandle global_dxc_dll = nullptr;
-#if (ETX_PLATFORM_WINDOWS)
+# if (ETX_PLATFORM_WINDOWS)
 std::atomic<bool> global_com_initialized{false};
-#endif
+# endif
 std::mutex global_dll_mutex;
 DxcCreateInstanceProc global_dxc_create_instance = nullptr;
 #endif
@@ -999,6 +1278,7 @@ RHIResult ShaderCompiler::initialize() {
 
   _impl->dxc_utils = global_dxc_utils;
   _impl->dxc_compiler = global_dxc_compiler;
+  prune_obsolete_shader_cache_versions();
 
   return RHIResult::Success;
 }
@@ -1138,28 +1418,31 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
   const uint64_t source_input_hash = etx_hash64(hlsl_source.data(), hlsl_source.size());
   const PreprocessedShaderKey preprocessed_key = {source_name, ordered_defines, source_input_hash};
   const uint64_t preprocessed_key_hash = preprocessed_shader_cache_hash(preprocessed_key);
+  const uint64_t preprocessed_slot_hash = preprocessed_shader_cache_slot_hash(preprocessed_key);
 
   PreprocessedShaderValue preprocessed_value = {};
   bool have_preprocessed_source = false;
   {
     std::lock_guard<std::mutex> lock(_impl->preprocessed_cache_mutex);
     auto it = _impl->preprocessed_cache.find(preprocessed_key);
-    if (it != _impl->preprocessed_cache.end()) {
+    if ((it != _impl->preprocessed_cache.end()) && dependencies_are_current(it->second.dependencies)) {
       preprocessed_value = it->second;
       have_preprocessed_source = true;
       local_stats.preprocessed_memory_cache_hits += 1u;
+    } else if (it != _impl->preprocessed_cache.end()) {
+      _impl->preprocessed_cache.erase(it);
     }
   }
 
   if (have_preprocessed_source == false) {
     const auto disk_read_begin = std::chrono::steady_clock::now();
-    if (load_preprocessed_shader_from_disk(preprocessed_key_hash, preprocessed_value)) {
+    if (load_preprocessed_shader_from_disk(preprocessed_slot_hash, preprocessed_key_hash, preprocessed_value)) {
       const auto disk_read_end = std::chrono::steady_clock::now();
       local_stats.cache_read_time_ms += std::chrono::duration<double, std::milli>(disk_read_end - disk_read_begin).count();
       local_stats.preprocessed_disk_cache_hits += 1u;
       have_preprocessed_source = true;
       std::lock_guard<std::mutex> lock(_impl->preprocessed_cache_mutex);
-      _impl->preprocessed_cache[preprocessed_key] = preprocessed_value;
+      retain_current_preprocessed_shader(_impl->preprocessed_cache, preprocessed_key, preprocessed_value);
     }
   }
 
@@ -1237,8 +1520,8 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     preprocessed_value.source.assign(canonical_hlsl_blob->GetStringPointer(), canonical_hlsl_blob->GetStringLength());
     if (preprocessed_value.source.size() > MAX_SHADER_SOURCE_SIZE) {
       result.result = RHIResult::ValidationError;
-      result.error_message = "Preprocessed HLSL exceeds max size: " + std::to_string(preprocessed_value.source.size()) + " bytes (max: " +
-                             std::to_string(MAX_SHADER_SOURCE_SIZE) + " bytes)";
+      result.error_message =
+        "Preprocessed HLSL exceeds max size: " + std::to_string(preprocessed_value.source.size()) + " bytes (max: " + std::to_string(MAX_SHADER_SOURCE_SIZE) + " bytes)";
       return finalize_result(std::move(result));
     }
 
@@ -1270,12 +1553,12 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
     {
       std::lock_guard<std::mutex> lock(_impl->preprocessed_cache_mutex);
-      _impl->preprocessed_cache[preprocessed_key] = preprocessed_value;
+      retain_current_preprocessed_shader(_impl->preprocessed_cache, preprocessed_key, preprocessed_value);
     }
 
     if (source_name.empty() == false) {
       const auto disk_write_begin = std::chrono::steady_clock::now();
-      if (store_preprocessed_shader_to_disk(preprocessed_key_hash, preprocessed_value)) {
+      if (store_preprocessed_shader_to_disk(preprocessed_slot_hash, preprocessed_key_hash, preprocessed_value)) {
         const auto disk_write_end = std::chrono::steady_clock::now();
         local_stats.cache_write_time_ms += std::chrono::duration<double, std::milli>(disk_write_end - disk_write_begin).count();
         local_stats.cache_writes += 1u;
@@ -1301,18 +1584,23 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     const std::string backend_entry_point = ((backend == RHIBackend::Metal) && (ep.entry_point == "main")) ? "main0" : ep.entry_point;
     ShaderVariantKey key{source_name, ep.entry_point, ep.stage, backend, ordered_defines, source_hash};
     const uint64_t key_hash = shader_variant_cache_hash(key);
-    uint32_t local_size_x = 1;
-    uint32_t local_size_y = 1;
-    uint32_t local_size_z = 1;
-    extract_compute_local_size(preprocessed_source, ep.entry_point, ep.stage, local_size_x, local_size_y, local_size_z);
+    const uint64_t slot_hash = shader_variant_cache_slot_hash(key);
+    uint32_t local_size_x = 1u;
+    uint32_t local_size_y = 1u;
+    uint32_t local_size_z = 1u;
 
     // Check cache
     std::vector<uint8_t> cached_spirv;
+    RHIMetalShaderMetadata cached_metal_metadata = {};
     {
       std::lock_guard<std::mutex> lock(_impl->cache_mutex);
       auto it = _impl->shader_cache.find(key);
       if (it != _impl->shader_cache.end() && it->second.result == RHIResult::Success) {
         cached_spirv = it->second.spirv_data;
+        cached_metal_metadata = it->second.metal_metadata;
+        local_size_x = it->second.local_size_x;
+        local_size_y = it->second.local_size_y;
+        local_size_z = it->second.local_size_z;
         local_stats.shader_memory_cache_hits += 1u;
       }
     }
@@ -1321,16 +1609,19 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
     if (cached_spirv.empty()) {
       const auto disk_read_begin = std::chrono::steady_clock::now();
-      if (load_shader_variant_from_disk(key_hash, ep.stage, backend, binary_format, cached_spirv)) {
+      ShaderCompilationResult cached_result = {};
+      if (load_shader_variant_from_disk(slot_hash, key_hash, ep.stage, backend, binary_format, cached_result)) {
         const auto disk_read_end = std::chrono::steady_clock::now();
         local_stats.cache_read_time_ms += std::chrono::duration<double, std::milli>(disk_read_end - disk_read_begin).count();
         local_stats.shader_disk_cache_hits += 1u;
 
-        ShaderCompilationResult partial_res = {};
-        partial_res.result = RHIResult::Success;
-        partial_res.spirv_data = cached_spirv;
+        cached_spirv = cached_result.spirv_data;
+        cached_metal_metadata = cached_result.metal_metadata;
+        local_size_x = cached_result.local_size_x;
+        local_size_y = cached_result.local_size_y;
+        local_size_z = cached_result.local_size_z;
         std::lock_guard<std::mutex> lock(_impl->cache_mutex);
-        _impl->shader_cache[key] = std::move(partial_res);
+        retain_current_shader_variant(_impl->shader_cache, key, std::move(cached_result));
       }
     }
 
@@ -1344,6 +1635,9 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       result.binaries[i].local_size_x = local_size_x;
       result.binaries[i].local_size_y = local_size_y;
       result.binaries[i].local_size_z = local_size_z;
+      result.binaries[i].cache_key = slot_hash;
+      result.binaries[i].content_hash = etx_hash64(cached_spirv.data(), cached_spirv.size());
+      result.binaries[i].metal_metadata = cached_metal_metadata;
       result.shared_blob.insert(result.shared_blob.end(), cached_spirv.begin(), cached_spirv.end());
       continue;
     }
@@ -1415,9 +1709,18 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       return finalize_result(std::move(result));
     }
 
+    std::string reflection_error = {};
+    if (extract_compute_local_size(static_cast<const uint8_t*>(shader_obj->GetBufferPointer()), shader_obj->GetBufferSize(), ep.stage, local_size_x, local_size_y, local_size_z,
+          reflection_error) == false) {
+      result.result = RHIResult::ValidationError;
+      result.error_message = reflection_error;
+      return finalize_result(std::move(result));
+    }
+
     const uint8_t* ptr = static_cast<const uint8_t*>(shader_obj->GetBufferPointer());
     size_t size = shader_obj->GetBufferSize();
     std::vector<uint8_t> final_binary = {};
+    RHIMetalShaderMetadata metal_metadata = {};
 
     std::vector<uint8_t> spirv_binary = {};
     if ((backend == RHIBackend::Metal)
@@ -1446,7 +1749,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       std::string msl_source = {};
       std::string translation_error = {};
       const auto translate_begin = std::chrono::steady_clock::now();
-      if (translate_spirv_to_msl(spirv_binary, msl_source, translation_error) == false) {
+      if (translate_spirv_to_msl(spirv_binary, msl_source, metal_metadata, translation_error) == false) {
         result.result = RHIResult::ValidationError;
         result.error_message = translation_error;
         return finalize_result(std::move(result));
@@ -1470,19 +1773,27 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     result.binaries[i].local_size_x = local_size_x;
     result.binaries[i].local_size_y = local_size_y;
     result.binaries[i].local_size_z = local_size_z;
+    result.binaries[i].cache_key = slot_hash;
+    result.binaries[i].content_hash = etx_hash64(ptr, size);
+    result.binaries[i].metal_metadata = metal_metadata;
 
     result.shared_blob.insert(result.shared_blob.end(), ptr, ptr + size);
     // Update cache (we need to convert back to ShaderCompilationResult for cache compatibility)
     ShaderCompilationResult partial_res;
     partial_res.result = RHIResult::Success;
     partial_res.spirv_data.assign(ptr, ptr + size);
+    partial_res.metal_metadata = metal_metadata;
+    partial_res.local_size_x = local_size_x;
+    partial_res.local_size_y = local_size_y;
+    partial_res.local_size_z = local_size_z;
     {
       std::lock_guard<std::mutex> lock(_impl->cache_mutex);
-      _impl->shader_cache[key] = partial_res;
+      retain_current_shader_variant(_impl->shader_cache, key, partial_res);
     }
 
     const auto disk_write_begin = std::chrono::steady_clock::now();
-    if (store_shader_variant_to_disk(key_hash, ep.stage, backend, binary_format, partial_res.spirv_data)) {
+    if (dependencies_are_current(preprocessed_value.dependencies) && store_shader_variant_to_disk(slot_hash, key_hash, ep.stage, backend, binary_format, partial_res.spirv_data,
+                                                                       partial_res.metal_metadata, partial_res.local_size_x, partial_res.local_size_y, partial_res.local_size_z)) {
       const auto disk_write_end = std::chrono::steady_clock::now();
       local_stats.cache_write_time_ms += std::chrono::duration<double, std::milli>(disk_write_end - disk_write_begin).count();
       local_stats.cache_writes += 1u;

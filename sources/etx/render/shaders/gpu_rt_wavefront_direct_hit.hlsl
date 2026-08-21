@@ -26,9 +26,6 @@
   if (hit.emitter_index == kInvalidIndex) {
     return;
   }
-  if (wavefront_diffraction_contribution_enabled(state.spect, wavefront_path_contains_diffraction(state)) == false) {
-    return;
-  }
   if ((scene_path_mode_is_path_tracing() == false) &&
       ((meta.camera_path_length < load_scene_options_min_path_length()) || (meta.camera_path_length > load_scene_options_max_path_length()))) {
     return;

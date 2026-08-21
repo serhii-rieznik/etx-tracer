@@ -10,6 +10,10 @@ constexpr size_t MAX_SHADER_SOURCE_SIZE = 16 * 1024 * 1024;
 struct ShaderCompilationResult {
   RHIResult result = RHIResult::Success;
   std::vector<uint8_t> spirv_data;
+  RHIMetalShaderMetadata metal_metadata = {};
+  uint32_t local_size_x = 1u;
+  uint32_t local_size_y = 1u;
+  uint32_t local_size_z = 1u;
   std::string error_message;
   std::string warning_message;
   uint32_t error_line = 0;
