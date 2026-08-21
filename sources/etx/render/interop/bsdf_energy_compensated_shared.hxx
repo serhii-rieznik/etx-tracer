@@ -1460,6 +1460,7 @@ ETX_SHARED_NOINLINE BSDFSample bsdf_dielectric_energy_compensated_sample(ETX_IN(
     phase_int_ior = prepared.ext_ior;
   }
   bool candidate_valid = false;
+  bool wavelength_dependent_direction = false;
   float3 local_w_o = float3(0.0f, 0.0f, 0.0f);
   float proposal_selector = sampler.fixed_w;
   if (has_fixed == false) {
@@ -1486,6 +1487,7 @@ ETX_SHARED_NOINLINE BSDFSample bsdf_dielectric_energy_compensated_sample(ETX_IN(
         if (dot(refracted_w_o, refracted_w_o) > kEpsilon) {
           local_w_o = direction_scale * normalize(refracted_w_o);
           candidate_valid = (w_i_local.z * local_w_o.z) < -kEpsilon;
+          wavelength_dependent_direction = candidate_valid;
         }
       }
       first_attempt = false;
@@ -1559,6 +1561,9 @@ ETX_SHARED_NOINLINE BSDFSample bsdf_dielectric_energy_compensated_sample(ETX_IN(
   }
   result.eta = reflection ? 1.0f : bsdf_energy_compensated_dielectric_continuation_eta(prepared.ext_ior, prepared.int_ior, outside);
   result.properties = reflection ? BSDFSample::Reflection : (BSDFSample::Transmission | BSDFSample::MediumChanged);
+  if (wavelength_dependent_direction) {
+    result.properties |= BSDFSample::WavelengthDependentDirection;
+  }
   result.medium_index = reflection ? data.current_medium : (outside ? material.int_medium : material.ext_medium);
   return result;
 }

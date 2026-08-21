@@ -17,6 +17,7 @@ enum class ApplicationCommandType : uint32_t {
   LoadReferenceImage,
   SaveImage,
   Denoise,
+  SetRenderConfiguration,
   SetRenderer,
   SetIntegrator,
   Run,

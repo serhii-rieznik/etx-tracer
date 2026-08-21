@@ -11,11 +11,26 @@ ETX_SHARED_INLINE bool bsdf_dielectric_has_thinfilm(ETX_IN(Material, material)) 
 }
 
 ETX_SHARED_INLINE bool bsdf_dielectric_equal_eta(ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior)) {
-  const float eta_ext = max(kEpsilon, spectral_response_monochromatic(ext_ior.eta));
-  const float eta_int = max(kEpsilon, spectral_response_monochromatic(int_ior.eta));
-  const float eta_scale = max(eta_ext, eta_int);
-  const float tolerance = max(kEpsilon, 16.0f * kEpsilon * eta_scale);
-  return abs(eta_ext - eta_int) <= tolerance;
+  const SpectralQuery query = spectral_response_as_query(ext_ior.eta);
+  if ((spectral_query_is_packet(query) == false) || spectral_query_is_hero_only(query)) {
+    const float eta_ext = max(kEpsilon, spectral_response_monochromatic(ext_ior.eta));
+    const float eta_int = max(kEpsilon, spectral_response_monochromatic(int_ior.eta));
+    const float eta_scale = max(eta_ext, eta_int);
+    const float tolerance = max(kEpsilon, 16.0f * kEpsilon * eta_scale);
+    return abs(eta_ext - eta_int) <= tolerance;
+  }
+
+  const uint32_t lane_count = kSpectralPacketSize;
+  for (uint32_t lane = 0u; lane < lane_count; ++lane) {
+    const float eta_ext = max(kEpsilon, spectral_response_packet_lane(ext_ior.eta, lane));
+    const float eta_int = max(kEpsilon, spectral_response_packet_lane(int_ior.eta, lane));
+    const float eta_scale = max(eta_ext, eta_int);
+    const float tolerance = max(kEpsilon, 16.0f * kEpsilon * eta_scale);
+    if (abs(eta_ext - eta_int) > tolerance) {
+      return false;
+    }
+  }
+  return true;
 }
 
 ETX_SHARED_INLINE bool bsdf_dielectric_equal_eta_with_context(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material)) {
@@ -98,7 +113,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_delta_sample(ETX_IN(BSDFResourceCon
   result.pdf = pdf;
   result.weight = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex),
     spectral_response_div(spectral_response_mul(one_minus_fresnel, eta_factor), pdf));
-  result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged;
+  result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged | BSDFSample::WavelengthDependentDirection;
   result.medium_index = outside ? material.int_medium : material.ext_medium;
   result.eta = eta;
   return result;

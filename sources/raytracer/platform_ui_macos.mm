@@ -14,17 +14,14 @@ static constexpr NSInteger kCommandTagBase = 1000;
 
 static NSMenu* g_recent_menu = nil;
 static NSMenu* g_integrator_menu = nil;
-static NSMenuItem* g_cpu_renderer_item = nil;
-static NSMenuItem* g_raster_renderer_item = nil;
-static NSMenuItem* g_gpu_renderer_item = nil;
 static NSMenuItem* g_scene_objects_item = nil;
 static NSMenuItem* g_properties_item = nil;
-static NSMenuItem* g_scene_tree_item = nil;
-static NSMenuItem* g_node_properties_item = nil;
+static NSMenuItem* g_diagnostics_item = nil;
 static NSToolbarItem* g_frame_scene_toolbar_item = nil;
 static std::vector<std::string> g_recent_files = {};
 static bool g_recent_files_initialized = false;
 static std::vector<etx::Integrator*> g_integrators = {};
+static bool g_gpu_renderer_available = false;
 static NSVisualEffectView* g_startup_overlay = nil;
 static NSProgressIndicator* g_startup_indicator = nil;
 static NSTextField* g_startup_label = nil;
@@ -141,15 +138,44 @@ static void rebuild_recent_menu(const std::vector<std::string>& recent_files) {
 
 static void rebuild_integrator_menu(UI& ui) {
   [g_integrator_menu removeAllItems];
+
+  const uint32_t raster_argument = UI::render_configuration_argument(etx::RendererMode::Rasterization, etx::kInvalidIndex);
+  NSMenuItem* raster_item = add_command_item(g_integrator_menu, @"Raster Preview", MenuCommand::SelectIntegrator);
+  raster_item.representedObject = @(raster_argument);
+  raster_item.state = ui.render_configuration_selected(raster_argument) ? NSControlStateValueOn : NSControlStateValueOff;
+
+  [g_integrator_menu addItem:[NSMenuItem separatorItem]];
+  NSMenuItem* cpu_header = [[NSMenuItem alloc] initWithTitle:@"CPU" action:nil keyEquivalent:@""];
+  cpu_header.enabled = NO;
+  [g_integrator_menu addItem:cpu_header];
   for (uint64_t i = 0; i < ui.integrator_count(); ++i) {
     etx::Integrator* integrator = ui.integrator(i);
-    if (integrator == nullptr) {
+    if ((integrator == nullptr) || (integrator->enabled() == false)) {
       continue;
     }
-    NSMenuItem* item = add_command_item(g_integrator_menu, ns_string(integrator->name()), MenuCommand::SelectIntegrator);
-    item.representedObject = @(i);
-    item.enabled = integrator->enabled();
-    item.state = integrator == ui.current_integrator() ? NSControlStateValueOn : NSControlStateValueOff;
+    const uint32_t argument = UI::render_configuration_argument(etx::RendererMode::CPURaytracing, static_cast<uint32_t>(i));
+    const std::string label = UI::render_configuration_label(etx::RendererMode::CPURaytracing, integrator);
+    NSMenuItem* item = add_command_item(g_integrator_menu, ns_string(label.c_str()), MenuCommand::SelectIntegrator);
+    item.representedObject = @(argument);
+    item.state = ui.render_configuration_selected(argument) ? NSControlStateValueOn : NSControlStateValueOff;
+  }
+
+  if (ui.gpu_renderer_available()) {
+    [g_integrator_menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem* gpu_header = [[NSMenuItem alloc] initWithTitle:@"GPU" action:nil keyEquivalent:@""];
+    gpu_header.enabled = NO;
+    [g_integrator_menu addItem:gpu_header];
+    for (uint64_t i = 0; i < ui.integrator_count(); ++i) {
+      etx::Integrator* integrator = ui.integrator(i);
+      if ((integrator == nullptr) || (integrator->enabled() == false) || (UI::gpu_integrator_supported(integrator->type()) == false)) {
+        continue;
+      }
+      const uint32_t argument = UI::render_configuration_argument(etx::RendererMode::GPURaytracing, static_cast<uint32_t>(i));
+      const std::string label = UI::render_configuration_label(etx::RendererMode::GPURaytracing, integrator);
+      NSMenuItem* item = add_command_item(g_integrator_menu, ns_string(label.c_str()), MenuCommand::SelectIntegrator);
+      item.representedObject = @(argument);
+      item.state = ui.render_configuration_selected(argument) ? NSControlStateValueOn : NSControlStateValueOff;
+    }
   }
 }
 
@@ -199,6 +225,7 @@ static void rebuild_integrator_menu(UI& ui) {
   constexpr MenuCommand commands[] = {
     MenuCommand::ToggleSceneObjects,
     MenuCommand::ToggleProperties,
+    MenuCommand::ToggleMemoryDiagnostics,
   };
   const NSInteger index = selected_group_index(sender);
   if ((index >= 0) && (index < static_cast<NSInteger>(sizeof(commands) / sizeof(commands[0])))) {
@@ -266,11 +293,12 @@ static void rebuild_integrator_menu(UI& ui) {
     NSArray<NSImage*>* images = @[
       toolbar_symbol(@"sidebar.left", @"Scene Objects"),
       toolbar_symbol(@"sidebar.right", @"Properties"),
+      toolbar_symbol(@"rectangle.bottomthird.inset.filled", @"Diagnostics"),
     ];
     g_panels_toolbar_group = [NSToolbarItemGroup groupWithItemIdentifier:kPanelsToolbarGroup
       images:images
       selectionMode:NSToolbarItemGroupSelectionModeSelectAny
-      labels:@[@"Objects", @"Properties"]
+      labels:@[@"Explorer", @"Inspector", @"Diagnostics"]
       target:self
       action:@selector(performPanelCommand:)];
     g_panels_toolbar_group.label = @"Panels";
@@ -443,11 +471,6 @@ void PlatformUI::setup(UI& ui) {
   [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"]];
   [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"]];
 
-  NSMenu* renderer_menu = add_submenu(main_menu, @"Renderer");
-  g_cpu_renderer_item = add_command_item(renderer_menu, @"CPU Raytracer", MenuCommand::SelectCPURenderer);
-  g_raster_renderer_item = add_command_item(renderer_menu, @"Rasterizer", MenuCommand::SelectRasterRenderer);
-  g_gpu_renderer_item = add_command_item(renderer_menu, @"GPU Raytracer", MenuCommand::SelectGPURenderer);
-
   g_integrator_menu = add_submenu(main_menu, @"Integrator");
 
   NSMenu* image_menu = add_submenu(main_menu, @"Image");
@@ -473,15 +496,15 @@ void PlatformUI::setup(UI& ui) {
   add_command_item(view_menu, @"Increase Exposure", MenuCommand::IncreaseExposure, @"+");
   add_command_item(view_menu, @"Decrease Exposure", MenuCommand::DecreaseExposure, @"-");
   [view_menu addItem:[NSMenuItem separatorItem]];
-  g_scene_objects_item = add_command_item(view_menu, @"Scene Objects", MenuCommand::ToggleSceneObjects, @"1", NSEventModifierFlagCommand | NSEventModifierFlagOption);
-  g_properties_item = add_command_item(view_menu, @"Properties", MenuCommand::ToggleProperties, @"2", NSEventModifierFlagCommand | NSEventModifierFlagOption);
-  g_scene_tree_item = add_command_item(view_menu, @"Scene Tree", MenuCommand::ToggleSceneTree, @"4", NSEventModifierFlagCommand | NSEventModifierFlagOption);
-  g_node_properties_item = add_command_item(view_menu, @"Node Properties", MenuCommand::ToggleNodeProperties, @"5", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+  g_scene_objects_item = add_command_item(view_menu, @"Scene Explorer", MenuCommand::ToggleSceneObjects, @"1", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+  g_properties_item = add_command_item(view_menu, @"Inspector", MenuCommand::ToggleProperties, @"2", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+  g_diagnostics_item = add_command_item(view_menu, @"Diagnostics", MenuCommand::ToggleMemoryDiagnostics, @"3", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+  [view_menu addItem:[NSMenuItem separatorItem]];
+  add_command_item(view_menu, @"Reset Workspace Layout", MenuCommand::ResetLayout, @"");
 
   NSWindow* window = NSApp.keyWindow ?: NSApp.mainWindow;
   if (window != nil) {
-    window.collectionBehavior =
-      (window.collectionBehavior & ~NSWindowCollectionBehaviorFullScreenPrimary) | NSWindowCollectionBehaviorFullScreenNone;
+    window.collectionBehavior = (window.collectionBehavior & ~NSWindowCollectionBehaviorFullScreenPrimary) | NSWindowCollectionBehaviorFullScreenNone;
   }
 
   [NSApp setWindowsMenu:nil];
@@ -509,14 +532,9 @@ void PlatformUI::update(UI& ui, const std::vector<std::string>& recent_files) {
   }
   g_platform_ui_controller.ui = &ui;
 
-  g_cpu_renderer_item.state = ui.current_renderer_mode() == RendererMode::CPURaytracing ? NSControlStateValueOn : NSControlStateValueOff;
-  g_raster_renderer_item.state = ui.current_renderer_mode() == RendererMode::Rasterization ? NSControlStateValueOn : NSControlStateValueOff;
-  g_gpu_renderer_item.state = ui.current_renderer_mode() == RendererMode::GPURaytracing ? NSControlStateValueOn : NSControlStateValueOff;
-  g_gpu_renderer_item.enabled = ui.gpu_renderer_available();
   g_scene_objects_item.state = ui.scene_objects_visible() ? NSControlStateValueOn : NSControlStateValueOff;
   g_properties_item.state = ui.properties_visible() ? NSControlStateValueOn : NSControlStateValueOff;
-  g_scene_tree_item.state = ui.scene_tree_visible() ? NSControlStateValueOn : NSControlStateValueOff;
-  g_node_properties_item.state = ui.node_properties_visible() ? NSControlStateValueOn : NSControlStateValueOff;
+  g_diagnostics_item.state = ui.diagnostics_visible() ? NSControlStateValueOn : NSControlStateValueOff;
   const BOOL frame_scene_enabled = ui.scene_view_commands_available() ? YES : NO;
   if (g_frame_scene_toolbar_item.enabled != frame_scene_enabled) {
     g_frame_scene_toolbar_item.enabled = frame_scene_enabled;
@@ -537,11 +555,13 @@ void PlatformUI::update(UI& ui, const std::vector<std::string>& recent_files) {
       }
     }
   }
-  if (g_panels_toolbar_group.subitems.count == 2) {
+  if (g_panels_toolbar_group.subitems.count == 3) {
     [g_panels_toolbar_group setSelected:ui.scene_objects_visible() atIndex:0];
     [g_panels_toolbar_group setSelected:ui.properties_visible() atIndex:1];
-    g_panels_toolbar_group.subitems[0].toolTip = ui.scene_objects_visible() ? @"Hide Scene Objects" : @"Show Scene Objects";
-    g_panels_toolbar_group.subitems[1].toolTip = ui.properties_visible() ? @"Hide Properties" : @"Show Properties";
+    [g_panels_toolbar_group setSelected:ui.diagnostics_visible() atIndex:2];
+    g_panels_toolbar_group.subitems[0].toolTip = ui.scene_objects_visible() ? @"Hide Scene Explorer" : @"Show Scene Explorer";
+    g_panels_toolbar_group.subitems[1].toolTip = ui.properties_visible() ? @"Hide Inspector" : @"Show Inspector";
+    g_panels_toolbar_group.subitems[2].toolTip = ui.diagnostics_visible() ? @"Hide Diagnostics" : @"Show Diagnostics";
   }
 
   if (!g_recent_files_initialized || (g_recent_files != recent_files)) {
@@ -553,18 +573,17 @@ void PlatformUI::update(UI& ui, const std::vector<std::string>& recent_files) {
   for (uint64_t i = 0; i < ui.integrator_count(); ++i) {
     integrators[i] = ui.integrator(i);
   }
-  if (g_integrators != integrators) {
+  if ((g_integrators != integrators) || (g_gpu_renderer_available != ui.gpu_renderer_available())) {
     g_integrators = std::move(integrators);
+    g_gpu_renderer_available = ui.gpu_renderer_available();
     rebuild_integrator_menu(ui);
   } else {
     for (NSMenuItem* item in g_integrator_menu.itemArray) {
       if (![item.representedObject isKindOfClass:[NSNumber class]]) {
         continue;
       }
-      const uint64_t index = [static_cast<NSNumber*>(item.representedObject) unsignedLongLongValue];
-      Integrator* integrator = ui.integrator(index);
-      item.enabled = (integrator != nullptr) && integrator->enabled();
-      item.state = integrator == ui.current_integrator() ? NSControlStateValueOn : NSControlStateValueOff;
+      const uint32_t argument = [static_cast<NSNumber*>(item.representedObject) unsignedIntValue];
+      item.state = ui.render_configuration_selected(argument) ? NSControlStateValueOn : NSControlStateValueOff;
     }
   }
 }
@@ -581,17 +600,16 @@ void PlatformUI::shutdown() {
   g_platform_ui_controller = nil;
   g_recent_menu = nil;
   g_integrator_menu = nil;
-  g_cpu_renderer_item = nil;
-  g_raster_renderer_item = nil;
-  g_gpu_renderer_item = nil;
   g_scene_objects_item = nil;
   g_properties_item = nil;
+  g_diagnostics_item = nil;
   g_frame_scene_toolbar_item = nil;
   g_render_toolbar_group = nil;
   g_panels_toolbar_group = nil;
   g_recent_files.clear();
   g_recent_files_initialized = false;
   g_integrators.clear();
+  g_gpu_renderer_available = false;
 }
 
 PlatformColorScheme PlatformUI::color_scheme() const {

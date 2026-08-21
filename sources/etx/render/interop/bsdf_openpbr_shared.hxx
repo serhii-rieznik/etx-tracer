@@ -173,13 +173,14 @@ ETX_SHARED_NOINLINE BSDFSample bsdf_openpbr_sample(ETX_IN(BSDFResourceContext, c
   }
 
   const BSDFEval eval = bsdf_openpbr_mix_eval(context, data, result.w_o, components, sampler);
+  const uint32_t sample_properties = result.properties & BSDFSample::WavelengthDependentDirection;
   result.weight = spectral_response_zero(data.spectrum_sample);
   if (eval.pdf > 0.0f) {
     result.weight = spectral_response_div(eval.bsdf, eval.pdf);
   }
   result.pdf = eval.pdf;
   result.eta = eval.eta;
-  result.properties = eval.properties;
+  result.properties = eval.properties | sample_properties;
   result.medium_index = eval.medium_index;
   return result;
 }

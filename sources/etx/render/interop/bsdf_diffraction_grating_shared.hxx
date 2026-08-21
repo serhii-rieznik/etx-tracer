@@ -344,7 +344,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_diffraction_grating_sample_spectral(ETX_IN(BSD
   result.w_o = normalize(local_frame_from_local(frame, selected_w_o));
   result.pdf = selected_efficiency / total_efficiency;
   result.weight = spectral_response_mul(reflectance, total_efficiency);
-  result.properties = BSDFSample::Delta | BSDFSample::Reflection;
+  result.properties = BSDFSample::Delta | BSDFSample::Reflection | BSDFSample::WavelengthDependentDirection;
   result.medium_index = data.current_medium;
   result.eta = 1.0f;
   return result;
@@ -525,7 +525,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_diffraction_grating_sample_rgb(ETX_IN(BSDFReso
   result.pdf = sample_pdf;
   const float selected_weight = selected_reflectance * channel_total_efficiency / selected_channel_probability;
   result.weight = spectral_response_make(data.spectrum_sample, bsdf_diffraction_grating_rgb_set_component(float3(0.0f, 0.0f, 0.0f), selected_channel, selected_weight));
-  result.properties = BSDFSample::Delta | BSDFSample::Reflection;
+  result.properties = BSDFSample::Delta | BSDFSample::Reflection | BSDFSample::WavelengthDependentDirection;
   result.medium_index = data.current_medium;
   result.eta = 1.0f;
   return result;

@@ -46,8 +46,10 @@ struct MTContext {
   RHICapabilities capabilities() const;
 
   RHICommandBuffer get_command_buffer();
+  RHICommandBuffer get_async_command_buffer();
   void destroy_command_buffer(RHICommandBuffer cmd);
   RHIResult wait_for_command_buffer(RHICommandBuffer cmd);
+  RHIResult query_command_buffer(RHICommandBuffer cmd);
   void submit_command_buffer(const RHISubmitInfo& info);
 
   void program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func);

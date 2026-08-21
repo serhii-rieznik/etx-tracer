@@ -1006,7 +1006,11 @@ bool ensure_storage_buffer(RHIDevice& device, uint64_t required_size, RHIBufferU
 
   auto create_result = device.create_buffer(desc);
   if ((create_result.result != RHIResult::Success) || (create_result.handle.valid() == false)) {
-    log::error("GPU RT: failed to create '%s' storage buffer (%u)", (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(create_result.result));
+    const RHIMemoryStats memory_stats = device.get_memory_statistics();
+    log::error("GPU RT: failed to create '%s' storage buffer (%u): requested=%llu bytes (%.2fMB), previous=%llu bytes (%.2fMB), device-local=%.2f/%.2fMB",
+      (buffer_name != nullptr) ? buffer_name : "unknown", static_cast<uint32_t>(create_result.result), static_cast<unsigned long long>(required_size),
+      static_cast<double>(required_size) / (1024.0 * 1024.0), static_cast<unsigned long long>(buffer_size), static_cast<double>(buffer_size) / (1024.0 * 1024.0),
+      static_cast<double>(memory_stats.gpu_device_local_allocated_bytes) / (1024.0 * 1024.0), static_cast<double>(memory_stats.gpu_device_local_budget_bytes) / (1024.0 * 1024.0));
     return false;
   }
 
@@ -1021,6 +1025,16 @@ bool ensure_storage_buffer(RHIDevice& device, uint64_t required_size, RHIBufferU
   buffer_size = required_size;
   descriptor_index = get_bindless_descriptor_index(buffer);
   return true;
+}
+
+bool ensure_storage_buffer_capacity(RHIDevice& device, uint64_t required_size, RHIBufferUsage usage, RHIBindlessHandle& buffer, uint64_t& buffer_size, uint32_t& descriptor_index,
+  const char* buffer_name) {
+  if (buffer.valid() && (buffer_size >= required_size)) {
+    descriptor_index = get_bindless_descriptor_index(buffer);
+    return true;
+  }
+
+  return ensure_storage_buffer(device, required_size, usage, buffer, buffer_size, descriptor_index, buffer_name);
 }
 
 bool ensure_host_visible_buffer(RHIDevice& device, uint64_t required_size, RHIBufferUsage usage, RHIBindlessHandle& buffer, uint64_t& buffer_size, uint32_t& descriptor_index,
@@ -1563,6 +1577,7 @@ bool GPURaytracingRenderer::set_render_window(const uint2& origin, const uint2& 
 
   _render_window_origin = origin;
   _render_window_size = size;
+  _wavefront_vcm_light_vertex_count = 0u;
   _wavefront_vcm_spectral_phase = 0u;
   _wavefront_tile_index = 0u;
   _wavefront_tile_max_pixels = 0u;
@@ -1591,6 +1606,7 @@ void GPURaytracingRenderer::set_batch_coarse_progress(bool value) {
 void GPURaytracingRenderer::reset_render_window() {
   _render_window_origin = {};
   _render_window_size = {};
+  _wavefront_vcm_light_vertex_count = 0u;
   _wavefront_vcm_spectral_phase = 0u;
   _wavefront_tile_index = 0u;
   _wavefront_tile_max_pixels = 0u;
@@ -1918,6 +1934,7 @@ void GPURaytracingRenderer::reset_render_progress() {
   _wavefront_light_vertex_sample_peak_count = 0u;
   _wavefront_light_history_underuse_sample_count = 0u;
   _wavefront_light_history_underuse_peak_count = 0u;
+  _wavefront_vcm_light_vertex_count = 0u;
   _wavefront_vcm_spectral_phase = 0u;
   _wavefront_tile_index = 0u;
   _wavefront_tile_max_pixels = 0u;
@@ -2832,6 +2849,7 @@ void GPURaytracingRenderer::stop() {
   _wavefront_path_iteration = 0u;
   _wavefront_camera_queue_count = 0u;
   _wavefront_light_queue_count = 0u;
+  _wavefront_vcm_light_vertex_count = 0u;
   _wavefront_vcm_spectral_phase = 0u;
   _wavefront_camera_phase_initialized = false;
   _run_state = RunState::Stopped;
@@ -2921,6 +2939,7 @@ void GPURaytracingRenderer::destroy_wavefront_buffers(RHIContext& ctx) {
   _wavefront_light_vertex_sample_peak_count = 0u;
   _wavefront_light_history_underuse_sample_count = 0u;
   _wavefront_light_history_underuse_peak_count = 0u;
+  _wavefront_vcm_light_vertex_count = 0u;
   _wavefront_vcm_spectral_phase = 0u;
   _wavefront_resources = {};
   _wavefront_tile_index = 0u;
@@ -3216,7 +3235,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _camera_vertex_buffer, _camera_vertex_buffer_size, _camera_vertex_buffer_descriptor_index);
   }
   if (enable_light_path) {
-    if (ensure_storage_buffer(device, light_vertex_buffer_size, light_vertex_usage, _light_vertex_buffer, _light_vertex_buffer_size, _light_vertex_buffer_descriptor_index,
+    if (ensure_storage_buffer_capacity(device, light_vertex_buffer_size, light_vertex_usage, _light_vertex_buffer, _light_vertex_buffer_size, _light_vertex_buffer_descriptor_index,
           "wavefront_light_vertex") == false) {
       return false;
     }
@@ -3224,10 +3243,10 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _light_vertex_buffer, _light_vertex_buffer_size, _light_vertex_buffer_descriptor_index);
   }
   if (enable_merge_vertices) {
-    if (ensure_storage_buffer(device, vcm_grid_heads_buffer_size, wavefront_usage, _vcm_grid_heads_buffer, _vcm_grid_heads_buffer_size, _vcm_grid_heads_buffer_descriptor_index,
-          "wavefront_vcm_grid_heads") == false ||
-        ensure_storage_buffer(device, vcm_grid_next_buffer_size, wavefront_usage, _vcm_grid_next_buffer, _vcm_grid_next_buffer_size, _vcm_grid_next_buffer_descriptor_index,
-          "wavefront_vcm_grid_next") == false) {
+    if (ensure_storage_buffer_capacity(device, vcm_grid_heads_buffer_size, wavefront_usage, _vcm_grid_heads_buffer, _vcm_grid_heads_buffer_size,
+          _vcm_grid_heads_buffer_descriptor_index, "wavefront_vcm_grid_heads") == false ||
+        ensure_storage_buffer_capacity(device, vcm_grid_next_buffer_size, wavefront_usage, _vcm_grid_next_buffer, _vcm_grid_next_buffer_size,
+          _vcm_grid_next_buffer_descriptor_index, "wavefront_vcm_grid_next") == false) {
       return false;
     }
   } else {
@@ -3363,7 +3382,6 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   _wavefront_path_capacity = path_capacity;
   _wavefront_vertex_capacity = std::max(camera_vertex_capacity, light_vertex_capacity);
   _wavefront_light_history_capacity_bounces = enable_light_path ? ((light_vertex_capacity / path_capacity) - 1u) : 0u;
-  _wavefront_light_vertex_reserved_count = active_path_capacity;
   return true;
 }
 
@@ -3386,51 +3404,64 @@ bool GPURaytracingRenderer::ensure_light_vertex_capacity(RHIContext& ctx, uint32
   const uint64_t doubled_capacity = static_cast<uint64_t>(_wavefront_resources.light_vertex_capacity) * 2ull;
   const uint64_t new_vertex_capacity = std::min(max_vertex_capacity, std::max<uint64_t>(required_vertex_capacity, doubled_capacity));
   const uint64_t new_buffer_size = new_vertex_capacity * kGPUWavefrontLightPathVertexStride;
+  const uint64_t allocated_vertex_capacity = _light_vertex_buffer_size / kGPUWavefrontLightPathVertexStride;
+  const bool reuse_light_vertex_buffer = new_vertex_capacity <= allocated_vertex_capacity;
 
-  RHIBufferDesc desc = {};
-  desc.size = new_buffer_size;
-  desc.usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferSrc | RHIBufferUsage::TransferDst;
   auto& device = ctx.device();
-  const RHICreateBindlessResult create_result = device.create_buffer(desc);
-  if ((create_result.result != RHIResult::Success) || (create_result.handle.valid() == false)) {
-    log::error("GPU RT: failed to grow light history buffer (%u)", static_cast<uint32_t>(create_result.result));
-    return false;
-  }
+  RHIBindlessHandle new_light_vertex_buffer = _light_vertex_buffer;
+  if (reuse_light_vertex_buffer == false) {
+    RHIBufferDesc desc = {};
+    desc.size = new_buffer_size;
+    desc.usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferSrc | RHIBufferUsage::TransferDst;
+    const RHICreateBindlessResult create_result = device.create_buffer(desc);
+    if ((create_result.result != RHIResult::Success) || (create_result.handle.valid() == false)) {
+      const RHIMemoryStats memory_stats = device.get_memory_statistics();
+      log::error("GPU RT: failed to grow light history buffer (%u): requested=%llu bytes (%.2fMB), previous=%llu bytes (%.2fMB), device-local=%.2f/%.2fMB",
+        static_cast<uint32_t>(create_result.result), static_cast<unsigned long long>(new_buffer_size), static_cast<double>(new_buffer_size) / (1024.0 * 1024.0),
+        static_cast<unsigned long long>(_light_vertex_buffer_size), static_cast<double>(_light_vertex_buffer_size) / (1024.0 * 1024.0),
+        static_cast<double>(memory_stats.gpu_device_local_allocated_bytes) / (1024.0 * 1024.0),
+        static_cast<double>(memory_stats.gpu_device_local_budget_bytes) / (1024.0 * 1024.0));
+      return false;
+    }
+    new_light_vertex_buffer = create_result.handle;
 
-  RHICommandBuffer cmd = ctx.get_command_buffer();
-  if (cmd.valid() == false) {
-    device.destroy_buffer(create_result.handle);
-    return false;
-  }
-  ctx.command_buffer_begin(cmd);
-  ctx.cmd_buffer_barrier(cmd, _light_vertex_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
-  ctx.cmd_buffer_barrier(cmd, create_result.handle, RHIResourceState::Undefined, RHIResourceState::TransferDst);
-  ctx.cmd_copy_buffer(cmd, _light_vertex_buffer, create_result.handle, _light_vertex_buffer_size);
-  ctx.cmd_buffer_barrier(cmd, _light_vertex_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
-  ctx.cmd_buffer_barrier(cmd, create_result.handle, RHIResourceState::TransferDst, RHIResourceState::General);
-  ctx.command_buffer_end(cmd);
-  ctx.submit_command_buffer({cmd});
-  const RHIResult copy_result = ctx.wait_for_command_buffer(cmd);
-  ctx.destroy_command_buffer(cmd);
-  if (copy_result != RHIResult::Success) {
-    device.destroy_buffer(create_result.handle);
-    log::error("GPU RT: failed to copy the grown light history buffer (%u)", static_cast<uint32_t>(copy_result));
-    return false;
+    RHICommandBuffer cmd = ctx.get_command_buffer();
+    if (cmd.valid() == false) {
+      device.destroy_buffer(new_light_vertex_buffer);
+      return false;
+    }
+    ctx.command_buffer_begin(cmd);
+    ctx.cmd_buffer_barrier(cmd, _light_vertex_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
+    ctx.cmd_buffer_barrier(cmd, new_light_vertex_buffer, RHIResourceState::Undefined, RHIResourceState::TransferDst);
+    ctx.cmd_copy_buffer(cmd, _light_vertex_buffer, new_light_vertex_buffer, _light_vertex_buffer_size);
+    ctx.cmd_buffer_barrier(cmd, _light_vertex_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
+    ctx.cmd_buffer_barrier(cmd, new_light_vertex_buffer, RHIResourceState::TransferDst, RHIResourceState::General);
+    ctx.command_buffer_end(cmd);
+    ctx.submit_command_buffer({cmd});
+    const RHIResult copy_result = ctx.wait_for_command_buffer(cmd);
+    ctx.destroy_command_buffer(cmd);
+    if (copy_result != RHIResult::Success) {
+      device.destroy_buffer(new_light_vertex_buffer);
+      log::error("GPU RT: failed to copy the grown light history buffer (%u)", static_cast<uint32_t>(copy_result));
+      return false;
+    }
   }
 
   GPUWavefrontResources updated_resources = _wavefront_resources;
-  updated_resources.light_vertex_buffer = get_bindless_descriptor_index(create_result.handle);
+  updated_resources.light_vertex_buffer = get_bindless_descriptor_index(new_light_vertex_buffer);
   updated_resources.light_vertex_capacity = static_cast<uint32_t>(new_vertex_capacity);
   updated_resources.light_fixed_max_bounces = static_cast<uint32_t>(new_vertex_capacity / static_cast<uint64_t>(_wavefront_path_capacity)) - 1u;
   if (gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::MergeVertices)) {
     const uint64_t grid_heads_size = static_cast<uint64_t>(wavefront_vcm_grid_head_count(updated_resources.light_vertex_capacity)) * sizeof(uint32_t);
     const uint64_t grid_next_size = new_vertex_capacity * sizeof(uint32_t);
     const RHIBufferUsage grid_usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst;
-    if (ensure_storage_buffer(device, grid_heads_size, grid_usage, _vcm_grid_heads_buffer, _vcm_grid_heads_buffer_size, _vcm_grid_heads_buffer_descriptor_index,
+    if (ensure_storage_buffer_capacity(device, grid_heads_size, grid_usage, _vcm_grid_heads_buffer, _vcm_grid_heads_buffer_size, _vcm_grid_heads_buffer_descriptor_index,
           "wavefront_vcm_grid_heads") == false ||
-        ensure_storage_buffer(device, grid_next_size, grid_usage, _vcm_grid_next_buffer, _vcm_grid_next_buffer_size, _vcm_grid_next_buffer_descriptor_index,
+        ensure_storage_buffer_capacity(device, grid_next_size, grid_usage, _vcm_grid_next_buffer, _vcm_grid_next_buffer_size, _vcm_grid_next_buffer_descriptor_index,
           "wavefront_vcm_grid_next") == false) {
-      device.destroy_buffer(create_result.handle);
+      if (reuse_light_vertex_buffer == false) {
+        device.destroy_buffer(new_light_vertex_buffer);
+      }
       return false;
     }
     updated_resources.vcm_grid_heads_buffer = _vcm_grid_heads_buffer_descriptor_index;
@@ -3438,21 +3469,27 @@ bool GPURaytracingRenderer::ensure_light_vertex_capacity(RHIContext& ctx, uint32
   }
   const RHIResult resource_update_result = device.update_buffer(_wavefront_resources_buffer, &updated_resources, sizeof(updated_resources));
   if (resource_update_result != RHIResult::Success) {
-    device.destroy_buffer(create_result.handle);
+    if (reuse_light_vertex_buffer == false) {
+      device.destroy_buffer(new_light_vertex_buffer);
+    }
     log::error("GPU RT: failed to update resources after light history growth (%u)", static_cast<uint32_t>(resource_update_result));
     return false;
   }
 
-  const RHIBindlessHandle old_buffer = _light_vertex_buffer;
-  _light_vertex_buffer = create_result.handle;
-  _light_vertex_buffer_size = new_buffer_size;
+  const RHIBindlessHandle old_buffer = reuse_light_vertex_buffer ? RHIBindlessHandle{} : _light_vertex_buffer;
+  _light_vertex_buffer = new_light_vertex_buffer;
+  if (reuse_light_vertex_buffer == false) {
+    _light_vertex_buffer_size = new_buffer_size;
+  }
   _light_vertex_buffer_descriptor_index = updated_resources.light_vertex_buffer;
   _wavefront_resources = updated_resources;
   _wavefront_vertex_capacity = std::max(_wavefront_vertex_capacity, updated_resources.light_vertex_capacity);
   _wavefront_light_history_capacity_bounces = updated_resources.light_fixed_max_bounces;
-  device.destroy_buffer(old_buffer);
-  log::info("GPU RT: grew compact light history capacity to %u vertices (%.2fMB)", updated_resources.light_vertex_capacity,
-    static_cast<double>(new_buffer_size) / (1024.0 * 1024.0));
+  if (old_buffer.valid()) {
+    device.destroy_buffer(old_buffer);
+  }
+  log::info("GPU RT: grew compact light history capacity to %u vertices (%.2fMB allocated%s)", updated_resources.light_vertex_capacity,
+    static_cast<double>(_light_vertex_buffer_size) / (1024.0 * 1024.0), reuse_light_vertex_buffer ? ", reused" : "");
   return true;
 }
 
@@ -3466,16 +3503,6 @@ void GPURaytracingRenderer::destroy_blue_noise_buffer(RHIContext& ctx) {
 
 bool GPURaytracingRenderer::update_blue_noise_buffer(RHIContext& ctx, const SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
-
-  const bool blue_noise_enabled = scene.data().options.properties[Scene::Properties::BlueNoise];
-  if (blue_noise_enabled == false) {
-    if (_blue_noise_buffer.valid()) {
-      destroy_blue_noise_buffer(ctx);
-    } else {
-      _blue_noise_target_samples = 0u;
-    }
-    return true;
-  }
 
   const uint32_t target_samples = normalize_blue_noise_target_samples(scene.data().options.samples);
   const bool needs_upload = (_blue_noise_buffer.valid() == false) || (_blue_noise_target_samples != target_samples);
@@ -3858,6 +3885,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     _wavefront_hard_iteration_cap = 0u;
     _wavefront_camera_queue_count = 0u;
     _wavefront_light_queue_count = 0u;
+    _wavefront_vcm_light_vertex_count = 0u;
     _wavefront_vcm_spectral_phase = 0u;
     _wavefront_tile_index = 0u;
     _wavefront_tile_max_pixels = 0u;
@@ -3869,6 +3897,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     _wavefront_camera_phase_initialized = false;
     const auto output_texture_end = std::chrono::steady_clock::now();
     output_texture_ms = elapsed_ms(output_texture_begin, output_texture_end);
+    return;
   }
 
   if (render_preview_this_frame) {
@@ -3896,6 +3925,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     .dispatch_item_offset = 0u,
     .dispatch_item_count = 0u,
     .work_queue_index = kInvalidIndex,
+    .vcm_light_vertex_count = _wavefront_vcm_light_vertex_count,
     .vcm_spectral_phase = _wavefront_vcm_spectral_phase,
     .scene = _gpu_scene,
   };
@@ -4200,6 +4230,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       _wavefront_light_max_path_length = 0u;
       _wavefront_camera_phase_initialized = false;
       _wavefront_light_vertex_sample_peak_count = std::max(_wavefront_light_vertex_sample_peak_count, _wavefront_light_vertex_reserved_count);
+      _wavefront_vcm_light_vertex_count = 0u;
       if (final_spectral_phase == false) {
         _wavefront_vcm_spectral_phase += 1u;
         dispatch_submit_ms = elapsed_ms(dispatch_submit_begin, std::chrono::steady_clock::now());
@@ -4222,7 +4253,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       _wavefront_camera_queue_count = initial_camera_queue_count;
       _wavefront_light_queue_count = 0u;
       _wavefront_camera_phase_initialized = true;
-      constants.vcm_light_vertex_count = std::min(_wavefront_light_vertex_reserved_count, _wavefront_resources.light_vertex_capacity);
+      _wavefront_vcm_light_vertex_count = std::min(_wavefront_light_vertex_reserved_count, _wavefront_resources.light_vertex_capacity);
+      constants.vcm_light_vertex_count = _wavefront_vcm_light_vertex_count;
 
       record_and_submit([&](RHICommandBuffer cmd) {
         barrier_wavefront_buffers(cmd);
@@ -4256,6 +4288,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       return true;
     };
 
+    if (render_output_texture_state != RHIResourceState::General) {
+      record_and_submit([&](RHICommandBuffer cmd) {
+        ctx.cmd_texture_barrier(cmd, render_output_texture, render_output_texture_state, RHIResourceState::General);
+      });
+      render_output_texture_state = RHIResourceState::General;
+    }
+
     bool finished_current_tile = false;
     bool wavefront_auto_measurement_valid = true;
     uint32_t executed_wavefront_steps = 0u;
@@ -4276,6 +4315,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         _wavefront_light_queue_count = initial_light_queue_count;
         _wavefront_light_max_path_length = 0u;
         _wavefront_light_vertex_reserved_count = wavefront_path_capacity;
+        _wavefront_vcm_light_vertex_count = 0u;
+        constants.vcm_light_vertex_count = 0u;
 
         record_and_submit([&](RHICommandBuffer cmd) {
           barrier_wavefront_buffers(cmd);
@@ -4290,6 +4331,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             barrier_wavefront_buffers(cmd);
           }
         });
+        render_output_texture_state = RHIResourceState::General;
 
         const RHIResult init_result = wait_and_destroy_submitted_commands("init sample submit");
         if (init_result != RHIResult::Success) {
@@ -4682,6 +4724,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     if (render_preview_this_frame == false) {
       update_wavefront_auto_tuning(executed_wavefront_steps, wavefront_batch_ms, wavefront_budget_consumed, wavefront_auto_measurement_valid);
     }
+    if ((render_output_texture_state == RHIResourceState::General) && frame_data.cmd.valid()) {
+      ctx.cmd_texture_barrier(frame_data.cmd, render_output_texture, RHIResourceState::General, RHIResourceState::ShaderReadOnly);
+      render_output_texture_state = RHIResourceState::ShaderReadOnly;
+    }
   }
 
   _frame_index += 1u;
@@ -4754,7 +4800,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         _wavefront_light_history_capacity_bounces = previous_light_history_bounces;
         log::warning("GPU RT: failed to shrink compact light history buffer");
       } else {
-        log::info("GPU RT: shrank compact light history capacity to %u vertices (%.2fMB)", _wavefront_resources.light_vertex_capacity,
+        log::info("GPU RT: reduced compact light history capacity to %u vertices (%.2fMB allocation retained)", _wavefront_resources.light_vertex_capacity,
           static_cast<double>(_light_vertex_buffer_size) / (1024.0 * 1024.0));
       }
     }
@@ -4814,6 +4860,7 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _wavefront_camera_queue_count = 0u;
   _wavefront_light_queue_count = 0u;
   _wavefront_light_max_path_length = 0u;
+  _wavefront_vcm_light_vertex_count = 0u;
   _wavefront_vcm_spectral_phase = 0u;
   _wavefront_tile_index = 0u;
   _wavefront_tile_max_pixels = 0u;

@@ -3,7 +3,6 @@
 #include <etx/core/profiler.hxx>
 
 #include <etx/render/host/scene_global.hxx>
-#include <etx/render/host/bsdf_energy_compensation_lut.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/rt/integrators/integrator.hxx>
@@ -286,8 +285,8 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.save_scene_file_selected = [this](std::string path) {
       submit_command({.type = ApplicationCommandType::SaveScene, .path = std::move(path)});
     };
-    ui.callbacks.renderer_selected = [this](RendererMode mode) {
-      submit_command({.type = ApplicationCommandType::SetRenderer, .renderer = mode});
+    ui.callbacks.render_configuration_selected = [this](RendererMode mode, Integrator::Type integrator_type) {
+      submit_command({.type = ApplicationCommandType::SetRenderConfiguration, .renderer = mode, .integrator = integrator_type});
     };
     ui.callbacks.run_selected = [this]() {
       submit_command({.type = ApplicationCommandType::Run});
@@ -325,6 +324,10 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.emitter_deleted = std::bind(&RTApplication::on_emitter_deleted, this, std::placeholders::_1);
     ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
+    ui.callbacks.scene_modified = std::bind(&RTApplication::mark_scene_dirty, this);
+    ui.callbacks.scene_discarded = [this]() {
+      _scene_dirty = false;
+    };
     ui.callbacks.scene_transforms_changed = std::bind(&RTApplication::on_scene_transforms_changed, this);
     ui.callbacks.scene_transform_interaction_started = std::bind(&RTApplication::on_scene_transform_interaction_started, this);
     ui.callbacks.scene_transform_interaction_finished = std::bind(&RTApplication::on_scene_transform_interaction_finished, this);
@@ -334,9 +337,6 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.view_scene = std::bind(&RTApplication::on_view_scene, this, std::placeholders::_1);
     ui.callbacks.clear_recent_files = std::bind(&RTApplication::on_clear_recent_files, this);
     ui.callbacks.camera_activated = std::bind(&RTApplication::on_camera_activated, this, std::placeholders::_1);
-    ui.callbacks.integrator_selected = [this](Integrator::Type type) {
-      submit_command({.type = ApplicationCommandType::SetIntegrator, .integrator = type});
-    };
     ui.callbacks.gpu_kernel_timing_enabled_changed = [this](bool value) {
       gpu_renderer.set_kernel_timing_enabled(value);
     };
@@ -541,6 +541,48 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
   sync_ui_renderer_state();
 }
 
+bool RTApplication::set_render_configuration(RendererMode mode, Integrator::Type integrator_type) {
+  if (mode == RendererMode::Rasterization) {
+    set_renderer_mode(mode);
+    return (_active_renderer != nullptr) && (_active_renderer->mode() == mode);
+  }
+  if ((mode != RendererMode::CPURaytracing) && (mode != RendererMode::GPURaytracing)) {
+    return false;
+  }
+  if ((mode == RendererMode::GPURaytracing) && (_gpu_renderer_supported == false)) {
+    return false;
+  }
+  if ((mode == RendererMode::GPURaytracing) && (UI::gpu_integrator_supported(integrator_type) == false)) {
+    return false;
+  }
+
+  Integrator* const integrator = integrator_type_to_instance(integrator_type, cpu_renderer.integrator_list(), cpu_renderer.integrator_count());
+  if ((integrator == nullptr) || (integrator->enabled() == false)) {
+    return false;
+  }
+
+  Renderer* const target_renderer = (mode == RendererMode::GPURaytracing) ? static_cast<Renderer*>(&gpu_renderer) : static_cast<Renderer*>(&cpu_renderer);
+  const bool renderer_changes = _active_renderer != target_renderer;
+  const bool integrator_changes = cpu_renderer.current_integrator() != integrator;
+  if (integrator_changes && (renderer_changes == false)) {
+    on_integrator_selected(integrator_type);
+  } else if (integrator_changes) {
+    cpu_renderer.set_integrator(integrator);
+    ui.set_current_integrator(integrator);
+    sync_scene_integrator_data_from_current_integrator();
+    _options.set_string("integrator", integrator->name(), "Integrator");
+    notify_scene_might_have_changed();
+  }
+
+  if (renderer_changes) {
+    set_renderer_mode(mode);
+  } else {
+    sync_ui_renderer_state();
+  }
+  ui.set_current_integrator(integrator);
+  return (_active_renderer == target_renderer) && (cpu_renderer.current_integrator() == integrator);
+}
+
 void RTApplication::sync_platform_color_scheme() {
   if (!_application_config.enable_platform_ui || !render_context.valid() || !render_context.rhi_ui().initialized()) {
     return;
@@ -608,8 +650,30 @@ void RTApplication::frame() {
   }
   if (render_context.valid() && render_context.rhi_ui().initialized()) {
     ETX_PROFILER_NAMED_SCOPE("app_ui_build");
+    ui.set_scene_dirty(_scene_dirty);
     ui.build(scene, ui_frame_data);
+    const UI::ViewportGeometry& geometry = ui.viewport_geometry();
+    RenderContext::PresentationViewport viewport = {};
+    if (geometry.valid) {
+      const int32_t left = static_cast<int32_t>(std::lround(geometry.logical_position.x * geometry.framebuffer_scale.x));
+      const int32_t top = static_cast<int32_t>(std::lround(geometry.logical_position.y * geometry.framebuffer_scale.y));
+      const int32_t right = static_cast<int32_t>(std::lround((geometry.logical_position.x + geometry.logical_size.x) * geometry.framebuffer_scale.x));
+      const int32_t bottom = static_cast<int32_t>(std::lround((geometry.logical_position.y + geometry.logical_size.y) * geometry.framebuffer_scale.y));
+      const uint32_t display_width = static_cast<uint32_t>(std::max(1l, std::lround(geometry.image_size.x * geometry.framebuffer_scale.x)));
+      const uint32_t display_height = static_cast<uint32_t>(std::max(1l, std::lround(geometry.image_size.y * geometry.framebuffer_scale.y)));
+      viewport = {
+        .x = left,
+        .y = top,
+        .width = static_cast<uint32_t>(std::max(0, right - left)),
+        .height = static_cast<uint32_t>(std::max(0, bottom - top)),
+        .display_width = display_width,
+        .display_height = display_height,
+        .valid = (right > left) && (bottom > top),
+      };
+    }
+    render_context.set_presentation_viewport(viewport);
   }
+  poll_material_render_resource_preparation();
   {
     ETX_PROFILER_NAMED_SCOPE("app_render_context_end_frame");
     render_context.end_frame();
@@ -643,6 +707,8 @@ void RTApplication::cleanup() {
       gpu_renderer.cleanup(ctx);
       device_already_idle = gpu_renderer.cleanup_wait_succeeded();
     }
+
+    scene.cancel_energy_compensation_interface_preparation();
   }
 
   scheduler.shutdown();
@@ -659,6 +725,12 @@ void RTApplication::process_event(const sapp_event* e) {
   ETX_PROFILER_SCOPE();
 
   if (!_initialized) {
+    return;
+  }
+
+  if ((e != nullptr) && (e->type == SAPP_EVENTTYPE_QUIT_REQUESTED) && _scene_dirty) {
+    sapp_cancel_quit();
+    ui.request_quit_confirmation();
     return;
   }
 
@@ -685,6 +757,13 @@ void RTApplication::process_event(const sapp_event* e) {
 
   if ((_active_renderer != nullptr) && !_current_scene_file.empty()) {
     ETX_PROFILER_NAMED_SCOPE("app_process_event_renderer");
+    const bool pointer_camera_input = (e->type == SAPP_EVENTTYPE_MOUSE_DOWN) || (e->type == SAPP_EVENTTYPE_MOUSE_SCROLL);
+    const bool keyboard_camera_input =
+      (e->type == SAPP_EVENTTYPE_KEY_DOWN) && ((e->key_code == SAPP_KEYCODE_W) || (e->key_code == SAPP_KEYCODE_A) || (e->key_code == SAPP_KEYCODE_S) ||
+                                                (e->key_code == SAPP_KEYCODE_D) || (e->key_code == SAPP_KEYCODE_Q) || (e->key_code == SAPP_KEYCODE_E));
+    if (pointer_camera_input || keyboard_camera_input) {
+      mark_scene_dirty();
+    }
     _active_renderer->process_event(e);
   }
 }
@@ -727,6 +806,8 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   if (_active_renderer != nullptr) {
     _active_renderer->stop();
   }
+  _material_render_resource_preparation_active = false;
+  _restart_cpu_after_material_resource_preparation = false;
 
   log::warning("Loading scene %s...", scene_file.c_str());
   SceneRepresentation::IntegratorData integrator_data;
@@ -785,6 +866,7 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   notify_scene_might_have_changed();
 
   add_to_recent(_current_scene_file);
+  _scene_dirty = false;
   save_options();
 
   if (start_rendering && (_active_renderer != nullptr)) {
@@ -808,9 +890,16 @@ std::string RTApplication::save_scene_file(const std::string& file_name) {
 
   _current_scene_file = env().resolve_to_absolute(saved_path);
   add_to_recent(_current_scene_file);
+  _scene_dirty = false;
   save_options();
 
   return _current_scene_file;
+}
+
+void RTApplication::mark_scene_dirty() {
+  if ((_current_scene_file.empty() == false) && scene.valid()) {
+    _scene_dirty = true;
+  }
 }
 
 void RTApplication::on_referenece_image_selected(std::string file_name) {
@@ -953,6 +1042,7 @@ void RTApplication::on_integrator_selected(Integrator::Type itype) {
   }
 
   cpu_renderer.set_integrator(i);
+  ui.set_current_integrator(i);
   if (_active_renderer == &gpu_renderer) {
     gpu_renderer.invalidate_output();
   }
@@ -1004,6 +1094,7 @@ void RTApplication::on_restart_selected() {
 
 void RTApplication::on_options_changed() {
   ETX_PROFILER_SCOPE();
+  mark_scene_dirty();
   const bool cpu_renderer_active = _active_renderer == &cpu_renderer;
   if (cpu_renderer_active) {
     cpu_renderer.stop();
@@ -1017,48 +1108,61 @@ void RTApplication::on_options_changed() {
 }
 
 void RTApplication::on_material_added() {
+  mark_scene_dirty();
   scene.add_material(nullptr);
   notify_scene_might_have_changed();
 }
 
 void RTApplication::on_material_renamed(uint32_t index, const std::string& name) {
+  mark_scene_dirty();
   scene.rename_material(index, name.c_str());
   notify_scene_might_have_changed();
 }
 
 void RTApplication::on_material_changed(uint32_t index) {
   (void)index;
+  mark_scene_dirty();
   const bool cpu_was_running = cpu_renderer.is_running();
   if (cpu_was_running) {
     cpu_renderer.stop();
   }
 
   scene.create_area_emitters_from_materials();
-  rebuild_material_render_resources();
-  notify_scene_might_have_changed();
-
-  if (cpu_was_running) {
-    cpu_renderer.restart();
+  _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+  if (scene.begin_energy_compensation_interface_preparation()) {
+    _material_render_resource_preparation_active = true;
+    return;
   }
+
+  _material_render_resource_preparation_active = false;
+  if (rebuild_material_render_resources() == false) {
+    finish_material_render_resource_preparation(false);
+    return;
+  }
+  finish_material_render_resource_preparation(true);
 }
 
 void RTApplication::on_medium_added() {
+  mark_scene_dirty();
   scene.add_medium(nullptr);
   scene.update_medium_bounds();
   notify_scene_might_have_changed();
 }
 
 void RTApplication::on_medium_renamed(uint32_t index, const std::string& name) {
+  mark_scene_dirty();
   scene.rename_medium(index, name.c_str());
   notify_scene_might_have_changed();
 }
 
 void RTApplication::on_medium_changed(uint32_t index) {
+  mark_scene_dirty();
   scene.update_medium_bounds();
   notify_scene_might_have_changed();
 }
 
 void RTApplication::on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index) {
+  mark_scene_dirty();
   const bool cpu_was_running = cpu_renderer.is_running();
   if (cpu_was_running) {
     cpu_renderer.stop();
@@ -1074,11 +1178,13 @@ void RTApplication::on_mesh_material_changed(uint32_t mesh_index, uint32_t mater
 }
 
 void RTApplication::on_mesh_renamed(uint32_t index, const std::string& name) {
+  mark_scene_dirty();
   scene.rename_mesh(index, name.c_str());
   notify_scene_might_have_changed();
 }
 
 void RTApplication::on_emitter_changed(uint32_t index) {
+  mark_scene_dirty();
   const bool cpu_was_running = cpu_renderer.is_running();
   bool atmosphere_related = false;
   uint32_t atmosphere_emitter_index = kInvalidIndex;
@@ -1112,6 +1218,7 @@ void RTApplication::on_emitter_changed(uint32_t index) {
 
 void RTApplication::on_emitter_added(uint32_t type) {
   ETX_PROFILER_SCOPE();
+  mark_scene_dirty();
   const bool cpu_was_running = cpu_renderer.is_running();
   if (cpu_was_running) {
     cpu_renderer.stop();
@@ -1150,6 +1257,7 @@ bool RTApplication::on_emitter_deleted(uint32_t index) {
 
   const bool deleted = scene.delete_emitter(index);
   if (deleted) {
+    mark_scene_dirty();
     notify_scene_might_have_changed();
   }
 
@@ -1161,6 +1269,7 @@ bool RTApplication::on_emitter_deleted(uint32_t index) {
 
 void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
   ETX_PROFILER_SCOPE();
+  mark_scene_dirty();
 
   scene.update_active_camera();
   if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
@@ -1176,6 +1285,7 @@ void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
 }
 
 void RTApplication::on_scene_settings_changed() {
+  mark_scene_dirty();
   if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
     _active_renderer->camera_controller()->sync_from_camera();
   }
@@ -1183,6 +1293,7 @@ void RTApplication::on_scene_settings_changed() {
 }
 
 void RTApplication::on_scene_transforms_changed() {
+  mark_scene_dirty();
   if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
     _active_renderer->camera_controller()->sync_from_camera();
   }
@@ -1235,6 +1346,7 @@ void RTApplication::update_camera_to_fit_scene(const float3& view_direction) {
 }
 
 void RTApplication::on_view_scene(uint32_t direction) {
+  mark_scene_dirty();
   ETX_PROFILER_SCOPE();
   constexpr float3 directions[] = {
     {1.0f, 1.0f, 1.0f},
@@ -1257,6 +1369,7 @@ void RTApplication::on_clear_recent_files() {
 }
 
 void RTApplication::on_camera_activated(uint32_t camera_index) {
+  mark_scene_dirty();
   ETX_PROFILER_SCOPE();
   if (camera_index >= (uint32_t)scene.data().cameras.size()) {
     return;
@@ -1290,7 +1403,22 @@ void RTApplication::notify_scene_transforms_changed() {
 }
 
 void RTApplication::sync_ui_renderer_state() {
-  ui.set_current_renderer_preparation(_active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{});
+  RendererPreparationStatus preparation = _active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{};
+  if (_material_render_resource_preparation_active) {
+    const EnergyCompensationPreparationStatus material_status = scene.energy_compensation_interface_preparation_status();
+    preparation = {
+      .state = RendererPreparationState::Preparing,
+      .phase = "Building material energy tables",
+      .message = "Generating spectral energy-compensation interfaces",
+      .completed_steps = material_status.completed_steps,
+      .total_steps = material_status.total_steps,
+      .elapsed_seconds = material_status.elapsed_seconds,
+      .remaining_seconds = material_status.remaining_seconds,
+      .remaining_available = material_status.remaining_available,
+      .cancelable = false,
+    };
+  }
+  ui.set_current_renderer_preparation(preparation);
   ui.set_current_renderer_status(_active_renderer ? _active_renderer->status() : RendererStatus{.mode = ui.current_renderer_mode()});
   ui.set_memory_stats(render_context.get_context().device().get_memory_statistics(), _active_renderer ? _active_renderer->memory_stats() : RendererMemoryStats{});
   ui.set_current_renderer_controls((_active_renderer && !_current_scene_file.empty()) ? _active_renderer->control_state() : RendererControlState{});
@@ -1405,6 +1533,14 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
       message = "Image denoised";
       return true;
     }
+
+    case ApplicationCommandType::SetRenderConfiguration:
+      if (set_render_configuration(command.renderer, command.integrator) == false) {
+        message = "Requested integrator is unavailable";
+        return false;
+      }
+      message = "Integrator changed";
+      return true;
 
     case ApplicationCommandType::SetRenderer:
       if ((command.renderer == RendererMode::GPURaytracing) && (_gpu_renderer_supported == false)) {
@@ -1612,11 +1748,41 @@ void RTApplication::sync_scene_integrator_data_from_current_integrator() {
 }
 
 bool RTApplication::rebuild_material_render_resources() {
-  if (ensure_energy_compensation_interfaces(scene.data(), scheduler) == false) {
+  if (scene.ensure_energy_compensation_interfaces() == false) {
     log::error("Failed to rebuild material energy-compensation interfaces");
     return false;
   }
   return true;
+}
+
+void RTApplication::poll_material_render_resource_preparation() {
+  if (_material_render_resource_preparation_active == false) {
+    return;
+  }
+
+  const EnergyCompensationPreparationState state = scene.poll_energy_compensation_interface_preparation();
+  if (state == EnergyCompensationPreparationState::Preparing) {
+    return;
+  }
+
+  if (state == EnergyCompensationPreparationState::Failed) {
+    log::error("Failed to prepare material energy-compensation interfaces");
+    finish_material_render_resource_preparation(false);
+    return;
+  }
+
+  finish_material_render_resource_preparation(true);
+}
+
+void RTApplication::finish_material_render_resource_preparation(bool resources_ready) {
+  _material_render_resource_preparation_active = false;
+  if (resources_ready) {
+    notify_scene_might_have_changed();
+  }
+  if (_restart_cpu_after_material_resource_preparation) {
+    cpu_renderer.restart();
+  }
+  _restart_cpu_after_material_resource_preparation = false;
 }
 
 void RTApplication::on_reload_shaders_selected() {

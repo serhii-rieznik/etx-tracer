@@ -753,6 +753,17 @@ RHICommandBuffer VKContext::get_command_buffer() {
   return h;
 }
 
+RHICommandBuffer VKContext::get_async_command_buffer() {
+  ETX_PROFILER_SCOPE();
+  const uint32_t index = _impl->command_buffer_pool.allocate_index();
+  auto& cmd = _impl->command_buffer_pool.get_data(index);
+  cmd.initialize(this, kRHIMaxFrames);  // The device reserves this pool outside frame recycling.
+
+  const Handle handle = Handle::construct(0, index, _impl->command_buffer_pool.get_generation(index));
+  _impl->command_buffer_pool.set_handle_to_index(handle, index);
+  return handle;
+}
+
 void VKContext::destroy_command_buffer(RHICommandBuffer cmd) {
   uint32_t index = _impl->command_buffer_pool.get_index(cmd);
   if (index != UINT32_MAX) {
@@ -781,6 +792,38 @@ RHIResult VKContext::wait_for_command_buffer(RHICommandBuffer cmd) {
   }
 
   if (etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), 1, &fence, VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
+    return RHIResult::ValidationError;
+  }
+
+  command_buffer->set_submitted(false);
+  _impl->release_temporary_fence(fence);
+  return RHIResult::Success;
+}
+
+RHIResult VKContext::query_command_buffer(RHICommandBuffer cmd) {
+  VKCommandBuffer* command_buffer = _impl->command_buffer_pool.get_data_ptr(cmd);
+  if (command_buffer == nullptr) {
+    return RHIResult::InvalidHandle;
+  }
+
+  if (command_buffer->is_recording()) {
+    return RHIResult::ValidationError;
+  }
+
+  if (command_buffer->is_submitted() == false) {
+    return RHIResult::Success;
+  }
+
+  const VkFence fence = command_buffer->submit_fence();
+  if (fence == VK_NULL_HANDLE) {
+    return RHIResult::ValidationError;
+  }
+
+  const VkResult fence_status = vkGetFenceStatus(_impl->device.get_vk_device(), fence);
+  if (fence_status == VK_NOT_READY) {
+    return RHIResult::NotReady;
+  }
+  if (fence_status != VK_SUCCESS) {
     return RHIResult::ValidationError;
   }
 

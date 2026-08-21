@@ -52,14 +52,23 @@ const ImVec4 kIorPickerColors[] = {
 };
 
 const ImVec4 kToolbarLaunchColor(0.11f, 0.44f, 0.11f, 1.0f);
-const ImVec4 kToolbarFinishColor(0.44f, 0.33f, 0.11f, 1.0f);
 const ImVec4 kToolbarTerminateColor(0.44f, 0.11f, 0.11f, 1.0f);
-const ImVec4 kToolbarRestartColor(0.11f, 0.22f, 0.44f, 1.0f);
-const ImVec4 kToolbarDisabledColor(0.25f, 0.25f, 0.25f, 1.0f);
 
-const ImVec4 kHistoryButtonBaseColor(0.2f, 0.6f, 0.2f, 1.0f);
-const ImVec4 kHistoryButtonHoverColor(0.25f, 0.75f, 0.25f, 1.0f);
-const ImVec4 kHistoryButtonActiveColor(0.15f, 0.5f, 0.15f, 1.0f);
+struct ViewportZoomOption {
+  const char* label = nullptr;
+  float scale = 0.0f;
+};
+
+constexpr ViewportZoomOption kViewportZoomOptions[] = {
+  {"Fit", 0.0f},
+  {"25%", 0.25f},
+  {"50%", 0.50f},
+  {"75%", 0.75f},
+  {"1:1 (100%)", 1.00f},
+  {"150%", 1.50f},
+  {"200%", 2.00f},
+  {"400%", 4.00f},
+};
 
 const ImVec4 kDeleteButtonColor(0.44f, 0.11f, 0.11f, 1.0f);
 const ImVec4 kDeleteButtonHoverColor(0.54f, 0.21f, 0.21f, 1.0f);
@@ -67,7 +76,6 @@ const ImVec4 kDeleteButtonActiveColor(0.64f, 0.31f, 0.31f, 1.0f);
 
 const ImVec4 kErrorTextColor(1.0f, 0.0f, 0.0f, 1.0f);
 
-const ImVec4 kSceneTextColor(0.30f, 0.45f, 0.90f, 1.0f);
 const ImVec4 kCameraTextColor(0.90f, 0.80f, 0.35f, 1.0f);
 
 const ImVec4 kMaterialHeaderPrimaryColor(0.96f, 0.79f, 0.45f, 1.0f);
@@ -193,6 +201,21 @@ std::string memory_size_string(uint64_t bytes) {
     snprintf(buffer, sizeof(buffer), "%llu B", static_cast<unsigned long long>(bytes));
   }
   return std::string(buffer);
+}
+
+bool contains_case_insensitive(const char* text, const char* filter) {
+  if ((filter == nullptr) || (filter[0] == '\0')) {
+    return true;
+  }
+  if (text == nullptr) {
+    return false;
+  }
+
+  const std::string text_value(text);
+  const std::string filter_value(filter);
+  return std::search(text_value.begin(), text_value.end(), filter_value.begin(), filter_value.end(), [](char a, char b) {
+    return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+  }) != text_value.end();
 }
 
 const char* renderer_memory_location_name(RendererMemoryLocation location) {
@@ -375,6 +398,52 @@ void draw_ior_tooltip(const char* label, const char* title, SpectralDistribution
 
 }  // namespace
 
+bool UI::gpu_integrator_supported(Integrator::Type type) {
+  return (type == Integrator::Type::PathTracing) || (type == Integrator::Type::Bidirectional) || (type == Integrator::Type::VCM);
+}
+
+std::string UI::render_configuration_label(RendererMode renderer, Integrator* integrator) {
+  if (renderer == RendererMode::Rasterization) {
+    return "Raster Preview";
+  }
+  if (integrator == nullptr) {
+    return "No Integrator";
+  }
+  if (renderer == RendererMode::CPURaytracing) {
+    return integrator->name();
+  }
+
+  switch (integrator->type()) {
+    case Integrator::Type::PathTracing:
+      return "Path Tracing (GPU)";
+    case Integrator::Type::Bidirectional:
+      return "Bidirectional (GPU)";
+    case Integrator::Type::VCM:
+      return "VCM (GPU)";
+    default:
+      return std::string(integrator->name()) + " (GPU)";
+  }
+}
+
+uint32_t UI::render_configuration_argument(RendererMode renderer, uint32_t integrator_index) {
+  constexpr uint32_t index_mask = 0x00ffffffu;
+  const uint32_t encoded_index = (integrator_index == kInvalidIndex) ? 0u : (integrator_index + 1u);
+  return (static_cast<uint32_t>(renderer) << 24u) | (encoded_index & index_mask);
+}
+
+bool UI::render_configuration_selected(uint32_t argument) const {
+  constexpr uint32_t index_mask = 0x00ffffffu;
+  const RendererMode renderer = static_cast<RendererMode>(argument >> 24u);
+  const uint32_t encoded_index = argument & index_mask;
+  if (renderer == RendererMode::Rasterization) {
+    return _current_renderer_mode == RendererMode::Rasterization;
+  }
+  if ((encoded_index == 0u) || ((encoded_index - 1u) >= _integrators.count)) {
+    return false;
+  }
+  return (_current_renderer_mode == renderer) && (_current_integrator == _integrators[encoded_index - 1u]);
+}
+
 void UI::full_width_item() {
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
 }
@@ -479,12 +548,12 @@ void UI::validate_selections(SceneRepresentation& scene_rep) {
   switch (_selection.kind) {
     case SelectionKind::Node:
       if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= scene_rep.data().hierarchy.nodes.size())) {
-        set_selection(SelectionKind::Rendering, 0, false);
+        set_selection(SelectionKind::None, -1, false);
       }
       break;
     case SelectionKind::Material:
       if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= _material_mapping.size())) {
-        set_selection(SelectionKind::Rendering, 0, false);
+        set_selection(SelectionKind::None, -1, false);
       } else if (_selected_material_positions.empty()) {
         _selected_material_positions.push_back(_selection.index);
         _material_selection_anchor = _selection.index;
@@ -494,17 +563,17 @@ void UI::validate_selections(SceneRepresentation& scene_rep) {
       break;
     case SelectionKind::Medium:
       if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= _medium_mapping.size())) {
-        set_selection(SelectionKind::Rendering, 0, false);
+        set_selection(SelectionKind::None, -1, false);
       }
       break;
     case SelectionKind::Mesh:
       if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= _mesh_mapping.size())) {
-        set_selection(SelectionKind::Rendering, 0, false);
+        set_selection(SelectionKind::None, -1, false);
       }
       break;
     case SelectionKind::Emitter:
       if ((_selection.index < 0) || (static_cast<uint32_t>(_selection.index) >= scene_rep.data().emitter_profiles.size())) {
-        set_selection(SelectionKind::Rendering, 0, false);
+        set_selection(SelectionKind::None, -1, false);
       }
       break;
     default:
@@ -1522,16 +1591,16 @@ bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool 
   return changed;
 }
 
-constexpr uint32_t kCompactWindowFlags = ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize;
-
 void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ETX_PROFILER_SCOPE();
   ImGuizmo::BeginFrame();
   _node_transform_editor_interaction_rendered_this_frame = false;
-
-  if (_selection.kind == SelectionKind::None) {
-    set_selection(SelectionKind::Rendering, 0);
+  const bool preparation_active = _current_renderer_preparation.state == RendererPreparationState::Preparing;
+  if (preparation_active && (_preparation_active_last_frame == false)) {
+    _ui_setup |= UIMemoryDiagnostics;
+    _activity_tab_requested = true;
   }
+  _preparation_active_last_frame = preparation_active;
 
   BuildContext ctx = {};
   ctx.wpadding = {ImGui::GetStyle().WindowPadding.x, ImGui::GetStyle().WindowPadding.y};
@@ -1551,17 +1620,10 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
 
   ctx.emitter_primary_instance.clear();
 
-  ctx.with_window = [&](uint32_t flag, const char* title, std::function<void()>&& body) {
-    if ((_ui_setup & flag) == 0)
-      return;
-
-    float char_width = ImGui::CalcTextSize("W").x;
-    float target_width = char_width * 30.0f + ImGui::GetStyle().WindowPadding.x * 2.0f;
-    ImGui::SetNextWindowSize(ImVec2(target_width, 0.0f), ImGuiCond_Always);
-    if (ImGui::Begin(title, nullptr, kCompactWindowFlags)) {
-      body();
-    }
-    ImGui::End();
+  ctx.with_window = [](uint32_t flag, const char* title, std::function<void()>&& body) {
+    (void)flag;
+    (void)title;
+    body();
   };
 
   uint64_t mmh = hash_mapping(scene_rep.material_mapping());
@@ -1598,8 +1660,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   _pending_selection = {};
 
   validate_selections(scene_rep);
-  if (_node_transform_editor_interaction_active &&
-      ((_selection.kind != SelectionKind::Node) || (_selection.index != _node_transform_editor_interaction_node_index))) {
+  if (_node_transform_editor_interaction_active && ((_selection.kind != SelectionKind::Node) || (_selection.index != _node_transform_editor_interaction_node_index))) {
     finish_node_transform_editor_interaction();
   }
 
@@ -1610,109 +1671,119 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
     build_toolbar(ctx);
   }
   build_status_bar(ctx);
-  build_scene_objects_window(scene_rep, ctx);
-  build_scene_tree_window(scene_rep, ctx);
-  build_node_properties_window(scene_rep, ctx, data);
-  build_properties_window(scene_rep, ctx, data);
+  build_workspace(scene_rep, ctx, data);
   build_transform_gizmo(scene_rep, data);
   if (_node_transform_editor_interaction_active && (_node_transform_editor_interaction_rendered_this_frame == false)) {
     finish_node_transform_editor_interaction();
   }
-  build_memory_diagnostics(scene_rep, data.film);
-  build_renderer_preparation_modal();
+  build_unsaved_changes_modal();
+}
 
-  const bool has_integrator_debug_info = ctx.has_integrator && (_current_integrator->status().debug_info_count > 0) && (_current_integrator->status().debug_info != nullptr);
-  const bool show_gpu_kernel_timings = (_current_renderer_mode == RendererMode::GPURaytracing) && _gpu_kernel_timing_stats.enabled;
-  if (has_integrator_debug_info || show_gpu_kernel_timings) {
-    if (show_gpu_kernel_timings) {
-      ImGui::SetNextWindowSize(ImVec2(720.0f, 440.0f), ImGuiCond_FirstUseEver);
-    }
-    const bool debug_info_visible = ImGui::Begin("Debug Info");
-    if (debug_info_visible) {
-      if (has_integrator_debug_info) {
-        const auto debug_info = _current_integrator->status().debug_info;
-        if (ImGui::BeginTable("##integrator_debug_info", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-          ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch);
-          ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 88.0f);
-          for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(debug_info[i].title);
-            ImGui::TableNextColumn();
-            ImGui::Text("%.3f", debug_info[i].value);
-          }
-          ImGui::EndTable();
-        }
-      }
+void UI::build_unsaved_changes_modal() {
+  constexpr const char* popup_id = "Unsaved scene changes##unsaved_changes";
+  if (_unsaved_changes_modal_requested) {
+    ImGui::OpenPopup(popup_id);
+    _unsaved_changes_modal_requested = false;
+  }
 
-      if (show_gpu_kernel_timings) {
-        if (has_integrator_debug_info) {
-          ImGui::Separator();
-        }
-        ImGui::Text("GPU: %.3f ms", _gpu_kernel_timing_stats.total_ms);
-        if (_gpu_kernel_timing_stats.dropped_dispatch_count > 0u) {
-          ImGui::Text("Unprofiled: %llu", static_cast<unsigned long long>(_gpu_kernel_timing_stats.dropped_dispatch_count));
-        }
-        if (_gpu_kernel_timing_stats.supported == false) {
-          ImGui::TextUnformatted("GPU timing unavailable");
-          draw_item_tooltip("The active backend does not support GPU timestamps.", ImGuiHoveredFlags_DelayNormal);
-        } else if (_gpu_kernel_timing_stats.kernels.empty()) {
-          ImGui::TextUnformatted("No GPU timing data");
-          draw_item_tooltip("Run the GPU renderer to collect kernel timings.", ImGuiHoveredFlags_DelayNormal);
-        } else if (ImGui::BeginTable("gpu_kernel_timings", 5,
-                     ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
-          ImGui::TableSetupColumn("Kernel");
-          ImGui::TableSetupColumn("Calls");
-          ImGui::TableSetupColumn("Total ms");
-          ImGui::TableSetupColumn("Avg us");
-          ImGui::TableSetupColumn("%");
-          ImGui::TableHeadersRow();
-          for (const RendererKernelTiming& timing : _gpu_kernel_timing_stats.kernels) {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(timing.name.c_str());
-            draw_item_tooltip(timing.name.c_str(), ImGuiHoveredFlags_DelayNormal);
-            ImGui::TableNextColumn();
-            ImGui::Text("%llu", static_cast<unsigned long long>(timing.dispatch_count));
-            ImGui::TableNextColumn();
-            ImGui::Text("%.3f", timing.total_ms);
-            ImGui::TableNextColumn();
-            ImGui::Text("%.2f", timing.average_ms * 1000.0);
-            ImGui::TableNextColumn();
-            ImGui::Text("%.1f", timing.percentage);
-          }
-          ImGui::EndTable();
-        }
-      }
+  bool continue_action = false;
+  if (ImGui::BeginPopupModal(popup_id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("The scene contains unsaved changes.");
+    ImGui::TextDisabled("Save the scene first to keep those changes.");
+    ImGui::Spacing();
+    if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+      ImGui::CloseCurrentPopup();
     }
-    ImGui::End();
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, kDeleteButtonColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kDeleteButtonHoverColor);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDeleteButtonActiveColor);
+    if (ImGui::Button("Discard and continue", ImVec2(180.0f, 0.0f))) {
+      continue_action = true;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::EndPopup();
+  }
+
+  if (continue_action) {
+    const MenuCommand command = _pending_menu_command;
+    const std::string value = _pending_menu_value;
+    _pending_menu_value.clear();
+    _scene_dirty = false;
+    if (callbacks.scene_discarded) {
+      callbacks.scene_discarded();
+    }
+    if (command != MenuCommand::Quit) {
+      _skip_unsaved_check_once = true;
+    }
+    execute_menu_command(command, 0u, value);
   }
 }
 
 bool UI::handle_event(const sapp_event* e) {
-  if ((e->type == SAPP_EVENTTYPE_MOUSE_DOWN) || (e->type == SAPP_EVENTTYPE_MOUSE_UP) || (e->type == SAPP_EVENTTYPE_MOUSE_MOVE) || (e->type == SAPP_EVENTTYPE_MOUSE_SCROLL)) {
-    return _gizmo_captures_mouse;
+  const auto pointer_inside_viewport = [&]() {
+    if (_viewport_geometry.valid == false) {
+      return false;
+    }
+    const float scale_x = std::max(1.0e-6f, _viewport_geometry.framebuffer_scale.x);
+    const float scale_y = std::max(1.0e-6f, _viewport_geometry.framebuffer_scale.y);
+    const float pointer_x = e->mouse_x / scale_x;
+    const float pointer_y = e->mouse_y / scale_y;
+    const float image_left = std::max(_viewport_geometry.logical_position.x, _viewport_geometry.image_position.x);
+    const float image_top = std::max(_viewport_geometry.logical_position.y, _viewport_geometry.image_position.y);
+    const float image_right =
+      std::min(_viewport_geometry.logical_position.x + _viewport_geometry.logical_size.x, _viewport_geometry.image_position.x + _viewport_geometry.image_size.x);
+    const float image_bottom =
+      std::min(_viewport_geometry.logical_position.y + _viewport_geometry.logical_size.y, _viewport_geometry.image_position.y + _viewport_geometry.image_size.y);
+    return (pointer_x >= image_left) && (pointer_y >= image_top) && (pointer_x < image_right) && (pointer_y < image_bottom);
+  };
+
+  if (e->type == SAPP_EVENTTYPE_MOUSE_DOWN) {
+    if (_gizmo_captures_mouse) {
+      _viewport_pointer_active = false;
+      return true;
+    }
+    _viewport_pointer_active = pointer_inside_viewport();
+    return _viewport_pointer_active == false;
+  }
+  if (e->type == SAPP_EVENTTYPE_MOUSE_UP) {
+    const bool route_to_viewport = _viewport_pointer_active;
+    _viewport_pointer_active = false;
+    return route_to_viewport == false;
+  }
+  if (e->type == SAPP_EVENTTYPE_MOUSE_MOVE) {
+    if (_gizmo_captures_mouse) {
+      return true;
+    }
+    return (_viewport_pointer_active || pointer_inside_viewport()) == false;
+  }
+  if (e->type == SAPP_EVENTTYPE_MOUSE_SCROLL) {
+    return pointer_inside_viewport() == false;
   }
   if (e->type != SAPP_EVENTTYPE_KEY_DOWN) {
     return false;
   }
 
   auto modifiers = e->modifiers;
-  bool has_alt = modifiers & SAPP_MODIFIER_ALT;
   bool has_shift = modifiers & SAPP_MODIFIER_SHIFT;
 
+  bool handled = false;
   if ((modifiers & SAPP_MODIFIER_CTRL) || (modifiers & SAPP_MODIFIER_SUPER)) {
     switch (e->key_code) {
       case SAPP_KEYCODE_Q: {
         execute_menu_command(MenuCommand::Quit);
+        handled = true;
         break;
       }
       case SAPP_KEYCODE_O: {
         execute_menu_command(MenuCommand::OpenScene);
+        handled = true;
         break;
       }
       case SAPP_KEYCODE_I: {
         execute_menu_command(MenuCommand::OpenReferenceImage);
+        handled = true;
         break;
       }
       case SAPP_KEYCODE_R: {
@@ -1721,20 +1792,26 @@ bool UI::handle_event(const sapp_event* e) {
         } else {
           execute_menu_command(MenuCommand::ReloadScene);
         }
+        handled = true;
         break;
       }
       case SAPP_KEYCODE_G: {
         execute_menu_command(MenuCommand::ReloadGeometry);
+        handled = true;
         break;
       }
       case SAPP_KEYCODE_S: {
-        if (has_alt && (has_shift == false)) {
-          // TODO : use
-        } else if (has_shift && (has_alt == false)) {
-          execute_menu_command(MenuCommand::SaveImageLDR);
-        } else if ((has_shift == false) && (has_alt == false)) {
-          execute_menu_command(MenuCommand::SaveImageRGB);
+        if (has_shift) {
+          execute_menu_command(MenuCommand::SaveSceneAs);
+        } else {
+          execute_menu_command(MenuCommand::SaveScene);
         }
+        handled = true;
+        break;
+      }
+      case SAPP_KEYCODE_E: {
+        execute_menu_command(has_shift ? MenuCommand::SaveImageLDR : MenuCommand::SaveImageRGB);
+        handled = true;
         break;
       }
       default:
@@ -1742,35 +1819,36 @@ bool UI::handle_event(const sapp_event* e) {
     }
   }
 
+  if (handled) {
+    return true;
+  }
+
   switch (e->key_code) {
     case SAPP_KEYCODE_F1:
     case SAPP_KEYCODE_F2:
-    case SAPP_KEYCODE_F3:
-    case SAPP_KEYCODE_F4:
-    case SAPP_KEYCODE_F5: {
+    case SAPP_KEYCODE_F3: {
       uint32_t flag = 1u << (e->key_code - SAPP_KEYCODE_F1);
       _ui_setup = (_ui_setup & flag) ? (_ui_setup & (~flag)) : (_ui_setup | flag);
-      break;
+      return true;
     };
 
     case SAPP_KEYCODE_1:
     case SAPP_KEYCODE_2:
     case SAPP_KEYCODE_3:
     case SAPP_KEYCODE_4:
-    case SAPP_KEYCODE_5:
-    case SAPP_KEYCODE_6: {
+    case SAPP_KEYCODE_5: {
       _view_options.view_image = static_cast<uint32_t>(e->key_code - SAPP_KEYCODE_1);
       if (callbacks.output_view_changed)
         callbacks.output_view_changed(_view_options.view_image);
-      break;
+      return true;
     }
     case SAPP_KEYCODE_KP_DIVIDE: {
       execute_menu_command(MenuCommand::DecreaseExposure);
-      break;
+      return true;
     }
     case SAPP_KEYCODE_KP_MULTIPLY: {
       execute_menu_command(MenuCommand::IncreaseExposure);
-      break;
+      return true;
     }
     default:
       break;
@@ -1780,24 +1858,29 @@ bool UI::handle_event(const sapp_event* e) {
 }
 
 void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std::string& value) {
+  const auto requires_unsaved_confirmation = [&](MenuCommand pending_command) {
+    const bool destructive_command = (pending_command == MenuCommand::Quit) || (pending_command == MenuCommand::OpenScene) || (pending_command == MenuCommand::OpenRecentScene) ||
+                                     (pending_command == MenuCommand::ReloadScene) || (pending_command == MenuCommand::ReloadGeometry);
+    if ((destructive_command == false) || (_scene_dirty == false)) {
+      return false;
+    }
+    if (_skip_unsaved_check_once) {
+      _skip_unsaved_check_once = false;
+      return false;
+    }
+    _pending_menu_command = pending_command;
+    _pending_menu_value = value;
+    _unsaved_changes_modal_requested = true;
+    return true;
+  };
+
+  if (requires_unsaved_confirmation(command)) {
+    return;
+  }
+
   switch (command) {
     case MenuCommand::Quit:
       quit();
-      break;
-    case MenuCommand::SelectCPURenderer:
-      if (callbacks.renderer_selected) {
-        callbacks.renderer_selected(RendererMode::CPURaytracing);
-      }
-      break;
-    case MenuCommand::SelectRasterRenderer:
-      if (callbacks.renderer_selected) {
-        callbacks.renderer_selected(RendererMode::Rasterization);
-      }
-      break;
-    case MenuCommand::SelectGPURenderer:
-      if (_gpu_renderer_available && callbacks.renderer_selected) {
-        callbacks.renderer_selected(RendererMode::GPURaytracing);
-      }
       break;
     case MenuCommand::OpenScene:
       select_scene_file();
@@ -1824,14 +1907,17 @@ void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std:
     case MenuCommand::SaveSceneAs:
       save_scene_file_as();
       break;
-    case MenuCommand::SelectIntegrator:
-      if ((argument < _integrators.count) && (_integrators[argument] != nullptr) && _integrators[argument]->enabled()) {
-        if (callbacks.integrator_selected) {
-          callbacks.integrator_selected(_integrators[argument]->type());
-        }
-        set_current_integrator(_integrators[argument]);
+    case MenuCommand::SelectIntegrator: {
+      constexpr uint32_t index_mask = 0x00ffffffu;
+      const RendererMode renderer = static_cast<RendererMode>(argument >> 24u);
+      const uint32_t encoded_index = argument & index_mask;
+      if (renderer == RendererMode::Rasterization) {
+        select_render_configuration(renderer, nullptr);
+      } else if ((encoded_index > 0u) && ((encoded_index - 1u) < _integrators.count)) {
+        select_render_configuration(renderer, _integrators[encoded_index - 1u]);
       }
       break;
+    }
     case MenuCommand::OpenReferenceImage:
       load_image();
       break;
@@ -1894,23 +1980,17 @@ void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std:
     case MenuCommand::ToggleProperties:
       _ui_setup ^= UIProperties;
       break;
-    case MenuCommand::ToggleSceneTree:
-      _ui_setup ^= UISceneTree;
-      break;
-    case MenuCommand::ToggleNodeProperties:
-      _ui_setup ^= UINodeProperties;
-      break;
     case MenuCommand::ToggleMemoryDiagnostics:
       _ui_setup ^= UIMemoryDiagnostics;
+      break;
+    case MenuCommand::ResetLayout:
+      _reset_layout_requested = true;
       break;
   }
 }
 
 void UI::set_current_integrator(Integrator* i) {
   _current_integrator = i;
-  if (i != nullptr) {
-    set_selection(SelectionKind::Rendering, 0, false);
-  }
 }
 
 void UI::quit() {
@@ -2777,17 +2857,6 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
 #endif
 
     if (ImGui::BeginMenu("ETX Tracer")) {
-      if (ImGui::MenuItem("CPU Raytracer", nullptr, _current_renderer_mode == RendererMode::CPURaytracing)) {
-        execute_menu_command(MenuCommand::SelectCPURenderer);
-      }
-      if (ImGui::MenuItem("Rasterizer", nullptr, _current_renderer_mode == RendererMode::Rasterization)) {
-        execute_menu_command(MenuCommand::SelectRasterRenderer);
-      }
-      const char* gpu_renderer_label = _gpu_renderer_available ? "GPU Raytracer" : "GPU Raytracer (Unavailable)";
-      if (ImGui::MenuItem(gpu_renderer_label, nullptr, _current_renderer_mode == RendererMode::GPURaytracing, _gpu_renderer_available)) {
-        execute_menu_command(MenuCommand::SelectGPURenderer);
-      }
-      ImGui::Separator();
       if (ImGui::MenuItem("Exit", "Ctrl+Q", false, true)) {
         execute_menu_command(MenuCommand::Quit);
       }
@@ -2835,19 +2904,46 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
       }
 
       ImGui::Separator();
-      if (ImGui::MenuItem("Save", nullptr, false, true)) {
+      if (ImGui::MenuItem("Save", "Ctrl+S", false, true)) {
         execute_menu_command(MenuCommand::SaveScene);
       }
-      if (ImGui::MenuItem("Save as...", nullptr, false, true)) {
+      if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S", false, true)) {
         execute_menu_command(MenuCommand::SaveSceneAs);
       }
       ImGui::EndMenu();
     }
 
     if (ImGui::BeginMenu("Integrator", true)) {
-      for (uint64_t i = 0; i < _integrators.count; ++i) {
-        if (ImGui::MenuItem(_integrators[i]->name(), nullptr, _current_integrator == _integrators[i], _integrators[i]->enabled())) {
-          execute_menu_command(MenuCommand::SelectIntegrator, static_cast<uint32_t>(i));
+      const uint32_t raster_argument = render_configuration_argument(RendererMode::Rasterization, kInvalidIndex);
+      if (ImGui::MenuItem("Raster Preview", nullptr, render_configuration_selected(raster_argument))) {
+        execute_menu_command(MenuCommand::SelectIntegrator, raster_argument);
+      }
+
+      ImGui::SeparatorText("CPU");
+      for (uint64_t i = 0u; i < _integrators.count; ++i) {
+        Integrator* const integrator = _integrators[i];
+        if ((integrator == nullptr) || (integrator->enabled() == false)) {
+          continue;
+        }
+        const uint32_t configuration_argument = render_configuration_argument(RendererMode::CPURaytracing, static_cast<uint32_t>(i));
+        const std::string label = render_configuration_label(RendererMode::CPURaytracing, integrator);
+        if (ImGui::MenuItem(label.c_str(), nullptr, render_configuration_selected(configuration_argument))) {
+          execute_menu_command(MenuCommand::SelectIntegrator, configuration_argument);
+        }
+      }
+
+      if (_gpu_renderer_available) {
+        ImGui::SeparatorText("GPU");
+        for (uint64_t i = 0u; i < _integrators.count; ++i) {
+          Integrator* const integrator = _integrators[i];
+          if ((integrator == nullptr) || (integrator->enabled() == false) || (gpu_integrator_supported(integrator->type()) == false)) {
+            continue;
+          }
+          const uint32_t configuration_argument = render_configuration_argument(RendererMode::GPURaytracing, static_cast<uint32_t>(i));
+          const std::string label = render_configuration_label(RendererMode::GPURaytracing, integrator);
+          if (ImGui::MenuItem(label.c_str(), nullptr, render_configuration_selected(configuration_argument))) {
+            execute_menu_command(MenuCommand::SelectIntegrator, configuration_argument);
+          }
         }
       }
 
@@ -2859,10 +2955,10 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
         execute_menu_command(MenuCommand::OpenReferenceImage);
       }
       ImGui::Separator();
-      if (ImGui::MenuItem("Save Current Image (RGB)...", "Ctrl+S", false, true)) {
+      if (ImGui::MenuItem("Save Current Image (RGB)...", "Ctrl+E", false, true)) {
         execute_menu_command(MenuCommand::SaveImageRGB);
       }
-      if (ImGui::MenuItem("Save Current Image (LDR)...", "Shift+Ctrl+S", false, true)) {
+      if (ImGui::MenuItem("Save Current Image (LDR)...", "Ctrl+Shift+E", false, true)) {
         execute_menu_command(MenuCommand::SaveImageLDR);
       }
       if (ImGui::MenuItem("Use as Reference", "Ctrl+Shift+R", false, true)) {
@@ -2918,11 +3014,13 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
           execute_menu_command(command);
         }
       };
-      ui_toggle("Scene Objects", UIObjects, MenuCommand::ToggleSceneObjects);
-      ui_toggle("Properties", UIProperties, MenuCommand::ToggleProperties);
-      ui_toggle("Memory Diagnostics", UIMemoryDiagnostics, MenuCommand::ToggleMemoryDiagnostics);
-      ui_toggle("Scene Tree", UISceneTree, MenuCommand::ToggleSceneTree);
-      ui_toggle("Node Properties", UINodeProperties, MenuCommand::ToggleNodeProperties);
+      ui_toggle("Scene Explorer", UIObjects, MenuCommand::ToggleSceneObjects);
+      ui_toggle("Inspector", UIProperties, MenuCommand::ToggleProperties);
+      ui_toggle("Diagnostics", UIMemoryDiagnostics, MenuCommand::ToggleMemoryDiagnostics);
+      ImGui::Separator();
+      if (ImGui::MenuItem("Reset Layout")) {
+        execute_menu_command(MenuCommand::ResetLayout);
+      }
       ImGui::EndMenu();
     }
 
@@ -3009,188 +3107,201 @@ float UI::build_title_bar_controls() {
 }
 #endif
 
+void UI::select_render_configuration(RendererMode renderer, Integrator* integrator) {
+  if ((renderer != RendererMode::Rasterization) && (integrator == nullptr)) {
+    return;
+  }
+  if ((renderer == RendererMode::GPURaytracing) && ((_gpu_renderer_available == false) || (gpu_integrator_supported(integrator->type()) == false))) {
+    return;
+  }
+  if ((integrator != nullptr) && (integrator->enabled() == false)) {
+    return;
+  }
+
+  if (callbacks.render_configuration_selected) {
+    callbacks.render_configuration_selected(renderer, integrator != nullptr ? integrator->type() : Integrator::Type::Invalid);
+  }
+  _current_renderer_mode = renderer;
+  if (integrator != nullptr) {
+    set_current_integrator(integrator);
+  }
+}
+
+void UI::build_render_configuration_selector(const char* id) {
+  const std::string current_label = render_configuration_label(_current_renderer_mode, _current_integrator);
+  if (ImGui::BeginCombo(id, current_label.c_str())) {
+    const bool raster_selected = _current_renderer_mode == RendererMode::Rasterization;
+    if (ImGui::Selectable("Raster Preview", raster_selected)) {
+      select_render_configuration(RendererMode::Rasterization, nullptr);
+    }
+
+    ImGui::SeparatorText("CPU");
+    for (uint64_t i = 0u; i < _integrators.count; ++i) {
+      Integrator* const integrator = _integrators[i];
+      if ((integrator == nullptr) || (integrator->enabled() == false)) {
+        continue;
+      }
+      const bool selected = (_current_renderer_mode == RendererMode::CPURaytracing) && (_current_integrator == integrator);
+      const std::string label = render_configuration_label(RendererMode::CPURaytracing, integrator);
+      if (ImGui::Selectable(label.c_str(), selected)) {
+        select_render_configuration(RendererMode::CPURaytracing, integrator);
+      }
+    }
+
+    if (_gpu_renderer_available) {
+      ImGui::SeparatorText("GPU");
+      for (uint64_t i = 0u; i < _integrators.count; ++i) {
+        Integrator* const integrator = _integrators[i];
+        if ((integrator == nullptr) || (integrator->enabled() == false) || (gpu_integrator_supported(integrator->type()) == false)) {
+          continue;
+        }
+        const bool selected = (_current_renderer_mode == RendererMode::GPURaytracing) && (_current_integrator == integrator);
+        const std::string label = render_configuration_label(RendererMode::GPURaytracing, integrator);
+        if (ImGui::Selectable(label.c_str(), selected)) {
+          select_render_configuration(RendererMode::GPURaytracing, integrator);
+        }
+      }
+    }
+    ImGui::EndCombo();
+  }
+}
+
 void UI::build_toolbar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##toolbar", ImGui::GetMainViewport(), ImGuiDir_Up, ctx.button_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     const bool cpu_mode = _current_renderer_mode == RendererMode::CPURaytracing;
     const bool gpu_mode = _current_renderer_mode == RendererMode::GPURaytracing;
+    ImGui::GetStyle().FramePadding.y = (ctx.button_size - ctx.text_size) / 2.0f;
+    ImGui::SetCursorPosX(ctx.wpadding.x);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Integrator");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(230.0f);
+    build_render_configuration_selector("##toolbar_integrator");
+
+    const RendererControlState& controls = _current_renderer_controls;
+    auto toolbar_action = [&](const char* label, bool available, const ImVec4* color, const char* tooltip, const std::function<void()>& action) {
+      ImGui::SameLine(0.0f, ctx.wpadding.x);
+      if (color != nullptr) {
+        ImGui::PushStyleColor(ImGuiCol_Button, *color);
+      }
+      if (available == false) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Button(label, ImVec2(0.0f, ctx.button_size)) && available && action) {
+        action();
+      }
+      if (available == false) {
+        ImGui::EndDisabled();
+      }
+      if (color != nullptr) {
+        ImGui::PopStyleColor();
+      }
+      draw_item_tooltip(tooltip, ImGuiHoveredFlags_DelayNormal);
+    };
+
     if (cpu_mode || gpu_mode) {
-      const RendererControlState& controls = _current_renderer_controls;
+      toolbar_action((_current_renderer_status.state == RendererStatusState::Running) ? "Running" : "Start", controls.can_run, &kToolbarLaunchColor, "Start a new render.",
+        callbacks.run_selected);
+      toolbar_action((_current_renderer_status.state == RendererStatusState::Finishing) ? "Finishing sample" : "Finish sample", controls.can_finish, nullptr,
+        "Stop after the in-progress sample completes.", [this]() {
+          if (callbacks.stop_selected) {
+            callbacks.stop_selected(true);
+          }
+        });
+      toolbar_action("Stop now", controls.can_stop, &kToolbarTerminateColor, "Stop immediately and keep the latest completed output.", [this]() {
+        if (callbacks.stop_selected) {
+          callbacks.stop_selected(false);
+        }
+      });
+      toolbar_action("Restart", controls.can_restart, nullptr, "Clear the current result and restart rendering.", callbacks.restart_selected);
+    }
 
-      const bool state_available[4] = {
-        controls.can_run,
-        controls.can_finish,
-        controls.can_stop,
-        controls.can_restart,
-      };
-
-      const char* labels[4] = {
-        (_current_renderer_status.state == RendererStatusState::Running) ? "> Running <" : "  Launch  ",
-        (_current_renderer_status.state == RendererStatusState::Finishing) ? "> Finishing <" : "  Finish  ",
-        " Terminate ",
-        (_current_renderer_status.state == RendererStatusState::Running) ? " Restart " : "  Restart  ",
-      };
-
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      ImGui::PushStyleColor(ImGuiCol_Button, state_available[0] ? kToolbarLaunchColor : kToolbarDisabledColor);
-      if (state_available[0] == false) {
-        ImGui::BeginDisabled();
+    ImGui::SameLine(0.0f, ctx.wpadding.x);
+    if (ImGui::Button("Display", ImVec2(0.0f, ctx.button_size))) {
+      ImGui::OpenPopup("##display_controls");
+    }
+    ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_Always);
+    if (ImGui::BeginPopup("##display_controls")) {
+      labeled_control("Exposure", [&]() {
+        return ImGui::DragFloat("##toolbar_exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
+      });
+      if (ImGui::IsItemDeactivatedAfterEdit() && callbacks.exposure_changed) {
+        callbacks.exposure_changed(_view_options.exposure);
       }
-      if (ImGui::Button(labels[0], {0.0f, ctx.button_size}) && state_available[0] && callbacks.run_selected) {
-        callbacks.run_selected();
+      ImGui::TextUnformatted("View layer");
+      full_width_item();
+      if (ImGui::BeginCombo("##toolbar_view_layer", Film::layer_name(_view_options.view_layer))) {
+        for (uint32_t i = 0u; i < ViewLayer::Count; ++i) {
+          const bool selected = i == _view_options.view_layer;
+          if (ImGui::Selectable(Film::layer_name(i), selected)) {
+            _view_options.view_layer = i;
+            if (callbacks.view_layer_changed) {
+              callbacks.view_layer_changed(i);
+            }
+          }
+        }
+        ImGui::EndCombo();
       }
-      if (state_available[0] == false) {
-        ImGui::EndDisabled();
+      ImGui::TextUnformatted("Output");
+      full_width_item();
+      if (ImGui::BeginCombo("##toolbar_output", output_view_to_string(_view_options.view_image).c_str())) {
+        for (uint32_t i = 0u; i < static_cast<uint32_t>(OutputView::Count); ++i) {
+          const bool selected = i == _view_options.view_image;
+          if (ImGui::Selectable(output_view_to_string(i).c_str(), selected)) {
+            _view_options.view_image = i;
+            if (callbacks.output_view_changed) {
+              callbacks.output_view_changed(i);
+            }
+          }
+        }
+        ImGui::EndCombo();
       }
-
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      ImGui::PushStyleColor(ImGuiCol_Button, state_available[1] ? kToolbarFinishColor : kToolbarDisabledColor);
-      if (state_available[1] == false) {
-        ImGui::BeginDisabled();
+      ImGui::TextUnformatted("Display transform");
+      full_width_item();
+      if (ImGui::BeginCombo("##toolbar_display_transform", view_option_to_string(_view_options.view_option).c_str())) {
+        for (uint32_t i = 0u; i < static_cast<uint32_t>(ViewOptions::Count); ++i) {
+          const bool selected = i == _view_options.view_option;
+          if (ImGui::Selectable(view_option_to_string(i).c_str(), selected)) {
+            _view_options.view_option = i;
+            if (callbacks.display_transform_changed) {
+              callbacks.display_transform_changed(i);
+            }
+          }
+        }
+        ImGui::EndCombo();
       }
-      if (ImGui::Button(labels[1], {0.0f, ctx.button_size}) && state_available[1] && callbacks.stop_selected) {
-        callbacks.stop_selected(true);
-      }
-      if (state_available[1] == false) {
-        ImGui::EndDisabled();
-      }
-
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      ImGui::PushStyleColor(ImGuiCol_Button, state_available[2] ? kToolbarTerminateColor : kToolbarDisabledColor);
-      if (state_available[2] == false) {
-        ImGui::BeginDisabled();
-      }
-      if (ImGui::Button(labels[2], {0.0f, ctx.button_size}) && state_available[2] && callbacks.stop_selected) {
-        callbacks.stop_selected(false);
-      }
-      if (state_available[2] == false) {
-        ImGui::EndDisabled();
-      }
-
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      ImGui::PushStyleColor(ImGuiCol_Button, state_available[3] ? kToolbarRestartColor : kToolbarDisabledColor);
-      if (state_available[3] == false) {
-        ImGui::BeginDisabled();
-      }
-      if (ImGui::Button(labels[3], {0.0f, ctx.button_size}) && state_available[3] && callbacks.restart_selected) {
-        callbacks.restart_selected();
-      }
-      if (state_available[3] == false) {
-        ImGui::EndDisabled();
-      }
-      ImGui::PopStyleColor(4);
-
       if (cpu_mode) {
         const bool can_denoise = controls.can_run && (_current_renderer_status.progress_kind == RendererProgressKind::Samples) && (_current_renderer_status.completed_units > 0u);
-        ImGui::SameLine(0.0f, ctx.wpadding.x);
-        ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-
-        ImGui::SameLine(0.0f, ctx.wpadding.x);
         if (can_denoise == false) {
           ImGui::BeginDisabled();
         }
-        if (ImGui::Button("  Denoise (preview)  ", {0.0f, ctx.button_size}) && callbacks.denoise_selected) {
+        if (ImGui::Button("Denoise result", ImVec2(-FLT_MIN, 0.0f)) && callbacks.denoise_selected) {
           callbacks.denoise_selected();
         }
         if (can_denoise == false) {
           ImGui::EndDisabled();
         }
       }
-    }
-
-    if (gpu_mode) {
-      const RendererPreparationStatus status = _current_renderer_preparation;
-      const char* label = "  Ready  ";
-      ImVec4 status_color = kToolbarLaunchColor;
-      if (status.state == RendererPreparationState::Preparing) {
-        label = " Preparing... ";
-        status_color = kToolbarFinishColor;
-      } else if (status.state == RendererPreparationState::Failed) {
-        label = "  Failed  ";
-        status_color = kToolbarTerminateColor;
-      }
-
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      ImGui::PushStyleColor(ImGuiCol_Button, status_color);
-      ImGui::BeginDisabled();
-      ImGui::Button(label, {0.0f, ctx.button_size});
-      ImGui::EndDisabled();
-      ImGui::PopStyleColor();
-
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      if (ImGui::Button((status.state == RendererPreparationState::Failed) ? "  Retry  " : "  Reload Shaders  ", {0.0f, ctx.button_size})) {
-        if (callbacks.reload_shaders_selected) {
-          callbacks.reload_shaders_selected();
-        }
-      }
-
-      ImGui::SameLine(0.0f, ctx.wpadding.x);
-      if (status.state != RendererPreparationState::Preparing) {
-        ImGui::BeginDisabled();
-      }
-      if (ImGui::Button("  Cancel to CPU  ", {0.0f, ctx.button_size})) {
-        if (callbacks.cancel_renderer_preparation_selected) {
-          callbacks.cancel_renderer_preparation_selected();
-        }
-      }
-      if (status.state != RendererPreparationState::Preparing) {
-        ImGui::EndDisabled();
-      }
+      ImGui::EndPopup();
     }
 
     ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::GetStyle().FramePadding.y = (ctx.button_size - ctx.text_size) / 2.0f;
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-
-    ImGui::PushItemWidth(2.25f * ctx.input_size);
-    if (ImGui::BeginCombo("##view_layer", Film::layer_name(_view_options.view_layer))) {
-      for (uint32_t i = 0; i < ViewLayer::Count; ++i) {
-        bool selected = i == _view_options.view_layer;
-        if (ImGui::Selectable(Film::layer_name(i), &selected)) {
-          if (selected) {
-            _view_options.view_layer = i;
-            if (callbacks.view_layer_changed)
-              callbacks.view_layer_changed(i);
-          }
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Zoom");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(125.0f);
+    if (ImGui::BeginCombo("##viewport_zoom", kViewportZoomOptions[_viewport_zoom_option].label)) {
+      for (uint32_t i = 0u; i < static_cast<uint32_t>(IM_ARRAYSIZE(kViewportZoomOptions)); ++i) {
+        const bool selected = i == _viewport_zoom_option;
+        if (ImGui::Selectable(kViewportZoomOptions[i].label, selected)) {
+          _viewport_zoom_option = i;
+        }
+        if (selected) {
+          ImGui::SetItemDefaultFocus();
         }
       }
       ImGui::EndCombo();
     }
-    ImGui::PopItemWidth();
-
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::PushItemWidth(2.25f * ctx.input_size);
-    if (ImGui::BeginCombo("##view_img", output_view_to_string(uint32_t(_view_options.view_image)).c_str())) {
-      for (uint32_t i = 0; i < uint32_t(OutputView::Count); ++i) {
-        bool selected = i == uint32_t(_view_options.view_image);
-        if (ImGui::Selectable(output_view_to_string(i).c_str(), &selected)) {
-          _view_options.view_image = i;
-          if (callbacks.output_view_changed)
-            callbacks.output_view_changed(i);
-        }
-      }
-      ImGui::EndCombo();
-    }
-    ImGui::PopItemWidth();
-
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::PushItemWidth(2.25f * ctx.input_size);
-    if (ImGui::BeginCombo("##view_opt", view_option_to_string(uint32_t(_view_options.view_option)).c_str())) {
-      for (uint32_t i = 0; i < uint32_t(ViewOptions::Count); ++i) {
-        bool selected = i == uint32_t(_view_options.view_option);
-        if (ImGui::Selectable(view_option_to_string(i).c_str(), &selected)) {
-          _view_options.view_option = i;
-          if (callbacks.display_transform_changed)
-            callbacks.display_transform_changed(i);
-        }
-      }
-      ImGui::EndCombo();
-    }
-    ImGui::PopItemWidth();
 
     ImGui::GetStyle().FramePadding.y = ctx.fpadding.y;
     ImGui::End();
@@ -3201,6 +3312,9 @@ void UI::build_status_bar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, ctx.text_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     const RendererStatus& status = _current_renderer_status;
     std::string core_status = format_string("%s  |  %s", renderer_mode_status_name(status.mode), renderer_status_state_name(status.state));
+    if (_scene_dirty) {
+      core_status += "  |  Modified";
+    }
     if (status.progress_kind != RendererProgressKind::None) {
       const char* unit = renderer_progress_unit_name(status.progress_kind);
       if (status.total_units > 0u) {
@@ -3271,9 +3385,362 @@ void UI::build_status_bar(const BuildContext& ctx) {
   }
 }
 
+void UI::request_quit_confirmation() {
+  execute_menu_command(MenuCommand::Quit);
+}
+
+void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
+  ImGuiViewport* const main_viewport = ImGui::GetMainViewport();
+  if (main_viewport == nullptr) {
+    _viewport_geometry = {};
+    return;
+  }
+
+  if (_reset_layout_requested) {
+    _explorer_width = 300.0f;
+    _inspector_width = 400.0f;
+    _diagnostics_height = 260.0f;
+    _ui_setup = UIDefaults;
+    _reset_layout_requested = false;
+  }
+
+  const bool explorer_visible = (_ui_setup & UIObjects) != 0u;
+  const bool inspector_visible = (_ui_setup & UIProperties) != 0u;
+  const bool diagnostics_visible = (_ui_setup & UIMemoryDiagnostics) != 0u;
+  constexpr float splitter_size = 5.0f;
+  constexpr float minimum_viewport_width = 320.0f;
+  constexpr float minimum_panel_width = 220.0f;
+  constexpr float minimum_inspector_width = 300.0f;
+  constexpr float minimum_main_height = 240.0f;
+
+  const ImVec2 workspace_position = main_viewport->WorkPos;
+  const ImVec2 workspace_size = main_viewport->WorkSize;
+  ImGui::SetNextWindowPos(workspace_position, ImGuiCond_Always);
+  ImGui::SetNextWindowSize(workspace_size, ImGuiCond_Always);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+  constexpr ImGuiWindowFlags workspace_flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                               ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoMouseInputs;
+  if (ImGui::Begin("##editor_workspace", nullptr, workspace_flags) == false) {
+    ImGui::End();
+    ImGui::PopStyleVar();
+    _viewport_geometry = {};
+    return;
+  }
+
+  const ImVec2 content_origin = ImGui::GetCursorScreenPos();
+  const ImVec2 content_size = ImGui::GetContentRegionAvail();
+  const float horizontal_splitter_count = static_cast<float>((explorer_visible ? 1u : 0u) + (inspector_visible ? 1u : 0u));
+  const float available_panel_width = std::max(0.0f, content_size.x - minimum_viewport_width - horizontal_splitter_count * splitter_size);
+  float explorer_width = explorer_visible ? std::min(std::max(_explorer_width, minimum_panel_width), available_panel_width) : 0.0f;
+  float inspector_width = inspector_visible ? std::min(std::max(_inspector_width, minimum_inspector_width), available_panel_width) : 0.0f;
+  const float requested_panel_width = explorer_width + inspector_width;
+  if ((requested_panel_width > available_panel_width) && (requested_panel_width > 0.0f)) {
+    const float panel_scale = available_panel_width / requested_panel_width;
+    explorer_width *= panel_scale;
+    inspector_width *= panel_scale;
+  }
+
+  float main_height = content_size.y;
+  if (diagnostics_visible) {
+    _diagnostics_height = std::clamp(_diagnostics_height, 150.0f, std::max(150.0f, content_size.y - minimum_main_height - splitter_size));
+    main_height = std::max(minimum_main_height, content_size.y - _diagnostics_height - splitter_size);
+  }
+
+  float cursor_x = content_origin.x;
+  if (explorer_visible) {
+    ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ctx.wpadding.x, ctx.wpadding.y));
+    ImGui::BeginChild("##workspace_explorer", ImVec2(explorer_width, main_height), ImGuiChildFlags_Borders);
+    build_scene_explorer(scene_rep, ctx);
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    cursor_x += explorer_width;
+
+    ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::BeginChild("##explorer_splitter_region", ImVec2(splitter_size, main_height), ImGuiChildFlags_None,
+      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground);
+    ImGui::InvisibleButton("##explorer_splitter", ImGui::GetContentRegionAvail());
+    if (ImGui::IsItemActive()) {
+      _explorer_width = std::max(minimum_panel_width, _explorer_width + ImGui::GetIO().MouseDelta.x);
+    }
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    cursor_x += splitter_size;
+  }
+
+  const float inspector_and_splitter_width = inspector_visible ? (inspector_width + splitter_size) : 0.0f;
+  const float viewport_width = std::max(1.0f, content_origin.x + content_size.x - cursor_x - inspector_and_splitter_width);
+  ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+  ImGui::BeginChild("##workspace_viewport", ImVec2(viewport_width, main_height), ImGuiChildFlags_None,
+    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);
+  const ImVec2 viewport_position = ImGui::GetWindowPos();
+  const ImVec2 viewport_size = ImGui::GetWindowSize();
+  const ImVec2 framebuffer_scale = ImGui::GetIO().DisplayFramebufferScale;
+  ImVec2 displayed_image_size = viewport_size;
+  if ((data.output_size.x > 0u) && (data.output_size.y > 0u) && (viewport_size.x > 0.0f) && (viewport_size.y > 0.0f)) {
+    const float output_aspect = static_cast<float>(data.output_size.x) / static_cast<float>(data.output_size.y);
+    const float zoom_scale = kViewportZoomOptions[_viewport_zoom_option].scale;
+    if (zoom_scale > 0.0f) {
+      displayed_image_size = ImVec2(static_cast<float>(data.output_size.x) * zoom_scale / std::max(1.0e-6f, framebuffer_scale.x),
+        static_cast<float>(data.output_size.y) * zoom_scale / std::max(1.0e-6f, framebuffer_scale.y));
+    } else {
+      const float viewport_aspect = viewport_size.x / viewport_size.y;
+      if (output_aspect > viewport_aspect) {
+        displayed_image_size.y = viewport_size.x / output_aspect;
+      } else {
+        displayed_image_size.x = viewport_size.y * output_aspect;
+      }
+    }
+  }
+  const ImVec2 displayed_image_position(viewport_position.x + 0.5f * (viewport_size.x - displayed_image_size.x),
+    viewport_position.y + 0.5f * (viewport_size.y - displayed_image_size.y));
+  _viewport_geometry = {
+    .logical_position = {viewport_position.x, viewport_position.y},
+    .logical_size = {viewport_size.x, viewport_size.y},
+    .image_position = {displayed_image_position.x, displayed_image_position.y},
+    .image_size = {displayed_image_size.x, displayed_image_size.y},
+    .framebuffer_scale = {framebuffer_scale.x, framebuffer_scale.y},
+    .valid = (viewport_size.x > 0.0f) && (viewport_size.y > 0.0f) && (displayed_image_size.x > 0.0f) && (displayed_image_size.y > 0.0f),
+  };
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+  cursor_x += viewport_width;
+
+  if (inspector_visible) {
+    ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::BeginChild("##inspector_splitter_region", ImVec2(splitter_size, main_height), ImGuiChildFlags_None,
+      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground);
+    ImGui::InvisibleButton("##inspector_splitter", ImGui::GetContentRegionAvail());
+    if (ImGui::IsItemActive()) {
+      _inspector_width = std::max(minimum_inspector_width, _inspector_width - ImGui::GetIO().MouseDelta.x);
+    }
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+    cursor_x += splitter_size;
+
+    ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ctx.wpadding.x, ctx.wpadding.y));
+    ImGui::BeginChild("##workspace_inspector", ImVec2(inspector_width, main_height), ImGuiChildFlags_Borders);
+    build_inspector(scene_rep, ctx, data);
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+  }
+
+  if (diagnostics_visible) {
+    const float splitter_y = content_origin.y + main_height;
+    ImGui::SetCursorScreenPos(ImVec2(content_origin.x, splitter_y));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::BeginChild("##diagnostics_splitter_region", ImVec2(content_size.x, splitter_size), ImGuiChildFlags_None,
+      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground);
+    ImGui::InvisibleButton("##diagnostics_splitter", ImGui::GetContentRegionAvail());
+    if (ImGui::IsItemActive()) {
+      _diagnostics_height = std::max(150.0f, _diagnostics_height - ImGui::GetIO().MouseDelta.y);
+    }
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+
+    ImGui::SetCursorScreenPos(ImVec2(content_origin.x, splitter_y + splitter_size));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ctx.wpadding.x, ctx.wpadding.y));
+    ImGui::BeginChild("##workspace_diagnostics", ImVec2(content_size.x, content_size.y - main_height - splitter_size), ImGuiChildFlags_Borders);
+    build_diagnostics(scene_rep, ctx, data);
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+  }
+
+  ImGui::End();
+  ImGui::PopStyleVar();
+}
+
+void UI::build_scene_explorer(SceneRepresentation& scene_rep, const BuildContext& ctx) {
+  if (ImGui::BeginTabBar("##scene_explorer_tabs")) {
+    if (ImGui::BeginTabItem("Scene")) {
+      build_scene_tree_window(scene_rep, ctx);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Resources")) {
+      build_scene_objects_window(scene_rep, ctx);
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+}
+
+void UI::build_inspector(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
+  if (ImGui::BeginTabBar("##inspector_tabs")) {
+    if (ImGui::BeginTabItem("Inspector")) {
+      build_properties_window(scene_rep, ctx, data);
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Render")) {
+      build_rendering_properties(scene_rep, ctx, data);
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+}
+
+void UI::build_diagnostics(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
+  (void)ctx;
+  if (ImGui::BeginTabBar("##diagnostics_tabs")) {
+    const ImGuiTabItemFlags activity_flags = _activity_tab_requested ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+    if (ImGui::BeginTabItem("Activity", nullptr, activity_flags)) {
+      build_activity_content();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Performance")) {
+      build_debug_info_content();
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Memory")) {
+      build_memory_diagnostics_content(scene_rep, data.film);
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+  }
+  _activity_tab_requested = false;
+}
+
+void UI::build_activity_content() {
+  const RendererPreparationStatus& status = _current_renderer_preparation;
+  ImGui::Text("Renderer resources: %s", status.phase.empty() ? "Ready" : status.phase.c_str());
+  if (status.message.empty() == false) {
+    ImGui::TextWrapped("%s", status.message.c_str());
+  }
+
+  if ((status.state == RendererPreparationState::Preparing) || (status.total_steps > 0u)) {
+    const float progress = (status.total_steps > 0u) ? (static_cast<float>(status.completed_steps) / static_cast<float>(status.total_steps)) : 0.0f;
+    const std::string progress_label = (status.total_steps > 0u) ? (std::to_string(status.completed_steps) + " / " + std::to_string(status.total_steps)) : "Starting";
+    ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f), progress_label.c_str());
+    if (status.remaining_available) {
+      ImGui::Text("Elapsed %s  |  Remaining %s", duration_string(status.elapsed_seconds).c_str(), duration_string(status.remaining_seconds).c_str());
+    } else {
+      ImGui::Text("Elapsed %s", duration_string(status.elapsed_seconds).c_str());
+    }
+  }
+
+  if (status.cancelable) {
+    if (ImGui::Button("Cancel and use CPU") && callbacks.cancel_renderer_preparation_selected) {
+      callbacks.cancel_renderer_preparation_selected();
+    }
+  }
+
+  if (status.steps.empty() == false &&
+      ImGui::BeginTable("##activity_steps", 4, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY)) {
+    ImGui::TableSetupColumn("Pipeline", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Variant", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 100.0f);
+    ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+    ImGui::TableHeadersRow();
+    for (const RendererPreparationStepStatus& step : status.steps) {
+      const char* step_state = "Queued";
+      if (step.state == RendererPreparationStepState::CompilingSpirV) {
+        step_state = "Compiling";
+      } else if (step.state == RendererPreparationStepState::QueuedForDriver) {
+        step_state = "Driver queue";
+      } else if (step.state == RendererPreparationStepState::CheckingCache) {
+        step_state = "Cache";
+      } else if (step.state == RendererPreparationStepState::DriverCompiling) {
+        step_state = "Driver";
+      } else if (step.state == RendererPreparationStepState::Complete) {
+        step_state = step.cache_hit ? "Cached" : "Complete";
+      } else if (step.state == RendererPreparationStepState::Failed) {
+        step_state = "Failed";
+      }
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(step.name.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(step.detail.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(step_state);
+      ImGui::TableNextColumn();
+      ImGui::Text("%.1f ms", step.elapsed_ms);
+    }
+    ImGui::EndTable();
+  }
+}
+
+void UI::build_debug_info_content() {
+  const bool has_integrator_debug_info =
+    (_current_integrator != nullptr) && (_current_integrator->status().debug_info_count > 0u) && (_current_integrator->status().debug_info != nullptr);
+  const bool show_gpu_kernel_timings = (_current_renderer_mode == RendererMode::GPURaytracing) && _gpu_kernel_timing_stats.enabled;
+  if ((has_integrator_debug_info == false) && (show_gpu_kernel_timings == false)) {
+    ImGui::TextDisabled("Enable GPU kernel profiling or run an integrator that exposes debug metrics.");
+    return;
+  }
+
+  if (has_integrator_debug_info) {
+    const auto debug_info = _current_integrator->status().debug_info;
+    if (ImGui::BeginTable("##integrator_debug_info", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+      ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 88.0f);
+      for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(debug_info[i].title);
+        ImGui::TableNextColumn();
+        ImGui::Text("%.3f", debug_info[i].value);
+      }
+      ImGui::EndTable();
+    }
+  }
+
+  if (show_gpu_kernel_timings) {
+    if (has_integrator_debug_info) {
+      ImGui::Separator();
+    }
+    ImGui::Text("GPU total: %.3f ms", _gpu_kernel_timing_stats.total_ms);
+    if (_gpu_kernel_timing_stats.supported == false) {
+      ImGui::TextDisabled("GPU timestamps are unavailable on the active backend.");
+      return;
+    }
+    if (_gpu_kernel_timing_stats.kernels.empty()) {
+      ImGui::TextDisabled("Run the GPU renderer to collect kernel timings.");
+      return;
+    }
+    if (ImGui::BeginTable("gpu_kernel_timings", 5,
+          ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable)) {
+      ImGui::TableSetupColumn("Kernel");
+      ImGui::TableSetupColumn("Calls");
+      ImGui::TableSetupColumn("Total ms");
+      ImGui::TableSetupColumn("Avg us");
+      ImGui::TableSetupColumn("%");
+      ImGui::TableHeadersRow();
+      for (const RendererKernelTiming& timing : _gpu_kernel_timing_stats.kernels) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted(timing.name.c_str());
+        ImGui::TableNextColumn();
+        ImGui::Text("%llu", static_cast<unsigned long long>(timing.dispatch_count));
+        ImGui::TableNextColumn();
+        ImGui::Text("%.3f", timing.total_ms);
+        ImGui::TableNextColumn();
+        ImGui::Text("%.2f", timing.average_ms * 1000.0);
+        ImGui::TableNextColumn();
+        ImGui::Text("%.1f", timing.percentage);
+      }
+      ImGui::EndTable();
+    }
+  }
+}
+
 void UI::build_renderer_preparation_modal() {
-  constexpr const char* popup_id = "Preparing GPU renderer##gpu_renderer_preparation";
-  const bool preparing = (_current_renderer_mode == RendererMode::GPURaytracing) && (_current_renderer_preparation.state == RendererPreparationState::Preparing);
+  constexpr const char* popup_id = "Preparing renderer resources##renderer_preparation";
+  const bool preparing = _current_renderer_preparation.state == RendererPreparationState::Preparing;
   const bool popup_open = ImGui::IsPopupOpen(popup_id);
   if (preparing && (popup_open == false)) {
     ImGui::OpenPopup(popup_id);
@@ -3309,7 +3776,9 @@ void UI::build_renderer_preparation_modal() {
       (status.total_steps > 0u) ? (std::to_string(status.completed_steps) + " / " + std::to_string(status.total_steps)) : std::string("Starting...");
     ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f), progress_label.c_str());
 
-    if (status.worker_count > 0u) {
+    if (status.remaining_available) {
+      ImGui::Text("Elapsed: %s | Remaining: %s", duration_string(status.elapsed_seconds).c_str(), duration_string(status.remaining_seconds).c_str());
+    } else if (status.worker_count > 0u) {
       ImGui::Text("Elapsed: %s | Workers: %u", duration_string(status.elapsed_seconds).c_str(), status.worker_count);
     } else {
       ImGui::Text("Elapsed: %s", duration_string(status.elapsed_seconds).c_str());
@@ -3373,37 +3842,18 @@ void UI::build_renderer_preparation_modal() {
       ImGui::Dummy(ImVec2(0.0f, ImGui::GetContentRegionAvail().y - 42.0f));
     }
 
-    if (status.cancelable == false) {
-      ImGui::BeginDisabled();
-    }
-    const float button_width = 180.0f;
-    ImGui::SetCursorPosX((ImGui::GetWindowWidth() - button_width) * 0.5f);
-    if (ImGui::Button("Cancel and use CPU", ImVec2(button_width, 0.0f)) && callbacks.cancel_renderer_preparation_selected) {
-      callbacks.cancel_renderer_preparation_selected();
-    }
-    if (status.cancelable == false) {
-      ImGui::EndDisabled();
+    if (status.cancelable) {
+      const float button_width = 180.0f;
+      ImGui::SetCursorPosX((ImGui::GetWindowWidth() - button_width) * 0.5f);
+      if (ImGui::Button("Cancel and use CPU", ImVec2(button_width, 0.0f)) && callbacks.cancel_renderer_preparation_selected) {
+        callbacks.cancel_renderer_preparation_selected();
+      }
     }
     ImGui::EndPopup();
   }
 }
 
-void UI::build_memory_diagnostics(SceneRepresentation& scene_rep, const Film& film) {
-  if ((_ui_setup & UIMemoryDiagnostics) == 0u) {
-    return;
-  }
-
-  ImGui::SetNextWindowSize(ImVec2(820.0f, 680.0f), ImGuiCond_FirstUseEver);
-  bool window_open = true;
-  const bool window_visible = ImGui::Begin("Memory Diagnostics", &window_open);
-  if (window_open == false) {
-    _ui_setup &= ~UIMemoryDiagnostics;
-  }
-  if (window_visible == false) {
-    ImGui::End();
-    return;
-  }
-
+void UI::build_memory_diagnostics_content(SceneRepresentation& scene_rep, const Film& film) {
   if (ImGui::CollapsingHeader("CPU memory", ImGuiTreeNodeFlags_DefaultOpen)) {
     draw_memory_summary_table("cpu_memory_summary", {
                                                       {"Process working set", _rhi_memory_stats.cpu_used_bytes},
@@ -3518,8 +3968,6 @@ void UI::build_memory_diagnostics(SceneRepresentation& scene_rep, const Film& fi
         std::min(_renderer_memory_stats.tile_index + 1u, std::max(1u, _renderer_memory_stats.tile_count)), std::max(1u, _renderer_memory_stats.tile_count));
     }
   }
-
-  ImGui::End();
 }
 
 void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx) {
@@ -3527,9 +3975,6 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
 
   ctx.with_window(UIObjects, "Scene Objects", [&]() {
     auto draw_history_button = [&](const char* label, bool enabled, int32_t step) {
-      ImGui::PushStyleColor(ImGuiCol_Button, kHistoryButtonBaseColor);
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kHistoryButtonHoverColor);
-      ImGui::PushStyleColor(ImGuiCol_ButtonActive, kHistoryButtonActiveColor);
       if (enabled == false)
         ImGui::BeginDisabled();
       if (ImGui::Button(label)) {
@@ -3537,7 +3982,6 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
       }
       if (enabled == false)
         ImGui::EndDisabled();
-      ImGui::PopStyleColor(3);
     };
 
     ImGui::AlignTextToFramePadding();
@@ -3593,15 +4037,8 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
     }
 
     ImGui::Spacing();
-    ImGui::Separator();
-
-    ImGui::PushStyleColor(ImGuiCol_Text, kSceneTextColor);
-    bool rendering_selected = (_selection.kind == SelectionKind::Rendering);
-    if (ImGui::Selectable("Rendering", rendering_selected)) {
-      set_selection(SelectionKind::Rendering, 0);
-    }
-    ImGui::PopStyleColor();
-
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextWithHint("##resource_filter", "Search resources", _resource_filter, sizeof(_resource_filter));
     ImGui::Separator();
 
     ImGui::Text("Materials (%zu)", static_cast<size_t>(_material_mapping.size()));
@@ -3613,6 +4050,10 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
         const int32_t list_index = static_cast<int32_t>(i);
         bool material_selected = (_selection.kind == SelectionKind::Material) && material_list_position_selected(list_index);
         const auto& entry = _material_mapping.entry(static_cast<int32_t>(i));
+        if (contains_case_insensitive(entry.name, _resource_filter) == false) {
+          ImGui::PopID();
+          continue;
+        }
         if (ImGui::Selectable(entry.name, material_selected)) {
           const ImGuiIO& io = ImGui::GetIO();
           if (io.KeyShift) {
@@ -3640,6 +4081,10 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
         ImGui::PushID(static_cast<int>(i + 1024));
         bool medium_selected = (_selection.kind == SelectionKind::Medium) && (_selection.index == static_cast<int32_t>(i));
         const auto& entry = _medium_mapping.entry(static_cast<int32_t>(i));
+        if (contains_case_insensitive(entry.name, _resource_filter) == false) {
+          ImGui::PopID();
+          continue;
+        }
         if (ImGui::Selectable(entry.name, medium_selected)) {
           set_selection(SelectionKind::Medium, static_cast<int32_t>(i));
         }
@@ -3693,8 +4138,12 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
             label = format_string("%u", emitter_index);
             break;
         }
-        ImGui::PushID(static_cast<int>(emitter_index + 2048));
+        ImGui::PushID(static_cast<int>(emitter_index + 4096));
         bool emitter_selected = (_selection.kind == SelectionKind::Emitter) && (_selection.index == static_cast<int32_t>(emitter_index));
+        if (contains_case_insensitive(label, _resource_filter) == false) {
+          ImGui::PopID();
+          continue;
+        }
         if (ImGui::Selectable(label, emitter_selected)) {
           set_selection(SelectionKind::Emitter, static_cast<int32_t>(emitter_index));
         }
@@ -3706,16 +4155,15 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
 }
 
 void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildContext& ctx) {
-  ctx.with_window(UISceneTree, "Scene Tree", [&]() {
+  ctx.with_window(UIObjects, "Scene Tree", [&]() {
     SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
     if (hierarchy.nodes.empty() || hierarchy.evaluation_order.empty()) {
       ImGui::TextDisabled("No scene nodes");
       return;
     }
 
-    const float tree_height = 14.0f * ImGui::GetTextLineHeightWithSpacing();
     ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 0.75f * ImGui::GetFontSize());
-    if (ImGui::BeginChild("##scene_tree", ImVec2(-FLT_MIN, tree_height), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+    if (ImGui::BeginChild("##scene_tree", ImVec2(-FLT_MIN, -FLT_MIN), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
       const ImGuiTreeNodeFlags scene_flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
       const bool scene_open = ImGui::TreeNodeEx("##scene_root", scene_flags, "Scene (%zu)", hierarchy.nodes.size());
       if (scene_open) {
@@ -3825,16 +4273,6 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
   });
 }
 
-void UI::build_node_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
-  ctx.with_window(UINodeProperties, "Node Properties", [&]() {
-    if (_selection.kind != SelectionKind::Node) {
-      ImGui::TextDisabled("Select a node in Scene Tree");
-      return;
-    }
-    build_node_selection_properties(scene_rep, ctx, data);
-  });
-}
-
 void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   if ((_ui_setup & UIProperties) == 0)
     return;
@@ -3900,9 +4338,10 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
 
   std::string properties_window_name = properties_title + "###properties";
   ctx.with_window(UIProperties, properties_window_name.c_str(), [&]() {
+    ImGui::SeparatorText(properties_title.c_str());
     switch (_selection.kind) {
       case SelectionKind::Node: {
-        ImGui::TextDisabled("See Node Properties");
+        build_node_selection_properties(scene_rep, ctx, data);
         break;
       }
       case SelectionKind::Material: {
@@ -3914,7 +4353,7 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
         break;
       }
       case SelectionKind::Mesh: {
-        build_mesh_selection_properties(scene_rep, ctx);
+        build_mesh_selection_properties(scene_rep, ctx, data);
         break;
       }
       case SelectionKind::Emitter: {
@@ -3922,11 +4361,11 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
         break;
       }
       case SelectionKind::Rendering: {
-        build_rendering_properties(scene_rep, ctx, data);
+        ImGui::TextDisabled("Rendering controls are available in the Render tab.");
         break;
       }
       default:
-        ImGui::Text("No Object Selected");
+        ImGui::TextDisabled("Select a scene node or resource to inspect it.");
         break;
     }
   });
@@ -4005,6 +4444,9 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
       hierarchy.node_names.resize(hierarchy.nodes.size());
     }
     hierarchy.node_names[node_index] = _name_edit_buffer;
+    if (callbacks.scene_modified) {
+      callbacks.scene_modified();
+    }
   }
 
   bool enabled = (node.flags & SceneNode::Enabled) != 0u;
@@ -4243,7 +4685,7 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
     ImGui::SeparatorText(type_name);
     switch (attachment.type) {
       case SceneAttachment::Type::Mesh:
-        build_mesh_resource_properties(scene_rep, attachment.resource_index, false);
+        build_mesh_resource_properties(scene_rep, attachment.resource_index, false, data);
         break;
       case SceneAttachment::Type::Camera:
         if (attachment.resource_index < scene_rep.data().cameras.size()) {
@@ -4336,15 +4778,18 @@ void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& 
     }
   }
 
-  const ImGuiIO& io = ImGui::GetIO();
-  const float framebuffer_scale_x = io.DisplayFramebufferScale.x > 0.0f ? io.DisplayFramebufferScale.x : 1.0f;
-  const float framebuffer_scale_y = io.DisplayFramebufferScale.y > 0.0f ? io.DisplayFramebufferScale.y : 1.0f;
-  const ImVec2 rect_size(static_cast<float>(output_size.x) / framebuffer_scale_x, static_cast<float>(output_size.y) / framebuffer_scale_y);
-  const ImVec2 rect_position(0.5f * (io.DisplaySize.x - rect_size.x), 0.5f * (io.DisplaySize.y - rect_size.y));
+  if (_viewport_geometry.valid == false) {
+    finish_interaction();
+    return;
+  }
+  const ImVec2 rect_position(_viewport_geometry.logical_position.x, _viewport_geometry.logical_position.y);
+  const ImVec2 rect_size(_viewport_geometry.logical_size.x, _viewport_geometry.logical_size.y);
 
   const uint2 projection_size = ((camera.film_size.x > 0u) && (camera.film_size.y > 0u)) ? camera.film_size : output_size;
   float4x4 view = look_at(camera.position, camera_target(camera), camera.up);
   float4x4 projection = perspective(get_camera_fov(camera) * kPi / 180.0f, projection_size.x, projection_size.y, camera.clip_near, camera.clip_far);
+  projection.col[0].x *= _viewport_geometry.image_size.x / std::max(1.0f, _viewport_geometry.logical_size.x);
+  projection.col[1].y *= _viewport_geometry.image_size.y / std::max(1.0f, _viewport_geometry.logical_size.y);
   // The resolved node translation is its pivot. Attachments must not shift the
   // gizmo to a mesh bounding-box center or another resource-specific origin.
   float4x4 world_matrix = matrix_from_affine(hierarchy.world_transforms[node_index]);
@@ -4902,11 +5347,27 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kDeleteButtonHoverColor);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDeleteButtonActiveColor);
     if (ImGui::Button("Delete Emitter", ImVec2(-1.0f, 0.0f))) {
-      if ((callbacks.emitter_deleted) && callbacks.emitter_deleted(emitter_index)) {
-        set_selection(SelectionKind::Rendering, 0, false);
-      }
+      ImGui::OpenPopup("Delete emitter?##confirm_delete_emitter");
     }
     ImGui::PopStyleColor(3);
+    if (ImGui::BeginPopupModal("Delete emitter?##confirm_delete_emitter", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::TextWrapped("Delete emitter %u? Scene objects that reference it may be affected.", emitter_index);
+      if (ImGui::Button("Cancel")) {
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      ImGui::PushStyleColor(ImGuiCol_Button, kDeleteButtonColor);
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kDeleteButtonHoverColor);
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDeleteButtonActiveColor);
+      if (ImGui::Button("Delete")) {
+        if ((callbacks.emitter_deleted) && callbacks.emitter_deleted(emitter_index)) {
+          set_selection(SelectionKind::None, -1, false);
+        }
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::PopStyleColor(3);
+      ImGui::EndPopup();
+    }
   }
   if (material_changed && callbacks.material_changed && (material_index < scene_rep.data().materials.size())) {
     callbacks.material_changed(material_index);
@@ -4916,7 +5377,7 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
   }
 }
 
-void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx) {
+void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   if (_mesh_mapping.empty()) {
     ImGui::Text("No meshes available");
     return;
@@ -4938,10 +5399,10 @@ void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const B
     _pending_selection = {SelectionKind::Mesh, mesh_index, true};
   }
 
-  build_mesh_resource_properties(scene_rep, mesh_index, true);
+  build_mesh_resource_properties(scene_rep, mesh_index, true, data);
 }
 
-void UI::build_mesh_resource_properties(SceneRepresentation& scene_rep, uint32_t mesh_index, bool show_links) {
+void UI::build_mesh_resource_properties(SceneRepresentation& scene_rep, uint32_t mesh_index, bool show_links, const FrameData& data) {
   if (mesh_index >= scene_rep.data().meshes.size()) {
     ImGui::TextColored(kErrorTextColor, "Invalid mesh");
     return;
@@ -4978,10 +5439,35 @@ void UI::build_mesh_resource_properties(SceneRepresentation& scene_rep, uint32_t
     if (callbacks.mesh_material_changed) {
       callbacks.mesh_material_changed(mesh_index, new_material_index);
     }
+    current_material = new_material_index;
   }
 
   if (show_links == false) {
+    const auto mesh_position = _mesh_mapping.reverse.find(mesh_index);
+    const bool mesh_resource_available = mesh_position != _mesh_mapping.reverse.end();
+    if (mesh_resource_available == false) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Open Mesh Resource", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)) && mesh_resource_available) {
+      set_selection(SelectionKind::Mesh, static_cast<int32_t>(mesh_position->second));
+    }
+    if (mesh_resource_available == false) {
+      ImGui::EndDisabled();
+    }
     return;
+  }
+
+  ImGui::Spacing();
+  ImGui::SeparatorText("Material Editor");
+  if (current_material < scene_rep.data().materials.size()) {
+    ImGui::PushID("mesh_material_editor");
+    Material& material = scene_rep.data().materials[current_material];
+    if (build_material(scene_rep, material, data) && callbacks.material_changed) {
+      callbacks.material_changed(current_material);
+    }
+    ImGui::PopID();
+  } else {
+    ImGui::TextDisabled("No material assigned");
   }
 
   ImGui::Spacing();
@@ -5212,8 +5698,6 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
 
   const bool spectral_changed = ImGui::Checkbox("Spectral rendering", scene_rep.data().options.properties + Scene::Properties::Spectral);
   scene_settings_changed = (scene_settings_changed || spectral_changed);
-  const bool blue_noise_changed = ImGui::Checkbox("Blue Noise", scene_rep.data().options.properties + Scene::Properties::BlueNoise);
-  scene_settings_changed = (scene_settings_changed || blue_noise_changed);
 
   ImGui::Separator();
   const bool noise_threshold_changed = labeled_control("Noise Threshold", [&]() {
@@ -5242,57 +5726,6 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
   if (ctx.has_integrator == false) {
     ImGui::Text("No integrator available");
     return;
-  }
-
-  ImGui::TextUnformatted("Integrator Type");
-  full_width_item();
-
-  const bool gpu_renderer_mode = _current_renderer_mode == RendererMode::GPURaytracing;
-  const auto gpu_integrator_supported = [](Integrator::Type type) {
-    return (type == Integrator::Type::PathTracing) || (type == Integrator::Type::Bidirectional) || (type == Integrator::Type::VCM);
-  };
-  const auto gpu_integrator_name = [](Integrator* integrator) {
-    switch (integrator->type()) {
-      case Integrator::Type::PathTracing:
-        return "Path Tracing";
-      case Integrator::Type::Bidirectional:
-        return "Bidirectional";
-      case Integrator::Type::VCM:
-        return "VCM";
-      default:
-        return integrator->name();
-    }
-  };
-  const char* current_integrator_name = gpu_renderer_mode ? gpu_integrator_name(_current_integrator) : _current_integrator->name();
-
-  if (ImGui::BeginCombo("##integrator_type", current_integrator_name)) {
-    for (uint64_t i = 0; i < _integrators.count; ++i) {
-      const bool is_selected = (_integrators[i] == _current_integrator);
-      const bool supported_by_gpu = gpu_integrator_supported(_integrators[i]->type());
-      const bool selectable_enabled = (gpu_renderer_mode == false) || supported_by_gpu;
-      const char* integrator_name = (gpu_renderer_mode && supported_by_gpu) ? gpu_integrator_name(_integrators[i]) : _integrators[i]->name();
-      if (selectable_enabled == false) {
-        ImGui::BeginDisabled();
-      }
-      if (ImGui::Selectable(integrator_name, is_selected) && selectable_enabled) {
-        if (callbacks.integrator_selected) {
-          callbacks.integrator_selected(_integrators[i]->type());
-          set_current_integrator(_integrators[i]);
-        }
-      }
-      if (selectable_enabled == false) {
-        ImGui::EndDisabled();
-      }
-      if (is_selected) {
-        ImGui::SetItemDefaultFocus();
-      }
-    }
-    ImGui::EndCombo();
-  }
-
-  if (gpu_renderer_mode && (gpu_integrator_supported(_current_integrator->type()) == false)) {
-    ImGui::TextColored(kErrorTextColor, "Unavailable on GPU");
-    draw_item_tooltip("The selected integrator is not supported by GPU raytracing.", ImGuiHoveredFlags_DelayNormal);
   }
 
   bool options_changed = false;
@@ -5368,20 +5801,9 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
 }
 
 void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
-  ImGui::TextUnformatted("Renderer");
+  ImGui::TextUnformatted("Integrator");
   full_width_item();
-  const char* renderer_modes[] = {"CPU", "Raster", _gpu_renderer_available ? "GPU" : "GPU (Unavailable)"};
-  int current_mode = static_cast<int>(_current_renderer_mode);
-  if (ImGui::Combo("##renderer_mode", &current_mode, renderer_modes, IM_ARRAYSIZE(renderer_modes))) {
-    RendererMode selected_mode = static_cast<RendererMode>(current_mode);
-    if ((selected_mode == RendererMode::GPURaytracing) && (_gpu_renderer_available == false)) {
-      selected_mode = RendererMode::CPURaytracing;
-    }
-    _current_renderer_mode = selected_mode;
-    if (callbacks.renderer_selected) {
-      callbacks.renderer_selected(_current_renderer_mode);
-    }
-  }
+  build_render_configuration_selector("##render_configuration");
 
   if (_current_renderer_mode == RendererMode::GPURaytracing) {
     ImGui::Text("Wavefront: %u step%s", _gpu_wavefront_steps_per_frame, (_gpu_wavefront_steps_per_frame == 1u) ? "" : "s");

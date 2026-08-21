@@ -140,6 +140,7 @@ struct RenderContextImpl {
   RHIPipeline presentation_pipeline = {};
   Renderer* active_renderer = nullptr;
   RenderContext::FrameData frame_data = {};
+  RenderContext::PresentationViewport presentation_viewport = {};
 
   RHITexture reference_texture = {};
   std::vector<Image> images;
@@ -489,6 +490,10 @@ void RenderContext::start_frame(Renderer* renderer, SceneRepresentation& scene, 
   _private->frame_data = frame_data;
 }
 
+void RenderContext::set_presentation_viewport(const PresentationViewport& viewport) {
+  _private->presentation_viewport = viewport;
+}
+
 void RenderContext::end_frame() {
   ETX_PROFILER_SCOPE();
 
@@ -517,15 +522,56 @@ void RenderContext::end_frame() {
 
   if (output.valid()) {
     ETX_PROFILER_NAMED_SCOPE("render_context_draw_present_quad");
-    const RHIViewport viewport = {.width = float(output_target.width), .height = float(output_target.height)};
-    const RHIRect scissor = {.width = output_target.width, .height = output_target.height};
+    PresentationViewport presentation_viewport = _private->presentation_viewport;
+    if (presentation_viewport.valid == false) {
+      presentation_viewport = {
+        .width = output_target.width,
+        .height = output_target.height,
+        .valid = true,
+      };
+    }
+
+    int32_t clamped_x = std::clamp(presentation_viewport.x, 0, static_cast<int32_t>(output_target.width));
+    int32_t clamped_y = std::clamp(presentation_viewport.y, 0, static_cast<int32_t>(output_target.height));
+    uint32_t viewport_width = std::min(presentation_viewport.width, output_target.width - static_cast<uint32_t>(clamped_x));
+    uint32_t viewport_height = std::min(presentation_viewport.height, output_target.height - static_cast<uint32_t>(clamped_y));
+    if ((viewport_width == 0u) || (viewport_height == 0u)) {
+      clamped_x = 0;
+      clamped_y = 0;
+      viewport_width = output_target.width;
+      viewport_height = output_target.height;
+    }
+    const RHIViewport viewport = {
+      .x = static_cast<float>(clamped_x),
+      .y = static_cast<float>(clamped_y),
+      .width = static_cast<float>(viewport_width),
+      .height = static_cast<float>(viewport_height),
+    };
+    const RHIRect scissor = {
+      .x = clamped_x,
+      .y = clamped_y,
+      .width = viewport_width,
+      .height = viewport_height,
+    };
     _private->rhi_context.cmd_set_viewport(_private->rhi_cmd, viewport);
     _private->rhi_context.cmd_set_scissor(_private->rhi_cmd, scissor);
 
-    uint2 output_size = _private->active_renderer->output_size();
+    uint2 display_size = {presentation_viewport.display_width, presentation_viewport.display_height};
+    if ((display_size.x == 0u) || (display_size.y == 0u)) {
+      const uint2 output_size = _private->active_renderer->output_size();
+      const float output_aspect = static_cast<float>(output_size.x) / static_cast<float>(std::max(1u, output_size.y));
+      const float viewport_aspect = static_cast<float>(viewport_width) / static_cast<float>(std::max(1u, viewport_height));
+      display_size = {viewport_width, viewport_height};
+      if (output_aspect > viewport_aspect) {
+        display_size.y = std::max(1u, static_cast<uint32_t>(static_cast<float>(viewport_width) / output_aspect));
+      } else {
+        display_size.x = std::max(1u, static_cast<uint32_t>(static_cast<float>(viewport_height) * output_aspect));
+      }
+    }
     RenderParameters params = {
       .view = _private->frame_data.view_parameters,
-      .dimensions = {float(output_target.width), float(output_target.height), float(output_size.x), float(output_size.y)},
+      .dimensions = {static_cast<float>(viewport_width), static_cast<float>(viewport_height), static_cast<float>(display_size.x), static_cast<float>(display_size.y)},
+      .viewport = {static_cast<float>(clamped_x), static_cast<float>(clamped_y), static_cast<float>(viewport_width), static_cast<float>(viewport_height)},
       .sample_count = _private->frame_data.sample_count,
       .sample_image_index = get_bindless_descriptor_index(output),
       .reference_image_index = _private->reference_texture.valid() ? get_bindless_descriptor_index(_private->reference_texture) : ~0u,

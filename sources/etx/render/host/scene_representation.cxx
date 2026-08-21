@@ -48,8 +48,8 @@ bool valid_direction(const float3& value) {
   return finite_point(value) && std::isfinite(length_squared) && (length_squared > 0.0f);
 }
 
-NodeGeometryEditResult analyze_node_geometry_edit(
-  const SceneData& data, uint32_t node_index, NodeGeometryOperation operation, bool validate_contents, NodeGeometryEditAnalysis* out_analysis) {
+NodeGeometryEditResult analyze_node_geometry_edit(const SceneData& data, uint32_t node_index, NodeGeometryOperation operation, bool validate_contents,
+  NodeGeometryEditAnalysis* out_analysis) {
   if (node_index >= data.hierarchy.nodes.size()) {
     return NodeGeometryEditResult::InvalidNode;
   }
@@ -207,9 +207,8 @@ struct PendingNodeGeometry {
   std::unordered_map<uint32_t, uint32_t> source_to_clone;
 };
 
-NodeGeometryEditResult build_edited_meshes(
-  const SceneData& data, const NodeGeometryEditAnalysis& analysis, NodeGeometryOperation operation, const AffineTransform& geometry_transform, const float3& center,
-  PendingNodeGeometry& pending) {
+NodeGeometryEditResult build_edited_meshes(const SceneData& data, const NodeGeometryEditAnalysis& analysis, NodeGeometryOperation operation,
+  const AffineTransform& geometry_transform, const float3& center, PendingNodeGeometry& pending) {
   const bool has_normals = data.vertices.nrm.empty() == false;
   const bool has_tangents = data.vertices.tan.empty() == false;
   const bool has_texcoords = data.vertices.tex.empty() == false;
@@ -474,6 +473,9 @@ struct SceneRepresentationImpl {
   RHIContext* rhi = nullptr;
   scattering::GpuContext scattering_gpu = {};
   bool scattering_gpu_ready = false;
+  EnergyCompensationGenerationContext energy_compensation_generation = {};
+  EnergyCompensationPreparationState energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
+  std::chrono::steady_clock::time_point energy_compensation_preparation_started_at = {};
   // Material-derived media overwrite the render-facing local bounds, so retain the authored volume bounds separately for later node attachment.
   std::vector<BoundingBox> medium_authored_bounds;
   std::vector<BoundingBox> medium_bounds_scratch;
@@ -550,6 +552,11 @@ struct SceneRepresentationImpl {
   }
 
   void cleanup() {
+    if ((rhi != nullptr) && (energy_compensation_generation.pipeline.valid() || (energy_compensation_generation.pending_step != nullptr))) {
+      cleanup_energy_compensation_generation(*rhi, energy_compensation_generation);
+    }
+    energy_compensation_generation = {};
+    energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
     data.clear(scheduler);
     medium_authored_bounds.clear();
     medium_bounds_scratch.clear();
@@ -903,6 +910,11 @@ struct SceneRepresentationImpl {
   void add_atmosphere_emitter(const AtmosphereEmitterParameters& params);
   void rebuild_atmosphere_emitter(uint32_t emitter_index);
   void set_scattering_rhi(RHIContext& rhi_context);
+  bool ensure_energy_compensation_interfaces();
+  bool begin_energy_compensation_interface_preparation();
+  void cancel_energy_compensation_interface_preparation();
+  EnergyCompensationPreparationState poll_energy_compensation_interface_preparation();
+  EnergyCompensationPreparationStatus energy_compensation_interface_preparation_status() const;
   bool ensure_scattering_gpu_context();
   void generate_pixel_sampler_image();
 
@@ -1142,8 +1154,8 @@ bool camera_pose_transform(const Camera& camera, AffineTransform& result) {
   const float3 up_hint = camera.up;
   const float3 side = cross(direction, up_hint);
   const float fov = get_camera_fov(camera);
-  if ((value_is_correct(camera.position) == false) || (is_valid_vector(direction) == false) || (is_valid_vector(up_hint) == false) ||
-      (is_valid_vector(side) == false) || (camera.film_size.x == 0u) || (camera.film_size.y == 0u) || (std::isfinite(fov) == false) || (fov <= 0.0f)) {
+  if ((value_is_correct(camera.position) == false) || (is_valid_vector(direction) == false) || (is_valid_vector(up_hint) == false) || (is_valid_vector(side) == false) ||
+      (camera.film_size.x == 0u) || (camera.film_size.y == 0u) || (std::isfinite(fov) == false) || (fov <= 0.0f)) {
     return false;
   }
 
@@ -1469,7 +1481,7 @@ NodeGeometryEditResult SceneRepresentation::edit_node_geometry(uint32_t node_ind
     child_indices.push_back(candidate_index);
     original_child_transforms.push_back(candidate.local_transform);
     edited_child_transforms.push_back(operation == NodeGeometryOperation::BakeLocalTransform ? multiply_affine(original_node_transform, candidate.local_transform)
-                                                                                              : multiply_affine(child_compensation, candidate.local_transform));
+                                                                                             : multiply_affine(child_compensation, candidate.local_transform));
   }
 
   const size_t original_position_count = scene_data.vertices.pos.size();
@@ -1601,11 +1613,39 @@ void SceneRepresentation::set_scattering_rhi(RHIContext& rhi) {
   _private->set_scattering_rhi(rhi);
 }
 
+bool SceneRepresentation::ensure_energy_compensation_interfaces() {
+  return _private->ensure_energy_compensation_interfaces();
+}
+
+bool SceneRepresentation::begin_energy_compensation_interface_preparation() {
+  return _private->begin_energy_compensation_interface_preparation();
+}
+
+void SceneRepresentation::cancel_energy_compensation_interface_preparation() {
+  _private->cancel_energy_compensation_interface_preparation();
+}
+
+EnergyCompensationPreparationState SceneRepresentation::poll_energy_compensation_interface_preparation() {
+  return _private->poll_energy_compensation_interface_preparation();
+}
+
+EnergyCompensationPreparationStatus SceneRepresentation::energy_compensation_interface_preparation_status() const {
+  return _private->energy_compensation_interface_preparation_status();
+}
+
 void SceneRepresentationImpl::set_scattering_rhi(RHIContext& rhi_context) {
   if ((rhi == &rhi_context) && scattering_gpu_ready) {
     return;
   }
 
+  if ((rhi != nullptr) && ((energy_compensation_preparation_state == EnergyCompensationPreparationState::Preparing) || energy_compensation_generation.pipeline.valid())) {
+    if (energy_compensation_generation.pipeline.valid()) {
+      cleanup_energy_compensation_generation(*rhi, energy_compensation_generation);
+    } else {
+      energy_compensation_generation = {};
+    }
+    energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
+  }
   if ((rhi != nullptr) && scattering_gpu.initialized) {
     scattering::gpu_cleanup(*rhi, scattering_gpu);
   }
@@ -1613,6 +1653,76 @@ void SceneRepresentationImpl::set_scattering_rhi(RHIContext& rhi_context) {
   rhi = &rhi_context;
   scattering_gpu = {};
   scattering_gpu_ready = false;
+}
+
+bool SceneRepresentationImpl::ensure_energy_compensation_interfaces() {
+  if ((rhi != nullptr) && rhi->valid()) {
+    return etx::ensure_energy_compensation_interfaces(data, scheduler, *rhi);
+  }
+  return etx::ensure_energy_compensation_interfaces(data, scheduler);
+}
+
+bool SceneRepresentationImpl::begin_energy_compensation_interface_preparation() {
+  if ((rhi == nullptr) || (rhi->valid() == false)) {
+    energy_compensation_preparation_state = EnergyCompensationPreparationState::Failed;
+    return false;
+  }
+
+  if (energy_compensation_generation.pipeline.valid()) {
+    cleanup_energy_compensation_generation(*rhi, energy_compensation_generation);
+  }
+  energy_compensation_generation = {};
+  energy_compensation_preparation_started_at = std::chrono::steady_clock::now();
+  energy_compensation_preparation_state = EnergyCompensationPreparationState::Preparing;
+  return true;
+}
+
+void SceneRepresentationImpl::cancel_energy_compensation_interface_preparation() {
+  if (rhi != nullptr) {
+    cleanup_energy_compensation_generation(*rhi, energy_compensation_generation);
+  } else {
+    energy_compensation_generation = {};
+  }
+  energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
+}
+
+EnergyCompensationPreparationState SceneRepresentationImpl::poll_energy_compensation_interface_preparation() {
+  if (energy_compensation_preparation_state != EnergyCompensationPreparationState::Preparing) {
+    return energy_compensation_preparation_state;
+  }
+
+  const EnergyCompensationGenerationResult result = generate_energy_compensation_interfaces_step(data, scheduler, *rhi, energy_compensation_generation);
+  if (result == EnergyCompensationGenerationResult::Pending) {
+    return energy_compensation_preparation_state;
+  }
+
+  if (result == EnergyCompensationGenerationResult::Complete) {
+    energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
+    return energy_compensation_preparation_state;
+  }
+
+  cleanup_energy_compensation_generation(*rhi, energy_compensation_generation);
+  energy_compensation_preparation_state = EnergyCompensationPreparationState::Failed;
+  return energy_compensation_preparation_state;
+}
+
+EnergyCompensationPreparationStatus SceneRepresentationImpl::energy_compensation_interface_preparation_status() const {
+  EnergyCompensationPreparationStatus result = {
+    .state = energy_compensation_preparation_state,
+    .completed_steps = energy_compensation_generation.completed_steps,
+    .total_steps = energy_compensation_generation.total_steps,
+  };
+  if (energy_compensation_preparation_state != EnergyCompensationPreparationState::Preparing) {
+    return result;
+  }
+
+  result.elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - energy_compensation_preparation_started_at).count();
+  if (result.completed_steps > 0u) {
+    const double seconds_per_step = result.elapsed_seconds / static_cast<double>(result.completed_steps);
+    result.remaining_seconds = seconds_per_step * static_cast<double>(result.total_steps - result.completed_steps);
+    result.remaining_available = true;
+  }
+  return result;
 }
 
 bool SceneRepresentationImpl::ensure_scattering_gpu_context() {
@@ -2027,7 +2137,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
       } else if (json_get_bool(i, "multiple_importance_sampling", bool_value)) {
         _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = bool_value;
       } else if (json_get_bool(i, "blue_noise", bool_value)) {
-        _private->data.options.properties[Scene::Properties::BlueNoise] = bool_value;
+        (void)bool_value;
       } else if ((key == "scene_hierarchy") && obj.is_object()) {
         hierarchy_json = obj;
       } else if (json_get_string(i, "light_sampling", str_value)) {
@@ -2063,7 +2173,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
           } else if (strat_key == "multiple_importance_sampling") {
             _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = strat_value;
           } else if (strat_key == "blue_noise") {
-            _private->data.options.properties[Scene::Properties::BlueNoise] = strat_value;
+            (void)strat_value;
           }
         }
         _private->data.options.strategy_flags = strategy_flags;
@@ -2316,8 +2426,7 @@ bool SceneRepresentationImpl::update_medium_bounds() {
         continue;
       }
       const Material& material = data.materials[triangle.material_index];
-      if (((material.int_medium == kInvalidIndex) || (material.int_medium >= medium_count)) &&
-          ((material.ext_medium == kInvalidIndex) || (material.ext_medium >= medium_count))) {
+      if (((material.int_medium == kInvalidIndex) || (material.int_medium >= medium_count)) && ((material.ext_medium == kInvalidIndex) || (material.ext_medium >= medium_count))) {
         continue;
       }
       const float3 v0 = transform_point(instance.object_to_world, data.vertices.pos[triangle.i[0]]);
@@ -2488,7 +2597,6 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   }
   js["spectral"] = impl->data.options.properties[Scene::Properties::Spectral];
   js["multiple_importance_sampling"] = impl->data.options.properties[Scene::Properties::MultipleImportanceSampling];
-  js["blue_noise"] = impl->data.options.properties[Scene::Properties::BlueNoise];
   js["scene_hierarchy"] = serialize_scene_hierarchy(impl->data.hierarchy);
 
   switch (impl->data.options.light_sampling) {
@@ -3087,6 +3195,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   }
   data.options.min_path_length = std::min(data.options.min_path_length, data.options.max_path_length);
   data.options.properties[Scene::Properties::Spectral] = spectral_scene;
+  data.options.properties[Scene::Properties::BlueNoise] = true;
 
   if (options & SceneRepresentation::SetupCamera) {
     if (data.cameras.empty()) {
@@ -3128,8 +3237,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
 
   generate_pixel_sampler_image();
 
-  const bool energy_compensation_ready = (rhi != nullptr) ? ensure_energy_compensation_interfaces(data, scheduler, *rhi) : ensure_energy_compensation_interfaces(data, scheduler);
-  if (energy_compensation_ready == false) {
+  if (ensure_energy_compensation_interfaces() == false) {
     return false;
   }
 

@@ -63,7 +63,8 @@ float4 fragment_main(in VSOutput input)
   : SV_Target0 {
   float2 offset = 0.5f * (options.dimensions.xy - options.dimensions.zw);
 
-  int2 coord = int2(floor(input.pos.xy - offset));
+  const float2 viewport_position = input.pos.xy - options.viewport.xy;
+  int2 coord = int2(floor(viewport_position - offset));
   int2 clamped = clamp(coord.xy, int2(0, 0), int2(options.dimensions.zw) - 1);
   clip(any(clamped != coord.xy) ? -1 : 1);
 

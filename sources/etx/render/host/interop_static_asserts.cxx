@@ -71,9 +71,10 @@ static_assert(offsetof(Ray, d) == 16, "Ray::d offset changed");
 static_assert(std::is_standard_layout_v<ViewParameters>, "ViewParameters must stay standard layout for C++/HLSL interop");
 static_assert(std::is_standard_layout_v<RenderParameters>, "RenderParameters must stay standard layout for C++/HLSL interop");
 static_assert(sizeof(ViewParameters) == 16, "ViewParameters size changed; update shared ABI or padding");
-static_assert(sizeof(RenderParameters) == 48, "RenderParameters size changed; update shared ABI or padding");
+static_assert(sizeof(RenderParameters) == 64, "RenderParameters size changed; update shared ABI or padding");
 static_assert(offsetof(RenderParameters, dimensions) == 16, "RenderParameters::dimensions offset changed");
-static_assert(offsetof(RenderParameters, sample_count) == 32, "RenderParameters::sample_count offset changed");
+static_assert(offsetof(RenderParameters, viewport) == 32, "RenderParameters::viewport offset changed");
+static_assert(offsetof(RenderParameters, sample_count) == 48, "RenderParameters::sample_count offset changed");
 static_assert(sizeof(ShaderConstants) == 32, "ShaderConstants size changed; update shared ABI or padding");
 
 static_assert(std::is_standard_layout_v<GPURTConstants>, "GPURTConstants must stay standard layout for C++/HLSL interop");

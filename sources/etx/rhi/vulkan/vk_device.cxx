@@ -1197,7 +1197,7 @@ RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuff
 
   RHIResult alloc_result = allocate_memory(mem_requirements, mem_props, mem_flags, out_memory);
   if (alloc_result != RHIResult::Success) {
-    log::error("Failed to allocate memory for buffer");
+    log::error("Failed to allocate %llu bytes of Vulkan memory for buffer", static_cast<unsigned long long>(mem_requirements.size));
     vkDestroyBuffer(device, out_buffer, nullptr);
     out_buffer = VK_NULL_HANDLE;
     return RHIResult::OutOfMemory;

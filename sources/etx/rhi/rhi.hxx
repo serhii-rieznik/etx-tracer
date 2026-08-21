@@ -224,6 +224,7 @@ struct RHIContext {
   void present();
   RHIResult wait_idle();
   RHIResult wait_for_command_buffer(RHICommandBuffer cmd);
+  RHIResult query_command_buffer(RHICommandBuffer cmd);
 
   RHISemaphore get_image_acquired_semaphore();
   RHISemaphore get_render_complete_semaphore();
@@ -234,6 +235,7 @@ struct RHIContext {
   RHICapabilities capabilities() const;
 
   RHICommandBuffer get_command_buffer();
+  RHICommandBuffer get_async_command_buffer();
   void destroy_command_buffer(RHICommandBuffer cmd);
   void submit_command_buffer(const RHISubmitInfo& info);
   void submit_frame_command_buffer(RHICommandBuffer cmd);

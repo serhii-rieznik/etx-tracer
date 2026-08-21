@@ -511,6 +511,12 @@ RHIResult RHIContext::wait_for_command_buffer(RHICommandBuffer cmd) {
   });
 }
 
+RHIResult RHIContext::query_command_buffer(RHICommandBuffer cmd) {
+  return dispatch_context(_backend, _impl, [&](auto* context) {
+    return context->query_command_buffer(cmd);
+  });
+}
+
 RHISemaphore RHIContext::get_image_acquired_semaphore() {
   return dispatch_context(_backend, _impl, [](auto* context) {
     return context->get_image_acquired_semaphore();
@@ -544,6 +550,12 @@ RHICapabilities RHIContext::capabilities() const {
 RHICommandBuffer RHIContext::get_command_buffer() {
   return dispatch_context(_backend, _impl, [](auto* context) {
     return context->get_command_buffer();
+  });
+}
+
+RHICommandBuffer RHIContext::get_async_command_buffer() {
+  return dispatch_context(_backend, _impl, [](auto* context) {
+    return context->get_async_command_buffer();
   });
 }
 

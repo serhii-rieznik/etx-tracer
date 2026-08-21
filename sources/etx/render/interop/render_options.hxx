@@ -49,6 +49,7 @@ struct ETX_ALIGNED ViewParameters {
 struct ETX_ALIGNED RenderParameters {
   ViewParameters view;
   float4 dimensions;
+  float4 viewport;
   uint32_t sample_count;
   uint32_t sample_image_index;
   uint32_t reference_image_index;

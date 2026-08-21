@@ -682,8 +682,10 @@ class MTCommandBuffer::Impl {
 };
 
 struct MTInflightSubmission {
+  RHICommandBuffer handle = {};
   id<MTLCommandBuffer> command_buffer = nil;
   id<CAMetalDrawable> drawable = nil;
+  bool completion_polled = false;
 };
 
 class MTContext::Impl {
@@ -712,6 +714,7 @@ class MTContext::Impl {
   std::array<uint32_t, static_cast<size_t>(RHISamplerType::Count)> predefined_sampler_indices = {kRHIBindlessDescriptorIndexMask, kRHIBindlessDescriptorIndexMask, kRHIBindlessDescriptorIndexMask, kRHIBindlessDescriptorIndexMask,
     kRHIBindlessDescriptorIndexMask};
   std::vector<MTInflightSubmission> inflight_command_buffers = {};
+  std::unordered_map<RHICommandBuffer, RHIResult> polled_completion_results = {};
   uint32_t width = 0;
   uint32_t height = 0;
   uint32_t current_frame = 0;
@@ -853,7 +856,7 @@ static void reap_completed_command_buffers(std::vector<MTInflightSubmission>& in
     }
 
     const MTLCommandBufferStatus status = command_buffer.status;
-    if ((status == MTLCommandBufferStatusCompleted) || (status == MTLCommandBufferStatusError)) {
+    if (((status == MTLCommandBufferStatusCompleted) || (status == MTLCommandBufferStatusError)) && (submission.completion_polled == false)) {
       [command_buffer release];
       if (submission.drawable != nil) {
         [submission.drawable release];
@@ -866,7 +869,7 @@ static void reap_completed_command_buffers(std::vector<MTInflightSubmission>& in
   inflight.resize(write_index);
 }
 
-static bool wait_for_inflight_command_buffers(std::vector<MTInflightSubmission>& inflight) {
+static bool wait_for_inflight_command_buffers(std::vector<MTInflightSubmission>& inflight, std::unordered_map<RHICommandBuffer, RHIResult>* polled_results) {
   bool success = true;
   for (MTInflightSubmission& submission : inflight) {
     id<MTLCommandBuffer> command_buffer = submission.command_buffer;
@@ -878,7 +881,11 @@ static bool wait_for_inflight_command_buffers(std::vector<MTInflightSubmission>&
     }
 
     [command_buffer waitUntilCompleted];
-    success &= (command_buffer.status != MTLCommandBufferStatusError);
+    const bool command_succeeded = command_buffer.status != MTLCommandBufferStatusError;
+    success = command_succeeded && success;
+    if ((polled_results != nullptr) && submission.completion_polled) {
+      (*polled_results)[submission.handle] = command_succeeded ? RHIResult::Success : RHIResult::ValidationError;
+    }
     [command_buffer release];
     if (submission.drawable != nil) {
       [submission.drawable release];
@@ -1633,7 +1640,7 @@ MTContext::MTContext(MTContext&& other) noexcept
 
 MTContext::~MTContext() {
   if (_impl != nullptr) {
-    wait_for_inflight_command_buffers(_impl->inflight_command_buffers);
+    wait_for_inflight_command_buffers(_impl->inflight_command_buffers, nullptr);
     for (auto& [handle, command_buffer] : _impl->command_buffers) {
       (void)handle;
       if (command_buffer) {
@@ -1714,7 +1721,7 @@ void MTContext::create_swapchain(const void* native_window, uint32_t width, uint
 }
 
 void MTContext::destroy_swapchain() {
-  wait_for_inflight_command_buffers(_impl->inflight_command_buffers);
+  wait_for_inflight_command_buffers(_impl->inflight_command_buffers, &_impl->polled_completion_results);
   if (_impl->swapchain_texture.valid()) {
     _impl->bindless_manager.unregister_texture(_impl->swapchain_texture);
     auto it = _impl->device._impl->textures.find(_impl->swapchain_texture);
@@ -1793,13 +1800,19 @@ void MTContext::present() {
 }
 
 RHIResult MTContext::wait_idle() {
-  return wait_for_inflight_command_buffers(_impl->inflight_command_buffers) ? RHIResult::Success : RHIResult::DeviceLost;
+  return wait_for_inflight_command_buffers(_impl->inflight_command_buffers, &_impl->polled_completion_results) ? RHIResult::Success : RHIResult::DeviceLost;
 }
 
 void MTContext::begin_frame() {
   reap_completed_command_buffers(_impl->inflight_command_buffers);
   while (_impl->inflight_command_buffers.size() >= kRHIMaxFrames) {
-    MTInflightSubmission oldest = _impl->inflight_command_buffers.front();
+    auto oldest_it = std::find_if(_impl->inflight_command_buffers.begin(), _impl->inflight_command_buffers.end(), [](const MTInflightSubmission& submission) {
+      return submission.completion_polled == false;
+    });
+    if (oldest_it == _impl->inflight_command_buffers.end()) {
+      break;
+    }
+    MTInflightSubmission oldest = *oldest_it;
     id<MTLCommandBuffer> oldest_command_buffer = oldest.command_buffer;
     id<CAMetalDrawable> oldest_drawable = oldest.drawable;
     if (oldest_command_buffer != nil) {
@@ -1809,7 +1822,7 @@ void MTContext::begin_frame() {
     if (oldest_drawable != nil) {
       [oldest_drawable release];
     }
-    _impl->inflight_command_buffers.erase(_impl->inflight_command_buffers.begin());
+    _impl->inflight_command_buffers.erase(oldest_it);
     reap_completed_command_buffers(_impl->inflight_command_buffers);
   }
   _impl->current_frame = (_impl->current_frame + 1u) % kRHIMaxFrames;
@@ -1851,7 +1864,12 @@ RHICommandBuffer MTContext::get_command_buffer() {
   return handle;
 }
 
+RHICommandBuffer MTContext::get_async_command_buffer() {
+  return get_command_buffer();
+}
+
 void MTContext::destroy_command_buffer(RHICommandBuffer cmd) {
+  _impl->polled_completion_results.erase(cmd);
   auto it = _impl->command_buffers.find(cmd);
   if (it == _impl->command_buffers.end()) {
     return;
@@ -1868,6 +1886,37 @@ RHIResult MTContext::wait_for_command_buffer(RHICommandBuffer cmd) {
   return wait_idle();
 }
 
+RHIResult MTContext::query_command_buffer(RHICommandBuffer cmd) {
+  auto completed_it = _impl->polled_completion_results.find(cmd);
+  if (completed_it != _impl->polled_completion_results.end()) {
+    const RHIResult result = completed_it->second;
+    _impl->polled_completion_results.erase(completed_it);
+    return result;
+  }
+
+  for (size_t submission_index = 0u; submission_index < _impl->inflight_command_buffers.size(); ++submission_index) {
+    MTInflightSubmission& submission = _impl->inflight_command_buffers[submission_index];
+    if (submission.handle != cmd) {
+      continue;
+    }
+
+    submission.completion_polled = true;
+    const MTLCommandBufferStatus status = submission.command_buffer.status;
+    if ((status != MTLCommandBufferStatusCompleted) && (status != MTLCommandBufferStatusError)) {
+      return RHIResult::NotReady;
+    }
+
+    const RHIResult result = (status == MTLCommandBufferStatusCompleted) ? RHIResult::Success : RHIResult::ValidationError;
+    [submission.command_buffer release];
+    if (submission.drawable != nil) {
+      [submission.drawable release];
+    }
+    _impl->inflight_command_buffers.erase(_impl->inflight_command_buffers.begin() + submission_index);
+    return result;
+  }
+  return RHIResult::InvalidHandle;
+}
+
 void MTContext::submit_command_buffer(const RHISubmitInfo& info) {
   (void)info.wait_semaphores;
   (void)info.signal_semaphores;
@@ -1882,6 +1931,7 @@ void MTContext::submit_command_buffer(const RHISubmitInfo& info) {
   }
 
   MTInflightSubmission inflight_submission = {
+    .handle = info.command_buffer,
     .command_buffer = submitted_command_buffer,
     .drawable = nil,
   };
@@ -1892,8 +1942,8 @@ void MTContext::submit_command_buffer(const RHISubmitInfo& info) {
   }
   [submitted_command_buffer commit];
   [submitted_command_buffer retain];
-  _impl->inflight_command_buffers.push_back(inflight_submission);
   reap_completed_command_buffers(_impl->inflight_command_buffers);
+  _impl->inflight_command_buffers.push_back(inflight_submission);
   command_buffer->detach_submitted();
   _impl->command_buffers.erase(info.command_buffer);
 }

@@ -13,6 +13,21 @@ struct IORDatabase;
 struct SceneData;
 struct RHIContext;
 
+enum class EnergyCompensationPreparationState : uint32_t {
+  Ready,
+  Preparing,
+  Failed,
+};
+
+struct EnergyCompensationPreparationStatus {
+  EnergyCompensationPreparationState state = EnergyCompensationPreparationState::Ready;
+  uint32_t completed_steps = 0u;
+  uint32_t total_steps = 0u;
+  double elapsed_seconds = 0.0;
+  double remaining_seconds = 0.0;
+  bool remaining_available = false;
+};
+
 enum class NodeGeometryOperation : uint32_t {
   BakeLocalTransform,
   CenterPivot,
@@ -77,6 +92,11 @@ struct SceneRepresentation {
   void add_atmosphere_emitter(const AtmosphereEmitterParameters& params);
   void rebuild_atmosphere_emitter(uint32_t emitter_index);
   void set_scattering_rhi(RHIContext& rhi);
+  bool ensure_energy_compensation_interfaces();
+  bool begin_energy_compensation_interface_preparation();
+  void cancel_energy_compensation_interface_preparation();
+  EnergyCompensationPreparationState poll_energy_compensation_interface_preparation();
+  EnergyCompensationPreparationStatus energy_compensation_interface_preparation_status() const;
   void create_area_emitters_from_materials();
   bool delete_emitter(uint32_t emitter_index);
 

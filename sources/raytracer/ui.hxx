@@ -22,9 +22,6 @@ struct IORDatabase;
 
 enum class MenuCommand : uint32_t {
   Quit,
-  SelectCPURenderer,
-  SelectRasterRenderer,
-  SelectGPURenderer,
   OpenScene,
   ReloadScene,
   ReloadGeometry,
@@ -52,12 +49,20 @@ enum class MenuCommand : uint32_t {
   DecreaseExposure,
   ToggleSceneObjects,
   ToggleProperties,
-  ToggleSceneTree,
-  ToggleNodeProperties,
   ToggleMemoryDiagnostics,
+  ResetLayout,
 };
 
 struct UI {
+  struct ViewportGeometry {
+    float2 logical_position = {};
+    float2 logical_size = {};
+    float2 image_position = {};
+    float2 image_size = {};
+    float2 framebuffer_scale = {1.0f, 1.0f};
+    bool valid = false;
+  };
+
   struct FrameData {
     const IORDatabase& ior_database;
     const std::vector<std::string>& recent_files;
@@ -74,6 +79,11 @@ struct UI {
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
   }
+
+  static bool gpu_integrator_supported(Integrator::Type type);
+  static std::string render_configuration_label(RendererMode renderer, Integrator* integrator);
+  static uint32_t render_configuration_argument(RendererMode renderer, uint32_t integrator_index);
+  bool render_configuration_selected(uint32_t argument) const;
 
   void set_current_integrator(Integrator*);
 
@@ -97,6 +107,20 @@ struct UI {
   void set_current_renderer_controls(const RendererControlState& controls) {
     _current_renderer_controls = controls;
   }
+
+  void set_scene_dirty(bool value) {
+    _scene_dirty = value;
+  }
+
+  bool scene_dirty() const {
+    return _scene_dirty;
+  }
+
+  const ViewportGeometry& viewport_geometry() const {
+    return _viewport_geometry;
+  }
+
+  void request_quit_confirmation();
 
   void set_gpu_kernel_timing_stats(const RendererKernelTimingStats& stats) {
     _gpu_kernel_timing_stats = stats;
@@ -154,12 +178,8 @@ struct UI {
     return (_ui_setup & UIProperties) != 0u;
   }
 
-  bool scene_tree_visible() const {
-    return (_ui_setup & UISceneTree) != 0u;
-  }
-
-  bool node_properties_visible() const {
-    return (_ui_setup & UINodeProperties) != 0u;
+  bool diagnostics_visible() const {
+    return (_ui_setup & UIMemoryDiagnostics) != 0u;
   }
 
   bool scene_view_commands_available() const {
@@ -192,7 +212,7 @@ struct UI {
     std::function<void(std::string, SaveImageMode)> save_image_selected;
     std::function<void(std::string)> scene_file_selected;
     std::function<void(std::string)> save_scene_file_selected;
-    std::function<void(RendererMode)> renderer_selected;
+    std::function<void(RendererMode, Integrator::Type)> render_configuration_selected;
     std::function<void(bool)> stop_selected;
     std::function<void()> run_selected;
     std::function<void()> restart_selected;
@@ -215,12 +235,13 @@ struct UI {
     std::function<bool(uint32_t)> emitter_deleted;
     std::function<void(uint2 /* viewport */, uint32_t /* pixel size*/)> camera_changed;
     std::function<void()> scene_settings_changed;
+    std::function<void()> scene_modified;
+    std::function<void()> scene_discarded;
     std::function<void()> scene_transforms_changed;
     std::function<void()> scene_transform_interaction_started;
     std::function<void()> scene_transform_interaction_finished;
     std::function<void()> denoise_selected;
     std::function<void(uint32_t direction)> view_scene;
-    std::function<void(Integrator::Type)> integrator_selected;
     std::function<void()> clear_recent_files;
     std::function<void(uint32_t)> camera_activated;
     std::function<void(bool)> gpu_kernel_timing_enabled_changed;
@@ -289,12 +310,20 @@ struct UI {
   float build_title_bar_controls();
 #endif
   void build_toolbar(const BuildContext& ctx);
+  void build_render_configuration_selector(const char* id);
+  void select_render_configuration(RendererMode renderer, Integrator* integrator);
   void build_status_bar(const BuildContext& ctx);
+  void build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
+  void build_scene_explorer(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_inspector(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
+  void build_diagnostics(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
+  void build_activity_content();
+  void build_debug_info_content();
+  void build_memory_diagnostics_content(SceneRepresentation& scene_rep, const Film& film);
   void build_renderer_preparation_modal();
-  void build_memory_diagnostics(SceneRepresentation& scene_rep, const Film& film);
+  void build_unsaved_changes_modal();
   void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_scene_tree_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  void build_node_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& data);
   void finish_node_transform_editor_interaction();
   void build_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
@@ -307,10 +336,10 @@ struct UI {
   void build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_atmosphere_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  void build_mesh_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_mesh_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_medium_resource_properties(SceneRepresentation& scene_rep, uint32_t medium_index);
   void build_emitter_resource_properties(SceneRepresentation& scene_rep, uint32_t emitter_index, const FrameData& data, bool standalone_actions);
-  void build_mesh_resource_properties(SceneRepresentation& scene_rep, uint32_t mesh_index, bool show_links);
+  void build_mesh_resource_properties(SceneRepresentation& scene_rep, uint32_t mesh_index, bool show_links, const FrameData& data);
   void build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, bool attachment_enabled, const FrameData& data);
   void build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_integrator_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
@@ -380,10 +409,7 @@ struct UI {
     UIObjects = 1u << 0u,
     UIProperties = 1u << 1u,
     UIMemoryDiagnostics = 1u << 2u,
-    UISceneTree = 1u << 3u,
-    UINodeProperties = 1u << 4u,
-
-    UIDefaults = UIObjects | UIProperties | UISceneTree | UINodeProperties,
+    UIDefaults = UIObjects | UIProperties,
   };
 
   struct SelectionState {
@@ -458,6 +484,21 @@ struct UI {
   uint64_t _medium_mapping_hash = 0ull;
   uint64_t _mesh_mapping_hash = 0ull;
   bool _auto_open_emission_section = false;
+  ViewportGeometry _viewport_geometry = {};
+  uint32_t _viewport_zoom_option = 0u;
+  float _explorer_width = 300.0f;
+  float _inspector_width = 400.0f;
+  float _diagnostics_height = 260.0f;
+  bool _viewport_pointer_active = false;
+  bool _reset_layout_requested = false;
+  bool _preparation_active_last_frame = false;
+  bool _activity_tab_requested = false;
+  bool _scene_dirty = false;
+  bool _unsaved_changes_modal_requested = false;
+  bool _skip_unsaved_check_once = false;
+  MenuCommand _pending_menu_command = MenuCommand::Quit;
+  std::string _pending_menu_value = {};
+  char _resource_filter[128] = {};
   double _last_fps_update_time = 0.0;
   uint32_t _frame_count = 0;
   float _current_fps = 0.0f;

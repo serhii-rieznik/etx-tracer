@@ -100,6 +100,7 @@ struct BSDFSample {
     Transmission = 1u << 2u,
     MediumChanged = 1u << 3u,
     Delta = 1u << 4u,
+    WavelengthDependentDirection = 1u << 5u,
   };
 
   SpectralResponse weight ETX_INIT({});

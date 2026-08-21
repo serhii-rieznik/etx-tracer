@@ -66,6 +66,7 @@ struct RTApplication {
   bool capture_output_png(std::vector<uint8_t>& png_data, uint32_t& width, uint32_t& height);
 
   void set_renderer_mode(RendererMode mode);
+  bool set_render_configuration(RendererMode mode, Integrator::Type integrator_type);
 
  private:
   bool load_scene_file(const std::string&, uint32_t options, bool start_rendering);
@@ -118,6 +119,9 @@ struct RTApplication {
   void sync_scene_integrator_data_from_current_integrator();
   void sync_platform_color_scheme();
   bool rebuild_material_render_resources();
+  void poll_material_render_resource_preparation();
+  void finish_material_render_resource_preparation(bool resources_ready);
+  void mark_scene_dirty();
 
  private:
   TaskScheduler scheduler;
@@ -145,6 +149,9 @@ struct RTApplication {
   std::atomic<bool> _initialized = false;
   bool _scene_global_initialized = false;
   bool _scene_transform_interaction_active = false;
+  bool _material_render_resource_preparation_active = false;
+  bool _restart_cpu_after_material_resource_preparation = false;
+  bool _scene_dirty = false;
   bool _platform_color_scheme_initialized = false;
   PlatformColorScheme _platform_color_scheme = PlatformColorScheme::Dark;
   SaveImageMode _pending_gpu_save_image_mode = SaveImageMode::RGB;

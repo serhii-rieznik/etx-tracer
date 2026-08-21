@@ -136,7 +136,7 @@ struct ETX_ALIGNED Scene {
     return options.properties[Properties::MultipleImportanceSampling];
   }
   bool blue_noise() const {
-    return options.properties[Properties::BlueNoise];
+    return true;
   }
   LightSampling light_sampling_method() const {
     return options.light_sampling;

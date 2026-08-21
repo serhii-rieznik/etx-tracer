@@ -55,6 +55,8 @@ struct RendererPreparationStatus {
   uint32_t total_steps = 0u;
   uint32_t worker_count = 0u;
   double elapsed_seconds = 0.0;
+  double remaining_seconds = 0.0;
+  bool remaining_available = false;
   bool cancelable = false;
   std::vector<RendererPreparationStepStatus> steps = {};
 };

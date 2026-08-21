@@ -128,11 +128,20 @@ bool validate_spectral_packet_invariants() {
   valid = ::spectral_query_compatible(query, ::spectral_response_as_query(hero_response)) && valid;
 
   ::BSDFSample refracted_sample = {};
-  refracted_sample.properties = BSDFSample::Delta | BSDFSample::Transmission;
+  refracted_sample.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::WavelengthDependentDirection;
   refracted_sample.eta = 1.5f;
   valid = ::bsdf_sample_requires_secondary_termination(MaterialClass::Dielectric, refracted_sample) && valid;
   refracted_sample.properties = BSDFSample::Transmission;
   valid = (::bsdf_sample_requires_secondary_termination(MaterialClass::Dielectric, refracted_sample) == false) && valid;
+  refracted_sample.properties = BSDFSample::Reflection | BSDFSample::WavelengthDependentDirection;
+  valid = ::bsdf_sample_requires_secondary_termination(MaterialClass::DiffractionGrating, refracted_sample) && valid;
+
+  ::RefractiveIndexSample equal_ext_ior = {};
+  equal_ext_ior.eta = ::spectral_response_make_packet(query, float3{1.0f, 1.0f, 1.0f}, 1.0f);
+  ::RefractiveIndexSample equal_int_ior = equal_ext_ior;
+  valid = ::bsdf_dielectric_equal_eta(equal_ext_ior, equal_int_ior) && valid;
+  equal_int_ior.eta.integrated.y = 1.5f;
+  valid = (::bsdf_dielectric_equal_eta(equal_ext_ior, equal_int_ior) == false) && valid;
 
   std::printf("spectral packet invariants %s\n", valid ? "valid" : "failed");
   return valid;
@@ -390,6 +399,7 @@ bool validate_diffraction_grating_contract(const etx::Scene& scene) {
     require(validate_sample(sample), "sample is finite and non-negative");
     require((sample.properties & BSDFSample::Delta) != 0u, "sample is marked delta");
     require((sample.properties & BSDFSample::Reflection) != 0u, "sample is marked reflection");
+    require((sample.properties & BSDFSample::WavelengthDependentDirection) != 0u, "sample is marked wavelength-dependent");
     require(close_value(sample.weight.monochromatic(), propagating_efficiency, 2.0e-6f), "white phase-mask sample carries the physically modeled propagating power");
 
     int matched_order = 0;
@@ -471,6 +481,7 @@ bool validate_diffraction_grating_contract(const etx::Scene& scene) {
     require(rgb_sample.valid(), "RGB diffraction sample is valid");
     require((rgb_sample.properties & BSDFSample::Delta) != 0u, "RGB diffraction sample is marked delta");
     require((rgb_sample.properties & BSDFSample::Reflection) != 0u, "RGB diffraction sample is marked reflection");
+    require((rgb_sample.properties & BSDFSample::WavelengthDependentDirection) != 0u, "RGB diffraction sample is marked wavelength-dependent");
 
     uint32_t selected_channel = 0u;
     uint32_t positive_channel_count = 0u;
@@ -2152,6 +2163,7 @@ bool validate_energy_compensated_dielectric_transport_contract(const char* label
   const uint32_t expected_transmission_medium = outside ? material_with_media.int_medium : material_with_media.ext_medium;
   bool saw_reflection = false;
   bool saw_transmission = false;
+  bool saw_wavelength_dependent_transmission = false;
   for (uint32_t i = 0u; i < kBsdfSamples; ++i) {
     etx::Sampler sampler(seed + i + 3000u, seed ^ (i * 37u + 23u));
     const etx::BSDFSample sample = etx::bsdf::sample(data, material_with_media, sampler);
@@ -2163,14 +2175,16 @@ bool validate_energy_compensated_dielectric_transport_contract(const char* label
     const bool reflection = (sample.properties & etx::BSDFSample::Reflection) != 0u;
     const bool transmission = ((sample.properties & etx::BSDFSample::Transmission) != 0u);
     const bool medium_changed = ((sample.properties & etx::BSDFSample::MediumChanged) != 0u);
+    const bool wavelength_dependent_direction = ((sample.properties & etx::BSDFSample::WavelengthDependentDirection) != 0u);
     if (reflection) {
       saw_reflection = true;
-      if ((transmission) || medium_changed || (sample.medium_index != data.current_medium) || (fabsf(sample.eta - 1.0f) > 1.0e-4f)) {
+      if ((transmission) || medium_changed || wavelength_dependent_direction || (sample.medium_index != data.current_medium) || (fabsf(sample.eta - 1.0f) > 1.0e-4f)) {
         std::printf("%s roughness %.3f invalid reflection metadata eta %.6f medium %u\n", label, roughness, sample.eta, sample.medium_index);
         return false;
       }
     } else if (transmission) {
       saw_transmission = true;
+      saw_wavelength_dependent_transmission = wavelength_dependent_direction || saw_wavelength_dependent_transmission;
       if ((medium_changed == false) || (sample.medium_index != expected_transmission_medium) || (sample.eta <= 0.0f)) {
         std::printf("%s roughness %.3f invalid transmission metadata eta %.6f medium %u expected %u\n", label, roughness, sample.eta, sample.medium_index,
           expected_transmission_medium);
@@ -2182,8 +2196,9 @@ bool validate_energy_compensated_dielectric_transport_contract(const char* label
     }
   }
 
-  if ((saw_reflection == false) || (saw_transmission == false)) {
-    std::printf("%s roughness %.3f missing sampled branch reflection %u transmission %u\n", label, roughness, saw_reflection ? 1u : 0u, saw_transmission ? 1u : 0u);
+  if ((saw_reflection == false) || (saw_transmission == false) || (saw_wavelength_dependent_transmission == false)) {
+    std::printf("%s roughness %.3f missing sampled branch reflection %u transmission %u wavelength-dependent %u\n", label, roughness, saw_reflection ? 1u : 0u,
+      saw_transmission ? 1u : 0u, saw_wavelength_dependent_transmission ? 1u : 0u);
     return false;
   }
 
@@ -2213,7 +2228,8 @@ bool validate_delta_dielectric_transmission_sample(const char* label, const etx:
     }
 
     const bool medium_changed = ((sample.properties & etx::BSDFSample::MediumChanged) != 0u);
-    if ((medium_changed == false) || (sample.medium_index != expected_medium) || (sample.eta <= 0.0f)) {
+    const bool wavelength_dependent_direction = ((sample.properties & etx::BSDFSample::WavelengthDependentDirection) != 0u);
+    if ((medium_changed == false) || (wavelength_dependent_direction == false) || (sample.medium_index != expected_medium) || (sample.eta <= 0.0f)) {
       std::printf("%s invalid transmission metadata eta %.6f medium %u expected %u\n", label, sample.eta, sample.medium_index, expected_medium);
       return false;
     }

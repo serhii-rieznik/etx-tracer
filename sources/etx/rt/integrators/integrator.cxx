@@ -1,6 +1,5 @@
 #include "integrator.hxx"
 
-#include <etx/render/host/bsdf_energy_compensation_lut.hxx>
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/shared/camera.hxx>
@@ -65,8 +64,10 @@ struct IntegratorThreadImpl {
 
     if (pending_scope != SceneUpdateScope::None) {
       if (pending_scope == SceneUpdateScope::Full) {
-        if (ensure_energy_compensation_interfaces(scene_representation.data(), raytracing.scheduler()) == false) {
+        if (scene_representation.ensure_energy_compensation_interfaces() == false) {
           log::error("Failed to ensure BSDF energy-compensation interfaces before CPU render commit");
+          request_scene_check(pending_scope);
+          return;
         }
         scene_representation.data().images.load_images(raytracing.scheduler());
       }

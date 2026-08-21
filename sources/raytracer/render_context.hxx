@@ -28,6 +28,16 @@ struct RenderContextConfig {
 };
 
 struct RenderContext {
+  struct PresentationViewport {
+    int32_t x = 0;
+    int32_t y = 0;
+    uint32_t width = 0u;
+    uint32_t height = 0u;
+    uint32_t display_width = 0u;
+    uint32_t display_height = 0u;
+    bool valid = false;
+  };
+
   struct FrameData {
     float dt = 0.0f;
     uint32_t sample_count = 0;
@@ -44,6 +54,7 @@ struct RenderContext {
 
   void start_frame(Renderer* renderer, SceneRepresentation& scene, const FrameData&);
   void end_frame();
+  void set_presentation_viewport(const PresentationViewport& viewport);
 
   RHIImGui& rhi_ui();
   RHIContext& get_context();
