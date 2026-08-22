@@ -190,6 +190,10 @@ struct UI {
     return _current_renderer_controls;
   }
 
+  bool preparation_active() const {
+    return _current_renderer_preparation.state == RendererPreparationState::Preparing;
+  }
+
   struct BuildContext {
     std::vector<int32_t> emitter_primary_instance;
     std::function<const char*(uint32_t)> material_name_from_index;
@@ -317,7 +321,6 @@ struct UI {
   void build_scene_explorer(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_inspector(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_diagnostics(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
-  void build_activity_content();
   void build_debug_info_content();
   void build_memory_diagnostics_content(SceneRepresentation& scene_rep, const Film& film);
   void build_renderer_preparation_modal();
@@ -485,14 +488,12 @@ struct UI {
   uint64_t _mesh_mapping_hash = 0ull;
   bool _auto_open_emission_section = false;
   ViewportGeometry _viewport_geometry = {};
-  uint32_t _viewport_zoom_option = 0u;
+  uint32_t _viewport_zoom_option = 4u;
   float _explorer_width = 300.0f;
   float _inspector_width = 400.0f;
   float _diagnostics_height = 260.0f;
   bool _viewport_pointer_active = false;
   bool _reset_layout_requested = false;
-  bool _preparation_active_last_frame = false;
-  bool _activity_tab_requested = false;
   bool _scene_dirty = false;
   bool _unsaved_changes_modal_requested = false;
   bool _skip_unsaved_check_once = false;

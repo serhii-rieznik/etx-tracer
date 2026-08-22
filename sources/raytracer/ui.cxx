@@ -64,7 +64,7 @@ constexpr ViewportZoomOption kViewportZoomOptions[] = {
   {"25%", 0.25f},
   {"50%", 0.50f},
   {"75%", 0.75f},
-  {"1:1 (100%)", 1.00f},
+  {"100%", 1.00f},
   {"150%", 1.50f},
   {"200%", 2.00f},
   {"400%", 4.00f},
@@ -1595,12 +1595,6 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ETX_PROFILER_SCOPE();
   ImGuizmo::BeginFrame();
   _node_transform_editor_interaction_rendered_this_frame = false;
-  const bool preparation_active = _current_renderer_preparation.state == RendererPreparationState::Preparing;
-  if (preparation_active && (_preparation_active_last_frame == false)) {
-    _ui_setup |= UIMemoryDiagnostics;
-    _activity_tab_requested = true;
-  }
-  _preparation_active_last_frame = preparation_active;
 
   BuildContext ctx = {};
   ctx.wpadding = {ImGui::GetStyle().WindowPadding.x, ImGui::GetStyle().WindowPadding.y};
@@ -1677,6 +1671,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
     finish_node_transform_editor_interaction();
   }
   build_unsaved_changes_modal();
+  build_renderer_preparation_modal();
 }
 
 void UI::build_unsaved_changes_modal() {
@@ -3596,11 +3591,6 @@ void UI::build_inspector(SceneRepresentation& scene_rep, const BuildContext& ctx
 void UI::build_diagnostics(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   (void)ctx;
   if (ImGui::BeginTabBar("##diagnostics_tabs")) {
-    const ImGuiTabItemFlags activity_flags = _activity_tab_requested ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
-    if (ImGui::BeginTabItem("Activity", nullptr, activity_flags)) {
-      build_activity_content();
-      ImGui::EndTabItem();
-    }
     if (ImGui::BeginTabItem("Performance")) {
       build_debug_info_content();
       ImGui::EndTabItem();
@@ -3610,67 +3600,6 @@ void UI::build_diagnostics(SceneRepresentation& scene_rep, const BuildContext& c
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
-  }
-  _activity_tab_requested = false;
-}
-
-void UI::build_activity_content() {
-  const RendererPreparationStatus& status = _current_renderer_preparation;
-  ImGui::Text("Renderer resources: %s", status.phase.empty() ? "Ready" : status.phase.c_str());
-  if (status.message.empty() == false) {
-    ImGui::TextWrapped("%s", status.message.c_str());
-  }
-
-  if ((status.state == RendererPreparationState::Preparing) || (status.total_steps > 0u)) {
-    const float progress = (status.total_steps > 0u) ? (static_cast<float>(status.completed_steps) / static_cast<float>(status.total_steps)) : 0.0f;
-    const std::string progress_label = (status.total_steps > 0u) ? (std::to_string(status.completed_steps) + " / " + std::to_string(status.total_steps)) : "Starting";
-    ImGui::ProgressBar(progress, ImVec2(-1.0f, 0.0f), progress_label.c_str());
-    if (status.remaining_available) {
-      ImGui::Text("Elapsed %s  |  Remaining %s", duration_string(status.elapsed_seconds).c_str(), duration_string(status.remaining_seconds).c_str());
-    } else {
-      ImGui::Text("Elapsed %s", duration_string(status.elapsed_seconds).c_str());
-    }
-  }
-
-  if (status.cancelable) {
-    if (ImGui::Button("Cancel and use CPU") && callbacks.cancel_renderer_preparation_selected) {
-      callbacks.cancel_renderer_preparation_selected();
-    }
-  }
-
-  if (status.steps.empty() == false &&
-      ImGui::BeginTable("##activity_steps", 4, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_ScrollY)) {
-    ImGui::TableSetupColumn("Pipeline", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("Variant", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 100.0f);
-    ImGui::TableSetupColumn("Time", ImGuiTableColumnFlags_WidthFixed, 80.0f);
-    ImGui::TableHeadersRow();
-    for (const RendererPreparationStepStatus& step : status.steps) {
-      const char* step_state = "Queued";
-      if (step.state == RendererPreparationStepState::CompilingSpirV) {
-        step_state = "Compiling";
-      } else if (step.state == RendererPreparationStepState::QueuedForDriver) {
-        step_state = "Driver queue";
-      } else if (step.state == RendererPreparationStepState::CheckingCache) {
-        step_state = "Cache";
-      } else if (step.state == RendererPreparationStepState::DriverCompiling) {
-        step_state = "Driver";
-      } else if (step.state == RendererPreparationStepState::Complete) {
-        step_state = step.cache_hit ? "Cached" : "Complete";
-      } else if (step.state == RendererPreparationStepState::Failed) {
-        step_state = "Failed";
-      }
-      ImGui::TableNextRow();
-      ImGui::TableNextColumn();
-      ImGui::TextUnformatted(step.name.c_str());
-      ImGui::TableNextColumn();
-      ImGui::TextUnformatted(step.detail.c_str());
-      ImGui::TableNextColumn();
-      ImGui::TextUnformatted(step_state);
-      ImGui::TableNextColumn();
-      ImGui::Text("%.1f ms", step.elapsed_ms);
-    }
-    ImGui::EndTable();
   }
 }
 
@@ -3739,7 +3668,7 @@ void UI::build_debug_info_content() {
 }
 
 void UI::build_renderer_preparation_modal() {
-  constexpr const char* popup_id = "Preparing renderer resources##renderer_preparation";
+  constexpr const char* popup_id = "Activity##renderer_preparation";
   const bool preparing = _current_renderer_preparation.state == RendererPreparationState::Preparing;
   const bool popup_open = ImGui::IsPopupOpen(popup_id);
   if (preparing && (popup_open == false)) {
@@ -3768,7 +3697,7 @@ void UI::build_renderer_preparation_modal() {
     const RendererPreparationStatus& status = _current_renderer_preparation;
     ImGui::TextUnformatted(status.phase.empty() ? "Preparing" : status.phase.c_str());
     if (status.message.empty() == false) {
-      draw_item_tooltip(status.message.c_str(), ImGuiHoveredFlags_DelayNormal);
+      ImGui::TextWrapped("%s", status.message.c_str());
     }
 
     const float progress = (status.total_steps > 0u) ? (static_cast<float>(status.completed_steps) / static_cast<float>(status.total_steps)) : 0.0f;
@@ -3854,6 +3783,9 @@ void UI::build_renderer_preparation_modal() {
 }
 
 void UI::build_memory_diagnostics_content(SceneRepresentation& scene_rep, const Film& film) {
+  const float column_spacing = ImGui::GetStyle().ItemSpacing.x;
+  const float column_width = std::max(1.0f, (ImGui::GetContentRegionAvail().x - column_spacing) * 0.5f);
+  ImGui::BeginChild("##cpu_memory_column", ImVec2(column_width, 0.0f));
   if (ImGui::CollapsingHeader("CPU memory", ImGuiTreeNodeFlags_DefaultOpen)) {
     draw_memory_summary_table("cpu_memory_summary", {
                                                       {"Process working set", _rhi_memory_stats.cpu_used_bytes},
@@ -3895,7 +3827,10 @@ void UI::build_memory_diagnostics_content(SceneRepresentation& scene_rep, const 
                                                         {"Other process working set", untracked_working_set},
                                                       });
   }
+  ImGui::EndChild();
 
+  ImGui::SameLine(0.0f, column_spacing);
+  ImGui::BeginChild("##gpu_memory_column", ImVec2(0.0f, 0.0f));
   if (ImGui::CollapsingHeader("GPU memory", ImGuiTreeNodeFlags_DefaultOpen)) {
     draw_memory_summary_table("gpu_memory_summary",
       {
@@ -3968,6 +3903,7 @@ void UI::build_memory_diagnostics_content(SceneRepresentation& scene_rep, const 
         std::min(_renderer_memory_stats.tile_index + 1u, std::max(1u, _renderer_memory_stats.tile_count)), std::max(1u, _renderer_memory_stats.tile_count));
     }
   }
+  ImGui::EndChild();
 }
 
 void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx) {
