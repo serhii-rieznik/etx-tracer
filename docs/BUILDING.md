@@ -91,7 +91,9 @@ bin/raytracer --build-shader-package /path/to/shaders.etxpack --shader-backend m
 bin/raytracer.exe --build-shader-package C:\path\to\shaders.etxpack --shader-backend vulkan
 ```
 
-Package generation reads sources from the development data folder and is not a runtime distribution workflow.
+The CMake package target reads directly from `sources/etx/render`; direct diagnostic commands default to the development data folder and accept
+`--shader-source-root <directory>` when an explicit source tree is required. Package generation bypasses any existing package so every successful build compiles or
+cache-validates the current source dependencies.
 
 ## Built-in dependencies
 These libraries are included into the source code in `thirdparty` folder:

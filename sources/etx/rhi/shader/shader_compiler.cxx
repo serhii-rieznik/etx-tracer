@@ -1029,6 +1029,7 @@ struct ShaderCompiler::Impl {
   std::array<std::string, 2> package_load_errors = {};
   std::mutex package_mutex;
   std::atomic<bool> runtime_compilation_allowed = true;
+  std::atomic<bool> shader_package_lookup_allowed = true;
 
   DxcComPtr<IDxcUtils> dxc_utils;
   DxcComPtr<IDxcCompiler3> dxc_compiler;
@@ -1250,6 +1251,10 @@ void ShaderCompiler::set_runtime_compilation_allowed(bool allowed) {
   _impl->runtime_compilation_allowed.store(allowed, std::memory_order_release);
 }
 
+void ShaderCompiler::set_shader_package_lookup_allowed(bool allowed) {
+  _impl->shader_package_lookup_allowed.store(allowed, std::memory_order_release);
+}
+
 bool ShaderCompiler::runtime_compilation_allowed() const {
   return _impl->runtime_compilation_allowed.load(std::memory_order_acquire);
 }
@@ -1371,7 +1376,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
   bool package_complete = false;
   std::string package_error = {};
   const uint32_t backend_index = static_cast<uint32_t>(backend);
-  if (backend_index < _impl->packages.size()) {
+  if (_impl->shader_package_lookup_allowed.load(std::memory_order_acquire) && (backend_index < _impl->packages.size())) {
     std::lock_guard<std::mutex> package_lock(_impl->package_mutex);
     ShaderPackage& package = _impl->packages[backend_index];
     if (_impl->package_load_attempted[backend_index] == false) {

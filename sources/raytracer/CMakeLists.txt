@@ -321,6 +321,7 @@ add_custom_command(
   COMMAND "$<TARGET_FILE:raytracer>"
     --build-shader-package "${ETX_RAYTRACER_SHADER_PACKAGE}"
     --shader-backend "${ETX_RAYTRACER_SHADER_BACKEND}"
+    --shader-source-root "${CMAKE_SOURCE_DIR}/sources/etx/render"
   DEPENDS
     raytracer
     ${ETX_SHADER_PACKAGE_INPUTS}

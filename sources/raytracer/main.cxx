@@ -29,7 +29,7 @@ extern "C" int main(int argc, char* argv[]) {
       continue;
     }
     if ((argument_index + 3) >= argc) {
-      fprintf(stderr, "Usage: raytracer --build-shader-package <output-file> --shader-backend <metal|vulkan>\n");
+      fprintf(stderr, "Usage: raytracer --build-shader-package <output-file> --shader-backend <metal|vulkan> [--shader-source-root <directory>]\n");
       return 1;
     }
     const std::filesystem::path output_path = argv[argument_index + 1];
@@ -45,15 +45,28 @@ extern "C" int main(int argc, char* argv[]) {
       return 1;
     }
 
+    std::filesystem::path source_root = env().data_folder();
+    for (int option_index = argument_index + 4; option_index < argc; ++option_index) {
+      if (std::strcmp(argv[option_index], "--shader-source-root") != 0) {
+        fprintf(stderr, "Unsupported shader package option '%s'.\n", argv[option_index]);
+        return 1;
+      }
+      if ((option_index + 1) >= argc) {
+        fprintf(stderr, "Expected a directory after --shader-source-root.\n");
+        return 1;
+      }
+      source_root = argv[++option_index];
+    }
+
     RaytracerShaderPackageStatistics statistics = {};
     std::string error_message = {};
-    if (build_raytracer_shader_package(output_path, backend, statistics, error_message) == false) {
+    if (build_raytracer_shader_package(output_path, source_root, backend, statistics, error_message) == false) {
       fprintf(stderr, "Shader package build failed: %s\n", error_message.c_str());
       return 1;
     }
-    printf("Shader package built: variants=%u binaries=%.2f MiB package=%.2f MiB compile=%.2f ms write-and-verify=%.2f ms\n", statistics.variant_count,
-      static_cast<double>(statistics.binary_size_bytes) / (1024.0 * 1024.0), static_cast<double>(statistics.package_size_bytes) / (1024.0 * 1024.0), statistics.compile_time_ms,
-      statistics.package_time_ms);
+    printf("Shader package built from %s: variants=%u binaries=%.2f MiB package=%.2f MiB compile=%.2f ms write-and-verify=%.2f ms\n", source_root.string().c_str(),
+      statistics.variant_count, static_cast<double>(statistics.binary_size_bytes) / (1024.0 * 1024.0), static_cast<double>(statistics.package_size_bytes) / (1024.0 * 1024.0),
+      statistics.compile_time_ms, statistics.package_time_ms);
     return 0;
   }
 #endif

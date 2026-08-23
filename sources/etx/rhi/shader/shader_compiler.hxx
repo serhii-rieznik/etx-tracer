@@ -71,6 +71,7 @@ struct ShaderCompiler {
   static ShaderCompiler& instance();
   void shutdown();
   void set_runtime_compilation_allowed(bool allowed);
+  void set_shader_package_lookup_allowed(bool allowed);
   bool runtime_compilation_allowed() const;
 
   RHIResult initialize();

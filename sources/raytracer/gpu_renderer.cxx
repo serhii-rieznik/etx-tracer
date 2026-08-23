@@ -2391,6 +2391,9 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
   reset_runtime_failure();
   _preparation_canceled = false;
   reset_render_progress();
+  if ((_integrator_mode != integrator_mode) || (_integrator_features != integrator_selection.features)) {
+    _scene_options_upload_pending = true;
+  }
   _integrator_mode = integrator_mode;
   _integrator_features = integrator_selection.features;
   _material_compile_mask = material_compile_mask;
@@ -3743,7 +3746,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   }
   _current_camera_hash = new_camera_hash;
 
-  if (integrator_mode_changed || integrator_features_changed) {
+  if (_scene_options_upload_pending) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_runtime_update_scene_options");
     const auto scene_options_upload_begin = std::chrono::steady_clock::now();
     const RHIBufferUsage scene_buffer_usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst;
@@ -3756,6 +3759,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       log::error("GPU RT: failed to upload scene options buffer for integrator change");
       return;
     }
+    _scene_options_upload_pending = false;
   }
 
   const uint2 full_dim = camera.film_size;
@@ -4898,6 +4902,7 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _integrator_features = 0u;
   _material_compile_mask = 0u;
   _spectral_mode = 0u;
+  _scene_options_upload_pending = false;
   _render_window_origin = {};
   _render_window_size = {};
   _active_preparation.reset();
@@ -5684,7 +5689,8 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
 }
 
 #if defined(ETX_ENABLE_SHADER_PACKAGER) && ETX_ENABLE_SHADER_PACKAGER
-bool build_raytracer_shader_package(const std::filesystem::path& output_path, RHIBackend backend, RaytracerShaderPackageStatistics& statistics, std::string& error_message) {
+bool build_raytracer_shader_package(const std::filesystem::path& output_path, const std::filesystem::path& source_root, RHIBackend backend,
+  RaytracerShaderPackageStatistics& statistics, std::string& error_message) {
   statistics = {};
   error_message.clear();
 
@@ -5800,6 +5806,7 @@ bool build_raytracer_shader_package(const std::filesystem::path& output_path, RH
 
   auto& compiler = ShaderCompiler::instance();
   compiler.set_runtime_compilation_allowed(true);
+  compiler.set_shader_package_lookup_allowed(false);
   const RHIResult initialization_result = compiler.initialize();
   if (initialization_result != RHIResult::Success) {
     error_message = "Failed to initialize the shader compiler for package generation.";
@@ -5841,7 +5848,7 @@ bool build_raytracer_shader_package(const std::filesystem::path& output_path, RH
         return;
       }
       const PackageCompileGroup& group = *compile_groups[group_index];
-      const std::filesystem::path source_path = std::filesystem::path(env().data_folder()) / group.source_name;
+      const std::filesystem::path source_path = source_root / group.source_name;
       std::string read_error = {};
       const std::string source = compiler.read_file_content(source_path.string(), read_error);
       if (read_error.empty() == false) {

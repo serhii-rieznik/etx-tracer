@@ -15,6 +15,7 @@ struct RaytracerShaderPackageStatistics {
   double package_time_ms = 0.0;
 };
 
-bool build_raytracer_shader_package(const std::filesystem::path& output_path, RHIBackend backend, RaytracerShaderPackageStatistics& statistics, std::string& error_message);
+bool build_raytracer_shader_package(const std::filesystem::path& output_path, const std::filesystem::path& source_root, RHIBackend backend,
+  RaytracerShaderPackageStatistics& statistics, std::string& error_message);
 
 }  // namespace etx

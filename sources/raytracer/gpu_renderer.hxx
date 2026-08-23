@@ -478,6 +478,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _integrator_features = 0u;
   uint32_t _material_compile_mask = 0u;
   uint32_t _spectral_mode = 0u;
+  bool _scene_options_upload_pending = false;
   uint2 _render_window_origin = {};
   uint2 _render_window_size = {};
   RHIResourceState _output_texture_state = RHIResourceState::Undefined;
