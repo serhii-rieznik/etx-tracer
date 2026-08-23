@@ -13,7 +13,7 @@
 # else
 #  include <interop/bsdf_various_shared.hxx>
 # endif
-# if ETX_ENABLE_THINFILM_STAGE
+#if ETX_ENABLE_THINFILM_STAGE
 #  include <interop/bsdf_dielectric_shared.hxx>
 # endif
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Diffuse
@@ -45,7 +45,7 @@ BSDFEval wavefront_connect_light_stage_various_eval(BSDFResourceContext context,
       return bsdf_mirror_evaluate(context, data, outgoing_direction, material, sampler);
     case MaterialClass::Boundary:
       return bsdf_boundary_evaluate(context, data, outgoing_direction, material, sampler);
-#if ETX_ENABLE_THINFILM_STAGE
+# if ETX_ENABLE_THINFILM_STAGE
     case MaterialClass::Thinfilm:
       return bsdf_thinfilm_evaluate(context, data, outgoing_direction, material, sampler);
 #endif
@@ -120,6 +120,10 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
 [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 dtid : SV_DispatchThreadID) {
   const uint dispatch_index = dtid.x;
   const uint batch_index = dtid.y;
+
+  if ((constants.dispatch_item_offset & 2u) != 0u) {
+    wavefront_initialize_connect_light_prepare_candidate(dispatch_index, batch_index);
+  }
 
   WavefrontConnectLightPrepareInput input_value = (WavefrontConnectLightPrepareInput)0;
   if (wavefront_load_connect_light_prepare_input(dispatch_index, batch_index, input_value) == false) {

@@ -45,7 +45,7 @@
     return;
   }
 
-  const uint queue_count = wavefront_shadow_queue_count(resources, kGPUWavefrontShadowQueueConnectLight);
+  const uint queue_count = wavefront_shadow_queue_dispatch_count(resources, kGPUWavefrontShadowQueueConnectLight);
   if (queue_index >= queue_count) {
     return;
   }

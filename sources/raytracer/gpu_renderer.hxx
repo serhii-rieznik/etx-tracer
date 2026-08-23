@@ -63,7 +63,6 @@ struct GPURaytracingRenderer : public Renderer {
     LightContinueFinalize = 42u,
     SwapQueues = 43u,
     FinalizeSample = 44u,
-    CameraConnectLightClear = 45u,
     LightConnectCameraClear = 46u,
     BuildDispatchArgs = 47u,
     VCMGridClear = 48u,

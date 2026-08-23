@@ -245,6 +245,52 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
 }
 
 #if ETX_CONNECT_LIGHT_CAMERA_PREPARE_STAGE
+void wavefront_initialize_connect_light_prepare_candidate(uint dispatch_index, uint batch_index) {
+  GPUWavefrontResources resources = wavefront_load_resources();
+  if (resources.connect_light_task_buffer == kInvalidIndex) {
+    return;
+  }
+
+  const uint queue_descriptor = wavefront_queue_current_descriptor(true);
+  const uint queue_count = wavefront_queue_count(queue_descriptor);
+  if (dispatch_index >= queue_count) {
+    return;
+  }
+
+  const uint path_index = wavefront_queue_load(queue_descriptor, dispatch_index);
+  GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
+  const uint output_cursor_slot = (constants.dispatch_item_offset >> 3u) & 1u;
+  const uint cursor_base_offset = resources.path_capacity * kGPUWavefrontConnectDispatchArgsCount * kGPUWavefrontConnectLightTaskStride;
+  const uint input_cursor_offset = cursor_base_offset + (((output_cursor_slot ^ 1u) * resources.path_capacity + dispatch_index) * 4u);
+  uint vertex_index = ((constants.dispatch_item_offset & 1u) != 0u) ? meta.reserved0 : WAVEFRONT_RO_BUFFER(resources.connect_light_task_buffer).Load(input_cursor_offset);
+  uint vertex_path_length = min(meta.light_path_length, constants.connect_light_vertex_length);
+  const uint light_vertex_length = constants.connect_light_vertex_length - batch_index;
+  const uint task_index = batch_index * resources.path_capacity + dispatch_index;
+  uint light_vertex_index = kInvalidIndex;
+  uint previous_light_vertex_index = kInvalidIndex;
+
+  if (resources.light_vertex_counter_buffer == kInvalidIndex) {
+    light_vertex_index = wavefront_light_vertex_slot(path_index, light_vertex_length);
+    previous_light_vertex_index = wavefront_light_vertex_slot(path_index, light_vertex_length - 1u);
+  } else {
+    while ((vertex_index != kInvalidIndex) && (vertex_path_length > light_vertex_length)) {
+      vertex_index = wavefront_light_previous_vertex_index(resources, vertex_index);
+      vertex_path_length -= 1u;
+    }
+    if ((vertex_index != kInvalidIndex) && (vertex_path_length == light_vertex_length)) {
+      previous_light_vertex_index = wavefront_light_previous_vertex_index(resources, vertex_index);
+      light_vertex_index = vertex_index;
+    } else {
+      previous_light_vertex_index = vertex_index;
+    }
+  }
+  wavefront_initialize_connect_light_candidate(resources.connect_light_task_buffer, task_index, light_vertex_index, previous_light_vertex_index);
+  if ((resources.light_vertex_counter_buffer != kInvalidIndex) && ((batch_index + 1u) == constants.dispatch_item_count)) {
+    const uint output_cursor_offset = cursor_base_offset + ((output_cursor_slot * resources.path_capacity + dispatch_index) * 4u);
+    WAVEFRONT_RW_BUFFER(resources.connect_light_task_buffer).Store(output_cursor_offset, previous_light_vertex_index);
+  }
+}
+
 void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput input_value, ETX_IN(BSDFEval, camera_eval)) {
   if (bsdf_eval_valid(camera_eval) == false) {
     return;

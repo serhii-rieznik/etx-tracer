@@ -146,8 +146,6 @@ constexpr WavefrontStage kWavefrontStages[] = {
   {GPURaytracingRenderer::PipelineStage::CameraDirectLightAccumulate, "shaders/gpu_rt_wavefront_direct_light.hlsl", "wavefront_camera_direct_light_accumulate_main", nullptr,
     nullptr},
   {GPURaytracingRenderer::PipelineStage::CameraDirectHitAccumulate, "shaders/gpu_rt_wavefront_direct_hit.hlsl", "wavefront_camera_direct_hit_accumulate_main", nullptr, nullptr},
-  {GPURaytracingRenderer::PipelineStage::CameraConnectLightClear, "shaders/gpu_rt_wavefront_connect_light_clear.hlsl", "wavefront_camera_connect_light_clear_main", nullptr,
-    nullptr},
   {GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareDiffuse, "shaders/gpu_rt_wavefront_connect_light_prepare_variant.hlsl",
     "wavefront_camera_connect_light_prepare_diffuse_main", "3", "1", true},
   {GPURaytracingRenderer::PipelineStage::CameraConnectLightPreparePlastic, "shaders/gpu_rt_wavefront_connect_light_prepare_variant.hlsl",
@@ -290,7 +288,7 @@ uint64_t wavefront_tile_bytes_per_path(uint32_t integrator_features, bool has_su
     result += shadow_work_stride + shadow_result_stride;
   }
   if (enable_connect_vertices) {
-    result += static_cast<uint64_t>(kWavefrontConnectLightBatchSize) * kGPUWavefrontConnectLightTaskStride;
+    result += static_cast<uint64_t>(kWavefrontConnectLightBatchSize) * kGPUWavefrontConnectLightTaskStride + 2ull * sizeof(uint32_t);
   }
   if (enable_merge_vertices) {
     // The power-of-two head table can approach two entries per retained light vertex,
@@ -579,8 +577,6 @@ const char* pipeline_stage_to_string(GPURaytracingRenderer::PipelineStage stage)
       return "CameraDirectLightAccumulate";
     case GPURaytracingRenderer::PipelineStage::CameraDirectHitAccumulate:
       return "CameraDirectHitAccumulate";
-    case GPURaytracingRenderer::PipelineStage::CameraConnectLightClear:
-      return "CameraConnectLightClear";
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareDiffuse:
       return "CameraConnectLightPrepareDiffuse";
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPreparePlastic:
@@ -845,8 +841,6 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
       return enable_connect_to_light && has_conductor;
     case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectric:
       return enable_connect_to_light && has_dielectric;
-    case GPURaytracingRenderer::PipelineStage::CameraConnectLightClear:
-      return enable_connect_vertices;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareDiffuse:
       return enable_connect_vertices && has_various_connect;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPreparePlastic:
@@ -3049,7 +3043,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   const uint64_t direct_light_work_buffer_size = std::max(direct_light_sample_buffer_size, direct_light_task_buffer_size);
   const uint64_t direct_light_result_buffer_size = static_cast<uint64_t>(path_capacity) * kGPUWavefrontDirectLightResultStride;
   const uint64_t connect_light_task_count = static_cast<uint64_t>(path_capacity) * static_cast<uint64_t>(kWavefrontConnectLightBatchSize);
-  const uint64_t connect_light_task_buffer_size = connect_light_task_count * kGPUWavefrontConnectLightTaskStride;
+  const uint64_t connect_light_task_buffer_size = connect_light_task_count * kGPUWavefrontConnectLightTaskStride + static_cast<uint64_t>(path_capacity) * 2ull * sizeof(uint32_t);
   const uint64_t connect_camera_task_buffer_size = static_cast<uint64_t>(path_capacity) * kGPUWavefrontConnectCameraTaskStride;
   const uint64_t connect_camera_result_buffer_size = static_cast<uint64_t>(path_capacity) * kGPUWavefrontConnectCameraResultStride;
   const uint64_t subsurface_state_buffer_size = static_cast<uint64_t>(path_capacity) * kGPUWavefrontSubsurfaceStateStride;
@@ -4025,12 +4019,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       }
     };
     const auto dispatch_stage_with_connect_light_length = [&](RHICommandBuffer cmd, PipelineStage stage, uint64_t argument_buffer_offset, uint32_t path_iteration,
-                                                            uint32_t connect_light_vertex_length, uint32_t connect_light_vertex_count, bool reset_light_cursor) {
+                                                            uint32_t connect_light_vertex_length, uint32_t connect_light_vertex_count, bool reset_light_cursor,
+                                                            bool initialize_connect_light_batch, uint32_t connect_light_cursor_slot) {
       GPURTConstants stage_constants = constants;
       stage_constants.path_iteration = path_iteration;
       stage_constants.connect_light_vertex_length = connect_light_vertex_length;
       stage_constants.dispatch_item_count = connect_light_vertex_count;
-      stage_constants.dispatch_item_offset = reset_light_cursor ? 1u : 0u;
+      stage_constants.dispatch_item_offset = (reset_light_cursor ? 1u : 0u) | (initialize_connect_light_batch ? 2u : 0u) | ((connect_light_cursor_slot & 1u) << 3u);
       ctx.cmd_set_pipeline(cmd, _pipelines[static_cast<uint32_t>(stage)]);
       ctx.cmd_push_constants(cmd, &stage_constants, sizeof(stage_constants));
       const uint32_t timing_end_query = begin_kernel_timing(cmd, stage);
@@ -4575,45 +4570,53 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             }
             if (connect_light_vertex_count > 0u) {
               const bool reset_light_cursor = _wavefront_connect_light_vertex_length == _wavefront_connect_light_history_bounces;
+              const uint32_t connect_light_batch_index = (_wavefront_connect_light_history_bounces - _wavefront_connect_light_vertex_length) / kWavefrontConnectLightBatchSize;
+              const uint32_t connect_light_cursor_slot = connect_light_batch_index & 1u;
               const uint64_t connect_light_argument_buffer_offset =
                 kGPUWavefrontConnectDispatchArgsOffset + static_cast<uint64_t>(connect_light_vertex_count - 1u) * kGPUWavefrontDispatchArgsStride;
-              dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightClear, connect_light_argument_buffer_offset, path_iteration,
-                _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor);
-              barrier_wavefront_buffers(cmd);
+              const uint32_t connect_light_prepare_stage_count =
+                static_cast<uint32_t>(has_various_connect) + static_cast<uint32_t>(has_plastic) + static_cast<uint32_t>(has_conductor) + static_cast<uint32_t>(has_dielectric);
+              bool initialize_connect_light_batch = true;
+              const auto dispatch_connect_light_prepare = [&](PipelineStage stage) {
+                const bool initialize_batch = initialize_connect_light_batch;
+                dispatch_stage_with_connect_light_length(cmd, stage, connect_light_argument_buffer_offset, path_iteration, _wavefront_connect_light_vertex_length,
+                  connect_light_vertex_count, reset_light_cursor && initialize_batch, initialize_batch, connect_light_cursor_slot);
+                initialize_connect_light_batch = false;
+                if (initialize_batch && (connect_light_prepare_stage_count > 1u)) {
+                  barrier_wavefront_buffers(cmd);
+                }
+              };
               if (has_various_connect) {
-                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightPrepareDiffuse, connect_light_argument_buffer_offset, path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor);
+                dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPrepareDiffuse);
               }
               if (has_plastic) {
-                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightPreparePlastic, connect_light_argument_buffer_offset, path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor);
+                dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPreparePlastic);
               }
               if (has_conductor) {
-                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightPrepareConductor, connect_light_argument_buffer_offset, path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor);
+                dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPrepareConductor);
               }
               if (has_dielectric) {
-                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightPrepareDielectric, connect_light_argument_buffer_offset, path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor);
+                dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPrepareDielectric);
               }
               barrier_wavefront_buffers(cmd);
               if (has_various_connect) {
                 dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveDiffuse, connect_light_argument_buffer_offset, path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor);
+                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
               }
               if (has_plastic) {
                 dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolvePlastic, connect_light_argument_buffer_offset, path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor);
+                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
               }
               if (has_conductor) {
                 dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveConductor, connect_light_argument_buffer_offset, path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor);
+                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
               }
               if (has_dielectric) {
                 dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveDielectric, connect_light_argument_buffer_offset, path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor);
+                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
               }
               rebuild_dispatch_args(cmd, path_iteration);
+              barrier_wavefront_buffers(cmd);
               dispatch_stage_indirect(cmd, PipelineStage::CameraConnectLightShadow, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueConnectLight), path_iteration);
               barrier_wavefront_buffers(cmd);
             }

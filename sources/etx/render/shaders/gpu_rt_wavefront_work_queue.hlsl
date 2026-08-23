@@ -106,6 +106,13 @@ uint wavefront_shadow_queue_count(GPUWavefrontResources resources, uint shadow_q
   return wavefront_work_queue_count(resources.shadow_queue_buffer, wavefront_shadow_queue_base_offset(resources, shadow_queue_index));
 }
 
+uint wavefront_shadow_queue_dispatch_count(GPUWavefrontResources resources, uint shadow_queue_index) {
+  if (resources.shadow_queue_buffer == kInvalidIndex) {
+    return 0u;
+  }
+  return WAVEFRONT_RO_BUFFER(resources.shadow_queue_buffer).Load(wavefront_shadow_queue_base_offset(resources, shadow_queue_index) + kGPUWavefrontQueuePad1Offset);
+}
+
 uint wavefront_shadow_queue_load(GPUWavefrontResources resources, uint shadow_queue_index, uint slot) {
   return wavefront_work_queue_load(resources.shadow_queue_buffer, wavefront_shadow_queue_base_offset(resources, shadow_queue_index), slot);
 }

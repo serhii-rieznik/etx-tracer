@@ -34,6 +34,12 @@ void wavefront_store_dispatch_args(RWByteAddressBuffer buffer, uint offset, uint
       const uint shadow_count = wavefront_shadow_queue_count(resources, queue_index);
       const uint offset = kGPUWavefrontShadowDispatchArgsOffset + queue_index * kGPUWavefrontDispatchArgsStride;
       wavefront_store_dispatch_args(dispatch_args, offset, shadow_count, 1u);
+      if ((queue_index == kGPUWavefrontShadowQueueConnectLight) && (resources.shadow_queue_buffer != kInvalidIndex)) {
+        const uint queue_base_offset = wavefront_shadow_queue_base_offset(resources, queue_index);
+        RWByteAddressBuffer shadow_queue = WAVEFRONT_RW_BUFFER(resources.shadow_queue_buffer);
+        shadow_queue.Store(queue_base_offset + kGPUWavefrontQueuePad1Offset, shadow_count);
+        shadow_queue.Store(queue_base_offset + kGPUWavefrontQueueCountOffset, 0u);
+      }
     }
   }
 
