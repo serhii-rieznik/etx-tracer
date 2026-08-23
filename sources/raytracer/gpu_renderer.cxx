@@ -297,10 +297,6 @@ uint64_t wavefront_tile_bytes_per_path(uint32_t integrator_features, bool has_su
     // plus one linked-list entry per vertex.
     result += static_cast<uint64_t>(light_history_bounces + 1u) * 3ull * sizeof(uint32_t);
   }
-  if (enable_connect_to_camera) {
-    result += kGPUWavefrontConnectCameraTaskStride;
-    result += kGPUWavefrontConnectCameraResultStride;
-  }
   return std::max<uint64_t>(1ull, result);
 }
 

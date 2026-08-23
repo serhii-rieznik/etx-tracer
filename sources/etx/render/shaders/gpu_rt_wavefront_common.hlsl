@@ -540,6 +540,7 @@ void wavefront_store_connect_light_candidate(uint descriptor_index, uint index, 
   buffer.Store(base_offset + kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset, candidate.previous_light_vertex_index);
   buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateFlagsOffset, candidate.flags);
   buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateSamplerSeedOffset, candidate.sampler_seed);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateLightMaterialClassOffset, candidate.light_material_class);
 }
 
 GPUWavefrontConnectLightCandidate wavefront_load_connect_light_candidate(uint descriptor_index, uint index) {
@@ -554,6 +555,7 @@ GPUWavefrontConnectLightCandidate wavefront_load_connect_light_candidate(uint de
   result_value.previous_light_vertex_index = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset);
   result_value.flags = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateFlagsOffset);
   result_value.sampler_seed = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateSamplerSeedOffset);
+  result_value.light_material_class = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateLightMaterialClassOffset);
   return result_value;
 }
 

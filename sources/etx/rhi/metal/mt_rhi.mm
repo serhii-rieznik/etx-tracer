@@ -3228,10 +3228,10 @@ void MTCommandBuffer::detach_submitted() {
 }
 
 void MTCommandBuffer::compute_barrier() {
-  if (@available(macOS 10.14, *)) {
-    if (_impl->compute_encoder != nil) {
-      [_impl->compute_encoder memoryBarrierWithScope:MTLBarrierScopeBuffers];
-    }
+  if (_impl->compute_encoder != nil) {
+    // An encoder boundary is a full compute dependency boundary and keeps long heterogeneous dispatch streams schedulable.
+    [_impl->compute_encoder endEncoding];
+    _impl->compute_encoder = nil;
   }
 }
 

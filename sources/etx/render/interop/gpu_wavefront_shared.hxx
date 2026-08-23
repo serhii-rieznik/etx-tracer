@@ -255,6 +255,7 @@ struct ETX_ALIGNED GPUWavefrontConnectLightCandidate {
   uint32_t previous_light_vertex_index ETX_INIT(kInvalidIndex);
   uint32_t flags ETX_INIT(0u);
   uint32_t sampler_seed ETX_INIT(0u);
+  uint32_t light_material_class ETX_INIT(MaterialClass::Undefined);
 };
 
 struct ETX_ALIGNED GPUWavefrontConnectLightTask {

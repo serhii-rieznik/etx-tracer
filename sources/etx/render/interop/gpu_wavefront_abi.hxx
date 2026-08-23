@@ -172,6 +172,7 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightCandidateLightVertexIndexOffs
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset = 48u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightCandidateFlagsOffset = 52u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightCandidateSamplerSeedOffset = 56u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightCandidateLightMaterialClassOffset = 60u;
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskStride = 112u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskShadowOriginOffset = 0u;
