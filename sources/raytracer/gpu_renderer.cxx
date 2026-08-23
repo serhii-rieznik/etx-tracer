@@ -3688,7 +3688,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (needs_full_rebuild) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_full_rebuild_resources");
     const auto full_rebuild_destroy_begin = std::chrono::steady_clock::now();
-    destroy_wavefront_buffers(ctx);
     destroy_scene_buffers(ctx);
     destroy_acceleration_structures(ctx);
     const auto full_rebuild_destroy_end = std::chrono::steady_clock::now();
@@ -3712,7 +3711,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     if (changes[UpdateFlags::Transforms]) {
       update_success = refit_top_level_acceleration_structure(ctx, scene.data());
       if (update_success == false) {
-        destroy_wavefront_buffers(ctx);
         destroy_scene_buffers(ctx);
         destroy_acceleration_structures(ctx);
         update_success = build_acceleration_structures(ctx, scene);
@@ -5007,9 +5005,13 @@ void GPURaytracingRenderer::on_scene_transform_interaction_finished(SceneReprese
 
 bool GPURaytracingRenderer::refit_top_level_acceleration_structure(RHIContext& ctx, const SceneData& scene_data) {
   if ((_tlas.valid() == false) || (_tlas_instance_buffer.valid() == false) || (_as_scratch_buffer.valid() == false)) {
+    log::warning("GPU RT: TLAS refit unavailable: tlas=%u instance_buffer=%u scratch_buffer=%u", _tlas.valid() ? 1u : 0u, _tlas_instance_buffer.valid() ? 1u : 0u,
+      _as_scratch_buffer.valid() ? 1u : 0u);
     return false;
   }
   if (scene_data.hierarchy.mesh_instances.size() != _tlas_instance_count) {
+    log::warning("GPU RT: TLAS refit unavailable: instance count changed from %u to %llu", _tlas_instance_count,
+      static_cast<unsigned long long>(scene_data.hierarchy.mesh_instances.size()));
     return false;
   }
 
@@ -5019,6 +5021,8 @@ bool GPURaytracingRenderer::refit_top_level_acceleration_structure(RHIContext& c
   for (uint32_t instance_index = 0u; instance_index < _tlas_instance_count; ++instance_index) {
     const ResolvedMeshInstance& resolved = scene_data.hierarchy.mesh_instances[instance_index];
     if (resolved.mesh_index >= _blas.size()) {
+      log::warning("GPU RT: TLAS refit unavailable: instance %u references mesh %u with %llu BLAS entries", instance_index, resolved.mesh_index,
+        static_cast<unsigned long long>(_blas.size()));
       return false;
     }
     RHIAccelerationStructureInstance& instance = _tlas_instance_staging.emplace_back();
@@ -5047,6 +5051,7 @@ bool GPURaytracingRenderer::refit_top_level_acceleration_structure(RHIContext& c
 
   const RHICommandBuffer command_buffer = ctx.get_command_buffer();
   if (command_buffer.valid() == false) {
+    log::warning("GPU RT: TLAS refit unavailable: failed to acquire a command buffer");
     return false;
   }
   ctx.command_buffer_begin(command_buffer);

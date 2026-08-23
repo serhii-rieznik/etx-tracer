@@ -274,10 +274,11 @@ struct Renderer {
     const bool camera_updated = _camera_controller->update(dt);
     const bool camera_input_active = _camera_controller->camera_navigation_input_active();
     if (camera_updated) {
-      if (scene.store_active_camera()) {
+      const bool scene_resources_changed = scene.store_active_camera();
+      if (scene_resources_changed) {
         scene.update_medium_bounds();
+        request_scene_transform_update();
       }
-      request_scene_transform_update();
       _camera_interaction_active = true;
       on_camera_changed(scene);
       return;

@@ -586,7 +586,7 @@ bool test_camera_interaction_queues_updates_until_input_released() {
   controller->add_mouse_delta(8.0f, 0.0f);
   renderer.update_camera(scene, 1.0f / 60.0f);
   if (check_condition((renderer.camera_changed_count == 1u) && (renderer.camera_steady_count == 0u), "camera motion starts one preview interaction") == false ||
-      check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::Transforms, "camera motion always queues a renderer update") == false) {
+      check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::None, "camera-only motion does not queue a scene-resource update") == false) {
     return false;
   }
 
