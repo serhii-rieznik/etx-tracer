@@ -283,7 +283,8 @@ void RTApplication::init(const ApplicationConfig& config) {
       submit_command({.type = ApplicationCommandType::LoadScene, .path = std::move(path)});
     };
     ui.callbacks.save_scene_file_selected = [this](std::string path) {
-      submit_command({.type = ApplicationCommandType::SaveScene, .path = std::move(path)});
+      std::string message = {};
+      return execute_application_command({.type = ApplicationCommandType::SaveScene, .path = std::move(path)}, message);
     };
     ui.callbacks.render_configuration_selected = [this](RendererMode mode, Integrator::Type integrator_type) {
       submit_command({.type = ApplicationCommandType::SetRenderConfiguration, .renderer = mode, .integrator = integrator_type});
@@ -314,11 +315,13 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.material_added = std::bind(&RTApplication::on_material_added, this);
     ui.callbacks.material_renamed = std::bind(&RTApplication::on_material_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
+    ui.callbacks.material_interaction_started = std::bind(&RTApplication::on_material_interaction_started, this);
+    ui.callbacks.material_interaction_finished = std::bind(&RTApplication::on_material_interaction_finished, this, std::placeholders::_1);
     ui.callbacks.medium_added = std::bind(&RTApplication::on_medium_added, this);
     ui.callbacks.medium_renamed = std::bind(&RTApplication::on_medium_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
     ui.callbacks.mesh_material_changed = std::bind(&RTApplication::on_mesh_material_changed, this, std::placeholders::_1, std::placeholders::_2);
-    ui.callbacks.mesh_renamed = std::bind(&RTApplication::on_mesh_renamed, this, std::placeholders::_1, std::placeholders::_2);
+    ui.callbacks.mesh_material_made_unique = std::bind(&RTApplication::on_make_mesh_material_unique, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
     ui.callbacks.emitter_added = std::bind(&RTApplication::on_emitter_added, this, std::placeholders::_1);
     ui.callbacks.emitter_deleted = std::bind(&RTApplication::on_emitter_deleted, this, std::placeholders::_1);
@@ -592,7 +595,9 @@ void RTApplication::sync_platform_color_scheme() {
   if (!_platform_color_scheme_initialized || (_platform_color_scheme != color_scheme)) {
     _platform_color_scheme_initialized = true;
     _platform_color_scheme = color_scheme;
-    render_context.set_ui_theme(color_scheme == PlatformColorScheme::Dark ? RHIImGuiTheme::Dark : RHIImGuiTheme::Light);
+    const RHIImGuiTheme theme = color_scheme == PlatformColorScheme::Dark ? RHIImGuiTheme::Dark : RHIImGuiTheme::Light;
+    render_context.set_ui_theme(theme);
+    ui.set_theme(theme);
   }
 }
 
@@ -635,6 +640,7 @@ void RTApplication::frame() {
     .film = film,
     .output_size = _active_renderer ? _active_renderer->output_size() : uint2{},
     .dt = render_frame_data.dt,
+    .scene_loaded = (_current_scene_file.empty() == false) && scene.valid(),
   };
   sync_ui_renderer_state();
   process_pending_image_requests();
@@ -806,6 +812,9 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   if (_active_renderer != nullptr) {
     _active_renderer->stop();
   }
+  ui.reset_scene_state();
+  _material_interaction_active = false;
+  _material_interaction_cpu_was_running = false;
   _material_render_resource_preparation_active = false;
   _restart_cpu_after_material_resource_preparation = false;
 
@@ -1107,10 +1116,11 @@ void RTApplication::on_options_changed() {
   }
 }
 
-void RTApplication::on_material_added() {
+uint32_t RTApplication::on_material_added() {
   mark_scene_dirty();
-  scene.add_material(nullptr);
+  const uint32_t material_index = scene.add_material(nullptr);
   notify_scene_might_have_changed();
+  return material_index;
 }
 
 void RTApplication::on_material_renamed(uint32_t index, const std::string& name) {
@@ -1142,11 +1152,45 @@ void RTApplication::on_material_changed(uint32_t index) {
   finish_material_render_resource_preparation(true);
 }
 
-void RTApplication::on_medium_added() {
+void RTApplication::on_material_interaction_started() {
+  if (_material_interaction_active) {
+    return;
+  }
+
+  _material_interaction_active = true;
+  _material_interaction_cpu_was_running = cpu_renderer.is_running();
+  if (_material_interaction_cpu_was_running) {
+    cpu_renderer.stop();
+  }
+}
+
+void RTApplication::on_material_interaction_finished(const std::vector<uint32_t>& material_indices) {
+  if (_material_interaction_active == false) {
+    return;
+  }
+
+  _material_interaction_active = false;
+  const bool cpu_was_running = _material_interaction_cpu_was_running;
+  _material_interaction_cpu_was_running = false;
+  if (material_indices.empty()) {
+    _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+    if (_restart_cpu_after_material_resource_preparation && (_material_render_resource_preparation_active == false)) {
+      cpu_renderer.restart();
+      _restart_cpu_after_material_resource_preparation = false;
+    }
+    return;
+  }
+
+  _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+  on_material_changed(material_indices.front());
+}
+
+uint32_t RTApplication::on_medium_added() {
   mark_scene_dirty();
-  scene.add_medium(nullptr);
+  const uint32_t medium_index = scene.add_medium(nullptr);
   scene.update_medium_bounds();
   notify_scene_might_have_changed();
+  return medium_index;
 }
 
 void RTApplication::on_medium_renamed(uint32_t index, const std::string& name) {
@@ -1177,10 +1221,47 @@ void RTApplication::on_mesh_material_changed(uint32_t mesh_index, uint32_t mater
   }
 }
 
-void RTApplication::on_mesh_renamed(uint32_t index, const std::string& name) {
-  mark_scene_dirty();
-  scene.rename_mesh(index, name.c_str());
-  notify_scene_might_have_changed();
+uint32_t RTApplication::on_make_mesh_material_unique(uint32_t mesh_index, uint32_t material_index) {
+  SceneData& scene_data = scene.data();
+  if ((mesh_index >= scene_data.meshes.size()) || (material_index >= scene_data.materials.size())) {
+    return kInvalidIndex;
+  }
+
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+    _restart_cpu_after_material_resource_preparation = true;
+  }
+
+  Material material = scene_data.materials[material_index];
+  const auto clone_spectrum = [&](uint32_t spectrum_index) {
+    return spectrum_index < scene_data.spectrum_values.size() ? scene_data.add_spectrum(scene_data.spectrum_values[spectrum_index]) : kInvalidIndex;
+  };
+  material.reflectance.spectrum_index = clone_spectrum(material.reflectance.spectrum_index);
+  material.scattering.spectrum_index = clone_spectrum(material.scattering.spectrum_index);
+  material.emission.spectrum_index = clone_spectrum(material.emission.spectrum_index);
+  material.subsurface.spectrum_index = clone_spectrum(material.subsurface.spectrum_index);
+  material.thinfilm.ior.eta_index = clone_spectrum(material.thinfilm.ior.eta_index);
+  material.thinfilm.ior.k_index = clone_spectrum(material.thinfilm.ior.k_index);
+  material.ext_ior.eta_index = clone_spectrum(material.ext_ior.eta_index);
+  material.ext_ior.k_index = clone_spectrum(material.ext_ior.k_index);
+  material.int_ior.eta_index = clone_spectrum(material.int_ior.eta_index);
+  material.int_ior.k_index = clone_spectrum(material.int_ior.k_index);
+  material.energy_compensation_interface_index = kInvalidIndex;
+  material.conductor_energy_compensation_interface_index = kInvalidIndex;
+
+  std::string source_name = "material";
+  for (const auto& [name, index] : scene_data.material_mapping) {
+    if (index == material_index) {
+      source_name = name;
+      break;
+    }
+  }
+  const std::string clone_name = source_name + " copy";
+  const uint32_t clone_index = scene_data.clone_material(material, clone_name.c_str());
+  scene.set_mesh_material(mesh_index, clone_index);
+  on_material_changed(clone_index);
+  return clone_index;
 }
 
 void RTApplication::on_emitter_changed(uint32_t index) {
@@ -1779,10 +1860,10 @@ void RTApplication::finish_material_render_resource_preparation(bool resources_r
   if (resources_ready) {
     notify_scene_might_have_changed();
   }
-  if (_restart_cpu_after_material_resource_preparation) {
+  if (_restart_cpu_after_material_resource_preparation && (_material_interaction_active == false)) {
     cpu_renderer.restart();
+    _restart_cpu_after_material_resource_preparation = false;
   }
-  _restart_cpu_after_material_resource_preparation = false;
 }
 
 void RTApplication::on_reload_shaders_selected() {

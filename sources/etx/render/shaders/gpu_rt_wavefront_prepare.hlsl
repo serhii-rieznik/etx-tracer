@@ -12,7 +12,7 @@
 
   uint2 output_pixel = wavefront_output_pixel(dtid.xy);
   uint pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
-  if ((constants.sample_index == 0u) && (constants.vcm_spectral_phase == 0u)) {
+  if (constants.sample_index == 0u) {
     wavefront_film_store(pixel_index, float4(0.0f, 0.0f, 0.0f, 0.0f));
   }
   if ((dtid.x == 0u) && (dtid.y == 0u)) {
@@ -51,7 +51,6 @@
   uint2 output_pixel = wavefront_output_pixel(dtid.xy);
   uint pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
   float4 value = wavefront_film_load(pixel_index);
-  uint spectral_phase_count = (scene_path_mode_is_vcm() && scene_uses_spectral_mode()) ? kSpectralPacketSize : 1u;
-  float sample_count = float(max(1u, (constants.sample_index + 1u) * spectral_phase_count));
+  float sample_count = float(max(1u, constants.sample_index + 1u));
   bindless_storage_textures[NonUniformResourceIndex(constants.output_image_index)][output_pixel] = float4(max(value.xyz / sample_count, float3(0.0f, 0.0f, 0.0f)), 1.0f);
 }

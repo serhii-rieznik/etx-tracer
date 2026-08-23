@@ -2589,7 +2589,10 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     if (timing_stats.supported == false) {
       log::warning("GPU kernel timestamps are not supported by the active backend");
     } else {
-      log::info("GPU kernel timing summary: total=%.3fms dropped_dispatches=%llu", timing_stats.total_ms, static_cast<unsigned long long>(timing_stats.dropped_dispatch_count));
+      const double kernel_coverage = (timing_stats.capture_elapsed_ms > 0.0) ? ((timing_stats.total_ms * 100.0) / timing_stats.capture_elapsed_ms) : 0.0;
+      log::info("GPU kernel timing summary: total=%.3fms profile_wall=%.3fms coverage=%.1f%% captured_samples=%llu dropped_dispatches=%llu", timing_stats.total_ms,
+        timing_stats.capture_elapsed_ms, kernel_coverage, static_cast<unsigned long long>(timing_stats.captured_sample_count),
+        static_cast<unsigned long long>(timing_stats.dropped_dispatch_count));
       for (const RendererKernelTiming& timing : timing_stats.kernels) {
         log::info("GPU kernel timing: %-42s calls=%llu total=%.3fms avg=%.3fus share=%.1f%%", timing.name.c_str(), static_cast<unsigned long long>(timing.dispatch_count),
           timing.total_ms, timing.average_ms * 1000.0, timing.percentage);

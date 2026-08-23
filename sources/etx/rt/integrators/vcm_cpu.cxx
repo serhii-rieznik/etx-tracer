@@ -106,13 +106,6 @@ struct CPUVCMImpl {
 
     status.current_iteration = vcm_iteration.iteration;
 
-    vcm_iteration.spectral_phase = 0u;
-    start_current_spectral_phase();
-  }
-
-  void start_current_spectral_phase() {
-    wait_for_tasks();
-
     _light_paths.clear();
     _light_paths.resize(rt.film().current_pixel_count());
 
@@ -147,7 +140,7 @@ struct CPUVCMImpl {
         if (step_result.splat) {
           const float3 val = step_result.value_to_splat.to_rgb_estimate();
           if (dot(val, val) > kEpsilon) {
-            film.submit(val * vcm_spectral_phase_weight(scene), step_result.splat_uv);
+            film.submit(val, step_result.splat_uv);
           }
         }
       }
@@ -194,7 +187,7 @@ struct CPUVCMImpl {
         state.merged *= vcm_iteration.vm_normalization;
         state.merged += state.gathered.to_rgb_estimate();
 
-        film.submit(state.merged * vcm_spectral_phase_weight(scene), {}, {}, pixel);
+        film.submit(state.merged, {}, {}, pixel);
       }
     }
   }
@@ -209,19 +202,12 @@ struct CPUVCMImpl {
     if (vcm_options.merge_vertices()) {
       _current_grid.construct(rt.scene(), _light_vertices.data(), _light_vertices.size(), vcm_iteration.current_radius, rt.scheduler());
     }
-
     mode = CPUVCMImpl::Mode::Camera;
     task_handle = rt.scheduler().schedule(rt.film().current_pixel_count(), &camera_gather);
   }
 
   void complete_camera_vertices() {
     const auto& scene = rt.scene();
-    if (vcm_iteration.spectral_phase + 1u < vcm_spectral_phase_count(scene)) {
-      vcm_iteration.spectral_phase += 1u;
-      start_current_spectral_phase();
-      return;
-    }
-
     rt.film().commit_iteration(vcm_iteration.iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp);
     status.completed_iterations += 1u;
     status.last_iteration_time = iteration_time.measure();

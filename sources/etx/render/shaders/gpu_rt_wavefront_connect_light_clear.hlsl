@@ -29,13 +29,12 @@
   for (uint item_index = 0u; item_index < constants.dispatch_item_count; ++item_index) {
     const uint light_vertex_length = constants.connect_light_vertex_length - item_index;
     const uint task_index = item_index * resources.path_capacity + dispatch_index;
-    GPUWavefrontConnectLightTask empty_task = (GPUWavefrontConnectLightTask)0;
-    empty_task.reserved1 = kInvalidIndex;
-    empty_task.reserved2 = kInvalidIndex;
+    uint light_vertex_index = kInvalidIndex;
+    uint previous_light_vertex_index = kInvalidIndex;
 
     if (resources.light_vertex_counter_buffer == kInvalidIndex) {
-      empty_task.reserved1 = wavefront_light_vertex_slot(path_index, light_vertex_length);
-      empty_task.reserved2 = wavefront_light_vertex_slot(path_index, light_vertex_length - 1u);
+      light_vertex_index = wavefront_light_vertex_slot(path_index, light_vertex_length);
+      previous_light_vertex_index = wavefront_light_vertex_slot(path_index, light_vertex_length - 1u);
     } else {
       while ((vertex_index != kInvalidIndex) && (vertex_path_length > light_vertex_length)) {
         vertex_index = wavefront_light_previous_vertex_index(resources, vertex_index);
@@ -43,13 +42,13 @@
       }
       if ((vertex_index != kInvalidIndex) && (vertex_path_length == light_vertex_length)) {
         const uint previous_vertex_index = wavefront_light_previous_vertex_index(resources, vertex_index);
-        empty_task.reserved1 = vertex_index;
-        empty_task.reserved2 = previous_vertex_index;
+        light_vertex_index = vertex_index;
+        previous_light_vertex_index = previous_vertex_index;
         vertex_index = previous_vertex_index;
         vertex_path_length -= 1u;
       }
     }
-    wavefront_store_connect_light_task(resources.connect_light_task_buffer, task_index, empty_task);
+    wavefront_initialize_connect_light_candidate(resources.connect_light_task_buffer, task_index, light_vertex_index, previous_light_vertex_index);
   }
 
   if (resources.light_vertex_counter_buffer != kInvalidIndex) {

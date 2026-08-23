@@ -124,7 +124,9 @@ struct RendererKernelTiming {
 struct RendererKernelTimingStats {
   std::vector<RendererKernelTiming> kernels = {};
   uint64_t dropped_dispatch_count = 0u;
+  uint64_t captured_sample_count = 0u;
   double total_ms = 0.0;
+  double capture_elapsed_ms = 0.0;
   bool supported = false;
   bool enabled = false;
 };

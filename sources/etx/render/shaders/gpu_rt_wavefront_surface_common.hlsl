@@ -185,7 +185,7 @@ SpectralResponse wavefront_compute_environment_direct_hit_contribution(SpectralQ
   if (scene_multiple_importance_sampling_enabled() && (state.path_length > 1u) && (scene_path_mode_is_path_tracing() == false)) {
     float2 emitter_pdfs = wavefront_environment_emitter_pdf(state.ray.d, previous_vertex);
     if (scene_path_mode_is_vcm()) {
-      mis_weight = 1.0f / (1.0f + state.forward_pdf * emitter_pdfs.y + state.reverse_pdf * emitter_pdfs.x);
+      mis_weight = 1.0f / (1.0f + state.forward_pdf * emitter_pdfs.y + state.reverse_pdf * emitter_pdfs.x * emitter_pdfs.y);
     } else {
       mis_weight = wavefront_direct_hit_weight(state.path_length, state.sampled_bsdf_pdf, previous_vertex.pdf_from_prev, previous_vertex.pdf_history,
         wavefront_path_vertex_connectible(previous_vertex), wavefront_path_vertex_mis_connectible(previous_vertex), emitter_pdfs.y, emitter_pdfs.x);

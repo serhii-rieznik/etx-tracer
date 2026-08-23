@@ -514,61 +514,74 @@ GPUWavefrontDirectLightResult wavefront_load_direct_light_result(uint descriptor
   return result_value;
 }
 
+void wavefront_initialize_connect_light_candidate(uint descriptor_index, uint index, uint light_vertex_index, uint previous_light_vertex_index) {
+  RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
+  uint base_offset = index * kGPUWavefrontConnectLightTaskStride;
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateLightVertexIndexOffset, light_vertex_index);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset, previous_light_vertex_index);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateFlagsOffset, 0u);
+}
+
+void wavefront_load_connect_light_candidate_indices(uint descriptor_index, uint index, out uint light_vertex_index, out uint previous_light_vertex_index) {
+  ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
+  uint base_offset = index * kGPUWavefrontConnectLightTaskStride;
+  light_vertex_index = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateLightVertexIndexOffset);
+  previous_light_vertex_index = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset);
+}
+
+void wavefront_store_connect_light_candidate(uint descriptor_index, uint index, GPUWavefrontConnectLightCandidate candidate) {
+  RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
+  uint base_offset = index * kGPUWavefrontConnectLightTaskStride;
+  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightCandidateCameraContributionOffset, candidate.camera_contribution);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateCameraPdfOffset, asuint(candidate.camera_pdf));
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateCameraReverseAreaPdfOffset, asuint(candidate.camera_reverse_area_pdf));
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateCameraReverseDirectionPdfOffset, asuint(candidate.camera_reverse_direction_pdf));
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateLightVertexIndexOffset, candidate.light_vertex_index);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset, candidate.previous_light_vertex_index);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateFlagsOffset, candidate.flags);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateSamplerSeedOffset, candidate.sampler_seed);
+}
+
+GPUWavefrontConnectLightCandidate wavefront_load_connect_light_candidate(uint descriptor_index, uint index) {
+  ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
+  uint base_offset = index * kGPUWavefrontConnectLightTaskStride;
+  GPUWavefrontConnectLightCandidate result_value = (GPUWavefrontConnectLightCandidate)0;
+  result_value.camera_contribution = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightCandidateCameraContributionOffset);
+  result_value.camera_pdf = asfloat(buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateCameraPdfOffset));
+  result_value.camera_reverse_area_pdf = asfloat(buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateCameraReverseAreaPdfOffset));
+  result_value.camera_reverse_direction_pdf = asfloat(buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateCameraReverseDirectionPdfOffset));
+  result_value.light_vertex_index = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateLightVertexIndexOffset);
+  result_value.previous_light_vertex_index = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset);
+  result_value.flags = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateFlagsOffset);
+  result_value.sampler_seed = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateSamplerSeedOffset);
+  return result_value;
+}
+
 void wavefront_store_connect_light_task(uint descriptor_index, uint index, GPUWavefrontConnectLightTask task) {
   RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
   uint base_offset = index * kGPUWavefrontConnectLightTaskStride;
-  wavefront_store_ray(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowRayOffset, task.shadow_ray);
-  wavefront_store_float3(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowTargetOffset, task.shadow_target);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskReserved0Offset, task.reserved0);
-  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskContributionOffset, task.contribution);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskMisWeightOffset, asuint(task.mis_weight));
-  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskPixelIndexOffset, task.pixel_index);
+  wavefront_store_float3(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowOriginOffset, task.shadow_origin);
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskMediumIndexOffset, task.medium_index);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskFlagsOffset, task.flags);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskPathIndexOffset, task.path_index);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskSamplerSeedOffset, task.sampler_seed);
+  wavefront_store_float3(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowTargetOffset, task.shadow_target);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskPixelIndexOffset, task.pixel_index);
+  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskContributionOffset, task.contribution);
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskInlineMediumExtinctionOffset, task.inline_medium_extinction);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskSamplerSeedOffset, task.sampler_seed);
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskInlineMediumFlagsOffset, task.inline_medium_flags);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskReserved1Offset, task.reserved1);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskReserved2Offset, task.reserved2);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskReserved3Offset, task.reserved3);
 }
 
 GPUWavefrontConnectLightTask wavefront_load_connect_light_task(uint descriptor_index, uint index) {
   ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
   uint base_offset = index * kGPUWavefrontConnectLightTaskStride;
   GPUWavefrontConnectLightTask result_value = (GPUWavefrontConnectLightTask)0;
-  result_value.shadow_ray = wavefront_load_ray(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowRayOffset);
-  result_value.shadow_target = wavefront_load_float3(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowTargetOffset);
-  result_value.reserved0 = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskReserved0Offset);
-  result_value.contribution = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskContributionOffset);
-  result_value.mis_weight = asfloat(buffer.Load(base_offset + kGPUWavefrontConnectLightTaskMisWeightOffset));
-  result_value.pixel_index = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskPixelIndexOffset);
+  result_value.shadow_origin = wavefront_load_float3(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowOriginOffset);
   result_value.medium_index = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskMediumIndexOffset);
-  result_value.flags = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskFlagsOffset);
-  result_value.path_index = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskPathIndexOffset);
-  result_value.sampler_seed = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskSamplerSeedOffset);
+  result_value.shadow_target = wavefront_load_float3(buffer, base_offset + kGPUWavefrontConnectLightTaskShadowTargetOffset);
+  result_value.pixel_index = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskPixelIndexOffset);
+  result_value.contribution = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskContributionOffset);
   result_value.inline_medium_extinction = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskInlineMediumExtinctionOffset);
+  result_value.sampler_seed = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskSamplerSeedOffset);
   result_value.inline_medium_flags = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskInlineMediumFlagsOffset);
-  result_value.reserved1 = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskReserved1Offset);
-  result_value.reserved2 = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskReserved2Offset);
-  result_value.reserved3 = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskReserved3Offset);
-  return result_value;
-}
-
-void wavefront_store_connect_light_result(uint descriptor_index, uint index, GPUWavefrontConnectLightResult result_value) {
-  RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
-  uint base_offset = index * kGPUWavefrontConnectLightResultStride;
-  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightResultTransmittanceOffset, result_value.transmittance);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightResultVisibleOffset, result_value.visible);
-}
-
-GPUWavefrontConnectLightResult wavefront_load_connect_light_result(uint descriptor_index, uint index) {
-  ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
-  uint base_offset = index * kGPUWavefrontConnectLightResultStride;
-  GPUWavefrontConnectLightResult result_value = (GPUWavefrontConnectLightResult)0;
-  result_value.transmittance = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightResultTransmittanceOffset);
-  result_value.visible = buffer.Load(base_offset + kGPUWavefrontConnectLightResultVisibleOffset);
   return result_value;
 }
 
@@ -786,8 +799,7 @@ SpectralQuery wavefront_vcm_iteration_spectral_query() {
   SpectralQuery spect = spectral_query_sample();
   uint iteration_seed = scene_random_seed(0u, constants.sample_index);
   if (scene_uses_spectral_mode()) {
-    SpectralQuery packet = spectral_query_packet_sample(rnd01(iteration_seed));
-    spect = spectral_query_packet_lane(packet, constants.vcm_spectral_phase);
+    spect = spectral_query_packet_sample(rnd01(iteration_seed));
   }
   return spect;
 }

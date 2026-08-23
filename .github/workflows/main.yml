@@ -212,30 +212,27 @@ jobs:
         shell: pwsh
         run: |
           Set-Location build
-          cmake --build . --config Release --parallel 8 --target raytracer
+          cmake --build . --config Release --parallel 8 --target raytracer raytracer_shader_package
 
       - name: Build raytracer (macOS)
         if: runner.os == 'macOS'
         run: |
           cd build
-          cmake --build . --config Release --target raytracer --verbose
+          cmake --build . --config Release --target raytracer_app --verbose
 
       - name: Verify build artifacts (macOS)
         if: runner.os == 'macOS'
         run: |
           cd build
-          echo "Checking for raytracer executable..."
+          echo "Checking for ETX Tracer.app..."
           ls -la ../bin/
-          if [ -f "../bin/raytracer" ]; then
-            echo "Found raytracer executable"
-            file ../bin/raytracer
-          elif [ -f "raytracer" ]; then
-            echo "Found raytracer in build directory"
-            file raytracer
+          if [ -x "../bin/ETX Tracer.app/Contents/MacOS/ETX Tracer" ]; then
+            echo "Found ETX Tracer.app"
+            codesign --verify --deep --strict "../bin/ETX Tracer.app"
           else
-            echo "Raytracer executable not found in expected locations"
+            echo "ETX Tracer.app was not found"
             echo "Checking build directory contents:"
-            find . -name "*raytracer*" 2>/dev/null || echo "No raytracer files found"
+            find .. -name "*.app" 2>/dev/null || echo "No application bundles found"
             exit 1
           fi
 

@@ -69,12 +69,14 @@ struct UI {
     const Film& film;
     uint2 output_size = {};
     float dt = 0.0f;
+    bool scene_loaded = false;
   };
 
   UI() = default;
   ~UI() = default;
 
   void build(SceneRepresentation& scene_rep, const FrameData& data);
+  void reset_scene_state();
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
@@ -150,6 +152,10 @@ struct UI {
     _embedded_toolbar_enabled = value;
   }
 
+  void set_theme(RHIImGuiTheme theme) {
+    _theme = theme;
+  }
+
   bool gpu_renderer_available() const {
     return _gpu_renderer_available;
   }
@@ -215,7 +221,7 @@ struct UI {
     std::function<void(std::string)> reference_image_selected;
     std::function<void(std::string, SaveImageMode)> save_image_selected;
     std::function<void(std::string)> scene_file_selected;
-    std::function<void(std::string)> save_scene_file_selected;
+    std::function<bool(std::string)> save_scene_file_selected;
     std::function<void(RendererMode, Integrator::Type)> render_configuration_selected;
     std::function<void(bool)> stop_selected;
     std::function<void()> run_selected;
@@ -226,14 +232,16 @@ struct UI {
     std::function<void()> cancel_renderer_preparation_selected;
     std::function<void()> options_changed;
     std::function<void()> use_image_as_reference;
-    std::function<void()> material_added;
+    std::function<uint32_t()> material_added;
     std::function<void(uint32_t, const std::string&)> material_renamed;
     std::function<void(uint32_t)> material_changed;
-    std::function<void()> medium_added;
+    std::function<void()> material_interaction_started;
+    std::function<void(const std::vector<uint32_t>&)> material_interaction_finished;
+    std::function<uint32_t()> medium_added;
     std::function<void(uint32_t, const std::string&)> medium_renamed;
     std::function<void(uint32_t)> medium_changed;
-    std::function<void(uint32_t, uint32_t)> mesh_material_changed;  // mesh_index, new_material_index
-    std::function<void(uint32_t, const std::string&)> mesh_renamed;
+    std::function<void(uint32_t, uint32_t)> mesh_material_changed;          // mesh_index, new_material_index
+    std::function<uint32_t(uint32_t, uint32_t)> mesh_material_made_unique;  // mesh_index, source_material_index
     std::function<void(uint32_t)> emitter_changed;
     std::function<void(uint32_t)> emitter_added;  // 0=environment, 1=directional, 2=atmosphere
     std::function<bool(uint32_t)> emitter_deleted;
@@ -267,7 +275,6 @@ struct UI {
     Node,
     Material,
     Medium,
-    Mesh,
     Emitter,
     Rendering,  // Combined Scene + Integrator properties
   };
@@ -275,8 +282,8 @@ struct UI {
   bool build_options(Options&);
   void quit();
   void select_scene_file() const;
-  void save_scene_file() const;
-  void save_scene_file_as() const;
+  bool save_scene_file() const;
+  bool save_scene_file_as() const;
   void save_image(SaveImageMode mode) const;
   void load_image() const;
   bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&);
@@ -294,6 +301,7 @@ struct UI {
   void update_name_buffer(SelectionKind kind, int32_t index, const char* current_name);
 
   void reset_selection();
+  void clear_selection_history();
   uint32_t selected_material_count() const;
   bool material_list_position_selected(int32_t index) const;
   void set_single_material_selection(int32_t index, bool track_history);
@@ -301,6 +309,8 @@ struct UI {
   void set_material_selection_range(int32_t index);
   std::vector<uint32_t> selected_material_indices(SceneRepresentation& scene_rep) const;
   void apply_material_changes(SceneRepresentation& scene_rep, const std::vector<uint32_t>& material_indices, const Material& before, const Material& after) const;
+  void queue_material_change(uint32_t material_index);
+  void finish_material_interaction();
   void reload_geometry();
   void reload_scene();
   void set_selection(SelectionKind kind, int32_t index, bool track_history = true);
@@ -339,10 +349,11 @@ struct UI {
   void build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_atmosphere_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  void build_mesh_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
+  uint32_t build_mesh_material_assignment(SceneRepresentation& scene_rep, uint32_t mesh_index);
+  uint32_t material_mesh_usage_count(const SceneRepresentation& scene_rep, uint32_t material_index) const;
+  void build_node_appearance_properties(SceneRepresentation& scene_rep, const SceneNode& node, uint32_t attachment_end, const FrameData& data);
   void build_medium_resource_properties(SceneRepresentation& scene_rep, uint32_t medium_index);
   void build_emitter_resource_properties(SceneRepresentation& scene_rep, uint32_t emitter_index, const FrameData& data, bool standalone_actions);
-  void build_mesh_resource_properties(SceneRepresentation& scene_rep, uint32_t mesh_index, bool show_links, const FrameData& data);
   void build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, bool attachment_enabled, const FrameData& data);
   void build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_integrator_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
@@ -463,6 +474,9 @@ struct UI {
   bool _node_transform_editor_interaction_active = false;
   bool _node_transform_editor_interaction_rendered_this_frame = false;
   int32_t _node_transform_editor_interaction_node_index = -1;
+  bool _material_interaction_active = false;
+  bool _material_editor_rendered_this_frame = false;
+  std::vector<uint32_t> _material_interaction_indices = {};
 
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;
@@ -474,6 +488,7 @@ struct UI {
   std::vector<SelectionState> _selection_history;
   int32_t _selection_history_cursor = -1;
   uint32_t _ui_setup = UIDefaults;
+  RHIImGuiTheme _theme = RHIImGuiTheme::Dark;
   bool _embedded_menu_enabled = true;
   uint32_t _font_image = 0u;
   std::unordered_map<std::string, SpectrumEditorState> _spectrum_editors;
@@ -496,6 +511,7 @@ struct UI {
   bool _reset_layout_requested = false;
   bool _scene_dirty = false;
   bool _unsaved_changes_modal_requested = false;
+  bool _unsaved_save_failed = false;
   bool _skip_unsaved_check_once = false;
   MenuCommand _pending_menu_command = MenuCommand::Quit;
   std::string _pending_menu_value = {};

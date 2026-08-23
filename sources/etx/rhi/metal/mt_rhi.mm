@@ -47,6 +47,7 @@ static_assert(kMetalBindlessBindingCount == kRHIMetalBindlessBindingCount);
 static_assert(kInvalidMetalBufferIndex == kRHIInvalidMetalBufferIndex);
 constexpr size_t kMetalMaxColorAttachments = 8u;
 constexpr uint32_t kMetalShaderCacheVersion = 2u;
+constexpr uint32_t kMetalTimestampQueryCount = 2048u;
 constexpr uint32_t kRHIAccelerationStructureInstanceFlagDisableTriangleCulling = 1u << 0u;
 constexpr uint32_t kRHIAccelerationStructureInstanceFlagFrontFacingCCW = 1u << 1u;
 constexpr uint32_t kRHIAccelerationStructureInstanceFlagForceOpaque = 1u << 2u;
@@ -666,6 +667,12 @@ class MTCommandBuffer::Impl {
   id<MTLRenderCommandEncoder> render_encoder = nil;
   id<MTLComputeCommandEncoder> compute_encoder = nil;
   id<MTLBlitCommandEncoder> blit_encoder = nil;
+  id<MTLCounterSampleBuffer> timestamp_sample_buffer = nil;
+  bool timestamp_sample_buffer_allocation_failed = false;
+  uint32_t timestamp_scope_begin_query = ~0u;
+  uint32_t timestamp_scope_end_query = ~0u;
+  bool timestamp_scope_active = false;
+  bool timestamp_scope_uses_stage_sampling = false;
 
   RHIPipeline current_pipeline = {};
   std::array<uint8_t, 4096> push_constants = {};
@@ -702,9 +709,11 @@ class MTContext::Impl {
   MTDevice device = {};
   MTBindlessManager bindless_manager = {};
   std::unordered_map<RHICommandBuffer, std::unique_ptr<MTCommandBuffer>> command_buffers = {};
+  std::unordered_map<RHICommandBuffer, id<MTLCounterSampleBuffer>> submitted_timestamp_sample_buffers = {};
 
   id<MTLDevice> metal_device = nil;
   id<MTLCommandQueue> command_queue = nil;
+  id<MTLCounterSet> timestamp_counter_set = nil;
   CAMetalLayer* metal_layer = nil;
   id<CAMetalDrawable> current_drawable = nil;
 
@@ -722,6 +731,8 @@ class MTContext::Impl {
   uint64_t next_command_buffer_serial = 1u;
   bool headless = false;
   bool supports_ray_tracing = false;
+  bool supports_timestamps = false;
+  bool supports_timestamp_dispatch_sampling = false;
 };
 
 static void reset_command_buffer_state(MTCommandBuffer::Impl* impl) {
@@ -738,6 +749,67 @@ static void reset_command_buffer_state(MTCommandBuffer::Impl* impl) {
   impl->current_color_attachment_count = 0u;
   impl->current_depth_attachment = {};
   impl->current_depth_final_state = RHIResourceState::Undefined;
+  impl->timestamp_sample_buffer_allocation_failed = false;
+  impl->timestamp_scope_begin_query = ~0u;
+  impl->timestamp_scope_end_query = ~0u;
+  impl->timestamp_scope_active = false;
+  impl->timestamp_scope_uses_stage_sampling = false;
+}
+
+static id<MTLComputeCommandEncoder> ensure_compute_encoder(MTCommandBuffer::Impl* impl) {
+  if ((impl == nullptr) || (impl->command_buffer == nil)) {
+    return nil;
+  }
+
+  [impl->render_encoder endEncoding];
+  impl->render_encoder = nil;
+  [impl->blit_encoder endEncoding];
+  impl->blit_encoder = nil;
+  if (impl->compute_encoder == nil) {
+    if (impl->timestamp_scope_active && impl->timestamp_scope_uses_stage_sampling) {
+      MTLComputePassDescriptor* descriptor = [[MTLComputePassDescriptor alloc] init];
+      MTLComputePassSampleBufferAttachmentDescriptor* attachment = descriptor.sampleBufferAttachments[0];
+      attachment.sampleBuffer = impl->timestamp_sample_buffer;
+      attachment.startOfEncoderSampleIndex = impl->timestamp_scope_begin_query;
+      attachment.endOfEncoderSampleIndex = impl->timestamp_scope_end_query;
+      impl->compute_encoder = [impl->command_buffer computeCommandEncoderWithDescriptor:descriptor];
+      [descriptor release];
+    } else {
+      impl->compute_encoder = [impl->command_buffer computeCommandEncoder];
+    }
+  }
+  return impl->compute_encoder;
+}
+
+static bool ensure_timestamp_sample_buffer(MTCommandBuffer::Impl* command_buffer, id<MTLDevice> device, id<MTLCounterSet> counter_set) {
+  if ((command_buffer == nullptr) || (device == nil) || (counter_set == nil)) {
+    return false;
+  }
+  if (command_buffer->timestamp_sample_buffer_allocation_failed) {
+    return false;
+  }
+  if (command_buffer->timestamp_sample_buffer != nil) {
+    return true;
+  }
+
+  MTLCounterSampleBufferDescriptor* descriptor = [[MTLCounterSampleBufferDescriptor alloc] init];
+  descriptor.counterSet = counter_set;
+  descriptor.label = @"ETX timestamp queries";
+  descriptor.storageMode = MTLStorageModeShared;
+  descriptor.sampleCount = kMetalTimestampQueryCount;
+  NSError* error = nil;
+  command_buffer->timestamp_sample_buffer = [device newCounterSampleBufferWithDescriptor:descriptor error:&error];
+  [descriptor release];
+  if (command_buffer->timestamp_sample_buffer == nil) {
+    command_buffer->timestamp_sample_buffer_allocation_failed = true;
+    const char* error_message = (error != nil) ? [[error localizedDescription] UTF8String] : nullptr;
+    if (error_message == nullptr) {
+      error_message = "unknown error";
+    }
+    log::error("Metal RHI: failed to create timestamp sample buffer: %s", error_message);
+    return false;
+  }
+  return true;
 }
 
 static MTLPrimitiveAccelerationStructureDescriptor* create_metal_blas_descriptor(const RHIAccelerationStructureGeometry* geometries, uint32_t geometry_count, MTDevice::Impl* device, std::string* out_error = nullptr) {
@@ -1479,27 +1551,56 @@ static bool create_stage_resources(MTDevice::Impl* device, const MTBindlessManag
     return false;
   }
 
-  NSString* source_text = make_nsstring(shader_desc.spirv_data, static_cast<size_t>(shader_desc.spirv_size));
-  if (source_text == nil) {
-    out_error = "Metal shader source is empty.";
-    return false;
-  }
-
-  if (([source_text rangeOfString:@"ETX_METAL_UNSUPPORTED_OVERLAPPING_BINDLESS"].location != NSNotFound) || ([source_text rangeOfString:@"Overlapping binding:"].location != NSNotFound)) {
-    out_error =
-      "Metal shader translation produced overlapping bindless descriptor layouts. "
-      "The current Metal RHI cannot safely encode mixed bindless resource classes yet.";
-    return false;
-  }
   if (shader_desc.metal_metadata.valid == false) {
     out_error = "Metal shader binding metadata is missing.";
     return false;
   }
 
-  const char* utf8_source = [source_text UTF8String];
-  const std::string source_string = (utf8_source != nullptr) ? utf8_source : std::string();
-
-  id<MTLLibrary> library = load_or_create_cached_metal_library(device, source_string, shader_desc.cache_key, shader_desc.content_hash, out_error);
+  id<MTLLibrary> library = nil;
+  if (shader_desc.format == RHIShaderBinaryFormat::MetalLibrary) {
+    if ((shader_desc.spirv_data == nullptr) || (shader_desc.spirv_size == 0u)) {
+      out_error = "Packaged Metal shader library is empty.";
+      return false;
+    }
+    const uint64_t content_hash = (shader_desc.content_hash != 0u) ? shader_desc.content_hash : etx_hash64(shader_desc.spirv_data, static_cast<size_t>(shader_desc.spirv_size));
+    const uint64_t cache_key = (shader_desc.cache_key != 0u) ? shader_desc.cache_key : content_hash;
+    if (const auto iterator = device->library_cache.find(cache_key); (iterator != device->library_cache.end()) && (iterator->second.content_hash == content_hash)) {
+      library = iterator->second.library;
+    } else {
+      dispatch_data_t library_data = dispatch_data_create(shader_desc.spirv_data, static_cast<size_t>(shader_desc.spirv_size), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), DISPATCH_DATA_DESTRUCTOR_DEFAULT);
+      NSError* library_error = nil;
+      library = [device->metal_device newLibraryWithData:library_data error:&library_error];
+      dispatch_release(library_data);
+      if (library == nil) {
+        out_error = library_error ? std::string([[library_error localizedDescription] UTF8String]) : "Failed to load packaged Metal shader library.";
+        return false;
+      }
+      if (iterator != device->library_cache.end()) {
+        [iterator->second.library release];
+        iterator->second = {content_hash, library};
+      } else {
+        device->library_cache.emplace(cache_key, MTLibraryCacheEntry{content_hash, library});
+      }
+    }
+  } else if (shader_desc.format == RHIShaderBinaryFormat::MetalSource) {
+    NSString* source_text = make_nsstring(shader_desc.spirv_data, static_cast<size_t>(shader_desc.spirv_size));
+    if (source_text == nil) {
+      out_error = "Metal shader source is empty.";
+      return false;
+    }
+    if (([source_text rangeOfString:@"ETX_METAL_UNSUPPORTED_OVERLAPPING_BINDLESS"].location != NSNotFound) || ([source_text rangeOfString:@"Overlapping binding:"].location != NSNotFound)) {
+      out_error =
+        "Metal shader translation produced overlapping bindless descriptor layouts. "
+        "The current Metal RHI cannot safely encode mixed bindless resource classes yet.";
+      return false;
+    }
+    const char* utf8_source = [source_text UTF8String];
+    const std::string source_string = (utf8_source != nullptr) ? utf8_source : std::string();
+    library = load_or_create_cached_metal_library(device, source_string, shader_desc.cache_key, shader_desc.content_hash, out_error);
+  } else {
+    out_error = "Metal shader binary format is unsupported.";
+    return false;
+  }
   if (library == nil) {
     return false;
   }
@@ -1582,6 +1683,19 @@ MTContext::MTContext()
   }
 
   _impl->supports_ray_tracing = device_reports_raytracing(_impl->metal_device);
+  if (@available(macOS 11.0, *)) {
+    _impl->supports_timestamp_dispatch_sampling = [_impl->metal_device supportsCounterSampling:MTLCounterSamplingPointAtDispatchBoundary];
+    const bool supports_timestamp_stage_sampling = [_impl->metal_device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary];
+    if (_impl->supports_timestamp_dispatch_sampling || supports_timestamp_stage_sampling) {
+      for (id<MTLCounterSet> counter_set in _impl->metal_device.counterSets) {
+        if ([counter_set.name isEqualToString:MTLCommonCounterSetTimestamp]) {
+          _impl->timestamp_counter_set = [counter_set retain];
+          _impl->supports_timestamps = true;
+          break;
+        }
+      }
+    }
+  }
   _impl->device._impl->command_queue = _impl->command_queue;
   _impl->device._impl->bindless_manager = &_impl->bindless_manager;
   prune_obsolete_metal_cache_versions(metal_library_cache_root_directory());
@@ -1648,6 +1762,11 @@ MTContext::~MTContext() {
       }
     }
     _impl->command_buffers.clear();
+    for (auto& [handle, sample_buffer] : _impl->submitted_timestamp_sample_buffers) {
+      (void)handle;
+      [sample_buffer release];
+    }
+    _impl->submitted_timestamp_sample_buffers.clear();
     for (auto& [hash, entry] : _impl->device._impl->library_cache) {
       (void)hash;
       [entry.library release];
@@ -1659,6 +1778,8 @@ MTContext::~MTContext() {
     _impl->metal_layer = nil;
     [_impl->command_queue release];
     _impl->command_queue = nil;
+    [_impl->timestamp_counter_set release];
+    _impl->timestamp_counter_set = nil;
   }
   delete _impl;
 }
@@ -1850,7 +1971,7 @@ RHICapabilities MTContext::capabilities() const {
   return {
     .supports_swapchain = has_swapchain() || _impl->headless,
     .supports_bindless = true,
-    .supports_timestamps = false,
+    .supports_timestamps = supports_timestamps(),
     .supports_ray_tracing = _impl->supports_ray_tracing,
   };
 }
@@ -1870,6 +1991,11 @@ RHICommandBuffer MTContext::get_async_command_buffer() {
 
 void MTContext::destroy_command_buffer(RHICommandBuffer cmd) {
   _impl->polled_completion_results.erase(cmd);
+  auto timestamp_it = _impl->submitted_timestamp_sample_buffers.find(cmd);
+  if (timestamp_it != _impl->submitted_timestamp_sample_buffers.end()) {
+    [timestamp_it->second release];
+    _impl->submitted_timestamp_sample_buffers.erase(timestamp_it);
+  }
   auto it = _impl->command_buffers.find(cmd);
   if (it == _impl->command_buffers.end()) {
     return;
@@ -1942,6 +2068,16 @@ void MTContext::submit_command_buffer(const RHISubmitInfo& info) {
   }
   [submitted_command_buffer commit];
   [submitted_command_buffer retain];
+  if (command_buffer->_impl->timestamp_sample_buffer != nil) {
+    auto existing_it = _impl->submitted_timestamp_sample_buffers.find(info.command_buffer);
+    if (existing_it != _impl->submitted_timestamp_sample_buffers.end()) {
+      [existing_it->second release];
+      existing_it->second = command_buffer->_impl->timestamp_sample_buffer;
+    } else {
+      _impl->submitted_timestamp_sample_buffers.emplace(info.command_buffer, command_buffer->_impl->timestamp_sample_buffer);
+    }
+    command_buffer->_impl->timestamp_sample_buffer = nil;
+  }
   reap_completed_command_buffers(_impl->inflight_command_buffers);
   _impl->inflight_command_buffers.push_back(inflight_submission);
   command_buffer->detach_submitted();
@@ -2052,15 +2188,105 @@ void MTContext::cmd_dispatch_indirect(RHICommandBuffer cmd, RHIBindlessHandle ar
 }
 
 void MTContext::cmd_reset_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count) {
-  (void)cmd;
-  (void)first_query;
-  (void)query_count;
+  if (supports_timestamps() == false) {
+    return;
+  }
+  if ((query_count == 0u) || (first_query >= kMetalTimestampQueryCount) || (query_count > (kMetalTimestampQueryCount - first_query))) {
+    log::error("Metal RHI: invalid timestamp query range: first=%u count=%u (max=%u)", first_query, query_count, kMetalTimestampQueryCount);
+    return;
+  }
+
+  MTCommandBuffer* command_buffer = _impl->find_command_buffer(cmd);
+  if ((command_buffer == nullptr) || (command_buffer->_impl->command_buffer == nil)) {
+    log::error("Metal RHI: cannot reset timestamps for an invalid command buffer");
+    return;
+  }
+  ensure_timestamp_sample_buffer(command_buffer->_impl, _impl->metal_device, _impl->timestamp_counter_set);
 }
 
 void MTContext::cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index, RHITimestampStage stage) {
-  (void)cmd;
-  (void)query_index;
   (void)stage;
+  if (supports_timestamps() == false) {
+    return;
+  }
+  if (query_index >= kMetalTimestampQueryCount) {
+    log::error("Metal RHI: invalid timestamp query index %u (max=%u)", query_index, kMetalTimestampQueryCount);
+    return;
+  }
+
+  MTCommandBuffer* command_buffer = _impl->find_command_buffer(cmd);
+  if ((command_buffer == nullptr) || (ensure_timestamp_sample_buffer(command_buffer->_impl, _impl->metal_device, _impl->timestamp_counter_set) == false)) {
+    return;
+  }
+  if (_impl->supports_timestamp_dispatch_sampling == false) {
+    return;
+  }
+
+  id<MTLComputeCommandEncoder> encoder = ensure_compute_encoder(command_buffer->_impl);
+  if (encoder != nil) {
+    [encoder sampleCountersInBuffer:command_buffer->_impl->timestamp_sample_buffer atSampleIndex:query_index withBarrier:YES];
+  }
+}
+
+void MTContext::cmd_begin_timestamp_scope(RHICommandBuffer cmd, uint32_t begin_query_index, uint32_t end_query_index, RHITimestampStage stage) {
+  (void)stage;
+  if ((begin_query_index >= kMetalTimestampQueryCount) || (end_query_index >= kMetalTimestampQueryCount)) {
+    log::error("Metal RHI: invalid timestamp scope: begin=%u end=%u (max=%u)", begin_query_index, end_query_index, kMetalTimestampQueryCount);
+    return;
+  }
+
+  MTCommandBuffer* command_buffer = _impl->find_command_buffer(cmd);
+  if ((command_buffer == nullptr) || (ensure_timestamp_sample_buffer(command_buffer->_impl, _impl->metal_device, _impl->timestamp_counter_set) == false)) {
+    return;
+  }
+  if (command_buffer->_impl->timestamp_scope_active) {
+    log::error("Metal RHI: nested timestamp scopes are unsupported");
+    return;
+  }
+
+  command_buffer->_impl->timestamp_scope_begin_query = begin_query_index;
+  command_buffer->_impl->timestamp_scope_end_query = end_query_index;
+  command_buffer->_impl->timestamp_scope_active = true;
+  command_buffer->_impl->timestamp_scope_uses_stage_sampling = _impl->supports_timestamp_dispatch_sampling == false;
+  if (_impl->supports_timestamp_dispatch_sampling) {
+    id<MTLComputeCommandEncoder> encoder = ensure_compute_encoder(command_buffer->_impl);
+    if (encoder != nil) {
+      [encoder sampleCountersInBuffer:command_buffer->_impl->timestamp_sample_buffer atSampleIndex:begin_query_index withBarrier:YES];
+    }
+    return;
+  }
+
+  [command_buffer->_impl->render_encoder endEncoding];
+  command_buffer->_impl->render_encoder = nil;
+  [command_buffer->_impl->compute_encoder endEncoding];
+  command_buffer->_impl->compute_encoder = nil;
+  [command_buffer->_impl->blit_encoder endEncoding];
+  command_buffer->_impl->blit_encoder = nil;
+}
+
+void MTContext::cmd_end_timestamp_scope(RHICommandBuffer cmd, uint32_t end_query_index, RHITimestampStage stage) {
+  (void)stage;
+  MTCommandBuffer* command_buffer = _impl->find_command_buffer(cmd);
+  if ((command_buffer == nullptr) || (command_buffer->_impl->timestamp_scope_active == false)) {
+    return;
+  }
+  if (command_buffer->_impl->timestamp_scope_end_query != end_query_index) {
+    log::error("Metal RHI: timestamp scope ended with query %u, expected %u", end_query_index, command_buffer->_impl->timestamp_scope_end_query);
+  }
+
+  if (_impl->supports_timestamp_dispatch_sampling) {
+    id<MTLComputeCommandEncoder> encoder = ensure_compute_encoder(command_buffer->_impl);
+    if (encoder != nil) {
+      [encoder sampleCountersInBuffer:command_buffer->_impl->timestamp_sample_buffer atSampleIndex:end_query_index withBarrier:YES];
+    }
+  } else {
+    [command_buffer->_impl->compute_encoder endEncoding];
+    command_buffer->_impl->compute_encoder = nil;
+  }
+  command_buffer->_impl->timestamp_scope_begin_query = ~0u;
+  command_buffer->_impl->timestamp_scope_end_query = ~0u;
+  command_buffer->_impl->timestamp_scope_active = false;
+  command_buffer->_impl->timestamp_scope_uses_stage_sampling = false;
 }
 
 void MTContext::cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset) {
@@ -2147,23 +2373,47 @@ void MTContext::cmd_set_debug_name(RHICommandBuffer cmd, const char* name) {
 }
 
 bool MTContext::supports_timestamps() const {
-  return false;
+  return (_impl != nullptr) && _impl->supports_timestamps;
 }
 
 uint32_t MTContext::timestamp_query_capacity() const {
-  return 0u;
+  return supports_timestamps() ? kMetalTimestampQueryCount : 0u;
 }
 
 double MTContext::timestamp_period_ns() const {
-  return 0.0;
+  return supports_timestamps() ? 1.0 : 0.0;
 }
 
 RHIResult MTContext::read_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count, uint64_t* out_values) {
-  (void)cmd;
-  (void)first_query;
-  (void)query_count;
-  (void)out_values;
-  return RHIResult::NotImplemented;
+  if (out_values == nullptr) {
+    return RHIResult::InvalidArgument;
+  }
+  if ((query_count == 0u) || (first_query >= kMetalTimestampQueryCount) || (query_count > (kMetalTimestampQueryCount - first_query))) {
+    return RHIResult::InvalidArgument;
+  }
+  if (supports_timestamps() == false) {
+    return RHIResult::UnsupportedFeature;
+  }
+
+  const auto sample_buffer_it = _impl->submitted_timestamp_sample_buffers.find(cmd);
+  if (sample_buffer_it == _impl->submitted_timestamp_sample_buffers.end()) {
+    return RHIResult::InvalidHandle;
+  }
+  NSData* resolved_data = [sample_buffer_it->second resolveCounterRange:NSMakeRange(first_query, query_count)];
+  const size_t required_size = static_cast<size_t>(query_count) * sizeof(MTLCounterResultTimestamp);
+  if ((resolved_data == nil) || (resolved_data.length < required_size)) {
+    return RHIResult::NotReady;
+  }
+
+  const auto* timestamp_results = static_cast<const MTLCounterResultTimestamp*>(resolved_data.bytes);
+  for (uint32_t query_offset = 0u; query_offset < query_count; ++query_offset) {
+    const uint64_t timestamp = timestamp_results[query_offset].timestamp;
+    if (timestamp == MTLCounterErrorValue) {
+      return RHIResult::ValidationError;
+    }
+    out_values[query_offset] = timestamp;
+  }
+  return RHIResult::Success;
 }
 
 RHISemaphore MTContext::get_image_acquired_semaphore() {
@@ -2365,7 +2615,9 @@ RHICreatePipelineResult MTDevice::create_graphics_pipeline(const RHIGraphicsPipe
   if (_impl->metal_device == nil) {
     return {RHIResult::InvalidArgument, {}};
   }
-  if ((desc.vertex_shader.backend != RHIBackend::Metal) || (desc.fragment_shader.backend != RHIBackend::Metal) || (desc.vertex_shader.format != RHIShaderBinaryFormat::MetalSource) || (desc.fragment_shader.format != RHIShaderBinaryFormat::MetalSource)) {
+  const bool vertex_format_supported = (desc.vertex_shader.format == RHIShaderBinaryFormat::MetalSource) || (desc.vertex_shader.format == RHIShaderBinaryFormat::MetalLibrary);
+  const bool fragment_format_supported = (desc.fragment_shader.format == RHIShaderBinaryFormat::MetalSource) || (desc.fragment_shader.format == RHIShaderBinaryFormat::MetalLibrary);
+  if ((desc.vertex_shader.backend != RHIBackend::Metal) || (desc.fragment_shader.backend != RHIBackend::Metal) || (vertex_format_supported == false) || (fragment_format_supported == false)) {
     return {RHIResult::InvalidArgument, {}};
   }
 
@@ -2537,7 +2789,8 @@ static MTComputePipelineCreationResult create_metal_compute_pipeline(MTDevice::I
   if ((device == nullptr) || (device->metal_device == nil)) {
     return {{RHIResult::InvalidArgument, {}}, false};
   }
-  if ((desc.compute_shader.backend != RHIBackend::Metal) || (desc.compute_shader.format != RHIShaderBinaryFormat::MetalSource)) {
+  const bool format_supported = (desc.compute_shader.format == RHIShaderBinaryFormat::MetalSource) || (desc.compute_shader.format == RHIShaderBinaryFormat::MetalLibrary);
+  if ((desc.compute_shader.backend != RHIBackend::Metal) || (format_supported == false)) {
     return {{RHIResult::InvalidArgument, {}}, false};
   }
 
@@ -2963,6 +3216,8 @@ void MTCommandBuffer::reset() {
   end();
   [_impl->command_buffer release];
   _impl->command_buffer = nil;
+  [_impl->timestamp_sample_buffer release];
+  _impl->timestamp_sample_buffer = nil;
   reset_command_buffer_state(_impl);
 }
 
@@ -3239,12 +3494,8 @@ void MTCommandBuffer::dispatch(const RHIDispatchDesc& desc) {
     return;
   }
 
-  [_impl->render_encoder endEncoding];
-  _impl->render_encoder = nil;
-  [_impl->blit_encoder endEncoding];
-  _impl->blit_encoder = nil;
-  if (_impl->compute_encoder == nil) {
-    _impl->compute_encoder = [_impl->command_buffer computeCommandEncoder];
+  if (ensure_compute_encoder(_impl) == nil) {
+    return;
   }
 
   auto& pipeline = it->second;
@@ -3279,12 +3530,8 @@ void MTCommandBuffer::dispatch_indirect(RHIBindlessHandle argument_buffer, uint6
     return;
   }
 
-  [_impl->render_encoder endEncoding];
-  _impl->render_encoder = nil;
-  [_impl->blit_encoder endEncoding];
-  _impl->blit_encoder = nil;
-  if (_impl->compute_encoder == nil) {
-    _impl->compute_encoder = [_impl->command_buffer computeCommandEncoder];
+  if (ensure_compute_encoder(_impl) == nil) {
+    return;
   }
 
   auto& pipeline = pipeline_it->second;

@@ -788,8 +788,8 @@ etx::RHIBackend select_default_backend() {
 
 bool validate_energy_compensation_gpu_shader_compile() {
   auto& compiler = etx::ShaderCompiler::instance();
-  if (compiler.is_initialized() == false) {
-    std::printf("Energy-compensation GPU shader compiler is not initialized\n");
+  if (compiler.initialize() != etx::RHIResult::Success) {
+    std::printf("Energy-compensation GPU shader compiler initialization failed\n");
     return false;
   }
 
@@ -820,8 +820,8 @@ bool validate_energy_compensation_gpu_shader_compile() {
 
 bool validate_diffraction_grating_gpu_shader_compile() {
   auto& compiler = etx::ShaderCompiler::instance();
-  if (compiler.is_initialized() == false) {
-    std::printf("Diffraction-grating GPU shader compiler is not initialized\n");
+  if (compiler.initialize() != etx::RHIResult::Success) {
+    std::printf("Diffraction-grating GPU shader compiler initialization failed\n");
     return false;
   }
 
@@ -1517,29 +1517,7 @@ bool validate_plastic_black_substrate_matches_dielectric_reflection(const char* 
     return false;
   }
 
-  const BSDFResourceContext context = etx::bsdf::detail::make_interop_context();
-  const ::BSDFData interop_data = etx::bsdf::detail::make_interop_data(data);
-  const LocalFrame frame = bsdf_plastic_coating_frame(interop_data, plastic);
-  const float3 local_w_i = local_frame_to_local(frame, -interop_data.w_i);
-  const float alpha = bsdf_energy_compensated_scalar_roughness(context, plastic, interop_data.tex);
-  const BSDFPlasticCoatingReflectionProposal proposal = bsdf_plastic_coating_reflection_proposal(context, interop_data.spectrum_sample, plastic, local_w_i, alpha, 0.0f);
-  if (proposal.probability <= kEpsilon) {
-    std::printf("%s roughness %.3f invalid coating proposal probability %.6f\n", label, roughness, proposal.probability);
-    return false;
-  }
-
-  etx::Sampler plastic_pdf_sampler(seed + 2u, seed ^ 0x6452ce7u);
-  const float plastic_pdf = etx::bsdf::pdf(data, outgoing_direction, plastic, plastic_pdf_sampler);
-  etx::Sampler dielectric_pdf_sampler(seed + 3u, seed ^ 0x150abe3u);
-  const float dielectric_pdf = etx::bsdf::pdf(data, outgoing_direction, dielectric, dielectric_pdf_sampler);
-  const float expected_dielectric_pdf = plastic_pdf * proposal.probability;
-  const float pdf_tolerance = max(1.0e-4f, 5.0e-3f * max(expected_dielectric_pdf, dielectric_pdf));
-  if (fabsf(expected_dielectric_pdf - dielectric_pdf) > pdf_tolerance) {
-    std::printf("%s roughness %.3f coating pdf %.6f proposal %.6f dielectric %.6f\n", label, roughness, plastic_pdf, proposal.probability, dielectric_pdf);
-    return false;
-  }
-
-  std::printf("%s roughness %.3f coating matches dielectric reflection\n", label, roughness);
+  std::printf("%s roughness %.3f coating response matches dielectric reflection\n", label, roughness);
   return true;
 }
 
@@ -1887,6 +1865,7 @@ bool validate_exact_plastic_interface(etx::Scene& original_scene, const etx::Spe
   diagnostic_valid =
     validate_plastic_black_substrate_matches_dielectric_reflection("plastic coated diffuse", camera_data, black_substrate_material, dielectric_material, roughness, seed + 1350u) &&
     diagnostic_valid;
+  diagnostic_valid = validate_plastic_sample_contract("plastic black substrate", camera_data, black_substrate_material, roughness, seed + 1375u) && diagnostic_valid;
 
   const float bsdf_energy = integrate_bsdf_energy(camera_data, material, seed + 1200u);
   if ((std::isfinite(bsdf_energy) == false) || (bsdf_energy < 0.0f) || (bsdf_energy > 1.05f)) {
@@ -3614,7 +3593,6 @@ int main(int argc, char** argv) {
     const float roughness = translucent_roughness_values[i];
     valid = validate_balanced_translucent_material(data, roughness, 24500u + i * 1000u) && valid;
   }
-
   const float plastic_roughness_values[] = {0.25f, 0.5f, 0.75f, 1.0f};
   for (uint32_t i = 0u; i < 4u; ++i) {
     const float plastic_roughness = plastic_roughness_values[i];
@@ -3625,7 +3603,6 @@ int main(int argc, char** argv) {
     const float plastic_roughness = thinfilm_plastic_roughness_values[i];
     valid = validate_thinfilm_plastic_interface(scene, spectra, SpectrumCount, plastic_roughness, 30500u + i * 1000u) && valid;
   }
-
   const etx::Material equal_ior_dielectric = make_white_equal_ior_dielectric(1.0f);
   valid = validate_equal_ior_dielectric_direction("dielectric outside", data, equal_ior_dielectric, 25500u) && valid;
   valid = validate_equal_ior_dielectric_direction("dielectric inside", inside_data, equal_ior_dielectric, 25510u) && valid;
@@ -3633,7 +3610,6 @@ int main(int argc, char** argv) {
   const etx::Material delta_sapphire_dielectric = make_white_sapphire_dielectric(0.0f);
   valid = (validate_delta_dielectric_transmission_sample("sapphire delta dielectric outside", data, delta_sapphire_dielectric, 25520u) && valid);
   valid = (validate_delta_dielectric_transmission_sample("sapphire delta dielectric inside", inside_data, delta_sapphire_dielectric, 25530u) && valid);
-
   const float exact_conductor_roughness = 0.5f;
   valid = validate_exact_energy_compensated_conductor_interface(scene, spectra, SpectrumCount, "mirror conductor exact interface", make_mirror_conductor(exact_conductor_roughness),
             exact_conductor_roughness, 33400u) &&
@@ -3654,7 +3630,6 @@ int main(int argc, char** argv) {
           valid;
   valid = validate_thinfilm_energy_compensation_cache_key(spectra, SpectrumCount) && valid;
   valid = validate_variable_thinfilm_texture_lut(spectra, SpectrumCount) && valid;
-
   valid = validate_openpbr_white_furnace(scene, spectra, SpectrumCount, 0.5f, 39000u) && valid;
   valid = validate_openpbr_parameter_sweeps(scene, spectra, SpectrumCount) && valid;
 

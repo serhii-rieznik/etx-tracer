@@ -41,7 +41,6 @@ struct GPURaytracingRenderer : public Renderer {
     CameraConnectLightResolveConductor = 19u,
     CameraConnectLightResolveDielectric = 20u,
     CameraConnectLightShadow = 21u,
-    CameraConnectLightAccumulate = 22u,
     CameraContinuePrepareDiffuse = 23u,
     CameraContinuePreparePlastic = 24u,
     CameraContinuePrepareConductor = 25u,
@@ -343,7 +342,6 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _direct_light_task_buffer = {};
   RHIBindlessHandle _direct_light_result_buffer = {};
   RHIBindlessHandle _connect_light_task_buffer = {};
-  RHIBindlessHandle _connect_light_result_buffer = {};
   RHIBindlessHandle _connect_camera_task_buffer = {};
   RHIBindlessHandle _connect_camera_result_buffer = {};
   RHIBindlessHandle _camera_subsurface_state_buffer = {};
@@ -395,7 +393,6 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _direct_light_task_buffer_size = 0;
   uint64_t _direct_light_result_buffer_size = 0;
   uint64_t _connect_light_task_buffer_size = 0;
-  uint64_t _connect_light_result_buffer_size = 0;
   uint64_t _connect_camera_task_buffer_size = 0;
   uint64_t _connect_camera_result_buffer_size = 0;
   uint64_t _camera_subsurface_state_buffer_size = 0;
@@ -429,7 +426,6 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _direct_light_task_buffer_descriptor_index = ~0u;
   uint32_t _direct_light_result_buffer_descriptor_index = ~0u;
   uint32_t _connect_light_task_buffer_descriptor_index = ~0u;
-  uint32_t _connect_light_result_buffer_descriptor_index = ~0u;
   uint32_t _connect_camera_task_buffer_descriptor_index = ~0u;
   uint32_t _connect_camera_result_buffer_descriptor_index = ~0u;
   uint32_t _camera_subsurface_state_buffer_descriptor_index = ~0u;
@@ -453,13 +449,14 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _wavefront_camera_queue_count = 0u;
   uint32_t _wavefront_light_queue_count = 0u;
   uint32_t _wavefront_light_max_path_length = 0u;
+  uint32_t _wavefront_connect_light_vertex_length = 0u;
+  uint32_t _wavefront_connect_light_history_bounces = 0u;
   uint32_t _wavefront_light_history_capacity_bounces = 0u;
   uint32_t _wavefront_light_vertex_reserved_count = 0u;
   uint32_t _wavefront_light_vertex_sample_peak_count = 0u;
   uint32_t _wavefront_light_history_underuse_sample_count = 0u;
   uint32_t _wavefront_light_history_underuse_peak_count = 0u;
   uint32_t _wavefront_vcm_light_vertex_count = 0u;
-  uint32_t _wavefront_vcm_spectral_phase = 0u;
   uint32_t _wavefront_tile_index = 0u;
   uint32_t _wavefront_tile_max_pixels = 0u;
   uint32_t _wavefront_tile_count = 1u;
@@ -506,6 +503,7 @@ struct GPURaytracingRenderer : public Renderer {
   std::chrono::steady_clock::time_point _preparation_started_at = {};
   std::chrono::steady_clock::time_point _pipeline_publish_started_at = {};
   std::chrono::steady_clock::time_point _render_started_at = {};
+  std::chrono::steady_clock::time_point _kernel_timing_started_at = {};
   double _last_render_elapsed_seconds = 0.0;
   uint32_t _preparation_generation = 0u;
   uint32_t _published_pipeline_count = 0u;

@@ -47,6 +47,7 @@ struct ShaderCompilerStatistics {
   uint64_t preprocessed_disk_cache_hits = 0;
   uint64_t shader_memory_cache_hits = 0;
   uint64_t shader_disk_cache_hits = 0;
+  uint64_t shader_package_hits = 0;
   uint64_t preprocess_invocations = 0;
   uint64_t dxc_compile_invocations = 0;
   uint64_t spirv_to_msl_translations = 0;
@@ -69,6 +70,8 @@ struct ShaderCompiler {
   // Singleton access
   static ShaderCompiler& instance();
   void shutdown();
+  void set_runtime_compilation_allowed(bool allowed);
+  bool runtime_compilation_allowed() const;
 
   RHIResult initialize();
   bool is_initialized() const;

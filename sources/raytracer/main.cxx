@@ -1,4 +1,5 @@
 #include <etx/core/environment.hxx>
+#include <etx/core/log.hxx>
 #include <etx/core/profiler.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
 
@@ -6,9 +7,11 @@
 #include "application_runner.hxx"
 #include "batch_mode.hxx"
 #include "bsdf_lut_generation.hxx"
+#include "shader_packager.hxx"
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -19,6 +22,49 @@ extern "C" int main(int argc, char* argv[]) {
 
   init_platform();
   env().setup(argv[0]);
+
+#if defined(ETX_ENABLE_SHADER_PACKAGER) && ETX_ENABLE_SHADER_PACKAGER
+  for (int argument_index = 1; argument_index < argc; ++argument_index) {
+    if (std::strcmp(argv[argument_index], "--build-shader-package") != 0) {
+      continue;
+    }
+    if ((argument_index + 3) >= argc) {
+      fprintf(stderr, "Usage: raytracer --build-shader-package <output-file> --shader-backend <metal|vulkan>\n");
+      return 1;
+    }
+    const std::filesystem::path output_path = argv[argument_index + 1];
+    if (std::strcmp(argv[argument_index + 2], "--shader-backend") != 0) {
+      fprintf(stderr, "Expected --shader-backend after the shader package output path.\n");
+      return 1;
+    }
+    RHIBackend backend = RHIBackend::Vulkan;
+    if (std::strcmp(argv[argument_index + 3], "metal") == 0) {
+      backend = RHIBackend::Metal;
+    } else if (std::strcmp(argv[argument_index + 3], "vulkan") != 0) {
+      fprintf(stderr, "Unsupported shader package backend '%s'.\n", argv[argument_index + 3]);
+      return 1;
+    }
+
+    RaytracerShaderPackageStatistics statistics = {};
+    std::string error_message = {};
+    if (build_raytracer_shader_package(output_path, backend, statistics, error_message) == false) {
+      fprintf(stderr, "Shader package build failed: %s\n", error_message.c_str());
+      return 1;
+    }
+    printf("Shader package built: variants=%u binaries=%.2f MiB package=%.2f MiB compile=%.2f ms write-and-verify=%.2f ms\n", statistics.variant_count,
+      static_cast<double>(statistics.binary_size_bytes) / (1024.0 * 1024.0), static_cast<double>(statistics.package_size_bytes) / (1024.0 * 1024.0), statistics.compile_time_ms,
+      statistics.package_time_ms);
+    return 0;
+  }
+#endif
+
+#if defined(ETX_REQUIRE_SHADER_PACKAGE) && ETX_REQUIRE_SHADER_PACKAGE
+  ShaderCompiler::instance().set_runtime_compilation_allowed(false);
+#else
+  if (ShaderCompiler::instance().initialize() != RHIResult::Success) {
+    log::error("Shader compiler initialization failed");
+  }
+#endif
 
   ApplicationRuntimeOptions runtime_options = parse_application_runtime_options(argc, argv);
   if (runtime_options.command == ApplicationRuntimeCommand::Help) {

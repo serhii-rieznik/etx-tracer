@@ -41,8 +41,6 @@ namespace etx {
 
 namespace {
 
-const ImVec4 kOptionStringColor(1.0f, 0.5f, 0.25f, 1.0f);
-
 const ImVec4 kIorPickerColors[] = {
   ImVec4(0.3333f, 0.3333f, 0.3333f, 1.0f),
   ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
@@ -51,8 +49,46 @@ const ImVec4 kIorPickerColors[] = {
   ImVec4(1.0f, 0.75f, 1.0f, 1.0f),
 };
 
-const ImVec4 kToolbarLaunchColor(0.11f, 0.44f, 0.11f, 1.0f);
-const ImVec4 kToolbarTerminateColor(0.44f, 0.11f, 0.11f, 1.0f);
+struct SemanticButtonColors {
+  ImVec4 normal = {};
+  ImVec4 hovered = {};
+  ImVec4 active = {};
+};
+
+const SemanticButtonColors kDarkLaunchButtonColors = {
+  .normal = {0.11f, 0.44f, 0.11f, 1.0f},
+  .hovered = {0.16f, 0.52f, 0.16f, 1.0f},
+  .active = {0.09f, 0.36f, 0.09f, 1.0f},
+};
+const SemanticButtonColors kDarkTerminateButtonColors = {
+  .normal = {0.44f, 0.11f, 0.11f, 1.0f},
+  .hovered = {0.52f, 0.16f, 0.16f, 1.0f},
+  .active = {0.36f, 0.09f, 0.09f, 1.0f},
+};
+const SemanticButtonColors kLightLaunchButtonColors = {
+  .normal = {0.72f, 0.89f, 0.76f, 1.0f},
+  .hovered = {0.64f, 0.85f, 0.69f, 1.0f},
+  .active = {0.56f, 0.80f, 0.62f, 1.0f},
+};
+const SemanticButtonColors kLightTerminateButtonColors = {
+  .normal = {0.95f, 0.75f, 0.75f, 1.0f},
+  .hovered = {0.92f, 0.67f, 0.67f, 1.0f},
+  .active = {0.89f, 0.58f, 0.58f, 1.0f},
+};
+
+const SemanticButtonColors& launch_button_colors(RHIImGuiTheme theme) {
+  return theme == RHIImGuiTheme::Light ? kLightLaunchButtonColors : kDarkLaunchButtonColors;
+}
+
+const SemanticButtonColors& terminate_button_colors(RHIImGuiTheme theme) {
+  return theme == RHIImGuiTheme::Light ? kLightTerminateButtonColors : kDarkTerminateButtonColors;
+}
+
+void push_semantic_button_colors(const SemanticButtonColors& colors) {
+  ImGui::PushStyleColor(ImGuiCol_Button, colors.normal);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, colors.hovered);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, colors.active);
+}
 
 struct ViewportZoomOption {
   const char* label = nullptr;
@@ -70,13 +106,7 @@ constexpr ViewportZoomOption kViewportZoomOptions[] = {
   {"400%", 4.00f},
 };
 
-const ImVec4 kDeleteButtonColor(0.44f, 0.11f, 0.11f, 1.0f);
-const ImVec4 kDeleteButtonHoverColor(0.54f, 0.21f, 0.21f, 1.0f);
-const ImVec4 kDeleteButtonActiveColor(0.64f, 0.31f, 0.31f, 1.0f);
-
 const ImVec4 kErrorTextColor(1.0f, 0.0f, 0.0f, 1.0f);
-
-const ImVec4 kCameraTextColor(0.90f, 0.80f, 0.35f, 1.0f);
 
 const ImVec4 kMaterialHeaderPrimaryColor(0.96f, 0.79f, 0.45f, 1.0f);
 const ImVec4 kMaterialHeaderSpecializedColor(0.54f, 0.80f, 0.98f, 1.0f);
@@ -566,11 +596,6 @@ void UI::validate_selections(SceneRepresentation& scene_rep) {
         set_selection(SelectionKind::None, -1, false);
       }
       break;
-    case SelectionKind::Mesh:
-      if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= _mesh_mapping.size())) {
-        set_selection(SelectionKind::None, -1, false);
-      }
-      break;
     case SelectionKind::Emitter:
       if ((_selection.index < 0) || (static_cast<uint32_t>(_selection.index) >= scene_rep.data().emitter_profiles.size())) {
         set_selection(SelectionKind::None, -1, false);
@@ -822,6 +847,39 @@ void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vecto
   });
 }
 
+void UI::queue_material_change(uint32_t material_index) {
+  if (material_index == kInvalidIndex) {
+    return;
+  }
+
+  if (_material_interaction_active == false) {
+    _material_interaction_active = true;
+    if (callbacks.material_interaction_started) {
+      callbacks.material_interaction_started();
+    }
+  }
+
+  if (std::find(_material_interaction_indices.begin(), _material_interaction_indices.end(), material_index) == _material_interaction_indices.end()) {
+    _material_interaction_indices.push_back(material_index);
+  }
+}
+
+void UI::finish_material_interaction() {
+  if (_material_interaction_active == false) {
+    return;
+  }
+
+  _material_interaction_active = false;
+  if (callbacks.material_interaction_finished) {
+    callbacks.material_interaction_finished(_material_interaction_indices);
+  } else if (callbacks.material_changed) {
+    for (const uint32_t material_index : _material_interaction_indices) {
+      callbacks.material_changed(material_index);
+    }
+  }
+  _material_interaction_indices.clear();
+}
+
 void UI::navigate_history(int32_t step) {
   if ((_selection_history.empty()) || (step == 0)) {
     return;
@@ -847,7 +905,7 @@ bool UI::build_options(Options& options) {
         if (option.description.empty() == false) {
           ImGui::TextUnformatted(option.description.c_str());
         }
-        ImGui::PushStyleColor(ImGuiCol_Text, kOptionStringColor);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
         ImGui::TextWrapped("%s", data.value.c_str());
         ImGui::PopStyleColor();
         break;
@@ -1595,6 +1653,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ETX_PROFILER_SCOPE();
   ImGuizmo::BeginFrame();
   _node_transform_editor_interaction_rendered_this_frame = false;
+  _material_editor_rendered_this_frame = false;
 
   BuildContext ctx = {};
   ctx.wpadding = {ImGui::GetStyle().WindowPadding.x, ImGui::GetStyle().WindowPadding.y};
@@ -1622,12 +1681,20 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
 
   uint64_t mmh = hash_mapping(scene_rep.material_mapping());
   if (mmh != _material_mapping_hash) {
+    if (_selection.kind == SelectionKind::Material) {
+      set_selection(SelectionKind::None, -1, false);
+    }
+    clear_selection_history();
     _material_mapping.build(scene_rep.material_mapping());
     _material_mapping_hash = mmh;
   }
 
   uint64_t medh = hash_mapping(scene_rep.medium_mapping());
   if (medh != _medium_mapping_hash) {
+    if (_selection.kind == SelectionKind::Medium) {
+      set_selection(SelectionKind::None, -1, false);
+    }
+    clear_selection_history();
     _medium_mapping.build(scene_rep.medium_mapping());
     _medium_mapping_hash = medh;
   }
@@ -1650,7 +1717,6 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
 
   apply_pending_selection(_material_mapping, SelectionKind::Material);
   apply_pending_selection(_medium_mapping, SelectionKind::Medium);
-  apply_pending_selection(_mesh_mapping, SelectionKind::Mesh);
   _pending_selection = {};
 
   validate_selections(scene_rep);
@@ -1670,6 +1736,9 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   if (_node_transform_editor_interaction_active && (_node_transform_editor_interaction_rendered_this_frame == false)) {
     finish_node_transform_editor_interaction();
   }
+  if (_material_interaction_active && ((_material_editor_rendered_this_frame == false) || (ImGui::IsAnyItemActive() == false))) {
+    finish_material_interaction();
+  }
   build_unsaved_changes_modal();
   build_renderer_preparation_modal();
 }
@@ -1679,25 +1748,41 @@ void UI::build_unsaved_changes_modal() {
   if (_unsaved_changes_modal_requested) {
     ImGui::OpenPopup(popup_id);
     _unsaved_changes_modal_requested = false;
+    _unsaved_save_failed = false;
   }
 
   bool continue_action = false;
+  bool discard_changes = false;
   if (ImGui::BeginPopupModal(popup_id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted("The scene contains unsaved changes.");
-    ImGui::TextDisabled("Save the scene first to keep those changes.");
+    ImGui::TextDisabled("Save before continuing to keep your edits.");
+    if (_unsaved_save_failed) {
+      ImGui::TextColored(kErrorTextColor, "The scene could not be saved.");
+    }
     ImGui::Spacing();
     if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+      _unsaved_save_failed = false;
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    ImGui::PushStyleColor(ImGuiCol_Button, kDeleteButtonColor);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kDeleteButtonHoverColor);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDeleteButtonActiveColor);
-    if (ImGui::Button("Discard and continue", ImVec2(180.0f, 0.0f))) {
+    push_semantic_button_colors(terminate_button_colors(_theme));
+    if (ImGui::Button("Don't Save", ImVec2(120.0f, 0.0f))) {
       continue_action = true;
+      discard_changes = true;
+      _unsaved_save_failed = false;
       ImGui::CloseCurrentPopup();
     }
     ImGui::PopStyleColor(3);
+    ImGui::SameLine();
+    if (ImGui::Button("Save", ImVec2(120.0f, 0.0f))) {
+      if (save_scene_file()) {
+        continue_action = true;
+        _unsaved_save_failed = false;
+        ImGui::CloseCurrentPopup();
+      } else {
+        _unsaved_save_failed = true;
+      }
+    }
     ImGui::EndPopup();
   }
 
@@ -1706,7 +1791,7 @@ void UI::build_unsaved_changes_modal() {
     const std::string value = _pending_menu_value;
     _pending_menu_value.clear();
     _scene_dirty = false;
-    if (callbacks.scene_discarded) {
+    if (discard_changes && callbacks.scene_discarded) {
       callbacks.scene_discarded();
     }
     if (command != MenuCommand::Quit) {
@@ -2003,17 +2088,19 @@ void UI::select_scene_file() const {
   }
 }
 
-void UI::save_scene_file() const {
+bool UI::save_scene_file() const {
   if (callbacks.save_scene_file_selected) {
-    callbacks.save_scene_file_selected({});
+    return callbacks.save_scene_file_selected({});
   }
+  return false;
 }
 
-void UI::save_scene_file_as() const {
+bool UI::save_scene_file_as() const {
   const std::string selected_file = save_file("json");
-  if (!selected_file.empty() && callbacks.save_scene_file_selected) {
-    callbacks.save_scene_file_selected(selected_file);
+  if ((selected_file.empty() == false) && callbacks.save_scene_file_selected) {
+    return callbacks.save_scene_file_selected(selected_file);
   }
+  return false;
 }
 
 void UI::save_image(SaveImageMode mode) const {
@@ -2031,6 +2118,7 @@ void UI::load_image() const {
 }
 
 bool UI::build_material(SceneRepresentation& scene_rep, Material& material, const FrameData& data) {
+  _material_editor_rendered_this_frame = true;
   auto material_values_mixed = [&](auto getter) -> bool {
     if ((_editing_material_indices == nullptr) || (_editing_material_indices->size() <= 1u)) {
       return false;
@@ -2196,9 +2284,9 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   auto brighten = [&](const ImVec4& c, float d) {
     return ImVec4{clamp01(c.x + d), clamp01(c.y + d), clamp01(c.z + d), c.w};
   };
-  auto with_section = [&](int color_index, const char* title, auto&& body, bool force_open) {
-    if (force_open) {
-      ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+  auto with_section = [&](int color_index, const char* title, auto&& body, bool default_open) {
+    if (default_open) {
+      ImGui::SetNextItemOpen(true, ImGuiCond_Once);
     }
     ImGui::PushStyleColor(ImGuiCol_Header, sec_col[color_index]);
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered, brighten(sec_col[color_index], 0.04f));
@@ -2433,7 +2521,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           ImGui::PopStyleVar();
         }
       },
-      false);
+      true);
   }
 
   if (material.cls == MaterialClass::DiffractionGrating) {
@@ -2808,14 +2896,43 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
   return changed;
 }
 
-void UI::reset_selection() {
-  _selection = {};
+void UI::clear_selection_history() {
   _selection_history.clear();
   _selection_history_cursor = -1;
+}
+
+void UI::reset_selection() {
+  _selection = {};
+  _pending_selection = {};
+  _name_edit_selection = {};
+  _name_edit_buffer[0] = 0;
+  clear_selection_history();
   _spectrum_editors.clear();
   _material_anisotropy.clear();
   _selected_material_positions.clear();
   _material_selection_anchor = -1;
+}
+
+void UI::reset_scene_state() {
+  reset_selection();
+  _node_transform_editor = {};
+  _node_geometry_edit_result_node = -1;
+  _node_geometry_edit_result = NodeGeometryEditResult::Success;
+  _node_transform_editor_interaction_active = false;
+  _node_transform_editor_interaction_rendered_this_frame = false;
+  _node_transform_editor_interaction_node_index = -1;
+  _material_interaction_active = false;
+  _material_editor_rendered_this_frame = false;
+  _material_interaction_indices.clear();
+  _editing_material_indices = nullptr;
+  _material_batch_changed_fields = 0u;
+  _auto_open_emission_section = false;
+  _scene_tree_open_subtree_ends.clear();
+  _viewport_geometry = {};
+  _viewport_pointer_active = false;
+  _gizmo_captures_mouse = false;
+  _gizmo_was_using = false;
+  _resource_filter[0] = 0;
 }
 
 void UI::reload_geometry() {
@@ -3165,19 +3282,22 @@ void UI::build_toolbar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##toolbar", ImGui::GetMainViewport(), ImGuiDir_Up, ctx.button_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     const bool cpu_mode = _current_renderer_mode == RendererMode::CPURaytracing;
     const bool gpu_mode = _current_renderer_mode == RendererMode::GPURaytracing;
+    const bool compact_toolbar = ImGui::GetContentRegionAvail().x < 1080.0f;
     ImGui::GetStyle().FramePadding.y = (ctx.button_size - ctx.text_size) / 2.0f;
     ImGui::SetCursorPosX(ctx.wpadding.x);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Integrator");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(230.0f);
+    if (compact_toolbar == false) {
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextUnformatted("Integrator");
+      ImGui::SameLine();
+    }
+    ImGui::SetNextItemWidth(compact_toolbar ? 190.0f : 230.0f);
     build_render_configuration_selector("##toolbar_integrator");
 
     const RendererControlState& controls = _current_renderer_controls;
-    auto toolbar_action = [&](const char* label, bool available, const ImVec4* color, const char* tooltip, const std::function<void()>& action) {
+    auto toolbar_action = [&](const char* label, bool available, const SemanticButtonColors* colors, const char* tooltip, const std::function<void()>& action) {
       ImGui::SameLine(0.0f, ctx.wpadding.x);
-      if (color != nullptr) {
-        ImGui::PushStyleColor(ImGuiCol_Button, *color);
+      if (colors != nullptr) {
+        push_semantic_button_colors(*colors);
       }
       if (available == false) {
         ImGui::BeginDisabled();
@@ -3188,22 +3308,22 @@ void UI::build_toolbar(const BuildContext& ctx) {
       if (available == false) {
         ImGui::EndDisabled();
       }
-      if (color != nullptr) {
-        ImGui::PopStyleColor();
+      if (colors != nullptr) {
+        ImGui::PopStyleColor(3);
       }
       draw_item_tooltip(tooltip, ImGuiHoveredFlags_DelayNormal);
     };
 
     if (cpu_mode || gpu_mode) {
-      toolbar_action((_current_renderer_status.state == RendererStatusState::Running) ? "Running" : "Start", controls.can_run, &kToolbarLaunchColor, "Start a new render.",
-        callbacks.run_selected);
-      toolbar_action((_current_renderer_status.state == RendererStatusState::Finishing) ? "Finishing sample" : "Finish sample", controls.can_finish, nullptr,
-        "Stop after the in-progress sample completes.", [this]() {
-          if (callbacks.stop_selected) {
-            callbacks.stop_selected(true);
-          }
-        });
-      toolbar_action("Stop now", controls.can_stop, &kToolbarTerminateColor, "Stop immediately and keep the latest completed output.", [this]() {
+      const SemanticButtonColors& launch_colors = launch_button_colors(_theme);
+      const SemanticButtonColors& terminate_colors = terminate_button_colors(_theme);
+      toolbar_action("Start", controls.can_run, &launch_colors, "Start a new render.", callbacks.run_selected);
+      toolbar_action(compact_toolbar ? "Finish" : "Finish sample", controls.can_finish, nullptr, "Stop after the in-progress sample completes.", [this]() {
+        if (callbacks.stop_selected) {
+          callbacks.stop_selected(true);
+        }
+      });
+      toolbar_action(compact_toolbar ? "Stop" : "Stop now", controls.can_stop, &terminate_colors, "Stop immediately and keep the latest completed output.", [this]() {
         if (callbacks.stop_selected) {
           callbacks.stop_selected(false);
         }
@@ -3217,12 +3337,6 @@ void UI::build_toolbar(const BuildContext& ctx) {
     }
     ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_Always);
     if (ImGui::BeginPopup("##display_controls")) {
-      labeled_control("Exposure", [&]() {
-        return ImGui::DragFloat("##toolbar_exposure", &_view_options.exposure, 1.0f / 256.0f, 1.0f / 1024.0f, 1024.0f, "%.4f", ImGuiSliderFlags_NoRoundToFormat);
-      });
-      if (ImGui::IsItemDeactivatedAfterEdit() && callbacks.exposure_changed) {
-        callbacks.exposure_changed(_view_options.exposure);
-      }
       ImGui::TextUnformatted("View layer");
       full_width_item();
       if (ImGui::BeginCombo("##toolbar_view_layer", Film::layer_name(_view_options.view_layer))) {
@@ -3281,10 +3395,12 @@ void UI::build_toolbar(const BuildContext& ctx) {
     }
 
     ImGui::SameLine(0.0f, ctx.wpadding.x);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Zoom");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(125.0f);
+    if (compact_toolbar == false) {
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextUnformatted("Zoom");
+      ImGui::SameLine();
+    }
+    ImGui::SetNextItemWidth(compact_toolbar ? 95.0f : 125.0f);
     if (ImGui::BeginCombo("##viewport_zoom", kViewportZoomOptions[_viewport_zoom_option].label)) {
       for (uint32_t i = 0u; i < static_cast<uint32_t>(IM_ARRAYSIZE(kViewportZoomOptions)); ++i) {
         const bool selected = i == _viewport_zoom_option;
@@ -3446,7 +3562,13 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
     ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ctx.wpadding.x, ctx.wpadding.y));
     ImGui::BeginChild("##workspace_explorer", ImVec2(explorer_width, main_height), ImGuiChildFlags_Borders);
+    if (data.scene_loaded == false) {
+      ImGui::BeginDisabled();
+    }
     build_scene_explorer(scene_rep, ctx);
+    if (data.scene_loaded == false) {
+      ImGui::EndDisabled();
+    }
     ImGui::EndChild();
     ImGui::PopStyleVar();
     cursor_x += explorer_width;
@@ -3472,8 +3594,11 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
   ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
   ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-  ImGui::BeginChild("##workspace_viewport", ImVec2(viewport_width, main_height), ImGuiChildFlags_None,
-    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoInputs);
+  ImGuiWindowFlags viewport_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground;
+  if (data.scene_loaded) {
+    viewport_flags |= ImGuiWindowFlags_NoInputs;
+  }
+  ImGui::BeginChild("##workspace_viewport", ImVec2(viewport_width, main_height), ImGuiChildFlags_None, viewport_flags);
   const ImVec2 viewport_position = ImGui::GetWindowPos();
   const ImVec2 viewport_size = ImGui::GetWindowSize();
   const ImVec2 framebuffer_scale = ImGui::GetIO().DisplayFramebufferScale;
@@ -3501,8 +3626,38 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
     .image_position = {displayed_image_position.x, displayed_image_position.y},
     .image_size = {displayed_image_size.x, displayed_image_size.y},
     .framebuffer_scale = {framebuffer_scale.x, framebuffer_scale.y},
-    .valid = (viewport_size.x > 0.0f) && (viewport_size.y > 0.0f) && (displayed_image_size.x > 0.0f) && (displayed_image_size.y > 0.0f),
+    .valid = data.scene_loaded && (viewport_size.x > 0.0f) && (viewport_size.y > 0.0f) && (displayed_image_size.x > 0.0f) && (displayed_image_size.y > 0.0f),
   };
+  if (data.scene_loaded == false) {
+    const float content_width = std::max(1.0f, std::min(280.0f, viewport_size.x - 32.0f));
+    const float content_height = data.recent_files.empty() ? 90.0f : 190.0f;
+    ImGui::SetCursorPos(ImVec2(std::max(16.0f, 0.5f * (viewport_size.x - content_width)), std::max(16.0f, 0.5f * (viewport_size.y - content_height))));
+    ImGui::BeginGroup();
+    const char* empty_title = "Open a scene to begin";
+    const float title_x = ImGui::GetCursorPosX() + 0.5f * (content_width - ImGui::CalcTextSize(empty_title).x);
+    ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), title_x));
+    ImGui::TextUnformatted(empty_title);
+    ImGui::Spacing();
+    if (ImGui::Button("Open Scene…", ImVec2(content_width, 0.0f))) {
+      execute_menu_command(MenuCommand::OpenScene);
+    }
+    if (data.recent_files.empty() == false) {
+      ImGui::Spacing();
+      ImGui::TextDisabled("Recent Scenes");
+      const size_t recent_count = std::min<size_t>(3u, data.recent_files.size());
+      for (size_t recent_index = 0u; recent_index < recent_count; ++recent_index) {
+        const std::string& path = data.recent_files[data.recent_files.size() - recent_index - 1u];
+        const std::string display_name = std::filesystem::path(path).filename().string();
+        ImGui::PushID(static_cast<int>(recent_index));
+        if (ImGui::Button(display_name.c_str(), ImVec2(content_width, 0.0f))) {
+          execute_menu_command(MenuCommand::OpenRecentScene, 0u, path);
+        }
+        draw_item_tooltip(path.c_str(), ImGuiHoveredFlags_DelayNormal);
+        ImGui::PopID();
+      }
+    }
+    ImGui::EndGroup();
+  }
   ImGui::EndChild();
   ImGui::PopStyleVar();
   ImGui::PopStyleColor();
@@ -3527,7 +3682,13 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
     ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ctx.wpadding.x, ctx.wpadding.y));
     ImGui::BeginChild("##workspace_inspector", ImVec2(inspector_width, main_height), ImGuiChildFlags_Borders);
+    if (data.scene_loaded == false) {
+      ImGui::BeginDisabled();
+    }
     build_inspector(scene_rep, ctx, data);
+    if (data.scene_loaded == false) {
+      ImGui::EndDisabled();
+    }
     ImGui::EndChild();
     ImGui::PopStyleVar();
   }
@@ -3632,11 +3793,29 @@ void UI::build_debug_info_content() {
     if (has_integrator_debug_info) {
       ImGui::Separator();
     }
-    ImGui::Text("GPU total: %.3f ms", _gpu_kernel_timing_stats.total_ms);
+    ImGui::Text("Kernel execution: %.3f ms", _gpu_kernel_timing_stats.total_ms);
+    draw_item_tooltip("Sum of timestamped compute dispatch durations. CPU scheduling, command-buffer gaps, barriers, transfers, and UI time are excluded.",
+      ImGuiHoveredFlags_DelayNormal);
     if (_gpu_kernel_timing_stats.supported == false) {
       ImGui::TextDisabled("GPU timestamps are unavailable on the active backend.");
       return;
     }
+    uint64_t captured_dispatch_count = 0u;
+    for (const RendererKernelTiming& timing : _gpu_kernel_timing_stats.kernels) {
+      captured_dispatch_count += timing.dispatch_count;
+    }
+    if (_gpu_kernel_timing_stats.capture_elapsed_ms > 0.0) {
+      const double timestamped_percentage = (_gpu_kernel_timing_stats.total_ms * 100.0) / _gpu_kernel_timing_stats.capture_elapsed_ms;
+      ImGui::SameLine();
+      ImGui::TextDisabled("Profile wall: %.0f ms | kernel coverage: %.1f%%", _gpu_kernel_timing_stats.capture_elapsed_ms, timestamped_percentage);
+      if (_gpu_kernel_timing_stats.captured_sample_count > 0u) {
+        const double completed_samples = static_cast<double>(_gpu_kernel_timing_stats.captured_sample_count);
+        ImGui::TextDisabled("Average / captured sample: elapsed %.1f ms | kernels %.1f ms | dispatches %.1f", _gpu_kernel_timing_stats.capture_elapsed_ms / completed_samples,
+          _gpu_kernel_timing_stats.total_ms / completed_samples, static_cast<double>(captured_dispatch_count) / completed_samples);
+      }
+    }
+    ImGui::TextDisabled("Captured samples: %llu | dispatches: %llu | dropped: %llu", static_cast<unsigned long long>(_gpu_kernel_timing_stats.captured_sample_count),
+      static_cast<unsigned long long>(captured_dispatch_count), static_cast<unsigned long long>(_gpu_kernel_timing_stats.dropped_dispatch_count));
     if (_gpu_kernel_timing_stats.kernels.empty()) {
       ImGui::TextDisabled("Run the GPU renderer to collect kernel timings.");
       return;
@@ -3907,185 +4086,150 @@ void UI::build_memory_diagnostics_content(SceneRepresentation& scene_rep, const 
 }
 
 void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx) {
-  const float kDefaultListHeight = 5.0f * ImGui::GetTextLineHeightWithSpacing();
-
   ctx.with_window(UIObjects, "Scene Objects", [&]() {
-    auto draw_history_button = [&](const char* label, bool enabled, int32_t step) {
-      if (enabled == false)
-        ImGui::BeginDisabled();
-      if (ImGui::Button(label)) {
-        navigate_history(step);
-      }
-      if (enabled == false)
-        ImGui::EndDisabled();
-    };
-
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Navigate");
-    ImGui::SameLine();
-    draw_history_button(" < ##selection_history_back", can_navigate_back(), -1);
-    ImGui::SameLine();
-    draw_history_button(" > ##selection_history_forward", can_navigate_forward(), 1);
-
-    ImGui::SameLine();
-    const char* add_scene_object_popup_id = "##add_scene_object_popup";
-    if (ImGui::Button(" + ##add_scene_object")) {
-      ImGui::OpenPopup(add_scene_object_popup_id);
-    }
-    ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 20.0f, 0.0f), ImGuiCond_Always);
-    if (ImGui::BeginPopup(add_scene_object_popup_id)) {
-      if (ImGui::Selectable("Add Material")) {
-        if (callbacks.material_added) {
-          callbacks.material_added();
-          _material_mapping.build(scene_rep.material_mapping());
-          _material_mapping_hash = hash_mapping(scene_rep.material_mapping());
-        }
-        ImGui::CloseCurrentPopup();
-      }
-      if (ImGui::Selectable("Add Medium")) {
-        if (callbacks.medium_added) {
-          callbacks.medium_added();
-          _medium_mapping.build(scene_rep.medium_mapping());
-          _medium_mapping_hash = hash_mapping(scene_rep.medium_mapping());
-        }
-        ImGui::CloseCurrentPopup();
-      }
-      ImGui::Separator();
-      if (ImGui::Selectable("Add Environment Emitter")) {
-        if (callbacks.emitter_added) {
-          callbacks.emitter_added(0);
-        }
-        ImGui::CloseCurrentPopup();
-      }
-      if (ImGui::Selectable("Add Directional Emitter")) {
-        if (callbacks.emitter_added) {
-          callbacks.emitter_added(1);
-        }
-        ImGui::CloseCurrentPopup();
-      }
-      if (ImGui::Selectable("Add Atmosphere Emitter")) {
-        if (callbacks.emitter_added) {
-          callbacks.emitter_added(2);
-        }
-        ImGui::CloseCurrentPopup();
-      }
-      ImGui::EndPopup();
-    }
-
-    ImGui::Spacing();
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##resource_filter", "Search resources", _resource_filter, sizeof(_resource_filter));
-    ImGui::Separator();
-
-    ImGui::Text("Materials (%zu)", static_cast<size_t>(_material_mapping.size()));
-    if (_material_mapping.empty()) {
-      ImGui::TextDisabled("None");
-    } else if (ImGui::BeginListBox("##materials_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
-      for (uint64_t i = 0; i < _material_mapping.size(); ++i) {
-        ImGui::PushID(static_cast<int>(i));
-        const int32_t list_index = static_cast<int32_t>(i);
-        bool material_selected = (_selection.kind == SelectionKind::Material) && material_list_position_selected(list_index);
-        const auto& entry = _material_mapping.entry(static_cast<int32_t>(i));
-        if (contains_case_insensitive(entry.name, _resource_filter) == false) {
-          ImGui::PopID();
-          continue;
-        }
-        if (ImGui::Selectable(entry.name, material_selected)) {
-          const ImGuiIO& io = ImGui::GetIO();
-          if (io.KeyShift) {
-            set_material_selection_range(list_index);
-          } else if ((io.KeyCtrl) || (io.KeySuper)) {
-            toggle_material_selection(list_index);
-          } else {
-            set_single_material_selection(list_index, true);
+    ImGui::Spacing();
+    if (ImGui::BeginTabBar("##resource_categories")) {
+      const std::string materials_label = format_string("Materials (%zu)###resource_materials", static_cast<size_t>(_material_mapping.size()));
+      if (ImGui::BeginTabItem(materials_label.c_str())) {
+        if (ImGui::Button("Add Material", ImVec2(-FLT_MIN, 0.0f)) && callbacks.material_added) {
+          const uint32_t material_index = callbacks.material_added();
+          _material_mapping.build(scene_rep.material_mapping());
+          _material_mapping_hash = hash_mapping(scene_rep.material_mapping());
+          reset_selection();
+          const auto material_position = _material_mapping.reverse.find(material_index);
+          if (material_position != _material_mapping.reverse.end()) {
+            set_single_material_selection(static_cast<int32_t>(material_position->second), true);
           }
         }
-        ImGui::PopID();
-      }
-      ImGui::EndListBox();
-    }
-
-    ImGui::Separator();
-
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Mediums (%zu)", static_cast<size_t>(_medium_mapping.size()));
-    ImGui::Spacing();
-    if (_medium_mapping.empty()) {
-      ImGui::TextDisabled("None");
-    } else if (ImGui::BeginListBox("##mediums_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
-      for (uint64_t i = 0; i < _medium_mapping.size(); ++i) {
-        ImGui::PushID(static_cast<int>(i + 1024));
-        bool medium_selected = (_selection.kind == SelectionKind::Medium) && (_selection.index == static_cast<int32_t>(i));
-        const auto& entry = _medium_mapping.entry(static_cast<int32_t>(i));
-        if (contains_case_insensitive(entry.name, _resource_filter) == false) {
-          ImGui::PopID();
-          continue;
-        }
-        if (ImGui::Selectable(entry.name, medium_selected)) {
-          set_selection(SelectionKind::Medium, static_cast<int32_t>(i));
-        }
-        ImGui::PopID();
-      }
-      ImGui::EndListBox();
-    }
-
-    ImGui::Separator();
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Emitters (%zu)", scene_rep.data().emitter_profiles.size());
-    ImGui::Spacing();
-    if (scene_rep.data().emitter_profiles.empty()) {
-      ImGui::TextDisabled("None");
-    } else if (ImGui::BeginListBox("##emitters_list", ImVec2(-FLT_MIN, kDefaultListHeight))) {
-      for (uint32_t emitter_index = 0; emitter_index < scene_rep.data().emitter_profiles.size(); ++emitter_index) {
-        const auto& emitter = scene_rep.data().emitter_profiles[emitter_index];
-        const char* label = nullptr;
-        switch (emitter.cls) {
-          case EmitterProfile::Class::Area: {
-            const char* material_name = nullptr;
-            // Find a triangle that uses this emitter profile to get material name
-            for (size_t tri_idx = 0; tri_idx < scene_rep.data().triangles.size(); ++tri_idx) {
-              const Triangle& tri = scene_rep.data().triangles[tri_idx];
-              if (tri.emitter_index == emitter_index && tri.material_index < scene_rep.data().materials.size()) {
-                material_name = _material_mapping.name_for(tri.material_index);
-                if (material_name == nullptr) {
-                  label = format_string("%u: area (material %u)", emitter_index, tri.material_index);
-                } else {
-                  label = format_string("%u: area (%s)", emitter_index, material_name);
-                }
-                break;
+        ImGui::Spacing();
+        if (ImGui::BeginListBox("##materials_list", ImVec2(-FLT_MIN, -FLT_MIN))) {
+          uint32_t visible_count = 0u;
+          for (uint64_t i = 0u; i < _material_mapping.size(); ++i) {
+            const int32_t list_index = static_cast<int32_t>(i);
+            const auto& entry = _material_mapping.entry(list_index);
+            if (contains_case_insensitive(entry.name, _resource_filter) == false) {
+              continue;
+            }
+            ++visible_count;
+            ImGui::PushID(list_index);
+            const bool material_selected = (_selection.kind == SelectionKind::Material) && material_list_position_selected(list_index);
+            if (ImGui::Selectable(entry.name, material_selected)) {
+              const ImGuiIO& io = ImGui::GetIO();
+              if (io.KeyShift) {
+                set_material_selection_range(list_index);
+              } else if ((io.KeyCtrl) || (io.KeySuper)) {
+                toggle_material_selection(list_index);
+              } else {
+                set_single_material_selection(list_index, true);
               }
             }
-            if (material_name == nullptr) {
-              label = format_string("%u: area", emitter_index);
-            }
-            break;
+            ImGui::PopID();
           }
-          case EmitterProfile::Class::Directional:
-            label = format_string("%u: directional", emitter_index);
-            break;
-          case EmitterProfile::Class::Environment:
-            if ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0) {
-              label = format_string("%u: atmosphere", emitter_index);
-            } else {
-              label = format_string("%u: environment", emitter_index);
-            }
-            break;
-          default:
-            label = format_string("%u", emitter_index);
-            break;
+          if (visible_count == 0u) {
+            ImGui::TextDisabled("No matching materials");
+          }
+          ImGui::EndListBox();
         }
-        ImGui::PushID(static_cast<int>(emitter_index + 4096));
-        bool emitter_selected = (_selection.kind == SelectionKind::Emitter) && (_selection.index == static_cast<int32_t>(emitter_index));
-        if (contains_case_insensitive(label, _resource_filter) == false) {
-          ImGui::PopID();
-          continue;
-        }
-        if (ImGui::Selectable(label, emitter_selected)) {
-          set_selection(SelectionKind::Emitter, static_cast<int32_t>(emitter_index));
-        }
-        ImGui::PopID();
+        ImGui::EndTabItem();
       }
-      ImGui::EndListBox();
+
+      const std::string mediums_label = format_string("Mediums (%zu)###resource_mediums", static_cast<size_t>(_medium_mapping.size()));
+      if (ImGui::BeginTabItem(mediums_label.c_str())) {
+        if (ImGui::Button("Add Medium", ImVec2(-FLT_MIN, 0.0f)) && callbacks.medium_added) {
+          const uint32_t medium_index = callbacks.medium_added();
+          _medium_mapping.build(scene_rep.medium_mapping());
+          _medium_mapping_hash = hash_mapping(scene_rep.medium_mapping());
+          reset_selection();
+          const auto medium_position = _medium_mapping.reverse.find(medium_index);
+          if (medium_position != _medium_mapping.reverse.end()) {
+            set_selection(SelectionKind::Medium, static_cast<int32_t>(medium_position->second), true);
+          }
+        }
+        ImGui::Spacing();
+        if (ImGui::BeginListBox("##mediums_list", ImVec2(-FLT_MIN, -FLT_MIN))) {
+          uint32_t visible_count = 0u;
+          for (uint64_t i = 0u; i < _medium_mapping.size(); ++i) {
+            const int32_t list_index = static_cast<int32_t>(i);
+            const auto& entry = _medium_mapping.entry(list_index);
+            if (contains_case_insensitive(entry.name, _resource_filter) == false) {
+              continue;
+            }
+            ++visible_count;
+            ImGui::PushID(static_cast<int>(i + 1024u));
+            const bool medium_selected = (_selection.kind == SelectionKind::Medium) && (_selection.index == list_index);
+            if (ImGui::Selectable(entry.name, medium_selected)) {
+              set_selection(SelectionKind::Medium, list_index);
+            }
+            ImGui::PopID();
+          }
+          if (visible_count == 0u) {
+            ImGui::TextDisabled("No matching mediums");
+          }
+          ImGui::EndListBox();
+        }
+        ImGui::EndTabItem();
+      }
+
+      const std::string emitters_label = format_string("Lights (%zu)###resource_lights", scene_rep.data().emitter_profiles.size());
+      if (ImGui::BeginTabItem(emitters_label.c_str())) {
+        if (ImGui::Button("Add Light", ImVec2(-FLT_MIN, 0.0f))) {
+          ImGui::OpenPopup("##add_light_popup");
+        }
+        if (ImGui::BeginPopup("##add_light_popup")) {
+          constexpr const char* light_names[] = {"Environment", "Directional", "Atmosphere"};
+          for (uint32_t light_type = 0u; light_type < IM_ARRAYSIZE(light_names); ++light_type) {
+            if (ImGui::Selectable(light_names[light_type])) {
+              if (callbacks.emitter_added) {
+                callbacks.emitter_added(light_type);
+              }
+              ImGui::CloseCurrentPopup();
+            }
+          }
+          ImGui::EndPopup();
+        }
+        ImGui::Spacing();
+        if (ImGui::BeginListBox("##emitters_list", ImVec2(-FLT_MIN, -FLT_MIN))) {
+          uint32_t visible_count = 0u;
+          for (uint32_t emitter_index = 0u; emitter_index < scene_rep.data().emitter_profiles.size(); ++emitter_index) {
+            const auto& emitter = scene_rep.data().emitter_profiles[emitter_index];
+            std::string label;
+            switch (emitter.cls) {
+              case EmitterProfile::Class::Area:
+                label = format_string("Area light %u", emitter_index + 1u);
+                break;
+              case EmitterProfile::Class::Directional:
+                label = ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u) ? format_string("Sun %u", emitter_index + 1u)
+                                                                                  : format_string("Directional light %u", emitter_index + 1u);
+                break;
+              case EmitterProfile::Class::Environment:
+                label =
+                  ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u) ? format_string("Sky %u", emitter_index + 1u) : format_string("Environment %u", emitter_index + 1u);
+                break;
+              default:
+                label = format_string("Light %u", emitter_index + 1u);
+                break;
+            }
+            if (contains_case_insensitive(label.c_str(), _resource_filter) == false) {
+              continue;
+            }
+            ++visible_count;
+            ImGui::PushID(static_cast<int>(emitter_index + 4096u));
+            const bool emitter_selected = (_selection.kind == SelectionKind::Emitter) && (_selection.index == static_cast<int32_t>(emitter_index));
+            if (ImGui::Selectable(label.c_str(), emitter_selected)) {
+              set_selection(SelectionKind::Emitter, static_cast<int32_t>(emitter_index));
+            }
+            ImGui::PopID();
+          }
+          if (visible_count == 0u) {
+            ImGui::TextDisabled("No matching lights");
+          }
+          ImGui::EndListBox();
+        }
+        ImGui::EndTabItem();
+      }
+      ImGui::EndTabBar();
     }
   });
 }
@@ -4103,8 +4247,6 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
       const ImGuiTreeNodeFlags scene_flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
       const bool scene_open = ImGui::TreeNodeEx("##scene_root", scene_flags, "Scene (%zu)", hierarchy.nodes.size());
       if (scene_open) {
-        constexpr const char* kCameraSymbol = "\xE2\x97\x8A";  // ◊
-        constexpr const char* kEmitterSymbol = "*";
         _scene_tree_open_subtree_ends.clear();
         auto& open_subtree_ends = _scene_tree_open_subtree_ends;
         uint32_t order_position = 0u;
@@ -4164,18 +4306,19 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
           if (enabled == false) {
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
           } else if (contains_active_camera) {
-            ImGui::PushStyleColor(ImGuiCol_Text, kCameraTextColor);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
           }
           const char* node_name = (node_index < hierarchy.node_names.size() && hierarchy.node_names[node_index].empty() == false) ? hierarchy.node_names[node_index].c_str()
                                                                                                                                   : format_string("Node %u", node_index);
-          std::string node_symbols;
-          if (has_camera_attachment) {
-            node_symbols += kCameraSymbol;
+          std::string node_label;
+          if (has_camera_attachment && has_emitter_attachment) {
+            node_label = "Camera + Light · ";
+          } else if (has_camera_attachment) {
+            node_label = "Camera · ";
+          } else if (has_emitter_attachment) {
+            node_label = "Light · ";
           }
-          if (has_emitter_attachment) {
-            node_symbols += kEmitterSymbol;
-          }
-          const std::string node_label = node_symbols.empty() ? std::string(node_name) : (node_symbols + "  " + node_name);
+          node_label += node_name;
           const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<uintptr_t>(node_index) + 1u), flags, "%s", node_label.c_str());
           if (ImGui::IsItemClicked()) {
             set_selection(SelectionKind::Node, static_cast<int32_t>(node_index));
@@ -4213,26 +4356,25 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
   if ((_ui_setup & UIProperties) == 0)
     return;
 
-  std::string properties_title = "Properties";
+  std::string properties_title = "Nothing selected";
 
   switch (_selection.kind) {
+    case SelectionKind::Node:
+      if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < scene_rep.data().hierarchy.node_names.size())) {
+        const std::string& node_name = scene_rep.data().hierarchy.node_names[_selection.index];
+        properties_title = node_name.empty() ? format_string("Node %u", static_cast<uint32_t>(_selection.index)) : node_name;
+      }
+      break;
     case SelectionKind::Material:
       if (selected_material_count() > 1u) {
-        properties_title = "Materials";
+        properties_title = format_string("%u Materials", selected_material_count());
       } else if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _material_mapping.size())) {
-        properties_title = "Material";
+        properties_title = _material_mapping.name(_selection.index);
       }
       break;
     case SelectionKind::Medium:
       if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _medium_mapping.size())) {
-        uint32_t medium_index = _medium_mapping.at(_selection.index);
-        if (medium_index < scene_rep.data().mediums_vector.size()) {
-          const Medium& medium = scene_rep.data().mediums_vector[medium_index];
-          constexpr const char* kMediumClassNames[] = {"Homogeneous Medium", "Density Grid Medium"};
-          int32_t class_index = static_cast<int32_t>(medium.cls);
-          class_index = clamp(class_index, 0, static_cast<int32_t>(sizeof(kMediumClassNames) / sizeof(kMediumClassNames[0])) - 1);
-          properties_title = kMediumClassNames[class_index];
-        }
+        properties_title = _medium_mapping.name(_selection.index);
       }
       break;
     case SelectionKind::Emitter: {
@@ -4242,13 +4384,13 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
         const char* emitter_type = nullptr;
         switch (emitter.cls) {
           case EmitterProfile::Class::Directional:
-            emitter_type = ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0) ? "Sun" : "Directional";
+            emitter_type = ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u) ? "Sun" : "Directional Light";
             break;
           case EmitterProfile::Class::Environment:
-            emitter_type = ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0) ? "Sky" : "Environment";
+            emitter_type = ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u) ? "Sky" : "Environment";
             break;
           case EmitterProfile::Class::Area:
-            emitter_type = "Area";
+            emitter_type = "Area Light";
             break;
           default:
             emitter_type = "Emitter";
@@ -4260,11 +4402,6 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
       }
       break;
     }
-    case SelectionKind::Mesh:
-      if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _mesh_mapping.size())) {
-        properties_title = "Mesh";
-      }
-      break;
     case SelectionKind::Rendering:
       properties_title = "Rendering";
       break;
@@ -4274,6 +4411,22 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
 
   std::string properties_window_name = properties_title + "###properties";
   ctx.with_window(UIProperties, properties_window_name.c_str(), [&]() {
+    const auto history_button = [&](const char* label, bool enabled, int32_t step, const char* tooltip) {
+      if (enabled == false) {
+        ImGui::BeginDisabled();
+      }
+      if (ImGui::Button(label)) {
+        navigate_history(step);
+      }
+      if (enabled == false) {
+        ImGui::EndDisabled();
+      }
+      draw_item_tooltip(tooltip, ImGuiHoveredFlags_DelayNormal);
+    };
+    history_button("Back##selection_history", can_navigate_back(), -1, "Return to the previous selection.");
+    ImGui::SameLine();
+    history_button("Forward##selection_history", can_navigate_forward(), 1, "Advance to the next selection.");
+    ImGui::Spacing();
     ImGui::SeparatorText(properties_title.c_str());
     switch (_selection.kind) {
       case SelectionKind::Node: {
@@ -4286,10 +4439,6 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
       }
       case SelectionKind::Medium: {
         build_medium_selection_properties(scene_rep, ctx, data);
-        break;
-      }
-      case SelectionKind::Mesh: {
-        build_mesh_selection_properties(scene_rep, ctx, data);
         break;
       }
       case SelectionKind::Emitter: {
@@ -4322,6 +4471,8 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
     _node_transform_editor_interaction_rendered_this_frame = true;
   }
   SceneNode& node = hierarchy.nodes[node_index];
+  const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+  const bool attachment_range_valid = (attachment_end >= node.attachment_offset) && (attachment_end <= hierarchy.attachments.size());
   if (_node_geometry_edit_result_node != static_cast<int32_t>(node_index)) {
     _node_geometry_edit_result_node = static_cast<int32_t>(node_index);
     _node_geometry_edit_result = NodeGeometryEditResult::Success;
@@ -4608,8 +4759,7 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
     ImGui::TextDisabled("None");
   }
   static constexpr const char* kAttachmentNames[] = {"Mesh", "Camera", "Emitter", "Medium"};
-  const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
-  if ((attachment_end < node.attachment_offset) || (attachment_end > hierarchy.attachments.size())) {
+  if (attachment_range_valid == false) {
     ImGui::TextColored(kErrorTextColor, "Invalid attachment range");
     return;
   }
@@ -4620,9 +4770,14 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
     ImGui::PushID(static_cast<int>(attachment_index));
     ImGui::SeparatorText(type_name);
     switch (attachment.type) {
-      case SceneAttachment::Type::Mesh:
-        build_mesh_resource_properties(scene_rep, attachment.resource_index, false, data);
+      case SceneAttachment::Type::Mesh: {
+        if (attachment.resource_index < scene_rep.data().meshes.size()) {
+          ImGui::Text("Triangles: %u", scene_rep.data().meshes[attachment.resource_index].triangle_count);
+        } else {
+          ImGui::TextColored(kErrorTextColor, "Invalid mesh");
+        }
         break;
+      }
       case SceneAttachment::Type::Camera:
         if (attachment.resource_index < scene_rep.data().cameras.size()) {
           Camera& camera = scene_rep.data().cameras[attachment.resource_index].cam;
@@ -4644,6 +4799,8 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
     }
     ImGui::PopID();
   }
+
+  build_node_appearance_properties(scene_rep, node, attachment_end, data);
 }
 
 void UI::finish_node_transform_editor_interaction() {
@@ -4883,9 +5040,7 @@ void UI::build_material_selection_properties(SceneRepresentation& scene_rep, con
     }
     bool changed = build_material(scene_rep, material, data);
     if (changed) {
-      if (callbacks.material_changed) {
-        callbacks.material_changed(material_index);
-      }
+      queue_material_change(material_index);
     }
     return;
   }
@@ -5011,10 +5166,8 @@ void UI::build_material_selection_properties(SceneRepresentation& scene_rep, con
   }
 
   apply_material_changes(scene_rep, material_indices, before, edit_material);
-  if (callbacks.material_changed) {
-    for (const uint32_t changed_material_index : material_indices) {
-      callbacks.material_changed(changed_material_index);
-    }
+  for (const uint32_t changed_material_index : material_indices) {
+    queue_material_change(changed_material_index);
   }
 }
 
@@ -5089,6 +5242,9 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     ImGui::TextColored(kErrorTextColor, "Material: None");
     draw_item_tooltip("This area emitter has no material reference.", ImGuiHoveredFlags_DelayNormal);
     return;
+  }
+  if (emitter.cls == EmitterProfile::Class::Area) {
+    _material_editor_rendered_this_frame = true;
   }
 
   bool common_changed = false;
@@ -5279,9 +5435,7 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Button, kDeleteButtonColor);
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kDeleteButtonHoverColor);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDeleteButtonActiveColor);
+    push_semantic_button_colors(terminate_button_colors(_theme));
     if (ImGui::Button("Delete Emitter", ImVec2(-1.0f, 0.0f))) {
       ImGui::OpenPopup("Delete emitter?##confirm_delete_emitter");
     }
@@ -5292,9 +5446,7 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
         ImGui::CloseCurrentPopup();
       }
       ImGui::SameLine();
-      ImGui::PushStyleColor(ImGuiCol_Button, kDeleteButtonColor);
-      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kDeleteButtonHoverColor);
-      ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDeleteButtonActiveColor);
+      push_semantic_button_colors(terminate_button_colors(_theme));
       if (ImGui::Button("Delete")) {
         if ((callbacks.emitter_deleted) && callbacks.emitter_deleted(emitter_index)) {
           set_selection(SelectionKind::None, -1, false);
@@ -5305,152 +5457,140 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
       ImGui::EndPopup();
     }
   }
-  if (material_changed && callbacks.material_changed && (material_index < scene_rep.data().materials.size())) {
-    callbacks.material_changed(material_index);
+  if (material_changed && (material_index < scene_rep.data().materials.size())) {
+    queue_material_change(material_index);
   }
-  if (changed && callbacks.emitter_changed) {
+  if (changed && (material_changed == false) && callbacks.emitter_changed) {
     callbacks.emitter_changed(emitter_index);
   }
 }
 
-void UI::build_mesh_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
-  if (_mesh_mapping.empty()) {
-    ImGui::Text("No meshes available");
-    return;
-  }
-  if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= _mesh_mapping.size())) {
-    ImGui::Text("Invalid mesh selection");
-    return;
-  }
-
-  uint32_t mesh_index = _mesh_mapping.at(_selection.index);
-  const char* mesh_name = _mesh_mapping.name(_selection.index);
-  update_name_buffer(SelectionKind::Mesh, _selection.index, mesh_name);
-  ImGui::TextUnformatted("Name");
-  full_width_item();
-  bool name_edit_active = ImGui::InputText("##mesh_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
-  bool name_commit = ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter));
-  if (name_commit && callbacks.mesh_renamed) {
-    callbacks.mesh_renamed(mesh_index, std::string(_name_edit_buffer));
-    _pending_selection = {SelectionKind::Mesh, mesh_index, true};
-  }
-
-  build_mesh_resource_properties(scene_rep, mesh_index, true, data);
-}
-
-void UI::build_mesh_resource_properties(SceneRepresentation& scene_rep, uint32_t mesh_index, bool show_links, const FrameData& data) {
+uint32_t UI::build_mesh_material_assignment(SceneRepresentation& scene_rep, uint32_t mesh_index) {
   if (mesh_index >= scene_rep.data().meshes.size()) {
-    ImGui::TextColored(kErrorTextColor, "Invalid mesh");
-    return;
+    return kInvalidIndex;
   }
+
   const Mesh& mesh = scene_rep.data().meshes[mesh_index];
-
-  ImGui::Text("Triangles: %u", mesh.triangle_count);
-
   uint32_t current_material = kInvalidIndex;
-  if (mesh.triangle_count > 0) {
-    uint32_t first_triangle_index = mesh.triangle_offset;
+  if (mesh.triangle_count > 0u) {
+    const uint32_t first_triangle_index = mesh.triangle_offset;
     if (first_triangle_index < scene_rep.data().triangles.size()) {
       current_material = scene_rep.data().triangles[first_triangle_index].material_index;
     }
   }
-  std::vector<const char*> material_names;
-  for (uint64_t i = 0; i < _material_mapping.size(); ++i) {
-    const auto& entry = _material_mapping.entry(static_cast<int32_t>(i));
-    material_names.push_back(entry.name);
+
+  ImGui::TextUnformatted("Assigned Material");
+  if (_material_mapping.empty()) {
+    ImGui::TextDisabled("No materials available");
+    return current_material;
   }
 
+  std::vector<const char*> material_names = {};
+  material_names.reserve(_material_mapping.size());
   int selected_material = -1;
-  for (int i = 0; i < static_cast<int>(material_names.size()); ++i) {
-    if (_material_mapping.at(i) == current_material) {
-      selected_material = i;
-      break;
+  for (uint64_t material_position = 0u; material_position < _material_mapping.size(); ++material_position) {
+    const auto& entry = _material_mapping.entry(static_cast<int32_t>(material_position));
+    material_names.push_back(entry.name);
+    if (_material_mapping.at(static_cast<int32_t>(material_position)) == current_material) {
+      selected_material = static_cast<int>(material_position);
     }
   }
 
-  ImGui::TextUnformatted("Material");
   full_width_item();
-  if (ImGui::Combo("##mesh_material", &selected_material, material_names.data(), static_cast<int>(material_names.size()))) {
-    uint32_t new_material_index = _material_mapping.at(selected_material);
+  if (ImGui::Combo("##mesh_material", &selected_material, material_names.data(), static_cast<int>(material_names.size())) && (selected_material >= 0)) {
+    const uint32_t new_material_index = _material_mapping.at(selected_material);
     if (callbacks.mesh_material_changed) {
       callbacks.mesh_material_changed(mesh_index, new_material_index);
     }
     current_material = new_material_index;
   }
+  return current_material;
+}
 
-  if (show_links == false) {
-    const auto mesh_position = _mesh_mapping.reverse.find(mesh_index);
-    const bool mesh_resource_available = mesh_position != _mesh_mapping.reverse.end();
-    if (mesh_resource_available == false) {
-      ImGui::BeginDisabled();
-    }
-    if (ImGui::Button("Open Mesh Resource", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f)) && mesh_resource_available) {
-      set_selection(SelectionKind::Mesh, static_cast<int32_t>(mesh_position->second));
-    }
-    if (mesh_resource_available == false) {
-      ImGui::EndDisabled();
-    }
-    return;
-  }
-
-  ImGui::Spacing();
-  ImGui::SeparatorText("Material Editor");
-  if (current_material < scene_rep.data().materials.size()) {
-    ImGui::PushID("mesh_material_editor");
-    Material& material = scene_rep.data().materials[current_material];
-    if (build_material(scene_rep, material, data) && callbacks.material_changed) {
-      callbacks.material_changed(current_material);
-    }
-    ImGui::PopID();
-  } else {
-    ImGui::TextDisabled("No material assigned");
-  }
-
-  ImGui::Spacing();
-  ImGui::SeparatorText("Links");
-
-  bool has_valid_material = (current_material != kInvalidIndex);
-  if (has_valid_material == false) {
-    ImGui::BeginDisabled();
-  }
-  if (ImGui::Button("Edit Material", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
-    for (int i = 0; i < static_cast<int>(_material_mapping.size()); ++i) {
-      if (_material_mapping.at(i) == current_material) {
-        set_selection(SelectionKind::Material, i);
-        break;
+uint32_t UI::material_mesh_usage_count(const SceneRepresentation& scene_rep, uint32_t material_index) const {
+  uint32_t usage_count = 0u;
+  const auto& scene = scene_rep.data();
+  std::vector<uint8_t> counted_meshes(scene.meshes.size(), 0u);
+  for (const SceneNode& node : scene.hierarchy.nodes) {
+    const uint64_t attachment_begin = node.attachment_offset;
+    const uint64_t attachment_end = std::min<uint64_t>(attachment_begin + node.attachment_count, scene.hierarchy.attachments.size());
+    for (uint64_t attachment_index = attachment_begin; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = scene.hierarchy.attachments[attachment_index];
+      if ((attachment.type != SceneAttachment::Type::Mesh) || (attachment.resource_index >= scene.meshes.size()) || (counted_meshes[attachment.resource_index] != 0u)) {
+        continue;
       }
-    }
-  }
-  if (has_valid_material == false) {
-    ImGui::EndDisabled();
-  }
 
-  uint32_t emitter_profile_index = kInvalidIndex;
-  if (mesh.triangle_count > 0) {
-    uint32_t start_triangle = mesh.triangle_offset;
-    uint32_t end_triangle = start_triangle + mesh.triangle_count;
-    for (uint32_t tri_idx = start_triangle; tri_idx < end_triangle; ++tri_idx) {
-      const Triangle& tri = scene_rep.data().triangles[tri_idx];
-      if (tri.emitter_index != kInvalidIndex && tri.emitter_index < scene_rep.data().emitter_profiles.size()) {
-        const auto& profile = scene_rep.data().emitter_profiles[tri.emitter_index];
-        if (profile.cls == EmitterProfile::Class::Area) {
-          emitter_profile_index = tri.emitter_index;
+      counted_meshes[attachment.resource_index] = 1u;
+      const Mesh& mesh = scene.meshes[attachment.resource_index];
+      const uint64_t triangle_begin = mesh.triangle_offset;
+      const uint64_t triangle_end = std::min<uint64_t>(triangle_begin + mesh.triangle_count, scene.triangles.size());
+      for (uint64_t triangle_index = triangle_begin; triangle_index < triangle_end; ++triangle_index) {
+        if (scene.triangles[triangle_index].material_index == material_index) {
+          ++usage_count;
           break;
         }
       }
     }
   }
+  return usage_count;
+}
 
-  bool has_emitter = (emitter_profile_index != kInvalidIndex);
-  if (has_emitter == false) {
-    ImGui::BeginDisabled();
+void UI::build_node_appearance_properties(SceneRepresentation& scene_rep, const SceneNode& node, uint32_t attachment_end, const FrameData& data) {
+  const SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
+  std::vector<uint32_t> mesh_indices = {};
+  mesh_indices.reserve(node.attachment_count);
+  for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+    const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+    if (attachment.type == SceneAttachment::Type::Mesh) {
+      mesh_indices.push_back(attachment.resource_index);
+    }
   }
-  if (ImGui::Button("Edit Emitter", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
-    set_selection(SelectionKind::Emitter, static_cast<int32_t>(emitter_profile_index));
+  if (mesh_indices.empty()) {
+    return;
   }
-  if (has_emitter == false) {
-    ImGui::EndDisabled();
+
+  ImGui::Spacing();
+  ImGui::SeparatorText(mesh_indices.size() == 1u ? "Appearance" : "Appearances");
+  ImGui::PushID("node_appearance");
+  for (size_t mesh_position = 0u; mesh_position < mesh_indices.size(); ++mesh_position) {
+    const uint32_t mesh_index = mesh_indices[mesh_position];
+    ImGui::PushID(static_cast<int>(mesh_position));
+    bool appearance_open = true;
+    if (mesh_indices.size() > 1u) {
+      const char* mesh_name = _mesh_mapping.name_for(mesh_index);
+      ImGui::SetNextItemOpen(mesh_position == 0u, ImGuiCond_Once);
+      appearance_open = ImGui::CollapsingHeader(mesh_name != nullptr ? mesh_name : "Mesh", ImGuiTreeNodeFlags_Framed);
+    }
+    if (appearance_open) {
+      uint32_t material_index = build_mesh_material_assignment(scene_rep, mesh_index);
+      if (material_index < scene_rep.data().materials.size()) {
+        const uint32_t usage_count = material_mesh_usage_count(scene_rep, material_index);
+        if (usage_count > 1u) {
+          ImGui::TextDisabled("Shared by %u meshes", usage_count);
+          if (ImGui::Button("Make Unique", ImVec2(-FLT_MIN, 0.0f)) && callbacks.mesh_material_made_unique) {
+            const uint32_t unique_material_index = callbacks.mesh_material_made_unique(mesh_index, material_index);
+            if (unique_material_index < scene_rep.data().materials.size()) {
+              material_index = unique_material_index;
+              _material_mapping.build(scene_rep.material_mapping());
+              _material_mapping_hash = hash_mapping(scene_rep.material_mapping());
+              clear_selection_history();
+            }
+          }
+        }
+        ImGui::Spacing();
+        ImGui::PushID("inline_material_editor");
+        Material& material = scene_rep.data().materials[material_index];
+        if (build_material(scene_rep, material, data)) {
+          queue_material_change(material_index);
+        }
+        ImGui::PopID();
+      } else {
+        ImGui::TextDisabled("No material assigned");
+      }
+    }
+    ImGui::PopID();
   }
+  ImGui::PopID();
 }
 
 void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, bool attachment_enabled, const FrameData& data) {
@@ -5603,51 +5743,52 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
 }
 
 void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
+  (void)ctx;
   bool scene_settings_changed = false;
 
-  if (validated_int_control("Samples Per Pixel", reinterpret_cast<int32_t&>(scene_rep.data().options.samples), 1, 1000000)) {
-    scene_settings_changed = true;
+  if (ImGui::CollapsingHeader("Sampling", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (validated_int_control("Samples Per Pixel", reinterpret_cast<int32_t&>(scene_rep.data().options.samples), 1, 1000000)) {
+      scene_settings_changed = true;
+    }
+
+    const bool noise_threshold_changed = labeled_control("Noise Threshold", [&]() {
+      return ImGui::InputFloat("##noise_thresh", &scene_rep.data().options.noise_threshold, 0.0001f, 0.01f, "%0.5f");
+    });
+    draw_item_tooltip("Experimental adaptive-sampling threshold.", ImGuiHoveredFlags_DelayNormal);
+    if (noise_threshold_changed) {
+      scene_rep.data().options.noise_threshold = std::clamp(scene_rep.data().options.noise_threshold, 0.0f, 1.0f);
+      scene_settings_changed = true;
+    }
+    if (scene_rep.data().options.noise_threshold > 0.0f) {
+      const uint32_t current_pixel_count = data.film.current_pixel_count();
+      const double active_pixel_percentage = (current_pixel_count > 0u) ? (double(data.film.active_pixel_count()) / double(current_pixel_count) * 100.0) : 0.0;
+      ImGui::Text("Active pixels: %.2f%%", active_pixel_percentage);
+    }
   }
 
-  int32_t min_path = static_cast<int32_t>(scene_rep.data().options.min_path_length);
-  int32_t max_path = static_cast<int32_t>(scene_rep.data().options.max_path_length);
+  ImGui::Spacing();
+  if (ImGui::CollapsingHeader("Path Transport", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
+    int32_t min_path = static_cast<int32_t>(scene_rep.data().options.min_path_length);
+    int32_t max_path = static_cast<int32_t>(scene_rep.data().options.max_path_length);
+    const bool min_changed = validated_int_control("Min Path Length", min_path, 0, static_cast<int32_t>(kMaximumPathLength));
+    const bool max_changed = validated_int_control("Max Path Length", max_path, 0, static_cast<int32_t>(kMaximumPathLength));
+    if (min_changed || max_changed) {
+      scene_rep.data().options.min_path_length = static_cast<uint32_t>(min(min_path, max_path));
+      scene_rep.data().options.max_path_length = static_cast<uint32_t>(max(min_path, max_path));
+      scene_settings_changed = true;
+    }
 
-  bool min_changed = validated_int_control("Min Path Length", min_path, 0, static_cast<int32_t>(kMaximumPathLength));
-  bool max_changed = validated_int_control("Max Path Length", max_path, 0, static_cast<int32_t>(kMaximumPathLength));
-
-  if (min_changed || max_changed) {
-    scene_rep.data().options.min_path_length = static_cast<uint32_t>(min(min_path, max_path));
-    scene_rep.data().options.max_path_length = static_cast<uint32_t>(max(min_path, max_path));
-    scene_settings_changed = true;
-  }
-
-  if (validated_int_control("Random Termination", reinterpret_cast<int32_t&>(scene_rep.data().options.random_path_termination), 0, 65536)) {
-    scene_settings_changed = true;
-  }
-
-  if (labeled_control("Radiance Clamp", [&]() {
-        return ImGui::InputFloat("##radiance_clamp", &scene_rep.data().options.radiance_clamp, 0.1f, 1.f, "%0.2f");
-      })) {
-    scene_rep.data().options.radiance_clamp = max(scene_rep.data().options.radiance_clamp, 0.0f);
-    scene_settings_changed = true;
-  }
-
-  const bool spectral_changed = ImGui::Checkbox("Spectral rendering", scene_rep.data().options.properties + Scene::Properties::Spectral);
-  scene_settings_changed = (scene_settings_changed || spectral_changed);
-
-  ImGui::Separator();
-  const bool noise_threshold_changed = labeled_control("Noise Threshold", [&]() {
-    return ImGui::InputFloat("##noise_thresh", &scene_rep.data().options.noise_threshold, 0.0001f, 0.01f, "%0.5f");
-  });
-  draw_item_tooltip("Experimental adaptive-sampling threshold.", ImGuiHoveredFlags_DelayNormal);
-  if (noise_threshold_changed) {
-    scene_rep.data().options.noise_threshold = std::clamp(scene_rep.data().options.noise_threshold, 0.0f, 1.0f);
-    scene_settings_changed = true;
-  }
-  if (scene_rep.data().options.noise_threshold > 0.0f) {
-    const uint32_t current_pixel_count = data.film.current_pixel_count();
-    const double active_pixel_percentage = (current_pixel_count > 0u) ? (double(data.film.active_pixel_count()) / double(current_pixel_count) * 100.0) : 0.0;
-    ImGui::Text("Active pixels: %.2f%%", active_pixel_percentage);
+    if (validated_int_control("Random Termination", reinterpret_cast<int32_t&>(scene_rep.data().options.random_path_termination), 0, 65536)) {
+      scene_settings_changed = true;
+    }
+    if (labeled_control("Radiance Clamp", [&]() {
+          return ImGui::InputFloat("##radiance_clamp", &scene_rep.data().options.radiance_clamp, 0.1f, 1.f, "%0.2f");
+        })) {
+      scene_rep.data().options.radiance_clamp = max(scene_rep.data().options.radiance_clamp, 0.0f);
+      scene_settings_changed = true;
+    }
+    const bool spectral_changed = ImGui::Checkbox("Spectral Rendering", scene_rep.data().options.properties + Scene::Properties::Spectral);
+    scene_settings_changed = (scene_settings_changed || spectral_changed);
   }
 
   if (scene_settings_changed) {
@@ -5666,18 +5807,12 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
 
   bool options_changed = false;
 
-  if (_current_integrator->options().options.empty() == false) {
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
+  if ((_current_integrator->options().options.empty() == false) && ImGui::CollapsingHeader("Integrator Settings", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
     options_changed = build_options(_current_integrator->options());
   }
 
   ImGui::Spacing();
-  ImGui::Separator();
-  ImGui::Spacing();
-
-  if (ImGui::CollapsingHeader("Rendering Strategies", ImGuiTreeNodeFlags_None)) {
+  if (ImGui::CollapsingHeader("Strategies", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
     const uint32_t supported = _current_integrator->supported_strategies();
     bool strategies_changed = false;
 
@@ -5700,7 +5835,7 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
     };
 
     draw_strategy_checkbox("Direct Illumination", Scene::Strategy::DirectHit);
-    draw_strategy_checkbox("Light Sampling", Scene::Strategy::ConnectToLight);
+    draw_strategy_checkbox("Connect to Lights", Scene::Strategy::ConnectToLight);
     draw_strategy_checkbox("Camera Connections", Scene::Strategy::ConnectToCamera);
     draw_strategy_checkbox("Bidirectional Connections", Scene::Strategy::ConnectVertices);
     draw_strategy_checkbox("Photon Merging", Scene::Strategy::MergeVertices);
@@ -5708,26 +5843,21 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
     if (strategies_changed && callbacks.scene_settings_changed) {
       callbacks.scene_settings_changed();
     }
-  }
-
-  ImGui::Spacing();
-  ImGui::Separator();
-  ImGui::Spacing();
-
-  const bool mis_changed = ImGui::Checkbox("Multiple Importance Sampling", scene_rep.data().options.properties + Scene::Properties::MultipleImportanceSampling);
-  if (mis_changed && callbacks.scene_settings_changed) {
-    callbacks.scene_settings_changed();
-  }
-
-  int current_light_sampling = static_cast<int>(scene_rep.data().options.light_sampling);
-  const char* light_sampling_options[] = {"Uniform", "From Distribution", "RIS Uniform", "RIS From Distribution"};
-  ImGui::TextUnformatted("Light Sampling");
-  full_width_item();
-  const bool light_sampling_changed = ImGui::Combo("##light_sampling", &current_light_sampling, light_sampling_options, IM_ARRAYSIZE(light_sampling_options));
-  if (light_sampling_changed) {
-    scene_rep.data().options.light_sampling = static_cast<Scene::LightSampling>(current_light_sampling);
-    if (callbacks.scene_settings_changed) {
+    const bool mis_changed = ImGui::Checkbox("Multiple Importance Sampling", scene_rep.data().options.properties + Scene::Properties::MultipleImportanceSampling);
+    if (mis_changed && callbacks.scene_settings_changed) {
       callbacks.scene_settings_changed();
+    }
+
+    int current_light_sampling = static_cast<int>(scene_rep.data().options.light_sampling);
+    const char* light_sampling_options[] = {"Uniform", "From Distribution", "RIS Uniform", "RIS From Distribution"};
+    ImGui::TextUnformatted("Light Selection");
+    full_width_item();
+    const bool light_sampling_changed = ImGui::Combo("##light_sampling", &current_light_sampling, light_sampling_options, IM_ARRAYSIZE(light_sampling_options));
+    if (light_sampling_changed) {
+      scene_rep.data().options.light_sampling = static_cast<Scene::LightSampling>(current_light_sampling);
+      if (callbacks.scene_settings_changed) {
+        callbacks.scene_settings_changed();
+      }
     }
   }
 
@@ -5737,31 +5867,13 @@ void UI::build_integrator_selection_properties(SceneRepresentation& scene_rep, c
 }
 
 void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
-  ImGui::TextUnformatted("Integrator");
-  full_width_item();
-  build_render_configuration_selector("##render_configuration");
-
-  if (_current_renderer_mode == RendererMode::GPURaytracing) {
-    ImGui::Text("Wavefront: %u step%s", _gpu_wavefront_steps_per_frame, (_gpu_wavefront_steps_per_frame == 1u) ? "" : "s");
-    draw_item_tooltip(_gpu_wavefront_automatic ? "Automatically tuned wavefront steps per UI frame." : "Wavefront steps per UI frame.", ImGuiHoveredFlags_DelayNormal);
-    if (_gpu_wavefront_automatic && (_gpu_wavefront_last_batch_ms > 0.0)) {
-      ImGui::Text("GPU batch: %.1f ms", _gpu_wavefront_last_batch_ms);
-      draw_item_tooltip("Time spent executing the most recent wavefront batch.", ImGuiHoveredFlags_DelayNormal);
-    } else if (_gpu_wavefront_automatic) {
-      ImGui::TextUnformatted("GPU batch: measuring");
-      draw_item_tooltip("Waiting for the first valid wavefront timing measurement.", ImGuiHoveredFlags_DelayNormal);
-    }
-    bool kernel_timing_enabled = _gpu_kernel_timing_stats.enabled;
-    if (ImGui::Checkbox("Profile kernels", &kernel_timing_enabled)) {
-      _gpu_kernel_timing_stats.enabled = kernel_timing_enabled;
-      if (callbacks.gpu_kernel_timing_enabled_changed) {
-        callbacks.gpu_kernel_timing_enabled_changed(kernel_timing_enabled);
-      }
-    }
-    draw_item_tooltip("Collects per-kernel GPU timestamps and adds query overhead.", ImGuiHoveredFlags_DelayNormal);
+  if (_embedded_toolbar_enabled == false) {
+    ImGui::TextUnformatted("Integrator");
+    full_width_item();
+    build_render_configuration_selector("##render_configuration");
+    ImGui::Spacing();
   }
 
-  ImGui::Spacing();
   if (ImGui::CollapsingHeader("Display", ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_DefaultOpen)) {
     if (labeled_control("Exposure",
           [&]() {
@@ -5832,13 +5944,34 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
   }
 
   ImGui::Spacing();
-  ImGui::Separator();
-  ImGui::Spacing();
 
-  build_scene_selection_properties(scene_rep, ctx, data);
-
-  if ((_current_renderer_mode == RendererMode::CPURaytracing) || (_current_renderer_mode == RendererMode::GPURaytracing)) {
+  const bool raytracing_mode = (_current_renderer_mode == RendererMode::CPURaytracing) || (_current_renderer_mode == RendererMode::GPURaytracing);
+  if (raytracing_mode) {
+    build_scene_selection_properties(scene_rep, ctx, data);
     build_integrator_selection_properties(scene_rep, ctx);
+  }
+
+  if (_current_renderer_mode == RendererMode::GPURaytracing) {
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("GPU Diagnostics", ImGuiTreeNodeFlags_Framed)) {
+      ImGui::Text("Wavefront: %u step%s", _gpu_wavefront_steps_per_frame, (_gpu_wavefront_steps_per_frame == 1u) ? "" : "s");
+      draw_item_tooltip(_gpu_wavefront_automatic ? "Automatically tuned wavefront steps per UI frame." : "Wavefront steps per UI frame.", ImGuiHoveredFlags_DelayNormal);
+      if (_gpu_wavefront_automatic && (_gpu_wavefront_last_batch_ms > 0.0)) {
+        ImGui::Text("GPU batch: %.1f ms", _gpu_wavefront_last_batch_ms);
+        draw_item_tooltip("Time spent executing the most recent wavefront batch.", ImGuiHoveredFlags_DelayNormal);
+      } else if (_gpu_wavefront_automatic) {
+        ImGui::TextUnformatted("GPU batch: measuring");
+        draw_item_tooltip("Waiting for the first valid wavefront timing measurement.", ImGuiHoveredFlags_DelayNormal);
+      }
+      bool kernel_timing_enabled = _gpu_kernel_timing_stats.enabled;
+      if (ImGui::Checkbox("Profile kernels", &kernel_timing_enabled)) {
+        _gpu_kernel_timing_stats.enabled = kernel_timing_enabled;
+        if (callbacks.gpu_kernel_timing_enabled_changed) {
+          callbacks.gpu_kernel_timing_enabled_changed(kernel_timing_enabled);
+        }
+      }
+      draw_item_tooltip("Collects per-kernel GPU timestamps and adds query overhead.", ImGuiHoveredFlags_DelayNormal);
+    }
   }
 }
 

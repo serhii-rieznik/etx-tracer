@@ -696,6 +696,18 @@ void RHIContext::cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index,
   });
 }
 
+void RHIContext::cmd_begin_timestamp_scope(RHICommandBuffer cmd, uint32_t begin_query_index, uint32_t end_query_index, RHITimestampStage stage) {
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_begin_timestamp_scope(cmd, begin_query_index, end_query_index, stage);
+  });
+}
+
+void RHIContext::cmd_end_timestamp_scope(RHICommandBuffer cmd, uint32_t end_query_index, RHITimestampStage stage) {
+  dispatch_context(_backend, _impl, [&](auto* context) {
+    context->cmd_end_timestamp_scope(cmd, end_query_index, stage);
+  });
+}
+
 void RHIContext::cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset) {
   dispatch_context(_backend, _impl, [&](auto* context) {
     context->cmd_build_acceleration_structure(cmd, desc, scratch_buffer, scratch_offset);

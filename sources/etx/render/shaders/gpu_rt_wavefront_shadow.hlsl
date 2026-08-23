@@ -41,7 +41,7 @@
   const uint queue_index = dtid.x;
 
   GPUWavefrontResources resources = wavefront_load_resources();
-  if ((resources.connect_light_task_buffer == kInvalidIndex) || (resources.connect_light_result_buffer == kInvalidIndex)) {
+  if (resources.connect_light_task_buffer == kInvalidIndex) {
     return;
   }
 
@@ -51,33 +51,24 @@
   }
   const uint task_index = wavefront_shadow_queue_load(resources, kGPUWavefrontShadowQueueConnectLight, queue_index);
   GPUWavefrontConnectLightTask task = wavefront_load_connect_light_task(resources.connect_light_task_buffer, task_index);
-  GPUWavefrontConnectLightResult result_value = (GPUWavefrontConnectLightResult)0;
-  result_value.transmittance = spectral_response_make(spectral_query_sample(), 0.0f);
-  if (task.flags != GPUWavefrontConnectLightTaskFlags::Ready) {
-    wavefront_store_connect_light_result(resources.connect_light_result_buffer, task_index, result_value);
-    return;
-  }
 
   SpectralQuery spect = (SpectralQuery)0;
   spect.wavelength = task.contribution.wavelength;
   spect.flags = task.contribution.flags;
-  result_value.transmittance = spectral_response_make(spect, 1.0f);
+  SpectralResponse transmittance = spectral_response_make(spect, 1.0f);
 
   uint seed = task.sampler_seed;
+  bool visible = false;
   if ((task.inline_medium_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) {
-    result_value.visible = wavefront_trace_transmittance_to_point_inline_medium(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
-                             task.inline_medium_flags, seed, result_value.transmittance)
-                             ? 1u
-                             : 0u;
+    visible = wavefront_trace_transmittance_to_point_inline_medium(task.shadow_origin, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
+      task.inline_medium_flags, seed, transmittance);
   } else {
-    result_value.visible = wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
+    visible = wavefront_trace_transmittance_to_point(task.shadow_origin, task.shadow_target, spect, task.medium_index, seed, transmittance);
   }
-  GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, task.path_index);
-  if (wavefront_path_state_valid(state)) {
-    state.sampler_seed = seed;
-    wavefront_store_path_state(resources.camera_state_buffer, task.path_index, state);
+  if (visible) {
+    SpectralResponse value = spectral_response_mul(task.contribution, transmittance);
+    wavefront_film_add(task.pixel_index, wavefront_spectral_estimate(value, spect));
   }
-  wavefront_store_connect_light_result(resources.connect_light_result_buffer, task_index, result_value);
 }
 
 [numthreads(64, 1, 1)] void wavefront_light_connect_camera_shadow_main(uint3 dtid : SV_DispatchThreadID) {

@@ -80,14 +80,16 @@ struct RTApplication {
   void on_restart_selected();
   void on_options_changed();
   void on_use_image_as_reference();
-  void on_material_added();
+  uint32_t on_material_added();
   void on_material_renamed(uint32_t index, const std::string&);
   void on_material_changed(uint32_t index);
-  void on_medium_added();
+  void on_material_interaction_started();
+  void on_material_interaction_finished(const std::vector<uint32_t>& material_indices);
+  uint32_t on_medium_added();
   void on_medium_renamed(uint32_t index, const std::string&);
   void on_medium_changed(uint32_t index);
   void on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index);
-  void on_mesh_renamed(uint32_t index, const std::string&);
+  uint32_t on_make_mesh_material_unique(uint32_t mesh_index, uint32_t material_index);
   void on_emitter_changed(uint32_t index);
   void on_emitter_added(uint32_t type);
   bool on_emitter_deleted(uint32_t index);
@@ -149,6 +151,8 @@ struct RTApplication {
   std::atomic<bool> _initialized = false;
   bool _scene_global_initialized = false;
   bool _scene_transform_interaction_active = false;
+  bool _material_interaction_active = false;
+  bool _material_interaction_cpu_was_running = false;
   bool _material_render_resource_preparation_active = false;
   bool _restart_cpu_after_material_resource_preparation = false;
   bool _scene_dirty = false;

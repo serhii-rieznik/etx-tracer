@@ -8,6 +8,7 @@
 /bin/options.json
 /bin/ui.ini
 /bin/raytracer
+/bin/shaders.etxpack
 /bin/bsdf_validation
 /bin/procedural_geometry
 /bin/*.app/

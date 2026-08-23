@@ -19,6 +19,8 @@ struct WavefrontConnectLightPrepareInput {
   Material camera_material;
   Material light_material;
   uint camera_sampler_seed;
+  uint light_vertex_index;
+  uint previous_light_vertex_index;
 };
 
 Vertex wavefront_make_connect_vertex(float3 position, float3 normal, float2 texcoord) {
@@ -169,19 +171,10 @@ float wavefront_connect_light_weight(WavefrontConnectLightPrepareInput input_val
   return 1.0f / (1.0f + w_camera + w_light);
 }
 
-void wavefront_clear_connect_light_task(uint storage_index) {
-  GPUWavefrontResources resources = wavefront_load_resources();
-  if (resources.connect_light_task_buffer != kInvalidIndex) {
-    GPUWavefrontConnectLightTask empty_task = (GPUWavefrontConnectLightTask)0;
-    empty_task.medium_index = kInvalidIndex;
-    wavefront_store_connect_light_task(resources.connect_light_task_buffer, storage_index, empty_task);
-  }
-}
-
 bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_index, out WavefrontConnectLightPrepareInput input_value) {
   input_value = (WavefrontConnectLightPrepareInput)0;
   input_value.resources = wavefront_load_resources();
-  if ((input_value.resources.connect_light_task_buffer == kInvalidIndex) || (input_value.resources.connect_light_result_buffer == kInvalidIndex)) {
+  if (input_value.resources.connect_light_task_buffer == kInvalidIndex) {
     return false;
   }
   if ((constants.dispatch_item_count != 0u) && (batch_index >= constants.dispatch_item_count)) {
@@ -227,13 +220,13 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
     wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length));
   input_value.camera_previous_vertex =
     wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
-  const GPUWavefrontConnectLightTask vertex_indices =
-    wavefront_load_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index);
-  if ((vertex_indices.reserved1 == kInvalidIndex) || (vertex_indices.reserved2 == kInvalidIndex)) {
+  wavefront_load_connect_light_candidate_indices(input_value.resources.connect_light_task_buffer, input_value.storage_index, input_value.light_vertex_index,
+    input_value.previous_light_vertex_index);
+  if ((input_value.light_vertex_index == kInvalidIndex) || (input_value.previous_light_vertex_index == kInvalidIndex)) {
     return false;
   }
-  input_value.light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, vertex_indices.reserved1);
-  input_value.light_previous_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, vertex_indices.reserved2);
+  input_value.light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, input_value.light_vertex_index);
+  input_value.light_previous_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, input_value.previous_light_vertex_index);
 
   if ((wavefront_path_vertex_valid(input_value.camera_vertex) == false) || (wavefront_path_vertex_valid(input_value.camera_previous_vertex) == false) ||
       (wavefront_path_vertex_valid(input_value.light_vertex) == false) || (wavefront_path_vertex_valid(input_value.light_previous_vertex) == false) ||
@@ -282,18 +275,16 @@ void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput
   float z_prev_pdf = wavefront_convert_solid_angle_pdf_to_area(z_prev_pdf_dir, input_value.camera_vertex.position, input_value.camera_previous_vertex.position,
     wavefront_path_vertex_is_surface(input_value.camera_previous_vertex), input_value.camera_previous_vertex.normal);
 
-  const GPUWavefrontConnectLightTask vertex_indices = wavefront_load_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index);
-  GPUWavefrontConnectLightTask task = (GPUWavefrontConnectLightTask)0;
-  task.contribution = camera_eval.bsdf;
-  task.mis_weight = camera_eval.pdf;
-  task.flags = GPUWavefrontConnectLightTaskFlags::CameraPrepared;
-  task.path_index = input_value.path_index;
-  task.reserved0 = asuint(z_prev_pdf);
-  task.reserved1 = vertex_indices.reserved1;
-  task.reserved2 = vertex_indices.reserved2;
-  task.reserved3 = asuint(z_prev_pdf_dir);
-  task.sampler_seed = input_value.camera_sampler_seed;
-  wavefront_store_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index, task);
+  GPUWavefrontConnectLightCandidate candidate = (GPUWavefrontConnectLightCandidate)0;
+  candidate.camera_contribution = camera_eval.bsdf;
+  candidate.camera_pdf = camera_eval.pdf;
+  candidate.camera_reverse_area_pdf = z_prev_pdf;
+  candidate.camera_reverse_direction_pdf = z_prev_pdf_dir;
+  candidate.light_vertex_index = input_value.light_vertex_index;
+  candidate.previous_light_vertex_index = input_value.previous_light_vertex_index;
+  candidate.flags = GPUWavefrontConnectLightTaskFlags::CameraPrepared;
+  candidate.sampler_seed = input_value.camera_sampler_seed;
+  wavefront_store_connect_light_candidate(input_value.resources.connect_light_task_buffer, input_value.storage_index, candidate);
 }
 #endif
 #if ETX_CONNECT_LIGHT_RESOLVE_STAGE
@@ -306,8 +297,8 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
     return;
   }
 
-  GPUWavefrontConnectLightTask camera_task = wavefront_load_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index);
-  if ((camera_task.flags != GPUWavefrontConnectLightTaskFlags::CameraPrepared) || (camera_task.path_index != input_value.path_index)) {
+  GPUWavefrontConnectLightCandidate candidate = wavefront_load_connect_light_candidate(input_value.resources.connect_light_task_buffer, input_value.storage_index);
+  if (candidate.flags != GPUWavefrontConnectLightTaskFlags::CameraPrepared) {
     return;
   }
 
@@ -340,14 +331,14 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
     light_eval.bsdf = spectral_response_mul(light_eval.bsdf, shading_fix);
   }
 
-  SpectralResponse connection = spectral_response_mul(input_value.light_vertex.throughput, spectral_response_mul(light_eval.bsdf, camera_task.contribution));
+  SpectralResponse connection = spectral_response_mul(input_value.light_vertex.throughput, spectral_response_mul(light_eval.bsdf, candidate.camera_contribution));
   if (spectral_response_is_zero(connection)) {
     return;
   }
 
-  float z_prev_pdf = asfloat(camera_task.reserved0);
-  float z_prev_pdf_dir = asfloat(camera_task.reserved3);
-  float y_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(camera_task.mis_weight, input_value.camera_vertex.position, input_value.light_vertex.position,
+  float z_prev_pdf = candidate.camera_reverse_area_pdf;
+  float z_prev_pdf_dir = candidate.camera_reverse_direction_pdf;
+  float y_curr_pdf = wavefront_convert_solid_angle_pdf_to_area(candidate.camera_pdf, input_value.camera_vertex.position, input_value.light_vertex.position,
     wavefront_path_vertex_is_surface(input_value.light_vertex), input_value.light_vertex.normal);
 
   float3 light_prev_direction = normalize(input_value.light_previous_vertex.position - input_value.light_vertex.position);
@@ -383,24 +374,17 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
 
   float3 shadow_origin = wavefront_connect_light_shadow_origin(input_value.light_vertex, direction_to_camera);
   float3 shadow_delta = input_value.camera_vertex.position - shadow_origin;
-  float shadow_distance = length(shadow_delta);
-  if (shadow_distance <= kRayEpsilon) {
+  if (dot(shadow_delta, shadow_delta) <= (kRayEpsilon * kRayEpsilon)) {
     return;
   }
 
   GPUWavefrontConnectLightTask task = (GPUWavefrontConnectLightTask)0;
-  task.shadow_ray.o = shadow_origin;
-  task.shadow_ray.d = shadow_delta / shadow_distance;
-  task.shadow_ray.min_t = kRayEpsilon;
-  task.shadow_ray.max_t = shadow_distance;
+  task.shadow_origin = shadow_origin;
   task.shadow_target = input_value.camera_vertex.position;
   task.contribution = contribution;
-  task.mis_weight = weight;
   task.pixel_index = input_value.camera_vertex.pixel_index;
   task.medium_index = input_value.light_vertex.medium_index;
-  task.flags = GPUWavefrontConnectLightTaskFlags::Ready;
-  task.path_index = input_value.path_index;
-  task.sampler_seed = camera_task.sampler_seed;
+  task.sampler_seed = sampler_random_seed(candidate.sampler_seed, candidate.light_vertex_index);
   task.inline_medium_extinction = input_value.light_vertex.inline_medium_extinction;
   task.inline_medium_flags = input_value.light_vertex.inline_medium_flags;
   wavefront_store_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index, task);

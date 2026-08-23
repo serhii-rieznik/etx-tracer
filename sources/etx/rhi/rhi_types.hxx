@@ -93,6 +93,7 @@ enum class RHIShaderStage : uint32_t {
 enum class RHIShaderBinaryFormat : uint32_t {
   SpirV = 0,
   MetalSource = 1,
+  MetalLibrary = 2,
 };
 
 constexpr uint32_t kRHIMetalBindlessBindingCount = 6u;

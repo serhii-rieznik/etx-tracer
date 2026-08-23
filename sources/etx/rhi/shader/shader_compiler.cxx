@@ -1,5 +1,6 @@
 #include <etx/rhi/shader/shader_compiler.hxx>
 #include <etx/rhi/shader/dxc_com_ptr.hxx>
+#include <etx/rhi/shader/shader_package.hxx>
 
 #include <etx/core/log.hxx>
 #include <etx/core/platform.hxx>
@@ -47,9 +48,10 @@ RHIResult initialize_dxc_interfaces_global();
 namespace {
 
 constexpr bool kEnableShaderDebugInfo = false;
-constexpr uint32_t kShaderCacheVersion = 6u;
+constexpr uint32_t kShaderCacheVersion = 7u;
 constexpr std::string_view kShaderVariantCacheMagic = "ETXSHV1";
 constexpr std::string_view kPreprocessedShaderCacheMagic = "ETXSHP1";
+std::atomic<uint64_t> dxc_library_fingerprint = 0u;
 
 #if (ETX_PLATFORM_WINDOWS)
 using DxcLibraryHandle = HMODULE;
@@ -79,6 +81,38 @@ void unload_dxc_library(DxcLibraryHandle library) {
 #else
   dlclose(library);
 #endif
+}
+
+std::filesystem::path loaded_dxc_library_path(DxcLibraryHandle library, DxcCreateInstanceProc create_instance) {
+#if ETX_PLATFORM_WINDOWS
+  std::array<wchar_t, 32768> path = {};
+  const DWORD length = GetModuleFileNameW(library, path.data(), static_cast<DWORD>(path.size()));
+  return ((length > 0u) && (length < path.size())) ? std::filesystem::path(path.data(), path.data() + length) : std::filesystem::path();
+#else
+  Dl_info info = {};
+  if ((create_instance == nullptr) || (dladdr(reinterpret_cast<const void*>(create_instance), &info) == 0) || (info.dli_fname == nullptr)) {
+    return {};
+  }
+  return info.dli_fname;
+#endif
+}
+
+uint64_t hash_dxc_library_file(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  if (stream.is_open() == false) {
+    return 0u;
+  }
+
+  uint64_t hash = 0x4554584458435631ull;
+  std::array<char, 64u * 1024u> buffer = {};
+  while (stream.good()) {
+    stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    const std::streamsize bytes_read = stream.gcount();
+    if (bytes_read > 0) {
+      hash = etx_hash64_continue(buffer.data(), static_cast<size_t>(bytes_read), hash);
+    }
+  }
+  return stream.bad() ? 0u : hash;
 }
 
 std::wstring utf8_to_wstring(const std::string& value) {
@@ -667,7 +701,7 @@ void retain_current_shader_variant(std::unordered_map<ShaderVariantKey, ShaderCo
 std::filesystem::path shader_cache_root_directory() {
   std::filesystem::path root(env().cache_folder());
   root /= "shaders";
-  root /= ("v" + std::to_string(kShaderCacheVersion));
+  root /= ("v" + std::to_string(kShaderCacheVersion) + "-" + format_hash_hex(dxc_library_fingerprint.load(std::memory_order_acquire)));
   return root;
 }
 
@@ -990,6 +1024,11 @@ struct ShaderCompiler::Impl {
   std::mutex preprocessed_cache_mutex;
   ShaderCompilerStatistics statistics = {};
   std::mutex statistics_mutex;
+  std::array<ShaderPackage, 2> packages = {};
+  std::array<bool, 2> package_load_attempted = {};
+  std::array<std::string, 2> package_load_errors = {};
+  std::mutex package_mutex;
+  std::atomic<bool> runtime_compilation_allowed = true;
 
   DxcComPtr<IDxcUtils> dxc_utils;
   DxcComPtr<IDxcCompiler3> dxc_compiler;
@@ -1007,6 +1046,7 @@ struct ShaderCompiler::Impl {
     statistics.preprocessed_disk_cache_hits += delta.preprocessed_disk_cache_hits;
     statistics.shader_memory_cache_hits += delta.shader_memory_cache_hits;
     statistics.shader_disk_cache_hits += delta.shader_disk_cache_hits;
+    statistics.shader_package_hits += delta.shader_package_hits;
     statistics.preprocess_invocations += delta.preprocess_invocations;
     statistics.dxc_compile_invocations += delta.dxc_compile_invocations;
     statistics.spirv_to_msl_translations += delta.spirv_to_msl_translations;
@@ -1135,60 +1175,6 @@ void reset_thread_local_dxc_context() {
 
 ShaderCompiler& ShaderCompiler::instance() {
   static ShaderCompiler singleton;
-  static std::once_flag init_flag;
-  static bool init_failed = false;
-
-  std::call_once(init_flag, []() {
-    // Initialize global DXC resources
-    RHIResult dll_result = load_dxc_dll_global();
-    if (dll_result != RHIResult::Success) {
-      log::error("Failed to load DXC DLL");
-      init_failed = true;
-      return;
-    }
-
-#if (ETX_PLATFORM_WINDOWS)
-    // DXC uses COM on Windows only.
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    if (FAILED(hr) && (hr != RPC_E_CHANGED_MODE)) {
-      log::error("Failed to initialize COM: 0x%08X", static_cast<uint32_t>(hr));
-      unload_dxc_dll_global();
-      init_failed = true;
-      return;
-    }
-
-    if ((hr != RPC_E_CHANGED_MODE)) {
-      global_com_initialized.store(true, std::memory_order_release);
-    }
-#endif
-
-    // Initialize DXC interfaces
-    RHIResult init_result = initialize_dxc_interfaces_global();
-    if (init_result != RHIResult::Success) {
-      log::error("Failed to initialize DXC interfaces");
-#if (ETX_PLATFORM_WINDOWS)
-      if (global_com_initialized.load(std::memory_order_acquire)) {
-        CoUninitialize();
-        global_com_initialized.store(false, std::memory_order_release);
-      }
-#endif
-      unload_dxc_dll_global();
-      init_failed = true;
-      return;
-    }
-
-    // Initialize the singleton instance
-    RHIResult instance_result = singleton.initialize();
-    if (instance_result != RHIResult::Success) {
-      log::error("Failed to initialize shader compiler instance");
-      init_failed = true;
-    }
-  });
-
-  if (init_failed) {
-    log::error("ShaderCompiler initialization failed");
-  }
-
   return singleton;
 }
 
@@ -1260,6 +1246,14 @@ void ShaderCompiler::shutdown() {
   }
 }
 
+void ShaderCompiler::set_runtime_compilation_allowed(bool allowed) {
+  _impl->runtime_compilation_allowed.store(allowed, std::memory_order_release);
+}
+
+bool ShaderCompiler::runtime_compilation_allowed() const {
+  return _impl->runtime_compilation_allowed.load(std::memory_order_acquire);
+}
+
 ShaderCompiler::ShaderCompiler()
   : _impl(std::make_unique<Impl>()) {
 }
@@ -1272,9 +1266,50 @@ ShaderCompiler::~ShaderCompiler() {
 }
 
 RHIResult ShaderCompiler::initialize() {
+  std::lock_guard<std::mutex> initialization_lock(global_init_mutex);
   if (is_initialized()) {
     return RHIResult::Success;
   }
+
+  if (runtime_compilation_allowed() == false) {
+    return RHIResult::NotImplemented;
+  }
+
+  const RHIResult library_result = load_dxc_dll_global();
+  if (library_result != RHIResult::Success) {
+    return library_result;
+  }
+
+#if ETX_PLATFORM_WINDOWS
+  const HRESULT com_result = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (FAILED(com_result) && (com_result != RPC_E_CHANGED_MODE)) {
+    log::error("Failed to initialize COM for DXC: 0x%08X", static_cast<uint32_t>(com_result));
+    unload_dxc_dll_global();
+    return RHIResult::ValidationError;
+  }
+  const bool com_initialized_here = com_result != RPC_E_CHANGED_MODE;
+#endif
+
+  if ((global_dxc_utils.Get() == nullptr) || (global_dxc_compiler.Get() == nullptr)) {
+    const RHIResult interface_result = initialize_dxc_interfaces_global();
+    if (interface_result != RHIResult::Success) {
+#if ETX_PLATFORM_WINDOWS
+      if (com_initialized_here) {
+        CoUninitialize();
+      }
+#endif
+      global_dxc_utils.Reset();
+      global_dxc_compiler.Reset();
+      unload_dxc_dll_global();
+      return interface_result;
+    }
+  }
+
+#if ETX_PLATFORM_WINDOWS
+  if (com_initialized_here) {
+    global_com_initialized.store(true, std::memory_order_release);
+  }
+#endif
 
   _impl->dxc_utils = global_dxc_utils;
   _impl->dxc_compiler = global_dxc_compiler;
@@ -1309,20 +1344,130 @@ void ShaderCompiler::log_statistics(const char* label) const {
   const ShaderCompilerStatistics stats = statistics();
   const char* stats_label = (label != nullptr && label[0] != 0) ? label : "global";
   log::info(
-    "Shader compiler stats [%s]: calls=%llu entries=%llu compiled=%llu preprocess(mem=%llu,disk=%llu,dxc=%llu) variants(mem=%llu,disk=%llu,dxc=%llu) msl=%llu writes=%llu "
+    "Shader compiler stats [%s]: calls=%llu entries=%llu compiled=%llu preprocess(mem=%llu,disk=%llu,dxc=%llu) variants(package=%llu,mem=%llu,disk=%llu,dxc=%llu) msl=%llu "
+    "writes=%llu "
     "time_ms(total=%.2f preprocess=%.2f dxc=%.2f msl=%.2f cache_read=%.2f cache_write=%.2f)",
     stats_label, static_cast<unsigned long long>(stats.compile_calls), static_cast<unsigned long long>(stats.requested_entry_points),
     static_cast<unsigned long long>(stats.compiled_entry_points), static_cast<unsigned long long>(stats.preprocessed_memory_cache_hits),
     static_cast<unsigned long long>(stats.preprocessed_disk_cache_hits), static_cast<unsigned long long>(stats.preprocess_invocations),
-    static_cast<unsigned long long>(stats.shader_memory_cache_hits), static_cast<unsigned long long>(stats.shader_disk_cache_hits),
-    static_cast<unsigned long long>(stats.dxc_compile_invocations), static_cast<unsigned long long>(stats.spirv_to_msl_translations),
-    static_cast<unsigned long long>(stats.cache_writes), stats.total_wall_time_ms, stats.preprocess_time_ms, stats.dxc_compile_time_ms, stats.spirv_to_msl_time_ms,
-    stats.cache_read_time_ms, stats.cache_write_time_ms);
+    static_cast<unsigned long long>(stats.shader_package_hits), static_cast<unsigned long long>(stats.shader_memory_cache_hits),
+    static_cast<unsigned long long>(stats.shader_disk_cache_hits), static_cast<unsigned long long>(stats.dxc_compile_invocations),
+    static_cast<unsigned long long>(stats.spirv_to_msl_translations), static_cast<unsigned long long>(stats.cache_writes), stats.total_wall_time_ms, stats.preprocess_time_ms,
+    stats.dxc_compile_time_ms, stats.spirv_to_msl_time_ms, stats.cache_read_time_ms, stats.cache_write_time_ms);
 }
 
 // File-loading overload
 ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::string& filename, const std::vector<ShaderEntryPoint>& entry_points,
   const std::unordered_map<std::string, std::string>& defines, RHIBackend backend) {
+  MultiShaderCompilationResult packaged_result = {};
+  if (entry_points.empty()) {
+    packaged_result.result = RHIResult::InvalidArgument;
+    packaged_result.error_message = "No entry points provided";
+    return packaged_result;
+  }
+
+  const auto package_begin = std::chrono::steady_clock::now();
+  bool package_loaded = false;
+  bool package_complete = false;
+  std::string package_error = {};
+  const uint32_t backend_index = static_cast<uint32_t>(backend);
+  if (backend_index < _impl->packages.size()) {
+    std::lock_guard<std::mutex> package_lock(_impl->package_mutex);
+    ShaderPackage& package = _impl->packages[backend_index];
+    if (_impl->package_load_attempted[backend_index] == false) {
+      _impl->package_load_attempted[backend_index] = true;
+      const std::filesystem::path package_path = std::filesystem::path(env().data_folder()) / "shaders.etxpack";
+      std::error_code ec = {};
+      if (std::filesystem::exists(package_path, ec) && (ec.value() == 0)) {
+        package.load(package_path, backend, _impl->package_load_errors[backend_index]);
+      }
+    }
+
+    package_loaded = package.loaded();
+    package_error = _impl->package_load_errors[backend_index];
+    if (package_loaded) {
+      const std::map<std::string, std::string> ordered_defines(defines.begin(), defines.end());
+      package_complete = true;
+      packaged_result.binaries.resize(entry_points.size());
+      std::vector<ShaderPackageBinary> package_binaries(entry_points.size());
+      for (size_t entry_index = 0u; entry_index < entry_points.size(); ++entry_index) {
+        const ShaderEntryPoint& entry_point = entry_points[entry_index];
+        const ShaderPackageRequest request = {
+          .source_name = filename,
+          .entry_point = entry_point.entry_point,
+          .stage = entry_point.stage,
+          .backend = backend,
+          .defines = ordered_defines,
+        };
+        if (package.read(request, package_binaries[entry_index], package_error) == false) {
+          package_complete = false;
+          break;
+        }
+      }
+
+      if (package_complete) {
+        size_t shared_size = 0u;
+        for (const ShaderPackageBinary& binary : package_binaries) {
+          shared_size += binary.data.size();
+        }
+        packaged_result.shared_blob.reserve(shared_size);
+        std::vector<size_t> binary_offsets(entry_points.size());
+        for (size_t entry_index = 0u; entry_index < entry_points.size(); ++entry_index) {
+          const ShaderEntryPoint& entry_point = entry_points[entry_index];
+          const ShaderPackageBinary& package_binary = package_binaries[entry_index];
+          const size_t offset = packaged_result.shared_blob.size();
+          binary_offsets[entry_index] = offset;
+          packaged_result.shared_blob.insert(packaged_result.shared_blob.end(), package_binary.data.begin(), package_binary.data.end());
+          const ShaderPackageRequest request = {
+            .source_name = filename,
+            .entry_point = entry_point.entry_point,
+            .stage = entry_point.stage,
+            .backend = backend,
+            .defines = ordered_defines,
+          };
+          RHIShaderBinary& binary = packaged_result.binaries[entry_index];
+          binary.spirv_data = nullptr;
+          binary.spirv_size = package_binary.data.size();
+          binary.stage = entry_point.stage;
+          binary.backend = backend;
+          binary.format = package_binary.format;
+          binary.entry_point = ((backend == RHIBackend::Metal) && (entry_point.entry_point == "main")) ? "main0" : entry_point.entry_point;
+          binary.local_size_x = package_binary.local_size_x;
+          binary.local_size_y = package_binary.local_size_y;
+          binary.local_size_z = package_binary.local_size_z;
+          binary.cache_key = shader_package_request_hash(request);
+          binary.content_hash = etx_hash64(package_binary.data.data(), package_binary.data.size());
+          binary.metal_metadata = package_binary.metal_metadata;
+        }
+        for (size_t entry_index = 0u; entry_index < packaged_result.binaries.size(); ++entry_index) {
+          packaged_result.binaries[entry_index].spirv_data = packaged_result.shared_blob.data() + binary_offsets[entry_index];
+        }
+      }
+    }
+  }
+
+  if (package_complete) {
+    ShaderCompilerStatistics package_statistics = {};
+    package_statistics.compile_calls = 1u;
+    package_statistics.requested_entry_points = static_cast<uint64_t>(entry_points.size());
+    package_statistics.shader_package_hits = static_cast<uint64_t>(entry_points.size());
+    package_statistics.total_wall_time_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - package_begin).count();
+    _impl->accumulate_statistics(package_statistics);
+    return packaged_result;
+  }
+
+  if (runtime_compilation_allowed() == false) {
+    packaged_result.result = RHIResult::ValidationError;
+    if (package_loaded) {
+      packaged_result.error_message = "Required shader variant is absent from the production package: " + filename;
+    } else if (package_error.empty() == false) {
+      packaged_result.error_message = "Failed to load the production shader package: " + package_error;
+    } else {
+      packaged_result.error_message = "Production shader package is missing.";
+    }
+    return packaged_result;
+  }
+
   std::string source_path = resolve_shader_file_path(filename);
   if (source_path.empty()) {
     source_path = filename;
@@ -1379,9 +1524,16 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     return finalize_result(std::move(result));
   }
 
-  if (is_initialized() == false) {
-    result.result = RHIResult::InvalidArgument;
-    result.error_message = "Shader compiler not initialized";
+  if (runtime_compilation_allowed() == false) {
+    result.result = RHIResult::ValidationError;
+    result.error_message = "Runtime shader compilation is disabled";
+    return finalize_result(std::move(result));
+  }
+
+  const RHIResult initialization_result = initialize();
+  if (initialization_result != RHIResult::Success) {
+    result.result = initialization_result;
+    result.error_message = "Shader compiler initialization failed";
     return finalize_result(std::move(result));
   }
 
@@ -2024,6 +2176,17 @@ RHIResult load_dxc_dll_global() {
     return RHIResult::NotImplemented;
   }
 
+  const std::filesystem::path library_path = loaded_dxc_library_path(global_dxc_dll, global_dxc_create_instance);
+  const uint64_t library_fingerprint = hash_dxc_library_file(library_path);
+  if (library_fingerprint == 0u) {
+    log::error("Failed to fingerprint DXC runtime library: %s", library_path.string().c_str());
+    unload_dxc_library(global_dxc_dll);
+    global_dxc_dll = nullptr;
+    global_dxc_create_instance = nullptr;
+    return RHIResult::ValidationError;
+  }
+  dxc_library_fingerprint.store(library_fingerprint, std::memory_order_release);
+
   return RHIResult::Success;
 }
 
@@ -2036,6 +2199,7 @@ void unload_dxc_dll_global() {
     unload_dxc_library(global_dxc_dll);
     global_dxc_dll = nullptr;
     global_dxc_create_instance = nullptr;
+    dxc_library_fingerprint.store(0u, std::memory_order_release);
 #endif
   }
 }
@@ -2092,6 +2256,8 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
     if constexpr (kEnableShaderDebugInfo) {
       arguments.emplace_back(L"-Zi");
       arguments.emplace_back(L"-Qembed_debug");
+    } else {
+      arguments.emplace_back(L"-Qstrip_debug");
     }
   } else {
     arguments.emplace_back(L"-P");

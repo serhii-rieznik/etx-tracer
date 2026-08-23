@@ -246,30 +246,26 @@ struct ETX_ALIGNED GPUWavefrontDirectLightResult {
   uint32_t reserved2 ETX_INIT(0u);
 };
 
-struct ETX_ALIGNED GPUWavefrontConnectLightTask {
-  Ray shadow_ray ETX_INIT({});
-  float3 shadow_target ETX_INIT({});
-  uint32_t reserved0 ETX_INIT(0u);
-  SpectralResponse contribution ETX_INIT({});
-  float mis_weight ETX_INIT(0.0f);
-  uint32_t pixel_index ETX_INIT(0u);
-  uint32_t medium_index ETX_INIT(kInvalidIndex);
+struct ETX_ALIGNED GPUWavefrontConnectLightCandidate {
+  SpectralResponse camera_contribution ETX_INIT({});
+  float camera_pdf ETX_INIT(0.0f);
+  float camera_reverse_area_pdf ETX_INIT(0.0f);
+  float camera_reverse_direction_pdf ETX_INIT(0.0f);
+  uint32_t light_vertex_index ETX_INIT(kInvalidIndex);
+  uint32_t previous_light_vertex_index ETX_INIT(kInvalidIndex);
   uint32_t flags ETX_INIT(0u);
-  uint32_t path_index ETX_INIT(0u);
   uint32_t sampler_seed ETX_INIT(0u);
-  SpectralResponse inline_medium_extinction ETX_INIT({});
-  uint32_t inline_medium_flags ETX_INIT(0u);
-  uint32_t reserved1 ETX_INIT(0u);
-  uint32_t reserved2 ETX_INIT(0u);
-  uint32_t reserved3 ETX_INIT(0u);
 };
 
-struct ETX_ALIGNED GPUWavefrontConnectLightResult {
-  SpectralResponse transmittance ETX_INIT({});
-  uint32_t visible ETX_INIT(0u);
-  uint32_t reserved0 ETX_INIT(0u);
-  uint32_t reserved1 ETX_INIT(0u);
-  uint32_t reserved2 ETX_INIT(0u);
+struct ETX_ALIGNED GPUWavefrontConnectLightTask {
+  float3 shadow_origin ETX_INIT({});
+  uint32_t medium_index ETX_INIT(kInvalidIndex);
+  float3 shadow_target ETX_INIT({});
+  uint32_t pixel_index ETX_INIT(0u);
+  SpectralResponse contribution ETX_INIT({});
+  SpectralResponse inline_medium_extinction ETX_INIT({});
+  uint32_t sampler_seed ETX_INIT(0u);
+  uint32_t inline_medium_flags ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontConnectCameraTask {

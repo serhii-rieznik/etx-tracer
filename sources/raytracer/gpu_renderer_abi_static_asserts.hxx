@@ -269,47 +269,45 @@ static_assert(offsetof(GPUWavefrontDirectLightResult, transmittance) == kGPUWave
 static_assert(offsetof(GPUWavefrontDirectLightResult, visible) == kGPUWavefrontDirectLightResultVisibleOffset,
   "GPUWavefrontDirectLightResult::visible offset changed; update GPU wavefront ABI");
 
+static_assert(std::is_standard_layout_v<GPUWavefrontConnectLightCandidate>, "GPUWavefrontConnectLightCandidate must stay standard layout for GPU wavefront ABI");
+static_assert(std::is_trivially_copyable_v<GPUWavefrontConnectLightCandidate>, "GPUWavefrontConnectLightCandidate must stay trivially copyable for GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontConnectLightCandidate) == 64u, "GPUWavefrontConnectLightCandidate size changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectLightCandidate, camera_contribution) == kGPUWavefrontConnectLightCandidateCameraContributionOffset,
+  "GPUWavefrontConnectLightCandidate::camera_contribution offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectLightCandidate, camera_pdf) == kGPUWavefrontConnectLightCandidateCameraPdfOffset,
+  "GPUWavefrontConnectLightCandidate::camera_pdf offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectLightCandidate, camera_reverse_area_pdf) == kGPUWavefrontConnectLightCandidateCameraReverseAreaPdfOffset,
+  "GPUWavefrontConnectLightCandidate::camera_reverse_area_pdf offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectLightCandidate, camera_reverse_direction_pdf) == kGPUWavefrontConnectLightCandidateCameraReverseDirectionPdfOffset,
+  "GPUWavefrontConnectLightCandidate::camera_reverse_direction_pdf offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectLightCandidate, light_vertex_index) == kGPUWavefrontConnectLightCandidateLightVertexIndexOffset,
+  "GPUWavefrontConnectLightCandidate::light_vertex_index offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectLightCandidate, previous_light_vertex_index) == kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset,
+  "GPUWavefrontConnectLightCandidate::previous_light_vertex_index offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectLightCandidate, flags) == kGPUWavefrontConnectLightCandidateFlagsOffset,
+  "GPUWavefrontConnectLightCandidate::flags offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectLightCandidate, sampler_seed) == kGPUWavefrontConnectLightCandidateSamplerSeedOffset,
+  "GPUWavefrontConnectLightCandidate::sampler_seed offset changed; update GPU wavefront ABI");
+
 static_assert(std::is_standard_layout_v<GPUWavefrontConnectLightTask>, "GPUWavefrontConnectLightTask must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontConnectLightTask>, "GPUWavefrontConnectLightTask must stay trivially copyable for GPU wavefront ABI");
 static_assert(sizeof(GPUWavefrontConnectLightTask) == kGPUWavefrontConnectLightTaskStride, "GPUWavefrontConnectLightTask size changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontConnectLightTask, shadow_ray) == kGPUWavefrontConnectLightTaskShadowRayOffset,
-  "GPUWavefrontConnectLightTask::shadow_ray offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectLightTask, shadow_origin) == kGPUWavefrontConnectLightTaskShadowOriginOffset,
+  "GPUWavefrontConnectLightTask::shadow_origin offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightTask, shadow_target) == kGPUWavefrontConnectLightTaskShadowTargetOffset,
   "GPUWavefrontConnectLightTask::shadow_target offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontConnectLightTask, reserved0) == kGPUWavefrontConnectLightTaskReserved0Offset,
-  "GPUWavefrontConnectLightTask::reserved0 offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightTask, contribution) == kGPUWavefrontConnectLightTaskContributionOffset,
   "GPUWavefrontConnectLightTask::contribution offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontConnectLightTask, mis_weight) == kGPUWavefrontConnectLightTaskMisWeightOffset,
-  "GPUWavefrontConnectLightTask::mis_weight offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightTask, pixel_index) == kGPUWavefrontConnectLightTaskPixelIndexOffset,
   "GPUWavefrontConnectLightTask::pixel_index offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightTask, medium_index) == kGPUWavefrontConnectLightTaskMediumIndexOffset,
   "GPUWavefrontConnectLightTask::medium_index offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontConnectLightTask, flags) == kGPUWavefrontConnectLightTaskFlagsOffset,
-  "GPUWavefrontConnectLightTask::flags offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontConnectLightTask, path_index) == kGPUWavefrontConnectLightTaskPathIndexOffset,
-  "GPUWavefrontConnectLightTask::path_index offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightTask, sampler_seed) == kGPUWavefrontConnectLightTaskSamplerSeedOffset,
   "GPUWavefrontConnectLightTask::sampler_seed offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightTask, inline_medium_extinction) == kGPUWavefrontConnectLightTaskInlineMediumExtinctionOffset,
   "GPUWavefrontConnectLightTask::inline_medium_extinction offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightTask, inline_medium_flags) == kGPUWavefrontConnectLightTaskInlineMediumFlagsOffset,
   "GPUWavefrontConnectLightTask::inline_medium_flags offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontConnectLightTask, reserved1) == kGPUWavefrontConnectLightTaskReserved1Offset,
-  "GPUWavefrontConnectLightTask::reserved1 offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontConnectLightTask, reserved2) == kGPUWavefrontConnectLightTaskReserved2Offset,
-  "GPUWavefrontConnectLightTask::reserved2 offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontConnectLightTask, reserved3) == kGPUWavefrontConnectLightTaskReserved3Offset,
-  "GPUWavefrontConnectLightTask::reserved3 offset changed; update GPU wavefront ABI");
-
-static_assert(std::is_standard_layout_v<GPUWavefrontConnectLightResult>, "GPUWavefrontConnectLightResult must stay standard layout for GPU wavefront ABI");
-static_assert(std::is_trivially_copyable_v<GPUWavefrontConnectLightResult>, "GPUWavefrontConnectLightResult must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontConnectLightResult) == kGPUWavefrontConnectLightResultStride, "GPUWavefrontConnectLightResult size changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontConnectLightResult, transmittance) == kGPUWavefrontConnectLightResultTransmittanceOffset,
-  "GPUWavefrontConnectLightResult::transmittance offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontConnectLightResult, visible) == kGPUWavefrontConnectLightResultVisibleOffset,
-  "GPUWavefrontConnectLightResult::visible offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontConnectCameraTask>, "GPUWavefrontConnectCameraTask must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontConnectCameraTask>, "GPUWavefrontConnectCameraTask must stay trivially copyable for GPU wavefront ABI");

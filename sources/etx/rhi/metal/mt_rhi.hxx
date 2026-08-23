@@ -79,6 +79,8 @@ struct MTContext {
   void cmd_dispatch_indirect(RHICommandBuffer cmd, RHIBindlessHandle argument_buffer, uint64_t argument_buffer_offset);
   void cmd_reset_timestamps(RHICommandBuffer cmd, uint32_t first_query, uint32_t query_count);
   void cmd_write_timestamp(RHICommandBuffer cmd, uint32_t query_index, RHITimestampStage stage);
+  void cmd_begin_timestamp_scope(RHICommandBuffer cmd, uint32_t begin_query_index, uint32_t end_query_index, RHITimestampStage stage);
+  void cmd_end_timestamp_scope(RHICommandBuffer cmd, uint32_t end_query_index, RHITimestampStage stage);
 
   void cmd_build_acceleration_structure(RHICommandBuffer cmd, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer, uint64_t scratch_offset = 0);
 

@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # Script to create release archive for etx-tracer
-# Creates a zip containing bin/ contents (except assets_testing, lib, and tmp) plus blender plugin in blender/ folder
+# Creates a zip containing runtime files plus the Blender plugin.
 
-set -e  # Exit on any error
+set -e
 
 # Get the directory where this script is located
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,36 +16,46 @@ echo "Excluding: assets_testing/, lib/, tmp/"
 # Create temporary directory for packaging
 TEMP_DIR=$(mktemp -d)
 RELEASE_DIR="$TEMP_DIR/etx-tracer-release"
+trap 'rm -rf "$TEMP_DIR"' EXIT
 
 echo "Using temporary directory: $TEMP_DIR"
 
 # Create release directory
 mkdir -p "$RELEASE_DIR"
 
-# Copy only necessary directories from bin/
-echo "Copying bin/ contents (including assets and runtime shaders)..."
-cd "$PROJECT_ROOT/bin"
-for item in *; do
-    if [[ "$item" == "assets" || "$item" == "fonts" || "$item" == "spectrum" ||
-          "$item" == "shaders" || "$item" == "interop" || "$item" == "access" ]]; then
-        echo "  Copying: $item"
-        cp -r "$item" "$RELEASE_DIR/"
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    PLATFORM="macos"
+    APP_BUNDLE="$PROJECT_ROOT/bin/ETX Tracer.app"
+    if [[ ! -d "$APP_BUNDLE" ]]; then
+        echo "Error: ETX Tracer.app was not built"
+        exit 1
     fi
-done
-
-# Copy necessary files (executables, libraries, configs)
-echo "Copying executables, libraries, and config files..."
-for item in *.exe *.dylib *.dll *.json; do
-    if [[ -f "$item" ]]; then
-        echo "  Copying: $item"
-        cp "$item" "$RELEASE_DIR/"
+    if ! codesign --verify --deep --strict "$APP_BUNDLE"; then
+        echo "Error: ETX Tracer.app has an invalid code signature"
+        exit 1
     fi
-done
-
-# Also copy raytracer binary (may not have extension on macOS)
-if [[ -f "raytracer" ]]; then
-    echo "  Copying: raytracer"
-    cp "raytracer" "$RELEASE_DIR/"
+    echo "Copying signed macOS application bundle..."
+    ditto "$APP_BUNDLE" "$RELEASE_DIR/ETX Tracer.app"
+else
+    PLATFORM="linux"
+    echo "Copying runtime data and compiled shader package..."
+    cd "$PROJECT_ROOT/bin"
+    for item in *; do
+        if [[ "$item" == "assets" || "$item" == "fonts" || "$item" == "spectrum" ||
+              "$item" == "shaders.etxpack" ]]; then
+            echo "  Copying: $item"
+            cp -r "$item" "$RELEASE_DIR/"
+        fi
+    done
+    if [[ ! -f "$RELEASE_DIR/shaders.etxpack" ]]; then
+        echo "Error: shaders.etxpack was not generated"
+        exit 1
+    fi
+    if [[ ! -f "$PROJECT_ROOT/bin/raytracer" ]]; then
+        echo "Error: raytracer was not built"
+        exit 1
+    fi
+    cp "$PROJECT_ROOT/bin/raytracer" "$RELEASE_DIR/"
 fi
 
 # Create zip of blender plugin
@@ -54,30 +64,22 @@ cd "$PROJECT_ROOT"
 mkdir -p "$RELEASE_DIR/blender"
 BLENDER_ZIP="$RELEASE_DIR/blender/etx_tracer_exporter.zip"
 cd blender
-zip -r "$BLENDER_ZIP" etx_tracer_exporter/
+zip -r "$BLENDER_ZIP" etx_tracer_exporter/ -x '*/__pycache__/*' '*/.DS_Store' '*.pyc'
 echo "  Created: blender/etx_tracer_exporter.zip"
-
-# Detect platform
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    PLATFORM="macos"
-elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    PLATFORM="linux"
-else
-    PLATFORM="unknown"
-fi
 
 # Create final release archive
 cd "$TEMP_DIR"
 ARCHIVE_NAME="etx-tracer-$PLATFORM-$(date +%Y%m%d-%H%M%S).zip"
 echo "Creating final archive: $ARCHIVE_NAME"
-zip -r "$ARCHIVE_NAME" etx-tracer-release/
+if [[ "$PLATFORM" == "macos" ]]; then
+    ditto -c -k --sequesterRsrc --keepParent etx-tracer-release "$ARCHIVE_NAME"
+else
+    zip -r "$ARCHIVE_NAME" etx-tracer-release/
+fi
 
 # Move archive to project root
 mv "$ARCHIVE_NAME" "$PROJECT_ROOT/"
 echo "Archive created: $PROJECT_ROOT/$ARCHIVE_NAME"
-
-# Cleanup
-rm -rf "$TEMP_DIR"
 
 echo "Release archive creation complete!"
 echo "Archive: $PROJECT_ROOT/$ARCHIVE_NAME"

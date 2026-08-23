@@ -46,11 +46,22 @@ set(RAYTRACER_SHARED_SOURCES
   bsdf_lut_generation.cxx
   gpu_renderer.hxx
   gpu_renderer.cxx
+  shader_packager.hxx
   raster_renderer.cxx
   raster_renderer.hxx
   cpu_renderer.hxx
   cpu_renderer.cxx
 )
+
+if(APPLE)
+  set(ETX_RAYTRACER_SHADER_BACKEND "metal")
+  set(ETX_RAYTRACER_SHADER_PACKAGE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+  set(ETX_RAYTRACER_SHADER_PACKAGE "${ETX_RAYTRACER_SHADER_PACKAGE_DIRECTORY}/shaders-metal.etxpack")
+else()
+  set(ETX_RAYTRACER_SHADER_BACKEND "vulkan")
+  set(ETX_RAYTRACER_SHADER_PACKAGE_DIRECTORY "${root_folder}/bin")
+  set(ETX_RAYTRACER_SHADER_PACKAGE "${ETX_RAYTRACER_SHADER_PACKAGE_DIRECTORY}/shaders.etxpack")
+endif()
 
 add_executable(raytracer
   main.cxx
@@ -87,6 +98,7 @@ if(APPLE)
   )
 
   target_compile_options(raytracer_app PRIVATE "-include" "${CMAKE_SOURCE_DIR}/sources/etx/std.hxx")
+  target_compile_definitions(raytracer_app PRIVATE ETX_REQUIRE_SHADER_PACKAGE=1)
   target_link_libraries(raytracer_app PRIVATE
     imgui imguizmo sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
     "-framework Foundation"
@@ -127,19 +139,14 @@ if(APPLE)
     "${root_folder}/bin/fonts/*"
     "${root_folder}/bin/spectrum/*"
     "${root_folder}/bin/lib/*"
-    "${CMAKE_SOURCE_DIR}/sources/etx/render/shaders/*"
-    "${CMAKE_SOURCE_DIR}/sources/etx/render/interop/*"
-    "${CMAKE_SOURCE_DIR}/sources/etx/render/access/*"
   )
   list(APPEND ETX_TRACER_BUNDLE_RESOURCES
     "${ETX_TRACER_APP_ICON}"
     "${CMAKE_CURRENT_SOURCE_DIR}/macos/DefaultOptions.json"
     "${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in"
     "${CMAKE_CURRENT_SOURCE_DIR}/macos/SignBundle.cmake"
+    "${ETX_RAYTRACER_SHADER_PACKAGE}"
   )
-  if(DXC_FOUND AND DXC_LIBRARY)
-    list(APPEND ETX_TRACER_BUNDLE_RESOURCES "${DXC_LIBRARY}")
-  endif()
   set_property(TARGET raytracer_app APPEND PROPERTY LINK_DEPENDS ${ETX_TRACER_BUNDLE_RESOURCES})
 
   add_custom_command(TARGET raytracer_app POST_BUILD
@@ -149,6 +156,7 @@ if(APPLE)
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/shaders"
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/interop"
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources/access"
+    COMMAND ${CMAKE_COMMAND} -E remove -f "$<TARGET_FILE_DIR:raytracer_app>/../Resources/shaders.etxpack"
     COMMAND ${CMAKE_COMMAND} -E remove -f "$<TARGET_FILE_DIR:raytracer_app>/../Resources/options.json"
     COMMAND ${CMAKE_COMMAND} -E remove_directory "$<TARGET_FILE_DIR:raytracer_app>/../Frameworks"
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:raytracer_app>/../Resources"
@@ -162,15 +170,9 @@ if(APPLE)
     COMMAND ${CMAKE_COMMAND} -E copy_directory
       "${root_folder}/bin/spectrum"
       "$<TARGET_FILE_DIR:raytracer_app>/../Resources/spectrum"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${CMAKE_SOURCE_DIR}/sources/etx/render/shaders"
-      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/shaders"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${CMAKE_SOURCE_DIR}/sources/etx/render/interop"
-      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/interop"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-      "${CMAKE_SOURCE_DIR}/sources/etx/render/access"
-      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/access"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ETX_RAYTRACER_SHADER_PACKAGE}"
+      "$<TARGET_FILE_DIR:raytracer_app>/../Resources/shaders.etxpack"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
       "${CMAKE_CURRENT_SOURCE_DIR}/macos/DefaultOptions.json"
       "$<TARGET_FILE_DIR:raytracer_app>/../Resources/DefaultOptions.json"
@@ -179,15 +181,6 @@ if(APPLE)
       "$<TARGET_FILE_DIR:raytracer_app>/../Frameworks"
     COMMENT "Bundling ETX Tracer resources and runtime libraries"
   )
-
-  if(DXC_FOUND AND DXC_LIBRARY)
-    add_custom_command(TARGET raytracer_app POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${DXC_LIBRARY}"
-        "$<TARGET_FILE_DIR:raytracer_app>/../Frameworks/"
-      COMMENT "Bundling DXC runtime library"
-    )
-  endif()
 
   if(ETX_MACOS_CODE_SIGN_IDENTITY)
     add_custom_command(TARGET raytracer_app POST_BUILD
@@ -206,6 +199,11 @@ if(MSVC)
   target_compile_options(raytracer PRIVATE "/FI${ETX_UNITY_STD_HEADER}")
 else()
   target_compile_options(raytracer PRIVATE "-include" "${ETX_UNITY_STD_HEADER}")
+endif()
+target_compile_definitions(raytracer PRIVATE $<$<CONFIG:Release>:ETX_REQUIRE_SHADER_PACKAGE=1>)
+target_compile_definitions(raytracer PRIVATE ETX_ENABLE_SHADER_PACKAGER=1)
+if(APPLE)
+  target_compile_definitions(raytracer PRIVATE "ETX_SHADER_PACKAGE_MACOS_DEPLOYMENT_TARGET=\"${CMAKE_OSX_DEPLOYMENT_TARGET}\"")
 endif()
 
 target_link_libraries(raytracer
@@ -310,4 +308,43 @@ if(DXC_FOUND AND DXC_LIBRARY)
         COMMENT "Copying DXC sidecar library to bin folder")
     endif()
   endforeach()
+endif()
+
+file(GLOB_RECURSE ETX_SHADER_PACKAGE_INPUTS CONFIGURE_DEPENDS
+  "${CMAKE_SOURCE_DIR}/sources/etx/render/shaders/*"
+  "${CMAKE_SOURCE_DIR}/sources/etx/render/interop/*"
+  "${CMAKE_SOURCE_DIR}/sources/etx/render/access/*"
+)
+add_custom_command(
+  OUTPUT "${ETX_RAYTRACER_SHADER_PACKAGE}"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "${ETX_RAYTRACER_SHADER_PACKAGE_DIRECTORY}"
+  COMMAND "$<TARGET_FILE:raytracer>"
+    --build-shader-package "${ETX_RAYTRACER_SHADER_PACKAGE}"
+    --shader-backend "${ETX_RAYTRACER_SHADER_BACKEND}"
+  DEPENDS
+    raytracer
+    ${ETX_SHADER_PACKAGE_INPUTS}
+    ${DXC_LIBRARY}
+    "${CMAKE_SOURCE_DIR}/sources/etx/rhi/shader/shader_compiler.cxx"
+    "${CMAKE_SOURCE_DIR}/sources/etx/rhi/shader/shader_compiler.hxx"
+    "${CMAKE_SOURCE_DIR}/sources/etx/rhi/shader/shader_package.cxx"
+    "${CMAKE_SOURCE_DIR}/sources/etx/rhi/shader/shader_package.hxx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu_renderer.cxx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shader_packager.hxx"
+  WORKING_DIRECTORY "${root_folder}/bin"
+  COMMENT "Building production ${ETX_RAYTRACER_SHADER_BACKEND} shader package"
+  VERBATIM
+)
+if(APPLE)
+  add_custom_command(
+    OUTPUT "${ETX_RAYTRACER_SHADER_PACKAGE}"
+    APPEND
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${ETX_RAYTRACER_SHADER_PACKAGE}"
+      "${root_folder}/bin/shaders.etxpack"
+  )
+endif()
+add_custom_target(raytracer_shader_package ALL DEPENDS "${ETX_RAYTRACER_SHADER_PACKAGE}")
+if(APPLE)
+  add_dependencies(raytracer_app raytracer_shader_package)
 endif()

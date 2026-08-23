@@ -27,6 +27,6 @@ struct ETX_ALIGNED GPURTConstants {
   uint32_t vcm_grid_mask;
   uint32_t vcm_kernel;
   uint32_t vcm_light_vertex_count;
-  uint32_t vcm_spectral_phase;
+  uint32_t pad2;
   GPUScene scene;
 };

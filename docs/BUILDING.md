@@ -11,16 +11,15 @@ These libraries and tools you have to install by yourself:
 - [DirectX Shader Compiler (DXC)](https://github.com/microsoft/DirectXShaderCompiler) for HLSL-to-SPIR-V compilation
 
 ## Building for Windows
-Windows is the only one platform, which is completely supported at the moment.
 - download and install the latest release of Intel Embree from [GitHub](https://github.com/embree/embree/releases);
   - add environment variable `EMBREE_LOCATION` pointing to the Embree installation folder provide this parameter to CMake (i.e `cmake -DEMBREE_LOCATION=path/to/embree`);
   - copy embree binaries (embree4.dll and other required dlls) to the `bin` folder in the root directory of `etx-tracer`
 
 ### DXC (DirectX Shader Compiler)
-DXC is required for compiling HLSL shaders to SPIR-V for Vulkan. CMake will automatically:
+DXC is required at build time for compiling HLSL shaders. CMake will automatically:
 1. Check if DXC is already installed on your system
 2. If not found on Windows, download a DXC release from GitHub
-3. Copy DXC binaries to the `bin` folder for runtime usage
+3. Copy DXC binaries to the developer `bin` folder for shader-package generation
 
 You can also install DXC manually using:
 - WinGet: `winget install -e --id Microsoft.DirectXShaderCompiler`
@@ -40,7 +39,7 @@ Other recognized folder names include:
 - Windows: `windows`, `win`, `windows-x64`, `win-x64`
 - Linux: `linux`, `linux-x64`
 
-When DXC is found (system, `DXC_PATH`, or vendored path), the build copies required DXC binaries to `bin/` for distribution.
+When DXC is found (system, `DXC_PATH`, or vendored path), the build copies required DXC binaries to `bin/` for development. Release archives exclude DXC.
 
 After that generating and building a project should be as simple as creating a folder for build files and calling CMake, something like:
 ```cmake
@@ -50,12 +49,49 @@ cmake -G "Visual Studio 17 2022" -DEMBREE_LOCATION=path/to/embree ..
 ```
 
 ## Building for macOS 
-Currently macOS platform is not completely supported, however there are steps towards it.
-
-Required extra step for shaders:
+Required shader build setup:
 - Install/build DXC locally and either:
   - place it under `thirdparty/dxc/<platform-folder>/` (auto-discovered), or
   - set `DXC_PATH` to its installation prefix.
+
+Build the native application with:
+
+```sh
+cmake --build build --config Release --target raytracer_app
+```
+
+The target generates and verifies the Metal shader package before copying it into `ETX Tracer.app/Contents/Resources`.
+
+## Production shader packages
+
+Release builds use `shaders.etxpack` instead of distributing the `shaders`, `interop`, and `access` source trees. The package contains an indexed set of backend binaries for every renderer variant reachable from the application:
+
+- Metal uses compiled `.metallib` payloads and stored binding metadata.
+- Vulkan uses SPIR-V payloads.
+- Each index and payload has an integrity hash.
+- Package publication uses a temporary file followed by an atomic replacement.
+- Release runtime compilation is disabled. A missing, corrupt, or incomplete package is a startup/rendering error.
+
+The package excludes HLSL text, include files, source paths, and DXC. Compiled GPU binaries remain inspectable like other executable code; the package is an IP-exposure reduction mechanism, not encryption.
+
+The normal build creates the package through the `raytracer_shader_package` target. Explicit release builds and CI must build both targets:
+
+```sh
+cmake --build build --config Release --target raytracer raytracer_shader_package
+```
+
+On macOS, the package builder uses `xcrun metal` and `xcrun metallib`. Its content-addressed cache is stored under the CMake build directory and includes the installed Metal compiler version and deployment target in its key. The shared shader cache also includes a fingerprint of the loaded DXC library. Shader or compiler changes rebuild affected binaries; unchanged package rebuilds reuse them.
+
+`scripts/create-release-archive.sh` packages the signed macOS application bundle. The Windows archive script packages the executable, runtime libraries, data, and shader package while excluding DXC and shader sources.
+
+For a direct diagnostic build:
+
+```sh
+bin/raytracer --build-shader-package /path/to/shaders.etxpack --shader-backend metal
+bin/raytracer.exe --build-shader-package C:\path\to\shaders.etxpack --shader-backend vulkan
+```
+
+Package generation reads sources from the development data folder and is not a runtime distribution workflow.
 
 ## Built-in dependencies
 These libraries are included into the source code in `thirdparty` folder:

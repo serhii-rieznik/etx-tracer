@@ -24,7 +24,7 @@ REM Create release directory
 mkdir "%RELEASE_DIR%" 2>nul
 
 REM Copy only necessary directories from bin/
-echo Copying bin/ contents (only including assets, fonts, spectrum)...
+echo Copying runtime data and compiled shader package...
 pushd "%PROJECT_ROOT%\bin"
 for /d %%i in (*) do (
     if "%%i" equ "assets" (
@@ -38,10 +38,29 @@ for /d %%i in (*) do (
         xcopy "%%i" "%RELEASE_DIR%\%%i\" /E /I /H /Y >nul
     )
 )
-REM Copy necessary files (exe, dll, json)
-for %%i in (*.exe *.dll *.json) do (
-    echo   Copying: %%i
-    copy "%%i" "%RELEASE_DIR%\" >nul
+if exist "shaders.etxpack" (
+    echo   Copying: shaders.etxpack
+    copy "shaders.etxpack" "%RELEASE_DIR%\" >nul
+) else (
+    echo Error: shaders.etxpack was not generated
+    popd
+    rmdir /s /q "%TEMP_DIR%" 2>nul
+    exit /b 1
+)
+if not exist "raytracer.exe" (
+    echo Error: raytracer.exe was not built
+    popd
+    rmdir /s /q "%TEMP_DIR%" 2>nul
+    exit /b 1
+)
+echo   Copying: raytracer.exe
+copy "raytracer.exe" "%RELEASE_DIR%\" >nul
+REM Copy runtime libraries, excluding the build-time shader compiler.
+for %%i in (*.dll) do (
+    if /I not "%%i" equ "dxc.dll" if /I not "%%i" equ "dxcompiler.dll" if /I not "%%i" equ "dxil.dll" (
+        echo   Copying: %%i
+        copy "%%i" "%RELEASE_DIR%\" >nul
+    )
 )
 popd
 
@@ -52,7 +71,12 @@ set "BLENDER_ZIP=%RELEASE_DIR%\blender\etx_tracer_exporter.zip"
 pushd "%PROJECT_ROOT%\blender"
 if exist "etx_tracer_exporter" (
     echo   Creating: blender/etx_tracer_exporter.zip
-    powershell -Command "Compress-Archive -Path 'etx_tracer_exporter\*' -DestinationPath '%BLENDER_ZIP%' -Force"
+    set "BLENDER_STAGE=%TEMP_DIR%\blender-plugin"
+    mkdir "!BLENDER_STAGE!" 2>nul
+    xcopy "etx_tracer_exporter" "!BLENDER_STAGE!\etx_tracer_exporter\" /E /I /H /Y >nul
+    powershell -Command "Get-ChildItem -LiteralPath '!BLENDER_STAGE!\etx_tracer_exporter' -Recurse -Force | Where-Object { $_.Name -eq '.DS_Store' -or $_.Extension -eq '.pyc' -or $_.Name -eq '__pycache__' } | Remove-Item -Recurse -Force"
+    powershell -Command "Compress-Archive -Path '!BLENDER_STAGE!\etx_tracer_exporter' -DestinationPath '%BLENDER_ZIP%' -Force"
+    rmdir /s /q "!BLENDER_STAGE!"
     echo   Created: blender/etx_tracer_exporter.zip
 ) else (
     echo   Warning: Blender plugin directory not found

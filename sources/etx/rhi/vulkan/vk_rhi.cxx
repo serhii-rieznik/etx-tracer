@@ -1039,6 +1039,15 @@ void VKContext::cmd_write_timestamp(RHICommandBuffer cmd_handle, uint32_t query_
   }
 }
 
+void VKContext::cmd_begin_timestamp_scope(RHICommandBuffer cmd_handle, uint32_t begin_query_index, uint32_t end_query_index, RHITimestampStage stage) {
+  (void)end_query_index;
+  cmd_write_timestamp(cmd_handle, begin_query_index, stage);
+}
+
+void VKContext::cmd_end_timestamp_scope(RHICommandBuffer cmd_handle, uint32_t end_query_index, RHITimestampStage stage) {
+  cmd_write_timestamp(cmd_handle, end_query_index, stage);
+}
+
 void VKContext::cmd_build_acceleration_structure(RHICommandBuffer cmd_handle, const RHIAccelerationStructureBuildDesc& desc, RHIBindlessHandle scratch_buffer,
   uint64_t scratch_offset) {
   VKCommandBuffer* cmd = _impl->command_buffer_pool.get_data_ptr(cmd_handle);
