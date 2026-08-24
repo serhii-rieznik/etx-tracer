@@ -73,10 +73,13 @@ extern "C" int main(int argc, char* argv[]) {
 
 #if defined(ETX_REQUIRE_SHADER_PACKAGE) && ETX_REQUIRE_SHADER_PACKAGE
   ShaderCompiler::instance().set_runtime_compilation_allowed(false);
+  log::info("Shader mode: production package");
 #else
+  ShaderCompiler::instance().set_shader_package_lookup_allowed(false);
   if (ShaderCompiler::instance().initialize() != RHIResult::Success) {
     log::error("Shader compiler initialization failed");
   }
+  log::info("Shader mode: development source compilation (package lookup disabled)");
 #endif
 
   ApplicationRuntimeOptions runtime_options = parse_application_runtime_options(argc, argv);

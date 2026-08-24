@@ -25,7 +25,7 @@
       rnd01(seed);
     }
   } else if (scene_uses_spectral_mode()) {
-    spect = spectral_query_packet_sample(rnd01(seed));
+    spect = spectral_query_spectral_sample(rnd01(seed));
   }
   float2 uv_sample = float2(rnd01(seed), rnd01(seed));
   float2 uv = camera_sample_film_uv(output_pixel, camera.film_size, uv_sample);

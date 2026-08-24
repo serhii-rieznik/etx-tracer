@@ -74,9 +74,25 @@ void wavefront_vcm_merge(uint dispatch_index) {
   BSDFData camera_data = bsdf_data_make(hit.vertex, state.spect, hit.medium_index, PathSource::Camera, camera_vertex.w_i);
   Sampler sampler = (Sampler)0;
   sampler.seed = state.sampler_seed;
+#if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE
+  const bool use_prepared_diffuse = material.cls == MaterialClass::Diffuse;
+  LocalFrame diffuse_frame = (LocalFrame)0;
+  float3 diffuse_local_w_i = float3(0.0f, 0.0f, 0.0f);
+  SpectralResponse diffuse_albedo = spectral_response_zero(state.spect);
+  float diffuse_roughness = 0.0f;
+  if (use_prepared_diffuse) {
+    diffuse_frame = bsdf_data_get_normal_frame(camera_data, material);
+    diffuse_local_w_i = local_frame_to_local(diffuse_frame, -camera_data.w_i);
+    diffuse_albedo = bsdf_resource_apply_image(bsdf_context, camera_data.spectrum_sample, material.scattering, camera_data.tex);
+    diffuse_roughness = bsdf_diffuse_scalar_roughness(bsdf_context, material, camera_data.tex);
+  }
+#endif
   float radius_squared = constants.vcm_radius * constants.vcm_radius;
   float inv_radius_squared = 1.0f / radius_squared;
   float3 merged = float3(0.0f, 0.0f, 0.0f);
+#if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
+  const float3 spectral_estimate_scale = wavefront_spectral_estimate(spectral_response_make(state.spect, 1.0f), state.spect);
+#endif
   ByteAddressBuffer heads = WAVEFRONT_RO_BUFFER(resources.vcm_grid_heads_buffer);
   ByteAddressBuffer next_indices = WAVEFRONT_RO_BUFFER(resources.vcm_grid_next_buffer);
   ByteAddressBuffer light_vertices = WAVEFRONT_RO_BUFFER(resources.light_vertex_buffer);
@@ -113,7 +129,20 @@ void wavefront_vcm_merge(uint dispatch_index) {
             const bool query_matches = spectral_query_compatible(spectral_response_as_query(light_vertex.throughput), state.spect);
             if (wavefront_path_vertex_valid(light_vertex) && wavefront_path_vertex_is_surface(light_vertex) && wavefront_path_vertex_connectible(light_vertex) && query_matches) {
               float3 outgoing_direction = -light_vertex.w_i;
-              BSDFEval camera_eval = wavefront_vcm_merge_stage_bsdf_eval(bsdf_context, camera_data, outgoing_direction, material, sampler);
+              BSDFEval camera_eval = (BSDFEval)0;
+#if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE
+              if (use_prepared_diffuse) {
+                const float3 diffuse_local_w_o = local_frame_to_local(diffuse_frame, outgoing_direction);
+                if ((diffuse_local_w_i.z > kEpsilon) && (diffuse_local_w_o.z > kEpsilon)) {
+                  camera_eval.func = bsdf_diffuse_eon_brdf(camera_data.spectrum_sample, diffuse_albedo, diffuse_local_w_i, diffuse_local_w_o, diffuse_roughness);
+                  camera_eval.pdf = kInvPi * diffuse_local_w_o.z;
+                  camera_eval.eta = 1.0f;
+                }
+              } else
+#endif
+              {
+                camera_eval = wavefront_vcm_merge_stage_bsdf_eval(bsdf_context, camera_data, outgoing_direction, material, sampler);
+              }
               if (bsdf_eval_valid(camera_eval)) {
                 float reverse_pdf = wavefront_vcm_merge_stage_reverse_pdf(bsdf_context, camera_data, outgoing_direction, material, sampler);
                 float w_light = light_vertex.forward_pdf * constants.vcm_vc_weight + light_vertex.d_vm * camera_eval.pdf;
@@ -123,8 +152,15 @@ void wavefront_vcm_merge(uint dispatch_index) {
                 if (constants.vcm_kernel != 0u) {
                   kernel_weight = max(2.0f * (1.0f - distance_squared * inv_radius_squared), 0.0f);
                 }
-                SpectralResponse value = spectral_response_mul(camera_eval.func, spectral_response_mul(camera_vertex.throughput, light_vertex.throughput));
-                merged += wavefront_spectral_estimate(value, state.spect) * (kernel_weight * mis_weight * constants.vcm_vm_normalization);
+#if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
+                const float3 estimate = camera_eval.func.integrated * (camera_vertex.throughput.integrated * light_vertex.throughput.integrated);
+#elif ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
+                const float3 estimate = spectral_estimate_scale * (camera_eval.func.value * (camera_vertex.throughput.value * light_vertex.throughput.value));
+#else
+                const SpectralResponse value = spectral_response_mul(camera_eval.func, spectral_response_mul(camera_vertex.throughput, light_vertex.throughput));
+                const float3 estimate = wavefront_spectral_estimate(value, state.spect);
+#endif
+                merged += estimate * (kernel_weight * mis_weight * constants.vcm_vm_normalization);
               }
             }
           }

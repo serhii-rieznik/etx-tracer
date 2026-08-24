@@ -102,11 +102,6 @@ ETX_SHARED_INLINE ::SpectralResponse spectrum_access_evaluate(ETX_IN(SpectrumAcc
   }
 
   ::SpectralResponse result = ::spectral_response_make(query, spectrum_access_evaluate_wavelength(context, spectrum_index, query.wavelength));
-  if (::spectral_query_is_packet(query) && (::spectral_query_is_hero_only(query) == false)) {
-    result.integrated.x = spectrum_access_evaluate_wavelength(context, spectrum_index, ::spectral_query_packet_lane(query, 1u).wavelength);
-    result.integrated.y = spectrum_access_evaluate_wavelength(context, spectrum_index, ::spectral_query_packet_lane(query, 2u).wavelength);
-    result.integrated.z = spectrum_access_evaluate_wavelength(context, spectrum_index, ::spectral_query_packet_lane(query, 3u).wavelength);
-  }
   return result;
 }
 

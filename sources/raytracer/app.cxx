@@ -3,6 +3,7 @@
 #include <etx/core/profiler.hxx>
 
 #include <etx/render/host/scene_global.hxx>
+#include <etx/render/interop/bsdf_energy_compensation_constants_shared.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/rt/integrators/integrator.hxx>
@@ -28,6 +29,17 @@ namespace {
 
 constexpr uint32_t kRecentFileLimit = 8u;
 constexpr size_t kRetainedApplicationCommandResultLimit = 256u;
+
+bool energy_compensation_cache_matches_render_mode(const SceneData& data) {
+  const uint32_t expected_cache_mode = data.options.properties[Scene::Properties::Spectral] ? kBSDFEnergyCompensationCacheModeSpectralScalar :
+                                                                                              kBSDFEnergyCompensationCacheModeIntegratedRGB;
+  for (const Scene::EnergyCompensationInterface& interface_data : data.energy_compensation_interfaces) {
+    if (interface_data.cache_mode != expected_cache_mode) {
+      return false;
+    }
+  }
+  return true;
+}
 
 bool read_texture_to_float4_buffer(RHIContext& ctx, RHITexture texture, const uint2 image_size, std::vector<float4>& output) {
   output.clear();
@@ -817,6 +829,7 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   _material_interaction_cpu_was_running = false;
   _material_render_resource_preparation_active = false;
   _restart_cpu_after_material_resource_preparation = false;
+  _restart_gpu_after_material_resource_preparation = false;
 
   log::warning("Loading scene %s...", scene_file.c_str());
   SceneRepresentation::IntegratorData integrator_data;
@@ -1370,6 +1383,32 @@ void RTApplication::on_scene_settings_changed() {
   if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
     _active_renderer->camera_controller()->sync_from_camera();
   }
+
+  if (energy_compensation_cache_matches_render_mode(scene.data()) == false) {
+    const bool cpu_was_running = (_active_renderer == &cpu_renderer) && cpu_renderer.is_running();
+    const bool gpu_was_running = (_active_renderer == &gpu_renderer) && gpu_renderer.is_running();
+    if (cpu_was_running) {
+      cpu_renderer.stop();
+    }
+    if (gpu_was_running) {
+      gpu_renderer.stop();
+    }
+    _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+    _restart_gpu_after_material_resource_preparation = _restart_gpu_after_material_resource_preparation || gpu_was_running;
+    if (scene.begin_energy_compensation_interface_preparation()) {
+      _material_render_resource_preparation_active = true;
+      return;
+    }
+
+    _material_render_resource_preparation_active = false;
+    if (rebuild_material_render_resources() == false) {
+      finish_material_render_resource_preparation(false);
+      return;
+    }
+    finish_material_render_resource_preparation(true);
+    return;
+  }
+
   notify_scene_might_have_changed();
 }
 
@@ -1863,6 +1902,10 @@ void RTApplication::finish_material_render_resource_preparation(bool resources_r
   if (_restart_cpu_after_material_resource_preparation && (_material_interaction_active == false)) {
     cpu_renderer.restart();
     _restart_cpu_after_material_resource_preparation = false;
+  }
+  if (_restart_gpu_after_material_resource_preparation && (_material_interaction_active == false)) {
+    gpu_renderer.restart();
+    _restart_gpu_after_material_resource_preparation = false;
   }
 }
 

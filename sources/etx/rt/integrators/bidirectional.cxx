@@ -300,13 +300,13 @@ struct CPUBidirectionalImpl : public Task {
       SpectralQuery spect = SpectralQuery::sample();
       if (mode != Mode::PathTracing) {
         if (scene.spectral()) {
-          spect = SpectralQuery::packet_sample(light_smp.next());
+          spect = SpectralQuery::spectral_sample(light_smp.next());
           camera_smp.next();
         }
         build_emitter_path(light_smp, spect, path_data);
       } else {
         if (scene.spectral()) {
-          spect = SpectralQuery::packet_sample(camera_smp.next());
+          spect = SpectralQuery::spectral_sample(camera_smp.next());
         }
       }
 

@@ -534,11 +534,8 @@ float wavefront_subsurface_trace_response_sum(SpectralResponse value) {
 
 SpectralResponse wavefront_subsurface_trace_safe_mul(SpectralQuery spect, SpectralResponse a, SpectralResponse b) {
   if (spectral_query_is_spectral(spect)) {
-    const float3 secondary = float3(((a.integrated.x == 0.0f) || (b.integrated.x == 0.0f)) ? 0.0f : (a.integrated.x * b.integrated.x),
-      ((a.integrated.y == 0.0f) || (b.integrated.y == 0.0f)) ? 0.0f : (a.integrated.y * b.integrated.y),
-      ((a.integrated.z == 0.0f) || (b.integrated.z == 0.0f)) ? 0.0f : (a.integrated.z * b.integrated.z));
-    const float hero = ((a.value == 0.0f) || (b.value == 0.0f)) ? 0.0f : (a.value * b.value);
-    return spectral_response_make_packet(spect, secondary, hero);
+    const float value = ((a.value == 0.0f) || (b.value == 0.0f)) ? 0.0f : (a.value * b.value);
+    return spectral_response_make(spect, value);
   }
 
   return spectral_response_make(spect, float3(((a.integrated.x == 0.0f) || (b.integrated.x == 0.0f)) ? 0.0f : (a.integrated.x * b.integrated.x),

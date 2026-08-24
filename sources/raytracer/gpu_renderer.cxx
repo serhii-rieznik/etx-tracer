@@ -59,7 +59,7 @@ constexpr uint32_t kWavefrontInitialLightHistoryBounces = 16u;
 constexpr uint32_t kWavefrontLightHistoryShrinkSampleCount = 8u;
 constexpr uint32_t kWavefrontAutoInitialSteps = 1u;
 constexpr uint32_t kWavefrontAutoMaximumSteps = 1024u;
-constexpr uint32_t kWavefrontAutoMaximumGrowthFactor = 4u;
+constexpr uint32_t kWavefrontAutoAdjustmentDivisor = 4u;
 constexpr double kWavefrontAutoTargetMs = 12.0;
 constexpr double kWavefrontAutoLowerDeadZoneMs = 8.0;
 constexpr double kWavefrontAutoUpperDeadZoneMs = 16.0;
@@ -72,6 +72,8 @@ constexpr uint32_t kVulkanPipelineMaxWorkerCount = 6u;
 constexpr uint64_t kVulkanPipelineWorkerMemoryReserve = 4ull * 1024ull * 1024ull * 1024ull;
 constexpr uint64_t kWavefrontBDPTFallbackLightVertexBytes = 512ull * 1024ull * 1024ull;
 constexpr uint64_t kWavefrontBDPTMemoryBudgetDivisor = 8ull;
+constexpr uint32_t kMaterialCompileConnectibleConductor = 1u << 30u;
+constexpr uint32_t kMaterialCompileConnectibleDielectric = 1u << 31u;
 
 static_assert(kGPUWavefrontDirectLightSampleStride == kGPUWavefrontConnectCameraTaskStride);
 static_assert(kGPUWavefrontDirectLightTaskStride == kGPUWavefrontConnectCameraTaskStride);
@@ -705,6 +707,14 @@ bool material_compile_mask_has_conductor_stage(uint32_t mask) {
   return material_compile_mask_has(mask, MaterialClass::Conductor);
 }
 
+bool material_compile_mask_has_connectible_conductor(uint32_t mask) {
+  return (mask & kMaterialCompileConnectibleConductor) != 0u;
+}
+
+bool material_compile_mask_has_connectible_dielectric(uint32_t mask) {
+  return (mask & kMaterialCompileConnectibleDielectric) != 0u;
+}
+
 uint32_t material_compile_mask_work_queue_count(uint32_t mask) {
   return static_cast<uint32_t>(material_compile_mask_has_various_continue(mask)) + static_cast<uint32_t>(material_compile_mask_has(mask, MaterialClass::Plastic)) +
          static_cast<uint32_t>(material_compile_mask_has_conductor_stage(mask)) + static_cast<uint32_t>(material_compile_mask_has(mask, MaterialClass::Dielectric)) +
@@ -808,6 +818,8 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
   const bool has_plastic = material_compile_mask_has(material_compile_mask, MaterialClass::Plastic);
   const bool has_conductor = material_compile_mask_has_conductor_stage(material_compile_mask);
   const bool has_dielectric = material_compile_mask_has(material_compile_mask, MaterialClass::Dielectric);
+  const bool has_connectible_conductor = material_compile_mask_has_connectible_conductor(material_compile_mask);
+  const bool has_connectible_dielectric = material_compile_mask_has_connectible_dielectric(material_compile_mask);
   const bool has_thinfilm = material_compile_mask_has(material_compile_mask, MaterialClass::Thinfilm);
 
   switch (stage) {
@@ -838,25 +850,25 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
     case GPURaytracingRenderer::PipelineStage::CameraDirectLightPreparePlastic:
       return enable_connect_to_light && has_plastic;
     case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareConductor:
-      return enable_connect_to_light && has_conductor;
+      return enable_connect_to_light && has_connectible_conductor;
     case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareDielectric:
-      return enable_connect_to_light && has_dielectric;
+      return enable_connect_to_light && has_connectible_dielectric;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareDiffuse:
       return enable_connect_vertices && has_various_connect;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPreparePlastic:
       return enable_connect_vertices && has_plastic;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareConductor:
-      return enable_connect_vertices && has_conductor;
+      return enable_connect_vertices && has_connectible_conductor;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareDielectric:
-      return enable_connect_vertices && has_dielectric;
+      return enable_connect_vertices && has_connectible_dielectric;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveDiffuse:
       return enable_connect_vertices && has_various_connect;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolvePlastic:
       return enable_connect_vertices && has_plastic;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveConductor:
-      return enable_connect_vertices && has_conductor;
+      return enable_connect_vertices && has_connectible_conductor;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveDielectric:
-      return enable_connect_vertices && has_dielectric;
+      return enable_connect_vertices && has_connectible_dielectric;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightShadow:
       return enable_connect_vertices;
     case GPURaytracingRenderer::PipelineStage::InitLightPath0:
@@ -885,9 +897,9 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
     case GPURaytracingRenderer::PipelineStage::LightConnectCameraPreparePlastic:
       return enable_connect_to_camera && has_plastic;
     case GPURaytracingRenderer::PipelineStage::LightConnectCameraPrepareConductor:
-      return enable_connect_to_camera && has_conductor;
+      return enable_connect_to_camera && has_connectible_conductor;
     case GPURaytracingRenderer::PipelineStage::LightConnectCameraPrepareDielectric:
-      return enable_connect_to_camera && has_dielectric;
+      return enable_connect_to_camera && has_connectible_dielectric;
     case GPURaytracingRenderer::PipelineStage::VCMGridClear:
     case GPURaytracingRenderer::PipelineStage::VCMGridBuild:
       return (mode == GPUIntegratorMode::VCM) && enable_merge_vertices;
@@ -896,9 +908,9 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
     case GPURaytracingRenderer::PipelineStage::VCMMergePlastic:
       return (mode == GPUIntegratorMode::VCM) && enable_merge_vertices && has_plastic;
     case GPURaytracingRenderer::PipelineStage::VCMMergeConductor:
-      return (mode == GPUIntegratorMode::VCM) && enable_merge_vertices && has_conductor;
+      return (mode == GPUIntegratorMode::VCM) && enable_merge_vertices && has_connectible_conductor;
     case GPURaytracingRenderer::PipelineStage::VCMMergeDielectric:
-      return (mode == GPUIntegratorMode::VCM) && enable_merge_vertices && has_dielectric;
+      return (mode == GPUIntegratorMode::VCM) && enable_merge_vertices && has_connectible_dielectric;
     case GPURaytracingRenderer::PipelineStage::PrepareSample:
     case GPURaytracingRenderer::PipelineStage::SwapQueues:
     case GPURaytracingRenderer::PipelineStage::FinalizeSample:
@@ -913,6 +925,13 @@ uint32_t build_material_compile_mask(const SceneData& scene_data) {
   uint32_t result = 0u;
   for (const auto& material : scene_data.materials) {
     result |= material_compile_bit(material.cls);
+    const float maximum_roughness = std::max(material.roughness.value.x, material.roughness.value.y);
+    if ((material.cls == MaterialClass::Conductor) && (maximum_roughness > kDeltaAlphaTreshold)) {
+      result |= kMaterialCompileConnectibleConductor;
+    }
+    if ((material.cls == MaterialClass::Dielectric) && (maximum_roughness > kDeltaAlphaTreshold)) {
+      result |= kMaterialCompileConnectibleDielectric;
+    }
   }
   return result;
 }
@@ -1972,13 +1991,14 @@ void GPURaytracingRenderer::update_wavefront_auto_tuning(uint32_t executed_steps
     _wavefront_smoothed_ms_per_step += kWavefrontAutoSmoothingFactor * (measured_ms_per_step - _wavefront_smoothed_ms_per_step);
   }
 
+  const uint32_t estimated_steps =
+    static_cast<uint32_t>(std::clamp(std::floor(kWavefrontAutoTargetMs / _wavefront_smoothed_ms_per_step), 1.0, static_cast<double>(kWavefrontAutoMaximumSteps)));
+  const uint32_t adjustment_limit = std::max(1u, _wavefront_steps_per_render / kWavefrontAutoAdjustmentDivisor);
   if (elapsed_ms > kWavefrontAutoUpperDeadZoneMs) {
-    const double scaled_steps = static_cast<double>(executed_steps) * kWavefrontAutoTargetMs / elapsed_ms;
-    uint32_t target_steps = static_cast<uint32_t>(std::clamp(std::floor(scaled_steps), 1.0, static_cast<double>(kWavefrontAutoMaximumSteps)));
-    if ((target_steps >= _wavefront_steps_per_render) && (_wavefront_steps_per_render > 1u)) {
-      target_steps = _wavefront_steps_per_render - 1u;
+    if (_wavefront_steps_per_render > 1u) {
+      const uint32_t minimum_steps = std::max(1u, _wavefront_steps_per_render - adjustment_limit);
+      _wavefront_steps_per_render = std::min(_wavefront_steps_per_render - 1u, std::max(estimated_steps, minimum_steps));
     }
-    _wavefront_steps_per_render = target_steps;
     return;
   }
 
@@ -1986,11 +2006,8 @@ void GPURaytracingRenderer::update_wavefront_auto_tuning(uint32_t executed_steps
     return;
   }
 
-  const uint32_t estimated_steps =
-    static_cast<uint32_t>(std::clamp(std::floor(kWavefrontAutoTargetMs / _wavefront_smoothed_ms_per_step), 1.0, static_cast<double>(kWavefrontAutoMaximumSteps)));
-  const uint32_t maximum_growth =
-    static_cast<uint32_t>(std::min<uint64_t>(kWavefrontAutoMaximumSteps, static_cast<uint64_t>(_wavefront_steps_per_render) * kWavefrontAutoMaximumGrowthFactor));
-  _wavefront_steps_per_render = std::max(_wavefront_steps_per_render, std::min(estimated_steps, maximum_growth));
+  const uint32_t maximum_steps = std::min(kWavefrontAutoMaximumSteps, _wavefront_steps_per_render + adjustment_limit);
+  _wavefront_steps_per_render = std::max(_wavefront_steps_per_render, std::min(estimated_steps, maximum_steps));
 }
 
 void GPURaytracingRenderer::stop_render_timing() {
@@ -3663,7 +3680,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const auto& camera = scene.camera();
   const uint64_t new_camera_hash = xxh64(&camera, sizeof(camera));
   const bool camera_changed = (new_camera_hash != _current_camera_hash);
-  const bool restart_accumulation = scene_changed || integrator_mode_changed || integrator_features_changed || material_compile_mask_changed || camera_changed;
+  const bool restart_accumulation =
+    scene_changed || integrator_mode_changed || integrator_features_changed || material_compile_mask_changed || spectral_mode_changed || camera_changed;
   if (restart_accumulation) {
     reset_render_progress();
     if (_run_state == RunState::Completed) {
@@ -4196,6 +4214,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     const bool has_plastic = material_compile_mask_has(_material_compile_mask, MaterialClass::Plastic);
     const bool has_conductor = material_compile_mask_has_conductor_stage(_material_compile_mask);
     const bool has_dielectric = material_compile_mask_has(_material_compile_mask, MaterialClass::Dielectric);
+    const bool has_connectible_conductor = material_compile_mask_has_connectible_conductor(_material_compile_mask);
+    const bool has_connectible_dielectric = material_compile_mask_has_connectible_dielectric(_material_compile_mask);
+    const bool has_connectible_material = has_various_connect || has_plastic || has_connectible_conductor || has_connectible_dielectric;
     const bool has_thinfilm = material_compile_mask_has(_material_compile_mask, MaterialClass::Thinfilm);
     const bool use_material_work_queues = material_compile_mask_work_queue_count(_material_compile_mask) > 1u;
     const auto dispatch_stage_material_indirect = [&](RHICommandBuffer cmd, PipelineStage stage, bool from_camera, uint32_t material_queue_index, uint32_t path_iteration) {
@@ -4476,7 +4497,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             }
           }
 
-          if ((connect_light_batch_in_progress == false) && enable_connect_vertices && (_wavefront_camera_queue_count > 0u)) {
+          if ((connect_light_batch_in_progress == false) && enable_connect_vertices && has_connectible_material && (_wavefront_camera_queue_count > 0u)) {
             const uint32_t generated_light_history_bounces =
               (phase_light_before_camera && _wavefront_camera_phase_initialized) ? _wavefront_light_max_path_length : std::min(light_history_bounces, path_iteration + 1u);
             const uint32_t camera_path_length = path_iteration + 1u;
@@ -4502,10 +4523,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                   if (has_plastic) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPreparePlastic, false, kGPUWavefrontMaterialQueuePlastic, path_iteration);
                   }
-                  if (has_conductor) {
+                  if (has_connectible_conductor) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareConductor, false, kGPUWavefrontMaterialQueueConductor, path_iteration);
                   }
-                  if (has_dielectric) {
+                  if (has_connectible_dielectric) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareDielectric, false, kGPUWavefrontMaterialQueueDielectric, path_iteration);
                   }
                   rebuild_dispatch_args(cmd, path_iteration);
@@ -4532,10 +4553,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                   if (has_plastic) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPreparePlastic, true, kGPUWavefrontMaterialQueuePlastic, path_iteration);
                   }
-                  if (has_conductor) {
+                  if (has_connectible_conductor) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareConductor, true, kGPUWavefrontMaterialQueueConductor, path_iteration);
                   }
-                  if (has_dielectric) {
+                  if (has_connectible_dielectric) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareDielectric, true, kGPUWavefrontMaterialQueueDielectric, path_iteration);
                   }
                   rebuild_dispatch_args(cmd, path_iteration);
@@ -4558,10 +4579,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                   if (has_plastic) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::VCMMergePlastic, true, kGPUWavefrontMaterialQueuePlastic, path_iteration);
                   }
-                  if (has_conductor) {
+                  if (has_connectible_conductor) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::VCMMergeConductor, true, kGPUWavefrontMaterialQueueConductor, path_iteration);
                   }
-                  if (has_dielectric) {
+                  if (has_connectible_dielectric) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::VCMMergeDielectric, true, kGPUWavefrontMaterialQueueDielectric, path_iteration);
                   }
                   barrier_wavefront_buffers(cmd);
@@ -4575,7 +4596,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               const uint64_t connect_light_argument_buffer_offset =
                 kGPUWavefrontConnectDispatchArgsOffset + static_cast<uint64_t>(connect_light_vertex_count - 1u) * kGPUWavefrontDispatchArgsStride;
               const uint32_t connect_light_prepare_stage_count =
-                static_cast<uint32_t>(has_various_connect) + static_cast<uint32_t>(has_plastic) + static_cast<uint32_t>(has_conductor) + static_cast<uint32_t>(has_dielectric);
+                static_cast<uint32_t>(has_various_connect) + static_cast<uint32_t>(has_plastic) + static_cast<uint32_t>(has_connectible_conductor) +
+                static_cast<uint32_t>(has_connectible_dielectric);
               bool initialize_connect_light_batch = true;
               const auto dispatch_connect_light_prepare = [&](PipelineStage stage) {
                 const bool initialize_batch = initialize_connect_light_batch;
@@ -4592,10 +4614,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               if (has_plastic) {
                 dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPreparePlastic);
               }
-              if (has_conductor) {
+              if (has_connectible_conductor) {
                 dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPrepareConductor);
               }
-              if (has_dielectric) {
+              if (has_connectible_dielectric) {
                 dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPrepareDielectric);
               }
               barrier_wavefront_buffers(cmd);
@@ -4607,11 +4629,11 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                 dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolvePlastic, connect_light_argument_buffer_offset, path_iteration,
                   _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
               }
-              if (has_conductor) {
+              if (has_connectible_conductor) {
                 dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveConductor, connect_light_argument_buffer_offset, path_iteration,
                   _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
               }
-              if (has_dielectric) {
+              if (has_connectible_dielectric) {
                 dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveDielectric, connect_light_argument_buffer_offset, path_iteration,
                   _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
               }
@@ -5742,12 +5764,13 @@ bool build_raytracer_shader_package(const std::filesystem::path& output_path, co
       if ((material_mask & open_pbr_bit) != 0u) {
         continue;
       }
+      const uint32_t package_material_mask = material_mask | kMaterialCompileConnectibleConductor | kMaterialCompileConnectibleDielectric;
       for (const uint32_t spectral_mode : spectral_modes) {
         for (const WavefrontStage& stage : kWavefrontStages) {
-          if (wavefront_stage_enabled(stage.stage, configuration.mode, configuration.features, material_mask) == false) {
+          if (wavefront_stage_enabled(stage.stage, configuration.mode, configuration.features, package_material_mask) == false) {
             continue;
           }
-          const auto defines = wavefront_stage_defines(stage, configuration.mode, material_mask, spectral_mode);
+          const auto defines = wavefront_stage_defines(stage, configuration.mode, package_material_mask, spectral_mode);
           if (add_request(stage.source_file, stage.entry_point, RHIShaderStage::Compute, defines) == false) {
             return false;
           }

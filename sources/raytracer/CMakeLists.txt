@@ -248,6 +248,9 @@ set_property(TARGET raytracer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${root_fol
 # Runtime shader compilation must not depend on the process working directory.
 # Keep the complete shader include tree next to the executable.
 add_custom_target(raytracer_runtime_shaders
+  COMMAND ${CMAKE_COMMAND} -E remove_directory "${root_folder}/bin/shaders"
+  COMMAND ${CMAKE_COMMAND} -E remove_directory "${root_folder}/bin/interop"
+  COMMAND ${CMAKE_COMMAND} -E remove_directory "${root_folder}/bin/access"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
     "${CMAKE_SOURCE_DIR}/sources/etx/render/shaders"
     "${root_folder}/bin/shaders"
@@ -345,7 +348,7 @@ if(APPLE)
       "${root_folder}/bin/shaders.etxpack"
   )
 endif()
-add_custom_target(raytracer_shader_package ALL DEPENDS "${ETX_RAYTRACER_SHADER_PACKAGE}")
+add_custom_target(raytracer_shader_package DEPENDS "${ETX_RAYTRACER_SHADER_PACKAGE}")
 if(APPLE)
   add_dependencies(raytracer_app raytracer_shader_package)
 endif()

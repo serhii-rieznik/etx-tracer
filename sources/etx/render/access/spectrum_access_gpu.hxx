@@ -53,6 +53,22 @@ float spectrum_access_evaluate_wavelength(SpectrumAccessGPUContext context, uint
     return 0.0f;
   }
 
+#if ETX_SPECTRAL_MODE != ETX_SPECTRAL_MODE_RUNTIME
+  if (entry_count == WavelengthCount) {
+    if ((wavelength < kShortestWavelength) || (wavelength > kLongestWavelength)) {
+      return 0.0f;
+    }
+
+    const float wavelength_position = wavelength - kShortestWavelength;
+    const float wavelength_floor = floor(wavelength_position);
+    const uint i = min(uint(wavelength_floor), WavelengthCount - 1u);
+    const uint j = min(i + 1u, WavelengthCount - 1u);
+    const float pi = spectrum_access_gpu_entry_power_internal(context, spectrum_index, i);
+    const float pj = spectrum_access_gpu_entry_power_internal(context, spectrum_index, j);
+    return lerp(pi, pj, wavelength_position - wavelength_floor);
+  }
+#endif
+
   uint begin = 0u;
   uint end = entry_count;
   while ((end - begin) > 1u) {
@@ -96,11 +112,6 @@ SpectralResponse spectrum_access_evaluate(SpectrumAccessGPUContext context, uint
   }
 
   SpectralResponse result = spectral_response_make(spect, spectrum_access_evaluate_wavelength(context, spectrum_index, spect.wavelength));
-  if (spectral_query_is_packet(spect) && (spectral_query_is_hero_only(spect) == false)) {
-    result.integrated.x = spectrum_access_evaluate_wavelength(context, spectrum_index, spectral_query_packet_lane(spect, 1u).wavelength);
-    result.integrated.y = spectrum_access_evaluate_wavelength(context, spectrum_index, spectral_query_packet_lane(spect, 2u).wavelength);
-    result.integrated.z = spectrum_access_evaluate_wavelength(context, spectrum_index, spectral_query_packet_lane(spect, 3u).wavelength);
-  }
   return result;
 }
 

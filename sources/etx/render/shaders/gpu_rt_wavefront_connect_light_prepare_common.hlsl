@@ -171,7 +171,8 @@ float wavefront_connect_light_weight(WavefrontConnectLightPrepareInput input_val
   return 1.0f / (1.0f + w_camera + w_light);
 }
 
-bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_index, out WavefrontConnectLightPrepareInput input_value) {
+bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_index, bool candidate_indices_initialized, uint initialized_light_vertex_index,
+  uint initialized_previous_light_vertex_index, out WavefrontConnectLightPrepareInput input_value) {
   input_value = (WavefrontConnectLightPrepareInput)0;
   input_value.resources = wavefront_load_resources();
   if (input_value.resources.connect_light_task_buffer == kInvalidIndex) {
@@ -220,8 +221,13 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
     wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length));
   input_value.camera_previous_vertex =
     wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
-  wavefront_load_connect_light_candidate_indices(input_value.resources.connect_light_task_buffer, input_value.storage_index, input_value.light_vertex_index,
-    input_value.previous_light_vertex_index);
+  if (candidate_indices_initialized) {
+    input_value.light_vertex_index = initialized_light_vertex_index;
+    input_value.previous_light_vertex_index = initialized_previous_light_vertex_index;
+  } else {
+    wavefront_load_connect_light_candidate_indices(input_value.resources.connect_light_task_buffer, input_value.storage_index, input_value.light_vertex_index,
+      input_value.previous_light_vertex_index);
+  }
   if ((input_value.light_vertex_index == kInvalidIndex) || (input_value.previous_light_vertex_index == kInvalidIndex)) {
     return false;
   }
@@ -245,7 +251,10 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
 }
 
 #if ETX_CONNECT_LIGHT_CAMERA_PREPARE_STAGE
-void wavefront_initialize_connect_light_prepare_candidate(uint dispatch_index, uint batch_index) {
+void wavefront_initialize_connect_light_prepare_candidate(uint dispatch_index, uint batch_index, out uint initialized_light_vertex_index,
+  out uint initialized_previous_light_vertex_index) {
+  initialized_light_vertex_index = kInvalidIndex;
+  initialized_previous_light_vertex_index = kInvalidIndex;
   GPUWavefrontResources resources = wavefront_load_resources();
   if (resources.connect_light_task_buffer == kInvalidIndex) {
     return;
@@ -285,13 +294,15 @@ void wavefront_initialize_connect_light_prepare_candidate(uint dispatch_index, u
     }
   }
   wavefront_initialize_connect_light_candidate(resources.connect_light_task_buffer, task_index, light_vertex_index, previous_light_vertex_index);
+  initialized_light_vertex_index = light_vertex_index;
+  initialized_previous_light_vertex_index = previous_light_vertex_index;
   if ((resources.light_vertex_counter_buffer != kInvalidIndex) && ((batch_index + 1u) == constants.dispatch_item_count)) {
     const uint output_cursor_offset = cursor_base_offset + ((output_cursor_slot * resources.path_capacity + dispatch_index) * 4u);
     WAVEFRONT_RW_BUFFER(resources.connect_light_task_buffer).Store(output_cursor_offset, previous_light_vertex_index);
   }
 }
 
-void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput input_value, ETX_IN(BSDFEval, camera_eval)) {
+void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput input_value, ETX_IN(BSDFEval, camera_eval), WavefrontConnectLightStagePrepared prepared) {
   if (bsdf_eval_valid(camera_eval) == false) {
     return;
   }
@@ -315,8 +326,8 @@ void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput
   } else {
     BSDFData camera_reverse_data = bsdf_data_make(wavefront_make_connect_path_vertex(input_value.camera_vertex), spect, kInvalidIndex, PathSource::Camera, direction_to_camera);
     Sampler camera_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 1u) ^ (constants.path_iteration + 31u)));
-    z_prev_pdf_dir = wavefront_connect_light_stage_camera_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), camera_reverse_data, camera_prev_direction, input_value.camera_material,
-      camera_reverse_sampler);
+    z_prev_pdf_dir = wavefront_connect_light_stage_camera_bsdf_pdf_prepared(make_scene_bsdf_resource_gpu_context(), camera_reverse_data, camera_prev_direction,
+      input_value.camera_material, prepared, camera_reverse_sampler);
   }
   float z_prev_pdf = wavefront_convert_solid_angle_pdf_to_area(z_prev_pdf_dir, input_value.camera_vertex.position, input_value.camera_previous_vertex.position,
     wavefront_path_vertex_is_surface(input_value.camera_previous_vertex), input_value.camera_previous_vertex.normal);
@@ -352,7 +363,7 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   }
 
   WavefrontConnectLightPrepareInput input_value = (WavefrontConnectLightPrepareInput)0;
-  if (wavefront_load_connect_light_prepare_input(dispatch_index, batch_index, input_value) == false) {
+  if (wavefront_load_connect_light_prepare_input(dispatch_index, batch_index, false, kInvalidIndex, kInvalidIndex, input_value) == false) {
     return;
   }
   if (wavefront_connect_light_stage_matches_vertex(input_value.light_vertex, input_value.light_material.cls) == false) {
@@ -373,12 +384,15 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   spect.flags = input_value.camera_vertex.throughput.flags;
 
   BSDFEval light_eval = (BSDFEval)0;
+  WavefrontConnectLightStagePrepared prepared = (WavefrontConnectLightStagePrepared)0;
   if (wavefront_path_vertex_is_medium(input_value.light_vertex)) {
     light_eval = wavefront_connect_light_medium_eval(spect, input_value.light_vertex, input_value.light_vertex.w_i, direction_to_camera);
   } else {
     Sampler light_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 17u)));
     BSDFData light_data = bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, kInvalidIndex, PathSource::Light, input_value.light_vertex.w_i);
-    light_eval = wavefront_connect_light_stage_light_bsdf_eval(make_scene_bsdf_resource_gpu_context(), light_data, direction_to_camera, input_value.light_material, light_sampler);
+    const BSDFResourceContext resource_context = make_scene_bsdf_resource_gpu_context();
+    prepared = wavefront_connect_light_stage_prepare_material(resource_context, light_data, input_value.light_material, light_sampler);
+    light_eval = wavefront_connect_light_stage_light_bsdf_eval_prepared(resource_context, light_data, direction_to_camera, input_value.light_material, prepared, light_sampler);
   }
   if (bsdf_eval_valid(light_eval) == false) {
     return;
@@ -405,8 +419,8 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   } else {
     BSDFData light_reverse_data = bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, kInvalidIndex, PathSource::Light, -direction_to_camera);
     Sampler light_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 3u) ^ (constants.path_iteration + 43u)));
-    y_prev_pdf_dir = wavefront_connect_light_stage_light_bsdf_pdf(make_scene_bsdf_resource_gpu_context(), light_reverse_data, light_prev_direction, input_value.light_material,
-      light_reverse_sampler);
+    y_prev_pdf_dir = wavefront_connect_light_stage_light_bsdf_pdf_prepared(make_scene_bsdf_resource_gpu_context(), light_reverse_data, light_prev_direction,
+      input_value.light_material, prepared, light_reverse_sampler);
   }
   float y_prev_pdf = wavefront_connect_light_vertex_to_vertex_area_pdf(y_prev_pdf_dir, input_value.light_vertex, input_value.light_previous_vertex);
 

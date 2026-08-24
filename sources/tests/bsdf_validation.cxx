@@ -67,7 +67,7 @@ float3 sample_uniform_sphere(etx::Sampler& sampler) {
 
 bool finite_response(const etx::SpectralResponse& value) {
   if (value.spectral()) {
-    return std::isfinite(value.value) && ((value.packet() == false) || value.hero_only() || etx::valid_value(value.integrated));
+    return std::isfinite(value.value);
   }
 
   return (std::isfinite(value.integrated.x)) && (std::isfinite(value.integrated.y)) && (std::isfinite(value.integrated.z));
@@ -75,8 +75,7 @@ bool finite_response(const etx::SpectralResponse& value) {
 
 bool non_negative_response(const etx::SpectralResponse& value) {
   if (value.spectral()) {
-    return (value.value >= -kEpsilon) &&
-           ((value.packet() == false) || value.hero_only() || ((value.integrated.x >= -kEpsilon) && (value.integrated.y >= -kEpsilon) && (value.integrated.z >= -kEpsilon)));
+    return value.value >= -kEpsilon;
   }
 
   return (value.integrated.x >= -kEpsilon) && (value.integrated.y >= -kEpsilon) && (value.integrated.z >= -kEpsilon);
@@ -102,48 +101,26 @@ bool close_value(const float a, const float b, const float tolerance) {
   return fabsf(a - b) <= tolerance;
 }
 
-bool validate_spectral_packet_invariants() {
-  const etx::SpectralQuery query = etx::SpectralQuery::packet_sample(0.371f);
-  const float3 secondary = {0.5f, 1.5f, 2.0f};
-  const etx::SpectralResponse response{::spectral_response_make_packet(query, secondary, 1.0f)};
-
-  float3 expected_rgb = {};
-  for (uint32_t lane = 0u; lane < kSpectralPacketSize; ++lane) {
-    const ::SpectralQuery lane_query = ::spectral_query_packet_lane(query, lane);
-    const ::SpectralResponse lane_response = ::spectral_response_make(lane_query, ::spectral_response_packet_lane(response, lane));
-    expected_rgb += ::spectral_response_to_rgb(lane_response) / ::spectral_query_sampling_pdf(lane_query);
-  }
-  expected_rgb /= float(kSpectralPacketSize);
+bool validate_spectral_sample_invariants() {
+  const etx::SpectralQuery query = etx::SpectralQuery::spectral_sample(0.371f);
+  const etx::SpectralResponse response{::spectral_response_make(query, 1.0f)};
+  const float3 expected_rgb = ::spectral_response_to_rgb(response) / ::spectral_query_sampling_pdf(query);
 
   const float3 actual_rgb = response.to_rgb_estimate();
-  bool valid = query.spectral() && query.packet() && (query.hero_only() == false);
+  bool valid = query.spectral();
   valid = close_value(actual_rgb.x, expected_rgb.x, 1.0e-5f) && close_value(actual_rgb.y, expected_rgb.y, 1.0e-5f) && close_value(actual_rgb.z, expected_rgb.z, 1.0e-5f) && valid;
-  valid = (response.component_count() == float(kSpectralPacketSize)) && close_value(response.sum(), 5.0f, 1.0e-6f) && close_value(response.maximum(), 2.0f, 1.0e-6f) && valid;
-
-  ::SpectralResponse hero_response = response;
-  ::spectral_response_terminate_secondary(hero_response);
-  const etx::SpectralResponse accumulated{::spectral_response_add(response, hero_response)};
-  valid = accumulated.hero_only() && close_value(accumulated.value, 2.0f, 1.0e-6f) && close_value(accumulated.integrated.x, 0.0f, 1.0e-6f) &&
-          close_value(accumulated.integrated.y, 0.0f, 1.0e-6f) && close_value(accumulated.integrated.z, 0.0f, 1.0e-6f) && valid;
-  valid = ::spectral_query_compatible(query, ::spectral_response_as_query(hero_response)) && valid;
-
-  ::BSDFSample refracted_sample = {};
-  refracted_sample.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::WavelengthDependentDirection;
-  refracted_sample.eta = 1.5f;
-  valid = ::bsdf_sample_requires_secondary_termination(MaterialClass::Dielectric, refracted_sample) && valid;
-  refracted_sample.properties = BSDFSample::Transmission;
-  valid = (::bsdf_sample_requires_secondary_termination(MaterialClass::Dielectric, refracted_sample) == false) && valid;
-  refracted_sample.properties = BSDFSample::Reflection | BSDFSample::WavelengthDependentDirection;
-  valid = ::bsdf_sample_requires_secondary_termination(MaterialClass::DiffractionGrating, refracted_sample) && valid;
+  valid = (response.component_count() == 1.0f) && close_value(response.sum(), 1.0f, 1.0e-6f) && close_value(response.maximum(), 1.0f, 1.0e-6f) && valid;
+  valid = close_value(response.integrated.x, 0.0f, 1.0e-6f) && close_value(response.integrated.y, 0.0f, 1.0e-6f) && close_value(response.integrated.z, 0.0f, 1.0e-6f) && valid;
+  valid = ::spectral_query_compatible(query, ::spectral_response_as_query(response)) && valid;
 
   ::RefractiveIndexSample equal_ext_ior = {};
-  equal_ext_ior.eta = ::spectral_response_make_packet(query, float3{1.0f, 1.0f, 1.0f}, 1.0f);
+  equal_ext_ior.eta = ::spectral_response_make(query, 1.0f);
   ::RefractiveIndexSample equal_int_ior = equal_ext_ior;
   valid = ::bsdf_dielectric_equal_eta(equal_ext_ior, equal_int_ior) && valid;
-  equal_int_ior.eta.integrated.y = 1.5f;
+  equal_int_ior.eta.value = 1.5f;
   valid = (::bsdf_dielectric_equal_eta(equal_ext_ior, equal_int_ior) == false) && valid;
 
-  std::printf("spectral packet invariants %s\n", valid ? "valid" : "failed");
+  std::printf("spectral sample invariants %s\n", valid ? "valid" : "failed");
   return valid;
 }
 
@@ -766,12 +743,12 @@ bool validate_spectral_energy_compensation_lut_sampling() {
 
   etx::Material material = {};
   material.energy_compensation_interface_index = 0u;
-  const etx::SpectralQuery packet = etx::SpectralQuery::packet_sample(0.0f);
-  const ::SpectralResponse packet_value = bsdf_energy_compensated_lut_response(context, packet, material, image_index, float2{0.0f, 0.0f}, 1u, 1u, 0.0f);
-  if ((close_value(packet_value.value, 0.0f, 1.0e-5f) == false) || (close_value(packet_value.integrated.x, 1.0f, 1.0e-5f) == false) ||
-      (close_value(packet_value.integrated.y, 1.0f, 1.0e-5f) == false) || (close_value(packet_value.integrated.z, 1.0f, 1.0e-5f) == false)) {
-    std::printf("Spectral energy-compensation LUT packet sampling failed %.6f %.6f %.6f %.6f\n", packet_value.value, packet_value.integrated.x, packet_value.integrated.y,
-      packet_value.integrated.z);
+  const etx::SpectralQuery sample = etx::SpectralQuery::spectral_sample(0.0f);
+  const ::SpectralResponse sample_value = bsdf_energy_compensated_lut_response(context, sample, material, image_index, float2{0.0f, 0.0f}, 1u, 1u, 0.0f);
+  if ((close_value(sample_value.value, 0.0f, 1.0e-5f) == false) || (close_value(sample_value.integrated.x, 0.0f, 1.0e-5f) == false) ||
+      (close_value(sample_value.integrated.y, 0.0f, 1.0e-5f) == false) || (close_value(sample_value.integrated.z, 0.0f, 1.0e-5f) == false)) {
+    std::printf("Spectral energy-compensation LUT sampling failed %.6f %.6f %.6f %.6f\n", sample_value.value, sample_value.integrated.x, sample_value.integrated.y,
+      sample_value.integrated.z);
     valid = false;
   }
 
@@ -3437,7 +3414,7 @@ bool validate_openpbr_parameter_sweeps(etx::Scene& scene, const etx::SpectralDis
 int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
   etx::env().setup("bin/bsdf_validation.exe");
-  if (validate_spectral_packet_invariants() == false) {
+  if (validate_spectral_sample_invariants() == false) {
     return 1;
   }
   bool runtime_only = false;

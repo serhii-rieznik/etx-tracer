@@ -74,7 +74,7 @@ Release builds use `shaders.etxpack` instead of distributing the `shaders`, `int
 
 The package excludes HLSL text, include files, source paths, and DXC. Compiled GPU binaries remain inspectable like other executable code; the package is an IP-exposure reduction mechanism, not encryption.
 
-The normal build creates the package through the `raytracer_shader_package` target. Explicit release builds and CI must build both targets:
+The `raytracer` Debug and RelWithDebInfo targets compile the copied runtime shader sources and ignore any existing package. Shader edits therefore take effect after rebuilding and restarting the application. Production packages are generated only by the `raytracer_shader_package` target; release builds and CI must build both targets:
 
 ```sh
 cmake --build build --config Release --target raytracer raytracer_shader_package

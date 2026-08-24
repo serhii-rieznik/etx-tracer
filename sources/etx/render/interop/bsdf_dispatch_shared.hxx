@@ -32,11 +32,6 @@ ETX_SHARED_INLINE bool bsdf_gpu_supported_class(uint32_t material_class) {
   }
 }
 
-ETX_SHARED_INLINE bool bsdf_sample_requires_secondary_termination(uint32_t material_class, ETX_IN(BSDFSample, sample)) {
-  (void)material_class;
-  return (sample.properties & BSDFSample::WavelengthDependentDirection) != 0u;
-}
-
 ETX_SHARED_INLINE BSDFSample bsdf_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   const Material effective_material = material;
   switch (effective_material.cls) {

@@ -155,6 +155,7 @@ struct RTApplication {
   bool _material_interaction_cpu_was_running = false;
   bool _material_render_resource_preparation_active = false;
   bool _restart_cpu_after_material_resource_preparation = false;
+  bool _restart_gpu_after_material_resource_preparation = false;
   bool _scene_dirty = false;
   bool _platform_color_scheme_initialized = false;
   PlatformColorScheme _platform_color_scheme = PlatformColorScheme::Dark;

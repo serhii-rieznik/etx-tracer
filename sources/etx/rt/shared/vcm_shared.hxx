@@ -153,12 +153,12 @@ constexpr uint64_t kVCMPathStateSize = sizeof(VCMPathState);
 
 // Vertex merging combines light and camera subpaths before converting the
 // complete path to RGB. All paths in one VCM iteration must therefore use the
-// same spectral packet so corresponding wavelengths are multiplied together.
+// same wavelength.
 ETX_SHARED_INLINE SpectralQuery vcm_iteration_spectral_query(const Scene& scene, ETX_IN(VCMIteration, iteration)) {
   Sampler sampler = {};
   sampler.init(0u, iteration.iteration ^ scene.options.random_seed);
   if (scene.spectral()) {
-    return SpectralQuery::packet_sample(sampler.next());
+    return SpectralQuery::spectral_sample(sampler.next());
   }
   return SpectralQuery::sample();
 }
@@ -382,7 +382,7 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, con
   state.pixel_coord = coord;  // Store pixel coordinate for blue noise
 
   state.sampler.init(state.global_index, it.iteration ^ scene.options.random_seed);
-  auto sampled_spectrum = spect.spectral() ? SpectralQuery::packet_sample(state.sampler.next()) : SpectralQuery::sample();
+  auto sampled_spectrum = spect.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
 
   state.uv = get_jittered_uv(state.sampler, coord, camera.film_size);

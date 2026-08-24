@@ -26,7 +26,7 @@
       rnd01(seed);
     }
   } else if (scene_uses_spectral_mode()) {
-    spect = spectral_query_packet_sample(rnd01(seed));
+    spect = spectral_query_spectral_sample(rnd01(seed));
   }
   GPUWavefrontResources resources = wavefront_load_resources();
   GPUWavefrontPathState cleared_state = (GPUWavefrontPathState)0;

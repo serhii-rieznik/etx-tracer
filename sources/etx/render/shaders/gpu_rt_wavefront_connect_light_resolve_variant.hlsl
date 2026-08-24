@@ -96,6 +96,55 @@ float wavefront_connect_light_stage_light_bsdf_pdf(BSDFResourceContext context, 
   return ETX_STAGE_BSDF_PDF(context, data, outgoing_direction, material, sampler);
 }
 
+struct WavefrontConnectLightStagePrepared {
+#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
+  BSDFEnergyCompensatedPreparedMaterial material;
+#else
+  uint unused;
+#endif
+};
+
+WavefrontConnectLightStagePrepared wavefront_connect_light_stage_prepare_material(BSDFResourceContext context, BSDFData data, Material material, inout Sampler sampler) {
+  WavefrontConnectLightStagePrepared result = (WavefrontConnectLightStagePrepared)0;
+#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
+  result.material = bsdf_energy_compensated_prepare_material(context, data.spectrum_sample, material, data.tex, sampler);
+#else
+  (void)context;
+  (void)data;
+  (void)material;
+  (void)sampler;
+#endif
+  return result;
+}
+
+BSDFEval wavefront_connect_light_stage_light_bsdf_eval_prepared(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material,
+  WavefrontConnectLightStagePrepared prepared, inout Sampler sampler) {
+#if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR
+  (void)sampler;
+  return bsdf_conductor_energy_compensated_evaluate_prepared(context, data, outgoing_direction, material, prepared.material);
+#elif ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC
+  (void)sampler;
+  return bsdf_dielectric_energy_compensated_evaluate_prepared(context, data, outgoing_direction, material, prepared.material);
+#else
+  (void)prepared;
+  return wavefront_connect_light_stage_light_bsdf_eval(context, data, outgoing_direction, material, sampler);
+#endif
+}
+
+float wavefront_connect_light_stage_light_bsdf_pdf_prepared(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material,
+  WavefrontConnectLightStagePrepared prepared, inout Sampler sampler) {
+#if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR
+  (void)sampler;
+  return bsdf_conductor_energy_compensated_pdf_prepared(context, data, outgoing_direction, material, prepared.material);
+#elif ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC
+  (void)sampler;
+  return bsdf_dielectric_energy_compensated_pdf_prepared(context, data, outgoing_direction, material, prepared.material);
+#else
+  (void)prepared;
+  return wavefront_connect_light_stage_light_bsdf_pdf(context, data, outgoing_direction, material, sampler);
+#endif
+}
+
 bool wavefront_connect_light_stage_matches_material(uint material_class) {
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
   return (material_class == MaterialClass::Diffuse) || (material_class == MaterialClass::Translucent) || (material_class == MaterialClass::Mirror) ||

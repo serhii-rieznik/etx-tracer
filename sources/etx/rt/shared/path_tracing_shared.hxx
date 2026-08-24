@@ -53,12 +53,7 @@ inline SpectralResponse safe_mul(const SpectralResponse& a, const SpectralRespon
   ETX_ASSERT(a.wavelength == b.wavelength);
 
   if (a.spectral()) {
-    SpectralQuery query = a.as_query();
-    if (b.hero_only()) {
-      ::spectral_query_terminate_secondary(query);
-    }
-    return SpectralResponse{::spectral_response_make_packet(query,
-      {safe_mul(a.integrated.x, b.integrated.x), safe_mul(a.integrated.y, b.integrated.y), safe_mul(a.integrated.z, b.integrated.z)}, safe_mul(a.value, b.value))};
+    return SpectralResponse{::spectral_response_make(a.as_query(), safe_mul(a.value, b.value))};
   }
 
   return SpectralResponse{a.as_query(), {safe_mul(a.integrated.x, b.integrated.x), safe_mul(a.integrated.y, b.integrated.y), safe_mul(a.integrated.z, b.integrated.z)}};
@@ -160,7 +155,7 @@ ETX_SHARED_INLINE PTRayPayload make_ray_payload(const Scene& scene, const Camera
   payload.iteration = iteration;
   payload.smp.init(pixel_index, payload.iteration ^ scene.options.random_seed);
   if (spectral) {
-    payload.spect = SpectralQuery::packet_sample(payload.smp.next());
+    payload.spect = SpectralQuery::spectral_sample(payload.smp.next());
   } else {
     payload.spect = SpectralQuery::sample();
   }

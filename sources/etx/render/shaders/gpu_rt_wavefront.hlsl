@@ -987,7 +987,7 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
   SpectralQuery spect = spectral_query_sample();
   if (scene_uses_spectral_mode()) {
-    spect = spectral_query_packet_sample(rnd01(seed));
+    spect = spectral_query_spectral_sample(rnd01(seed));
   }
   float2 film_sample_rnd = float2(rnd01(seed), rnd01(seed));
   float2 uv = camera_sample_film_uv(dtid.xy, camera.film_size, film_sample_rnd);
@@ -1028,7 +1028,7 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   uint seed = scene_random_seed(path_index, constants.sample_index ^ 0x9e3779b9u);
   SpectralQuery spect = spectral_query_sample();
   if (scene_uses_spectral_mode()) {
-    spect = spectral_query_packet_sample(rnd01(seed));
+    spect = spectral_query_spectral_sample(rnd01(seed));
   }
   WavefrontEmitterSample emitter_sample = (WavefrontEmitterSample)0;
   if (wavefront_sample_light_emission(spect, seed, emitter_sample) == false) {
@@ -1342,9 +1342,6 @@ void wavefront_surface_continue(bool from_camera, uint dispatch_index) {
     bsdf_data.path_source = PathSource::Light;
   }
   BSDFSample bsdf_sample = gpu_sample_material_bsdf(make_scene_bsdf_resource_gpu_context(), bsdf_data, material, bsdf_sampler);
-  if (spectral_query_is_packet(state.spect) && bsdf_sample_requires_secondary_termination(material.cls, bsdf_sample)) {
-    spectral_response_terminate_secondary(bsdf_sample.weight);
-  }
   state.sampler_seed = bsdf_sampler.seed;
   if ((bsdf_sample_valid(bsdf_sample) == false) || (gpu_valid_direction(bsdf_sample.w_o) == false) || (gpu_valid_spectral_response(bsdf_sample.weight) == false)) {
     state.flags = 0u;
