@@ -58,8 +58,8 @@ bool wavefront_subsurface_random_walk_applicable(Material material, BSDFSample b
 uint wavefront_load_path_vertex_flags_only(uint descriptor_index, uint vertex_index) {
   ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
   if (wavefront_path_vertex_descriptor_is_light(descriptor_index)) {
-    const uint packed_flags = buffer.Load(vertex_index * kGPUWavefrontLightPathVertexStride + kGPUWavefrontLightPathVertexFlagsOffset);
-    return packed_flags & kGPUWavefrontLightPathVertexFlagsMask;
+    const uint packed_path_and_flags = buffer.Load(vertex_index * kGPUWavefrontLightPathVertexStride + kGPUWavefrontLightPathVertexPackedPathAndFlagsOffset);
+    return wavefront_unpack_light_path_vertex_flags(packed_path_and_flags);
   }
 
   return buffer.Load(vertex_index * kGPUWavefrontPathVertexStride + kGPUWavefrontPathVertexFlagsOffset);

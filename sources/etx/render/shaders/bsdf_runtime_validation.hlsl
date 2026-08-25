@@ -322,7 +322,7 @@ void main(uint3 id : SV_DispatchThreadID) {
 #else
   const float3 outgoing_direction = normalize(float3(0.35f, 0.0f, 0.9367497f));
 #endif
-  BSDFResourceContext context = make_bsdf_resource_gpu_context(constants.images_descriptor_index, constants.spectrums_descriptor_index,
+  BSDFResourceContext context = make_bsdf_resource_gpu_context(constants.images_descriptor_index, constants.spectrums_descriptor_index, kInvalidIndex,
     constants.energy_compensation_interfaces_descriptor_index, constants.scene_globals_descriptor_index);
 
 #if (ETX_BSDF_RUNTIME_VALIDATION_OPERATION == 0) || (ETX_BSDF_RUNTIME_VALIDATION_OPERATION == 1)

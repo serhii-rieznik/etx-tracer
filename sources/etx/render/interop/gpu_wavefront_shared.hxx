@@ -145,9 +145,13 @@ struct ETX_ALIGNED GPUWavefrontPathVertex {
   float d_vm ETX_INIT(0.0f);
 };
 
+struct ETX_ALIGNED GPUWavefrontCompactSpectralResponse {
+  float4 payload ETX_INIT({});
+};
+
 struct ETX_ALIGNED GPUWavefrontLightPathVertex {
-  SpectralResponse throughput ETX_INIT({});
-  SpectralResponse inline_medium_extinction ETX_INIT({});
+  GPUWavefrontCompactSpectralResponse throughput ETX_INIT({});
+  GPUWavefrontCompactSpectralResponse inline_medium_extinction ETX_INIT({});
   float3 position ETX_INIT({});
   uint32_t triangle_index ETX_INIT(kInvalidIndex);
   float3 normal ETX_INIT({});
@@ -160,8 +164,7 @@ struct ETX_ALIGNED GPUWavefrontLightPathVertex {
   float forward_pdf ETX_INIT(0.0f);
   float reverse_pdf ETX_INIT(0.0f);
   float sampled_bsdf_pdf ETX_INIT(0.0f);
-  uint32_t path_length ETX_INIT(0u);
-  uint32_t flags ETX_INIT(0u);
+  uint32_t packed_path_and_flags ETX_INIT(0u);
   float pdf_from_prev ETX_INIT(0.0f);
   float pdf_from_next ETX_INIT(0.0f);
   float pdf_accumulated ETX_INIT(0.0f);
@@ -171,9 +174,6 @@ struct ETX_ALIGNED GPUWavefrontLightPathVertex {
   uint32_t previous_vertex_index ETX_INIT(kInvalidIndex);
   uint32_t instance_index ETX_INIT(kInvalidIndex);
   float d_vm ETX_INIT(0.0f);
-  uint32_t reserved0 ETX_INIT(0u);
-  uint32_t reserved1 ETX_INIT(0u);
-  uint32_t reserved2 ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontFastLightEndpoint {

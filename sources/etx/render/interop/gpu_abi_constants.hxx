@@ -234,3 +234,6 @@ ETX_STATIC_CONST uint32_t kSceneGlobalsDefaultConductorEtaOffset = 372u;
 ETX_STATIC_CONST uint32_t kSceneGlobalsDefaultConductorKOffset = 376u;
 ETX_STATIC_CONST uint32_t kSceneGlobalsPixelFilterImageIndexOffset = 384u;
 ETX_STATIC_CONST uint32_t kSceneGlobalsPixelFilterRadiusOffset = 388u;
+
+ETX_STATIC_CONST uint32_t kGPUSpectralValuesRGBEstimateScaleOffset = 0u;
+ETX_STATIC_CONST uint32_t kGPUSpectralValuesDataOffset = 16u;

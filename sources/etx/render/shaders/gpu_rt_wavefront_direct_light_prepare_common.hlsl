@@ -49,7 +49,8 @@ uint wavefront_load_camera_path_length(uint descriptor_index, uint path_index) {
 }
 
 BSDFResourceContext wavefront_make_scene_bsdf_resource_gpu_context() {
-  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
+  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.spectral_values, constants.scene.energy_compensation_interfaces,
+    constants.scene.scene_globals);
 }
 
 bool wavefront_try_load_material_full(uint material_index, out Material material) {

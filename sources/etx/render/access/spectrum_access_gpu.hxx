@@ -6,6 +6,7 @@
 struct SpectrumAccessGPUContext {
   ByteAddressBuffer buffer;
   uint descriptor_index;
+  uint spectral_values_descriptor_index;
 };
 
 float3 spectrum_access_gpu_integrated(SpectrumAccessGPUContext context, uint spectrum_index) {
@@ -32,6 +33,15 @@ SpectrumAccessGPUContext make_spectrum_access_gpu_context(ByteAddressBuffer buff
   SpectrumAccessGPUContext result;
   result.buffer = buffer;
   result.descriptor_index = descriptor_index;
+  result.spectral_values_descriptor_index = kInvalidIndex;
+  return result;
+}
+
+SpectrumAccessGPUContext make_spectrum_access_gpu_context(ByteAddressBuffer buffer, uint descriptor_index, uint spectral_values_descriptor_index) {
+  SpectrumAccessGPUContext result;
+  result.buffer = buffer;
+  result.descriptor_index = descriptor_index;
+  result.spectral_values_descriptor_index = spectral_values_descriptor_index;
   return result;
 }
 
@@ -110,6 +120,14 @@ SpectralResponse spectrum_access_evaluate(SpectrumAccessGPUContext context, uint
   if (spectral_query_is_spectral(spect) == false) {
     return spectral_response_make(spect, spectrum_access_gpu_integrated(context, spectrum_index));
   }
+
+#if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
+  if (context.spectral_values_descriptor_index != kInvalidIndex) {
+    ByteAddressBuffer spectral_values = bindless_buffers[NonUniformResourceIndex(context.spectral_values_descriptor_index)];
+    const float value = asfloat(spectral_values.Load(kGPUSpectralValuesDataOffset + spectrum_index * 4u));
+    return spectral_response_make(spect, value);
+  }
+#endif
 
   SpectralResponse result = spectral_response_make(spect, spectrum_access_evaluate_wavelength(context, spectrum_index, spect.wavelength));
   return result;

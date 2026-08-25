@@ -111,6 +111,8 @@ struct RendererMemoryStats {
   uint32_t tile_index = 0u;
   uint32_t tile_count = 0u;
   uint32_t max_path_length = 0u;
+  uint32_t max_observed_camera_path_length = 0u;
+  uint32_t max_observed_light_path_length = 0u;
 };
 
 struct RendererKernelTiming {

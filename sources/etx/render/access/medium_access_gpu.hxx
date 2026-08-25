@@ -10,13 +10,16 @@ struct MediumAccessGPUContext {
   uint mediums_descriptor_index;
   uint images_descriptor_index;
   uint spectrums_descriptor_index;
+  uint spectral_values_descriptor_index;
 };
 
-MediumAccessGPUContext make_medium_access_gpu_context(uint mediums_descriptor_index, uint images_descriptor_index, uint spectrums_descriptor_index) {
+MediumAccessGPUContext make_medium_access_gpu_context(uint mediums_descriptor_index, uint images_descriptor_index, uint spectrums_descriptor_index,
+  uint spectral_values_descriptor_index) {
   MediumAccessGPUContext result;
   result.mediums_descriptor_index = mediums_descriptor_index;
   result.images_descriptor_index = images_descriptor_index;
   result.spectrums_descriptor_index = spectrums_descriptor_index;
+  result.spectral_values_descriptor_index = spectral_values_descriptor_index;
   return result;
 }
 
@@ -190,7 +193,7 @@ float3 medium_access_load_absorption_integrated(MediumAccessGPUContext context, 
   }
 
   ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(context.spectrums_descriptor_index)];
-  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index);
+  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index, context.spectral_values_descriptor_index);
   return spectrum_access_load_integrated(spectrum_context, access.absorption_spectrum_index);
 }
 
@@ -200,7 +203,7 @@ float3 medium_access_load_scattering_integrated(MediumAccessGPUContext context, 
   }
 
   ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(context.spectrums_descriptor_index)];
-  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index);
+  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index, context.spectral_values_descriptor_index);
   return spectrum_access_load_integrated(spectrum_context, access.scattering_spectrum_index);
 }
 
@@ -214,7 +217,7 @@ SpectralResponse medium_access_load_absorption_spectral(MediumAccessGPUContext c
   }
 
   ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(context.spectrums_descriptor_index)];
-  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index);
+  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index, context.spectral_values_descriptor_index);
   return spectrum_access_evaluate(spectrum_context, access.absorption_spectrum_index, spect);
 }
 
@@ -224,7 +227,7 @@ SpectralResponse medium_access_load_scattering_spectral(MediumAccessGPUContext c
   }
 
   ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(context.spectrums_descriptor_index)];
-  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index);
+  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index, context.spectral_values_descriptor_index);
   return spectrum_access_evaluate(spectrum_context, access.scattering_spectrum_index, spect);
 }
 

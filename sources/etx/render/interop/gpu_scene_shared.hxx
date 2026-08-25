@@ -108,4 +108,6 @@ struct ETX_ALIGNED GPUScene {
 
   uint32_t scene_options;
   uint32_t energy_compensation_interfaces;
+  uint32_t spectral_values;
+  uint32_t spectrum_count;
 };

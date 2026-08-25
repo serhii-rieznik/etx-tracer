@@ -9,15 +9,17 @@
 struct BSDFResourceContext {
   uint images_descriptor_index;
   uint spectrums_descriptor_index;
+  uint spectral_values_descriptor_index;
   uint energy_compensation_interfaces_descriptor_index;
   uint scene_globals_descriptor_index;
 };
 
-BSDFResourceContext make_bsdf_resource_gpu_context(uint images_descriptor_index, uint spectrums_descriptor_index, uint energy_compensation_interfaces_descriptor_index,
-  uint scene_globals_descriptor_index) {
+BSDFResourceContext make_bsdf_resource_gpu_context(uint images_descriptor_index, uint spectrums_descriptor_index, uint spectral_values_descriptor_index,
+  uint energy_compensation_interfaces_descriptor_index, uint scene_globals_descriptor_index) {
   BSDFResourceContext result;
   result.images_descriptor_index = images_descriptor_index;
   result.spectrums_descriptor_index = spectrums_descriptor_index;
+  result.spectral_values_descriptor_index = spectral_values_descriptor_index;
   result.energy_compensation_interfaces_descriptor_index = energy_compensation_interfaces_descriptor_index;
   result.scene_globals_descriptor_index = scene_globals_descriptor_index;
   return result;
@@ -29,7 +31,7 @@ SpectralResponse bsdf_resource_load_spectrum(BSDFResourceContext context, uint s
   }
 
   ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(context.spectrums_descriptor_index)];
-  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index);
+  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, context.spectrums_descriptor_index, context.spectral_values_descriptor_index);
   return spectrum_access_evaluate(spectrum_context, spectrum_index, spect);
 }
 

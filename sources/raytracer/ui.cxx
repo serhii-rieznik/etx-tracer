@@ -4078,7 +4078,7 @@ void UI::build_memory_diagnostics_content(SceneRepresentation& scene_rep, const 
       const std::string history_label =
         std::to_string(_renderer_memory_stats.light_vertex_count) + " / " + std::to_string(_renderer_memory_stats.light_vertex_capacity) + " vertices";
       ImGui::ProgressBar(history_fraction, ImVec2(-1.0f, 0.0f), history_label.c_str());
-      ImGui::Text("Paths: %u | Max depth: %u | Tile: %u / %u", _renderer_memory_stats.wavefront_path_capacity, _renderer_memory_stats.max_path_length,
+      ImGui::Text("Paths: %u | Tile: %u / %u", _renderer_memory_stats.wavefront_path_capacity,
         std::min(_renderer_memory_stats.tile_index + 1u, std::max(1u, _renderer_memory_stats.tile_count)), std::max(1u, _renderer_memory_stats.tile_count));
     }
   }
@@ -5436,25 +5436,14 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     ImGui::Separator();
     ImGui::Spacing();
     push_semantic_button_colors(terminate_button_colors(_theme));
+    bool emitter_deleted = false;
     if (ImGui::Button("Delete Emitter", ImVec2(-1.0f, 0.0f))) {
-      ImGui::OpenPopup("Delete emitter?##confirm_delete_emitter");
+      emitter_deleted = callbacks.emitter_deleted && callbacks.emitter_deleted(emitter_index);
     }
     ImGui::PopStyleColor(3);
-    if (ImGui::BeginPopupModal("Delete emitter?##confirm_delete_emitter", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-      ImGui::TextWrapped("Delete emitter %u? Scene objects that reference it may be affected.", emitter_index);
-      if (ImGui::Button("Cancel")) {
-        ImGui::CloseCurrentPopup();
-      }
-      ImGui::SameLine();
-      push_semantic_button_colors(terminate_button_colors(_theme));
-      if (ImGui::Button("Delete")) {
-        if ((callbacks.emitter_deleted) && callbacks.emitter_deleted(emitter_index)) {
-          set_selection(SelectionKind::None, -1, false);
-        }
-        ImGui::CloseCurrentPopup();
-      }
-      ImGui::PopStyleColor(3);
-      ImGui::EndPopup();
+    if (emitter_deleted) {
+      set_selection(SelectionKind::None, -1, false);
+      return;
     }
   }
   if (material_changed && (material_index < scene_rep.data().materials.size())) {
@@ -5963,6 +5952,9 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
         ImGui::TextUnformatted("GPU batch: measuring");
         draw_item_tooltip("Waiting for the first valid wavefront timing measurement.", ImGuiHoveredFlags_DelayNormal);
       }
+      ImGui::Text("Path depth: camera %u | light %u | limit %u", _renderer_memory_stats.max_observed_camera_path_length, _renderer_memory_stats.max_observed_light_path_length,
+        _renderer_memory_stats.max_path_length);
+      draw_item_tooltip("Maximum camera and light path depth processed since render accumulation was reset.", ImGuiHoveredFlags_DelayNormal);
       bool kernel_timing_enabled = _gpu_kernel_timing_stats.enabled;
       if (ImGui::Checkbox("Profile kernels", &kernel_timing_enabled)) {
         _gpu_kernel_timing_stats.enabled = kernel_timing_enabled;

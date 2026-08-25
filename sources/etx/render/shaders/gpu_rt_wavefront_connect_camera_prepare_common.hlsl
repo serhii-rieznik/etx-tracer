@@ -24,7 +24,8 @@ struct WavefrontConnectCameraPrepareInput {
 };
 
 BSDFResourceContext wavefront_connect_camera_make_scene_bsdf_resource_gpu_context() {
-  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
+  return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.spectral_values, constants.scene.energy_compensation_interfaces,
+    constants.scene.scene_globals);
 }
 
 bool wavefront_connect_camera_try_load_material_full(uint material_index, out Material material) {

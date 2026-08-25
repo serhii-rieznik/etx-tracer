@@ -41,6 +41,7 @@ struct GPURaytracingRenderer : public Renderer {
     CameraConnectLightResolveConductor = 19u,
     CameraConnectLightResolveDielectric = 20u,
     CameraConnectLightShadow = 21u,
+    PrepareSpectralValues = 22u,
     CameraContinuePrepareDiffuse = 23u,
     CameraContinuePreparePlastic = 24u,
     CameraContinuePrepareConductor = 25u,
@@ -307,6 +308,7 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _emitter_instances_buffer = {};
   RHIBindlessHandle _materials_buffer = {};
   RHIBindlessHandle _spectrums_buffer = {};
+  RHIBindlessHandle _spectral_values_buffer = {};
   RHIBindlessHandle _energy_compensation_interfaces_buffer = {};
   RHIBindlessHandle _scene_globals_buffer = {};
   RHIBindlessHandle _scene_options_buffer = {};
@@ -358,6 +360,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _emitter_instances_buffer_size = 0;
   uint64_t _materials_buffer_size = 0;
   uint64_t _spectrums_buffer_size = 0;
+  uint64_t _spectral_values_buffer_size = 0;
   uint64_t _energy_compensation_interfaces_buffer_size = 0;
   uint64_t _scene_globals_buffer_size = 0;
   float _scene_bounding_sphere_radius = 0.0f;
@@ -397,6 +400,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _camera_subsurface_state_buffer_size = 0;
   uint64_t _light_subsurface_state_buffer_size = 0;
   uint32_t _camera_buffer_descriptor_index = ~0u;
+  uint32_t _spectral_values_buffer_descriptor_index = ~0u;
   uint32_t _blue_noise_buffer_descriptor_index = ~0u;
   uint32_t _wavefront_resources_buffer_descriptor_index = ~0u;
   uint32_t _camera_state_buffer_descriptor_index = ~0u;
@@ -448,6 +452,8 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _wavefront_camera_queue_count = 0u;
   uint32_t _wavefront_light_queue_count = 0u;
   uint32_t _wavefront_light_max_path_length = 0u;
+  uint32_t _wavefront_max_observed_camera_path_length = 0u;
+  uint32_t _wavefront_max_observed_light_path_length = 0u;
   uint32_t _wavefront_connect_light_vertex_length = 0u;
   uint32_t _wavefront_connect_light_history_bounces = 0u;
   uint32_t _wavefront_light_history_capacity_bounces = 0u;

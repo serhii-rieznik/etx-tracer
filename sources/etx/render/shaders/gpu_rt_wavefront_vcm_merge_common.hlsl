@@ -69,8 +69,8 @@ void wavefront_vcm_merge(uint dispatch_index) {
     int3(adjacent.x, adjacent.y, adjacent.z)};
   uint cell_hashes[8];
 
-  BSDFResourceContext bsdf_context =
-    make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
+  BSDFResourceContext bsdf_context = make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.spectral_values,
+    constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
   BSDFData camera_data = bsdf_data_make(hit.vertex, state.spect, hit.medium_index, PathSource::Camera, camera_vertex.w_i);
   Sampler sampler = (Sampler)0;
   sampler.seed = state.sampler_seed;
@@ -116,7 +116,8 @@ void wavefront_vcm_merge(uint dispatch_index) {
       // CPU VCM numbers the first light-surface vertex as depth zero, while
       // the shared GPU BDPT history numbers it as depth one (after the emitter
       // root). Translate only for VCM's combined merge-path depth test.
-      const uint light_path_length = light_vertices.Load(light_vertex_offset + kGPUWavefrontLightPathVertexPathLengthOffset);
+      const uint packed_path_and_flags = light_vertices.Load(light_vertex_offset + kGPUWavefrontLightPathVertexPackedPathAndFlagsOffset);
+      const uint light_path_length = wavefront_unpack_light_path_vertex_path_length(packed_path_and_flags);
       const uint vcm_light_path_length = (light_path_length > 0u) ? (light_path_length - 1u) : 0u;
       if ((vcm_light_path_length + state.path_length + 1u) <= resources.max_path_length) {
         const float3 light_position = wavefront_load_float3(light_vertices, light_vertex_offset + kGPUWavefrontLightPathVertexPositionOffset);
