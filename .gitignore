@@ -33,3 +33,5 @@ scripts/validation
 dxc
 libdxcompiler.dylib
 playground_app
+bin/assets/
+bsdf/energy_compensation/

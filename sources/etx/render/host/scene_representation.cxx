@@ -2254,6 +2254,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
                 integrator_data->selected = Integrator::Type::Bidirectional;
               } else if (name.find("VCM") != std::string::npos) {
                 integrator_data->selected = Integrator::Type::VCM;
+              } else if (name.find("UPBP") != std::string::npos) {
+                integrator_data->selected = Integrator::Type::UPBP;
               } else if (name.find("Debug") != std::string::npos) {
                 integrator_data->selected = Integrator::Type::Debug;
               }

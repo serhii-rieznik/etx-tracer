@@ -7,6 +7,7 @@
 #include <etx/rt/integrators/debug.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/integrators/vcm_cpu.hxx>
+#include <etx/rt/integrators/upbp_cpu.hxx>
 
 #include <chrono>
 
@@ -90,12 +91,14 @@ struct CPURaytracingRenderer : public Renderer {
   CPUBidirectional _cpu_pt = {_raytracing, BDPTMode::PathTracing, Integrator::Type::PathTracing};
   CPUBidirectional _cpu_bidir = {_raytracing};
   CPUVCM _cpu_vcm = {_raytracing};
+  CPUUPBP _cpu_upbp = {_raytracing};
 
-  Integrator* _integrator_array[4] = {
+  Integrator* _integrator_array[5] = {
     &_debug,      // Debug = 0
     &_cpu_pt,     // PathTracing = 1
     &_cpu_bidir,  // Bidirectional = 2
     &_cpu_vcm,    // VCM = 3
+    &_cpu_upbp,   // UPBP = 4
   };
 
   std::chrono::steady_clock::time_point _render_started_at = {};

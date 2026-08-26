@@ -10,16 +10,28 @@ add_executable(scene_hierarchy
   scene_hierarchy.cxx
 )
 
+add_executable(medium_tracking_validation
+  medium_tracking_validation.cxx
+)
+
+add_executable(upbp_core_validation
+  upbp_core_validation.cxx
+)
+
 set(ETX_UNITY_STD_HEADER "${CMAKE_SOURCE_DIR}/sources/etx/std.hxx")
 
 if(MSVC)
   target_compile_options(bsdf_validation PRIVATE "/FI${ETX_UNITY_STD_HEADER}")
   target_compile_options(procedural_geometry PRIVATE "/FI${ETX_UNITY_STD_HEADER}")
   target_compile_options(scene_hierarchy PRIVATE "/FI${ETX_UNITY_STD_HEADER}")
+  target_compile_options(medium_tracking_validation PRIVATE "/FI${ETX_UNITY_STD_HEADER}")
+  target_compile_options(upbp_core_validation PRIVATE "/FI${ETX_UNITY_STD_HEADER}")
 else()
   target_compile_options(bsdf_validation PRIVATE "-include" "${ETX_UNITY_STD_HEADER}")
   target_compile_options(procedural_geometry PRIVATE "-include" "${ETX_UNITY_STD_HEADER}")
   target_compile_options(scene_hierarchy PRIVATE "-include" "${ETX_UNITY_STD_HEADER}")
+  target_compile_options(medium_tracking_validation PRIVATE "-include" "${ETX_UNITY_STD_HEADER}")
+  target_compile_options(upbp_core_validation PRIVATE "-include" "${ETX_UNITY_STD_HEADER}")
 endif()
 
 target_link_libraries(bsdf_validation
@@ -34,6 +46,14 @@ target_link_libraries(scene_hierarchy
   PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
 )
 
+target_link_libraries(medium_tracking_validation
+  PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
+)
+
+target_link_libraries(upbp_core_validation
+  PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
+)
+
 target_include_directories(bsdf_validation
   PRIVATE "${CMAKE_SOURCE_DIR}/sources"
   PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render"
@@ -45,6 +65,16 @@ target_include_directories(procedural_geometry
 )
 
 target_include_directories(scene_hierarchy
+  PRIVATE "${CMAKE_SOURCE_DIR}/sources"
+  PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render"
+)
+
+target_include_directories(medium_tracking_validation
+  PRIVATE "${CMAKE_SOURCE_DIR}/sources"
+  PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render"
+)
+
+target_include_directories(upbp_core_validation
   PRIVATE "${CMAKE_SOURCE_DIR}/sources"
   PRIVATE "${CMAKE_SOURCE_DIR}/sources/etx/render"
 )
@@ -73,8 +103,24 @@ set_target_properties(scene_hierarchy PROPERTIES
   FOLDER "tests"
 )
 
+set_target_properties(medium_tracking_validation PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${root_folder}/bin"
+  RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${root_folder}/bin"
+  RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${root_folder}/bin"
+  FOLDER "tests"
+)
+
+set_target_properties(upbp_core_validation PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${root_folder}/bin"
+  RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${root_folder}/bin"
+  RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${root_folder}/bin"
+  FOLDER "tests"
+)
+
 if(APPLE)
-  foreach(test_target bsdf_validation procedural_geometry scene_hierarchy)
+  foreach(test_target bsdf_validation procedural_geometry scene_hierarchy medium_tracking_validation upbp_core_validation)
     target_link_libraries(${test_target} PRIVATE
       "-framework Foundation"
       "-framework QuartzCore"
@@ -136,4 +182,6 @@ if(MSVC)
   target_link_options(bsdf_validation PRIVATE "/NODEFAULTLIB:LIBCMT")
   target_link_options(procedural_geometry PRIVATE "/NODEFAULTLIB:LIBCMT")
   target_link_options(scene_hierarchy PRIVATE "/NODEFAULTLIB:LIBCMT")
+  target_link_options(medium_tracking_validation PRIVATE "/NODEFAULTLIB:LIBCMT")
+  target_link_options(upbp_core_validation PRIVATE "/NODEFAULTLIB:LIBCMT")
 endif()

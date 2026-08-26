@@ -450,6 +450,8 @@ std::string UI::render_configuration_label(RendererMode renderer, Integrator* in
       return "Bidirectional (GPU)";
     case Integrator::Type::VCM:
       return "VCM (GPU)";
+    case Integrator::Type::UPBP:
+      return "UPBP (GPU unsupported)";
     default:
       return std::string(integrator->name()) + " (GPU)";
   }

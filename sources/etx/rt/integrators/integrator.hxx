@@ -15,6 +15,7 @@ struct Integrator {
     PathTracing = 1,
     Bidirectional = 2,
     VCM = 3,
+    UPBP = 4,
 
     Count,
     Invalid = kInvalidIndex,
@@ -136,6 +137,7 @@ struct IntegratorThread {
 
   void reset_scene_hashes();
   void request_scene_check(SceneUpdateScope scope);
+  void suppress_next_scene_commit_run();
   bool scene_changes_pending() const;
 
  private:
@@ -152,6 +154,8 @@ inline const char* integrator_type_to_id(Integrator::Type type) {
       return "bdpt";
     case Integrator::Type::VCM:
       return "vcm";
+    case Integrator::Type::UPBP:
+      return "upbp";
     default:
       return nullptr;
   }
@@ -168,6 +172,8 @@ inline Integrator::Type integrator_id_to_type(const char* id) {
     return Integrator::Type::Bidirectional;
   if (strcmp(id, "vcm") == 0)
     return Integrator::Type::VCM;
+  if (strcmp(id, "upbp") == 0)
+    return Integrator::Type::UPBP;
   return Integrator::Type::Invalid;
 }
 

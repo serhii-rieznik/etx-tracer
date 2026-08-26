@@ -31,8 +31,8 @@ constexpr uint32_t kRecentFileLimit = 8u;
 constexpr size_t kRetainedApplicationCommandResultLimit = 256u;
 
 bool energy_compensation_cache_matches_render_mode(const SceneData& data) {
-  const uint32_t expected_cache_mode = data.options.properties[Scene::Properties::Spectral] ? kBSDFEnergyCompensationCacheModeSpectralScalar :
-                                                                                              kBSDFEnergyCompensationCacheModeIntegratedRGB;
+  const uint32_t expected_cache_mode =
+    data.options.properties[Scene::Properties::Spectral] ? kBSDFEnergyCompensationCacheModeSpectralScalar : kBSDFEnergyCompensationCacheModeIntegratedRGB;
   for (const Scene::EnergyCompensationInterface& interface_data : data.energy_compensation_interfaces) {
     if (interface_data.cache_mode != expected_cache_mode) {
       return false;
@@ -857,6 +857,9 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     set_renderer_mode(RendererMode::CPURaytracing);
   }
 
+  if (_application_config.persist_options == false) {
+    cpu_renderer.integrator_thread().suppress_next_scene_commit_run();
+  }
   notify_scene_might_have_changed();
 
   {
@@ -1667,6 +1670,11 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
         message = "GPU ray tracing is unavailable";
         return false;
       }
+      if ((command.renderer == RendererMode::GPURaytracing) &&
+          ((cpu_renderer.current_integrator() == nullptr) || (UI::gpu_integrator_supported(cpu_renderer.current_integrator()->type()) == false))) {
+        message = "Current integrator is unavailable on GPU";
+        return false;
+      }
       set_renderer_mode(command.renderer);
       if ((_active_renderer == nullptr) || (_active_renderer->mode() != command.renderer)) {
         message = "Requested renderer could not be initialized";
@@ -1679,6 +1687,10 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
       Integrator* integrator = integrator_type_to_instance(command.integrator, cpu_renderer.integrator_list(), cpu_renderer.integrator_count());
       if ((integrator == nullptr) || (integrator->enabled() == false)) {
         message = "Integrator is unavailable";
+        return false;
+      }
+      if ((_active_renderer == &gpu_renderer) && (UI::gpu_integrator_supported(command.integrator) == false)) {
+        message = "Integrator is unavailable on GPU";
         return false;
       }
       on_integrator_selected(command.integrator);

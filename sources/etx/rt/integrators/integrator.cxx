@@ -28,6 +28,7 @@ struct IntegratorThreadImpl {
   Integrator::State latest_state = Integrator::State::Stopped;
   Integrator::Status latest_status = {};
   std::atomic<SceneUpdateScope> scene_update_scope = {SceneUpdateScope::Full};
+  std::atomic_bool suppress_scene_commit_run = false;
 
   IntegratorThreadImpl(SceneRepresentation& scene_rep, Raytracing& rt)
     : scene_representation(scene_rep)
@@ -85,6 +86,8 @@ struct IntegratorThreadImpl {
       current_scene_hashes = new_hashes;
     }
 
+    const bool suppress_run = (pending_scope != SceneUpdateScope::None) && suppress_scene_commit_run.exchange(false);
+
     const auto& camera = scene_representation.camera();
     const uint64_t new_camera_hash = xxh64(&camera, sizeof(camera));
 
@@ -97,7 +100,7 @@ struct IntegratorThreadImpl {
       raytracing.commit(scene_representation.data(), scene_representation.camera(), changes);
       current_camera_hash = new_camera_hash;
 
-      if (integrator != nullptr) {
+      if ((integrator != nullptr) && (suppress_run == false)) {
         integrator->run();
         latest_state = integrator->state();
       }
@@ -209,6 +212,10 @@ void IntegratorThread::reset_scene_hashes() {
 
 void IntegratorThread::request_scene_check(SceneUpdateScope scope) {
   _private->request_scene_check(scope);
+}
+
+void IntegratorThread::suppress_next_scene_commit_run() {
+  _private->suppress_scene_commit_run.store(true);
 }
 
 bool IntegratorThread::scene_changes_pending() const {

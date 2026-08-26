@@ -403,6 +403,8 @@ const char* integrator_type_to_display_name(Integrator::Type type) {
       return "Bidirectional";
     case Integrator::Type::VCM:
       return "VCM";
+    case Integrator::Type::UPBP:
+      return "UPBP";
     default:
       return "Unknown";
   }

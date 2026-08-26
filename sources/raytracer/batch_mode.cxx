@@ -348,6 +348,16 @@ const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
       Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices | Scene::Strategy::MergeVertices,
     .reference = false,
   },
+  {
+    .file_tag = "upbp",
+    .display_name = "UPBP",
+    .description = "Unified points, beams, and paths CPU integrator.",
+    .integrator = Integrator::Type::UPBP,
+    .bdpt_mode = BDPTMode::BDPTFast,
+    .strategy_flags =
+      Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight | Scene::Strategy::ConnectToCamera | Scene::Strategy::ConnectVertices | Scene::Strategy::MergeVertices,
+    .reference = false,
+  },
 };
 
 const char* full_comparison_group_name(const BDPTMode mode) {
@@ -378,7 +388,7 @@ const char* batch_usage_string() {
          "  --cpu-comparison\n"
          "  --generate-bsdf-luts\n"
          "  --pregenerate-bsdf-lut-cache\n"
-         "  --integrator <debug|pt|bdpt|vcm>\n"
+         "  --integrator <debug|pt|bdpt|vcm|upbp>\n"
          "  --bdpt-mode <pt|lt|bdpt-fast|bdpt-full>\n"
          "  --renderer <cpu|gpu>\n"
          "  --samples <count>\n"
@@ -2089,7 +2099,7 @@ bool configure_batch_render_window(const BatchRenderOptions& options, BatchRende
       bdpt_mode = settings_it->second.get_integral("bdpt-mode", bdpt_mode);
     }
     cpu_can_render_crop_window = bdpt_mode == BDPTMode::PathTracing;
-  } else if (integrator_data.selected == Integrator::Type::VCM) {
+  } else if ((integrator_data.selected == Integrator::Type::VCM) || (integrator_data.selected == Integrator::Type::UPBP)) {
     cpu_can_render_crop_window = false;
   }
 
@@ -2441,6 +2451,7 @@ bool run_cpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   ETX_ASSERT(session.cpu_renderer.current_integrator() != nullptr);
 
   session.cpu_renderer.film().clear(Film::ClearEverything);
+  session.cpu_renderer.integrator_thread().suppress_next_scene_commit_run();
   session.cpu_renderer.start();
 
   uint32_t last_completed_iterations = 0u;
@@ -2455,9 +2466,12 @@ bool run_cpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
       last_completed_iterations = status.completed_iterations;
     }
 
-    const bool render_finished = (session.cpu_renderer.is_running() == false) && (status.completed_iterations >= target_iterations);
-    if (render_finished) {
-      break;
+    if (session.cpu_renderer.is_running() == false) {
+      if (status.completed_iterations >= target_iterations) {
+        break;
+      }
+      log::error("CPU batch render stopped before completion: %s", session.cpu_renderer.current_integrator()->status_str());
+      return false;
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1));

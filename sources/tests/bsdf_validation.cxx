@@ -2190,11 +2190,11 @@ bool validate_delta_dielectric_transmission_sample(const char* label, const etx:
       return false;
     }
 
-    const float expected_weight = sample.eta * sample.eta;
+    const float expected_weight = data.path_source == etx::PathSource::Light ? 1.0f : sample.eta * sample.eta;
     const float weight = sample.weight.monochromatic();
     const float tolerance = max(1.0e-4f, 5.0e-4f * expected_weight);
     if (fabsf(weight - expected_weight) > tolerance) {
-      std::printf("%s transmission weight %.6f expected eta^2 %.6f eta %.6f\n", label, weight, expected_weight, sample.eta);
+      std::printf("%s transmission weight %.6f expected %.6f eta %.6f\n", label, weight, expected_weight, sample.eta);
       return false;
     }
 
@@ -3587,6 +3587,12 @@ int main(int argc, char** argv) {
   const etx::Material delta_sapphire_dielectric = make_white_sapphire_dielectric(0.0f);
   valid = (validate_delta_dielectric_transmission_sample("sapphire delta dielectric outside", data, delta_sapphire_dielectric, 25520u) && valid);
   valid = (validate_delta_dielectric_transmission_sample("sapphire delta dielectric inside", inside_data, delta_sapphire_dielectric, 25530u) && valid);
+  etx::BSDFData light_data = data;
+  light_data.path_source = etx::PathSource::Light;
+  etx::BSDFData light_inside_data = inside_data;
+  light_inside_data.path_source = etx::PathSource::Light;
+  valid = (validate_delta_dielectric_transmission_sample("sapphire delta dielectric light outside", light_data, delta_sapphire_dielectric, 25540u) && valid);
+  valid = (validate_delta_dielectric_transmission_sample("sapphire delta dielectric light inside", light_inside_data, delta_sapphire_dielectric, 25550u) && valid);
   const float exact_conductor_roughness = 0.5f;
   valid = validate_exact_energy_compensated_conductor_interface(scene, spectra, SpectrumCount, "mirror conductor exact interface", make_mirror_conductor(exact_conductor_roughness),
             exact_conductor_roughness, 33400u) &&

@@ -42,8 +42,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_equal_eta_sample(ETX_IN(BSDFData, d
   return result;
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_dielectric_delta_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
-  ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_INLINE BSDFSample bsdf_dielectric_delta_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   LocalFrame frame = ETX_ZERO(LocalFrame);
   frame.tan = data.tan;
   frame.btn = data.btn;
@@ -93,7 +92,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_delta_sample(ETX_IN(BSDFResourceCon
   const float3 local_w_o = direction_scale * normalize(bsdf_external_refract(w_i, float3(0.0f, 0.0f, 1.0f), eta));
   const float pdf = max(kEpsilon, 1.0f - fresnel_probability);
   const SpectralResponse one_minus_fresnel = spectral_response_sub(spectral_response_make(data.spectrum_sample, 1.0f), fresnel);
-  const float eta_factor = eta * eta;
+  const float eta_factor = data.path_source == PathSource::Light ? 1.0f : eta * eta;
   result.w_o = normalize(local_frame_from_local(frame, local_w_o));
   result.pdf = pdf;
   result.weight = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex),
