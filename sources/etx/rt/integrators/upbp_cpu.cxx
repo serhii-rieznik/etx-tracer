@@ -224,11 +224,15 @@ Sampler upbp_pair_sampler(const uint32_t render_seed, const uint64_t iteration, 
 }  // namespace
 
 struct CPUUPBPImpl {
-  struct BB1DQueryStatistics {
+  struct CameraEvaluationStatistics {
     uint64_t camera_paths = 0u;
     uint64_t queries = 0u;
     uint64_t candidates = 0u;
     uint64_t contributions = 0u;
+    uint64_t published_camera_paths = 0u;
+    uint64_t published_queries = 0u;
+    uint64_t published_candidates = 0u;
+    uint64_t published_contributions = 0u;
   };
 
   struct CameraWorkspace {
@@ -469,6 +473,37 @@ struct CPUUPBPImpl {
     log::info("UPBP iteration %u live: camera %.2f s, %.1f%% paths; BB1D queries %.3f M, candidates %.3f M, contributions %.3f M, %.2f candidates/query",
       status.current_iteration + 1u, stage_time.measure(), camera_progress, static_cast<double>(queries) / 1.0e6, static_cast<double>(candidates) / 1.0e6,
       static_cast<double>(contributions) / 1.0e6, candidates_per_query);
+  }
+
+  void publish_camera_statistics(CameraEvaluationStatistics& statistics) {
+    const uint64_t camera_path_delta = statistics.camera_paths - statistics.published_camera_paths;
+    const uint64_t query_delta = statistics.queries - statistics.published_queries;
+    const uint64_t candidate_delta = statistics.candidates - statistics.published_candidates;
+    const uint64_t contribution_delta = statistics.contributions - statistics.published_contributions;
+    if (camera_path_delta > 0u) {
+      evaluated_camera_path_count.fetch_add(camera_path_delta, std::memory_order_relaxed);
+      statistics.published_camera_paths = statistics.camera_paths;
+    }
+    if (query_delta > 0u) {
+      bb1d_query_count.fetch_add(query_delta, std::memory_order_relaxed);
+      statistics.published_queries = statistics.queries;
+    }
+    if (candidate_delta > 0u) {
+      bb1d_candidate_count.fetch_add(candidate_delta, std::memory_order_relaxed);
+      statistics.published_candidates = statistics.candidates;
+    }
+    if (contribution_delta > 0u) {
+      bb1d_contribution_count.fetch_add(contribution_delta, std::memory_order_relaxed);
+      statistics.published_contributions = statistics.contributions;
+    }
+  }
+
+  void complete_camera_path(CameraEvaluationStatistics& statistics) {
+    ++statistics.camera_paths;
+    constexpr uint64_t publish_interval = 16u;
+    if ((statistics.camera_paths - statistics.published_camera_paths) >= publish_interval) {
+      publish_camera_statistics(statistics);
+    }
   }
 
   void release_light_storage() {
@@ -1100,7 +1135,7 @@ struct CPUUPBPImpl {
   }
 
   bool evaluate_bb1d(const UPBPPathRecord& camera_path, const UPBPRecursivePathWeights& camera_weights, const std::vector<UPBPBeamReference>& camera_beams, SpectralResponse& value,
-    BB1DQueryStatistics& statistics) {
+    CameraEvaluationStatistics& statistics) {
     if (bb1d_index.size() == 0u) {
       return true;
     }
@@ -1110,6 +1145,10 @@ struct CPUUPBPImpl {
       const bool query_valid = bb1d_index.query_beam(camera_beam, static_cast<float>(iteration.bb1d_radius),
         [this, &camera_path, &camera_weights, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam) {
           ++statistics.candidates;
+          constexpr uint64_t publish_interval = 4096u;
+          if ((statistics.candidates - statistics.published_candidates) >= publish_interval) {
+            publish_camera_statistics(statistics);
+          }
           if (evaluation_valid == false) {
             return;
           }
@@ -1137,21 +1176,18 @@ struct CPUUPBPImpl {
   }
 
   void evaluate_camera_paths(const uint32_t begin, const uint32_t end, const uint32_t thread_id) {
-    BB1DQueryStatistics bb1d_statistics = {};
+    CameraEvaluationStatistics statistics = {};
     try {
-      evaluate_camera_paths_impl(begin, end, thread_id, bb1d_statistics);
+      evaluate_camera_paths_impl(begin, end, thread_id, statistics);
     } catch (const std::bad_alloc&) {
       fail("UPBP failed to allocate camera-path working storage");
     } catch (const std::length_error&) {
       fail("UPBP camera-path working storage exceeds the platform container limit");
     }
-    evaluated_camera_path_count.fetch_add(bb1d_statistics.camera_paths, std::memory_order_relaxed);
-    bb1d_query_count.fetch_add(bb1d_statistics.queries, std::memory_order_relaxed);
-    bb1d_candidate_count.fetch_add(bb1d_statistics.candidates, std::memory_order_relaxed);
-    bb1d_contribution_count.fetch_add(bb1d_statistics.contributions, std::memory_order_relaxed);
+    publish_camera_statistics(statistics);
   }
 
-  void evaluate_camera_paths_impl(const uint32_t begin, const uint32_t end, const uint32_t thread_id, BB1DQueryStatistics& bb1d_statistics) {
+  void evaluate_camera_paths_impl(const uint32_t begin, const uint32_t end, const uint32_t thread_id, CameraEvaluationStatistics& statistics) {
     const Scene& scene = rt.scene();
     Film& film = rt.film();
     const uint32_t maximum_vertices = scene.options.max_path_length + 1u;
@@ -1161,9 +1197,9 @@ struct CPUUPBPImpl {
     }
     CameraWorkspace& workspace = camera_workspaces[thread_id];
     for (uint32_t path_index = begin; running() && (path_index < end); ++path_index) {
-      ++bb1d_statistics.camera_paths;
       uint2 pixel = {};
       if (film.active_pixel(path_index, pixel) == false) {
+        complete_camera_path(statistics);
         continue;
       }
       Sampler film_sampler{upbp_sampler_seed(scene.options.random_seed, status.current_iteration, path_index, 0u, 0u, UPBPRandomDomain::FilmSample)};
@@ -1236,7 +1272,7 @@ struct CPUUPBPImpl {
         fail("UPBP PB2D evaluation failed at pixel path " + std::to_string(path_index));
         return;
       }
-      if (iteration.mis.enabled(UPBPTechnique::BB1D) && (evaluate_bb1d(camera.subpath.path, camera_weights, camera_beams, value, bb1d_statistics) == false)) {
+      if (iteration.mis.enabled(UPBPTechnique::BB1D) && (evaluate_bb1d(camera.subpath.path, camera_weights, camera_beams, value, statistics) == false)) {
         fail("UPBP BB1D evaluation failed at pixel path " + std::to_string(path_index));
         return;
       }
@@ -1254,6 +1290,7 @@ struct CPUUPBPImpl {
         }
       }
       film.submit(value.to_rgb_estimate(), normal, albedo.to_rgb_estimate(), pixel);
+      complete_camera_path(statistics);
     }
   }
 
