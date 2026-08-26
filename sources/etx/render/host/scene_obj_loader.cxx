@@ -132,15 +132,20 @@ void setup_materials_for_obj(const ObjFileData& obj_data, const char* mtl_file_n
 }
 
 void process_obj_shape(const tinyobj::shape_t& shape, const tinyobj::attrib_t& obj_attrib, const std::vector<tinyobj::material_t>& obj_materials, SceneData& data,
-  std::unordered_map<etx::VertexKey, uint32_t, etx::VertexKeyHash>& vertex_map, size_t& cache_hits) {
+  size_t& total_vertices_processed, size_t& cache_hits) {
   auto& triangles = data.triangles;
   auto& vertices = data.vertices;
   auto& material_mapping = data.material_mapping;
+
+  using VertexMap = std::unordered_map<etx::VertexKey, uint32_t, etx::VertexKeyHash>;
+  VertexMap explicit_normal_vertices;
+  std::unordered_map<uint32_t, VertexMap> smoothing_group_vertices;
 
   uint64_t index_offset = 0;
 
   struct FaceData {
     int material_id;
+    uint32_t smoothing_group_id;
     tinyobj::index_t indices[3];
   };
 
@@ -157,6 +162,7 @@ void process_obj_shape(const tinyobj::shape_t& shape, const tinyobj::attrib_t& o
 
     FaceData face_data = {
       .material_id = material_id,
+      .smoothing_group_id = (face < shape.mesh.smoothing_group_ids.size()) ? shape.mesh.smoothing_group_ids[face] : 0u,
     };
     for (uint64_t vertex_index = 0; vertex_index < face_size; ++vertex_index) {
       face_data.indices[vertex_index] = shape.mesh.indices[index_offset + vertex_index];
@@ -200,6 +206,7 @@ void process_obj_shape(const tinyobj::shape_t& shape, const tinyobj::attrib_t& o
       float3 face_bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
 
       for (uint64_t vertex_index = 0; vertex_index < 3; ++vertex_index) {
+        ++total_vertices_processed;
         const auto& index = face_data.indices[vertex_index];
 
         float3 position = {static_cast<float>(obj_attrib.vertex_x[index.vertex_index]), static_cast<float>(obj_attrib.vertex_y[index.vertex_index]),
@@ -208,7 +215,7 @@ void process_obj_shape(const tinyobj::shape_t& shape, const tinyobj::attrib_t& o
         bool has_normal = (index.normal_index >= 0) && (static_cast<size_t>(index.normal_index) < obj_attrib.normal_x.size());
         float3 normal = has_normal ? float3{static_cast<float>(obj_attrib.normal_x[index.normal_index]), static_cast<float>(obj_attrib.normal_y[index.normal_index]),
                                        static_cast<float>(obj_attrib.normal_z[index.normal_index])}
-                                   : float3{0.0f, 1.0f, 0.0f};
+                                   : float3{};
 
         bool has_uv = (index.texcoord_index >= 0) && (static_cast<size_t>(index.texcoord_index) < obj_attrib.texcoord_u.size());
         float2 uv =
@@ -219,19 +226,27 @@ void process_obj_shape(const tinyobj::shape_t& shape, const tinyobj::attrib_t& o
 
         VertexKey key = {position, normal, uv, has_normal, has_uv};
 
-        auto it = vertex_map.find(key);
-        if (it != vertex_map.end()) {
-          tri.i[vertex_index] = it->second;
-          cache_hits++;
-        } else {
-          uint32_t vertex_index_new = static_cast<uint32_t>(vertices.pos.size());
-          tri.i[vertex_index] = vertex_index_new;
-          vertex_map[key] = vertex_index_new;
-
-          vertices.pos.emplace_back(position);
-          vertices.nrm.emplace_back(normal);
-          vertices.tex.emplace_back(uv);
+        VertexMap* vertex_map = nullptr;
+        if (has_normal) {
+          vertex_map = &explicit_normal_vertices;
+        } else if (face_data.smoothing_group_id != 0u) {
+          vertex_map = &smoothing_group_vertices[face_data.smoothing_group_id];
         }
+
+        const uint32_t vertex_index_new = static_cast<uint32_t>(vertices.pos.size());
+        if (vertex_map != nullptr) {
+          auto [it, inserted] = vertex_map->emplace(key, vertex_index_new);
+          if (inserted == false) {
+            tri.i[vertex_index] = it->second;
+            cache_hits++;
+            continue;
+          }
+        }
+
+        tri.i[vertex_index] = vertex_index_new;
+        vertices.pos.emplace_back(position);
+        vertices.nrm.emplace_back(normal);
+        vertices.tex.emplace_back(uv);
       }
 
       if (validate_triangle(tri, vertices.pos) == false) {
@@ -257,7 +272,7 @@ void process_obj_shape(const tinyobj::shape_t& shape, const tinyobj::attrib_t& o
 }
 
 void process_obj_shapes(const ObjFileData& obj_data, SceneData& data) {
-  std::unordered_map<etx::VertexKey, uint32_t, etx::VertexKeyHash> vertex_map;
+  size_t total_vertices_processed = 0;
   size_t cache_hits = 0;
 
   uint64_t total_triangles = 0;
@@ -278,11 +293,10 @@ void process_obj_shapes(const ObjFileData& obj_data, SceneData& data) {
   vertices.tex.reserve(total_count);
 
   for (const auto& shape : obj_data.shapes) {
-    process_obj_shape(shape, obj_data.attrib, obj_data.materials, data, vertex_map, cache_hits);
+    process_obj_shape(shape, obj_data.attrib, obj_data.materials, data, total_vertices_processed, cache_hits);
   }
 
-  size_t total_vertices_processed = vertex_map.size() + cache_hits;
-  size_t unique_vertices = vertex_map.size();
+  size_t unique_vertices = total_vertices_processed - cache_hits;
   log::info("Vertex deduplication: %llu total processed, %llu unique (%.1f%% reduction)", total_vertices_processed, unique_vertices,
     total_vertices_processed > 0 ? (1.0f - float(unique_vertices) / total_vertices_processed) * 100.0f : 0.0f);
 }

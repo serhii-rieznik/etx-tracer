@@ -52,17 +52,6 @@ bool wavefront_connect_camera_valid_spectral_response(SpectralResponse value) {
   return isfinite(value.value) && all(isfinite(value.integrated));
 }
 
-float wavefront_connect_camera_mis_light(GPUWavefrontPathVertex current_vertex, GPUWavefrontPathVertex previous_vertex, float current_backward_pdf, float previous_backward_pdf) {
-  float result_accumulated = 0.0f;
-  float r1 = wavefront_safe_div(previous_backward_pdf, previous_vertex.pdf_from_prev);
-  float previous_mis_connectible = ((previous_vertex.flags & GPUWavefrontVertexFlags::Mis_connectible) != 0u) ? 1.0f : 0.0f;
-  float previous_connectible = ((previous_vertex.flags & GPUWavefrontVertexFlags::Connectible) != 0u) ? 1.0f : 0.0f;
-  result_accumulated = r1 * (previous_mis_connectible + previous_vertex.pdf_history);
-  float r0 = wavefront_safe_div(current_backward_pdf, current_vertex.pdf_from_prev);
-  result_accumulated = r0 * (previous_connectible + result_accumulated);
-  return result_accumulated;
-}
-
 float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_value, inout Sampler sampler) {
   if ((wavefront_connect_camera_scene_mis_enabled() == false) || scene_path_mode_is_light_tracing()) {
     return 1.0f;
@@ -78,57 +67,12 @@ float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_v
   float3 previous_direction = normalize(input_value.previous_vertex.position - input_value.current_vertex.position);
   float previous_from_current_dir =
     wavefront_connect_camera_stage_bsdf_pdf(wavefront_connect_camera_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
-  float previous_from_current = wavefront_path_vertex_is_infinite_emitter(input_value.previous_vertex)
-                                  ? previous_from_current_dir
-                                  : wavefront_convert_solid_angle_pdf_to_area(previous_from_current_dir, input_value.current_vertex.position, input_value.previous_vertex.position,
-                                      wavefront_path_vertex_is_surface(input_value.previous_vertex), input_value.previous_vertex.normal);
-
-  if (scene_path_mode_is_vcm()) {
-    float vm_camera = wavefront_path_vertex_is_medium(input_value.current_vertex) ? 0.0f : constants.vcm_vm_weight;
-    float w_light = current_from_camera * (vm_camera + input_value.current_vertex.forward_pdf + input_value.current_vertex.reverse_pdf * previous_from_current_dir);
-    return 1.0f / (1.0f + w_light);
+  float vm_camera = scene_path_mode_is_vcm() && (wavefront_path_vertex_is_medium(input_value.current_vertex) == false) ? constants.vcm_vm_weight : 0.0f;
+  float adjacent_connection = input_value.current_vertex.forward_pdf;
+  if (scene_path_mode_uses_bdpt_fast() && (input_value.path_meta.light_path_length != 1u)) {
+    adjacent_connection = 0.0f;
   }
-
-  if (scene_path_mode_uses_bdpt_fast()) {
-    if (input_value.path_meta.light_path_length == 0u) {
-      return 1.0f;
-    }
-
-    GPUWavefrontPathVertex emitter_root = (GPUWavefrontPathVertex)0;
-    GPUWavefrontPathVertex first_light_vertex = (GPUWavefrontPathVertex)0;
-    if (input_value.path_meta.light_path_length == 1u) {
-      emitter_root = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 0u));
-      first_light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 1u));
-    } else if (input_value.resources.fast_light_endpoint_buffer != kInvalidIndex) {
-      const GPUWavefrontFastLightEndpoint endpoint = wavefront_load_fast_light_endpoint(input_value.resources.fast_light_endpoint_buffer, input_value.path_index);
-      emitter_root.pdf_from_prev = endpoint.emitter_pdf_from_prev;
-      emitter_root.pdf_from_next = endpoint.emitter_pdf_from_next;
-      emitter_root.flags = endpoint.emitter_flags;
-      first_light_vertex.flags = endpoint.first_vertex_flags;
-    } else {
-      emitter_root = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 0u));
-      first_light_vertex = wavefront_load_path_vertex(input_value.resources.light_vertex_buffer, wavefront_light_vertex_slot(input_value.path_index, 1u));
-    }
-    if (wavefront_path_vertex_valid(emitter_root) == false) {
-      return 1.0f;
-    }
-
-    float p_sample = emitter_root.pdf_from_prev;
-    float p_light = input_value.previous_vertex.pdf_from_prev * input_value.current_vertex.pdf_from_prev;
-    float p_bck = current_from_camera * input_value.previous_vertex.pdf_history;
-    float p_direct = previous_from_current;
-    if (input_value.path_meta.light_path_length > 1u) {
-      p_direct = emitter_root.pdf_from_next;
-      p_bck *= previous_from_current;
-      p_light *= p_sample;
-    }
-
-    float p_camera_direct = ((emitter_root.flags & GPUWavefrontVertexFlags::Mis_connectible) != 0u) ? (p_bck * p_direct) : 0.0f;
-    float p_camera_connect = ((first_light_vertex.flags & GPUWavefrontVertexFlags::Connectible) != 0u) ? (p_bck * p_sample) : 0.0f;
-    return balance_heuristic(p_light, p_camera_direct, p_camera_connect);
-  }
-
-  float w_light = wavefront_connect_camera_mis_light(input_value.current_vertex, input_value.previous_vertex, current_from_camera, previous_from_current);
+  float w_light = current_from_camera * (vm_camera + adjacent_connection + input_value.current_vertex.reverse_pdf * previous_from_current_dir);
   return 1.0f / (1.0f + w_light);
 }
 

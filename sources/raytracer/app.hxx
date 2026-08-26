@@ -17,7 +17,6 @@
 
 #include <etx/rt/integrators/integrator.hxx>
 #include <etx/rt/integrators/debug.hxx>
-#include <etx/rt/integrators/path_tracing.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 
 #include "ui.hxx"

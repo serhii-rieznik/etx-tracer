@@ -350,7 +350,11 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     } else {
       state.forward_pdf = wavefront_safe_div(1.0f, selected_sample_pdf);
       float vcm_connection_term = scene_path_mode_is_vcm() ? constants.vcm_vm_weight : 0.0f;
-      state.reverse_pdf = wavefront_safe_div(cos_theta_bsdf * ((current_d_vc * reverse_bsdf_pdf) + current_d_vcm + vcm_connection_term), selected_sample_pdf);
+      float connection_source = current_d_vcm + vcm_connection_term;
+      if (scene_path_mode_uses_bdpt_fast()) {
+        connection_source = (state.path_length == 1u) ? current_d_vcm : 0.0f;
+      }
+      state.reverse_pdf = wavefront_safe_div(cos_theta_bsdf * ((current_d_vc * reverse_bsdf_pdf) + connection_source), selected_sample_pdf);
       state.d_vm = scene_path_mode_is_vcm()
                      ? wavefront_safe_div(cos_theta_bsdf * ((current_d_vm * reverse_bsdf_pdf) + (current_d_vcm * constants.vcm_vc_weight) + 1.0f), selected_sample_pdf)
                      : 0.0f;

@@ -82,54 +82,6 @@ float wavefront_direct_light_sampling_pdf(GPUWavefrontDirectLightSample sample_v
   return sample_value.pdf_dir * sample_value.pdf_sample;
 }
 
-float wavefront_direct_light_emitter_sample_pdf(GPUWavefrontDirectLightSample sample_value) {
-  if ((sample_value.flags & GPUWavefrontDirectLightSampleFlags::Distant) != 0u) {
-    float directional_pdf = ((sample_value.flags & GPUWavefrontDirectLightSampleFlags::Delta) != 0u) ? 1.0f : sample_value.pdf_dir;
-    return sample_value.pdf_sample * directional_pdf;
-  }
-
-  return sample_value.pdf_sample * sample_value.pdf_area;
-}
-
-float wavefront_direct_light_from_emitter_pdf(GPUWavefrontDirectLightSample sample_value, GPUWavefrontPathVertex current_vertex) {
-  if ((sample_value.flags & GPUWavefrontDirectLightSampleFlags::Distant) != 0u) {
-    float3 w_o = normalize(sample_value.origin - current_vertex.position);
-    float cosine_term = wavefront_path_vertex_is_surface(current_vertex) ? abs(dot(current_vertex.geo_normal, w_o)) : 1.0f;
-    return sample_value.pdf_area * cosine_term;
-  }
-
-  TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], sample_value.triangle_index);
-  Material emitter_material = (Material)0;
-  if (wavefront_try_load_material_full(tri.material_index, emitter_material) == false) {
-    return 0.0f;
-  }
-
-  float3 w_o = current_vertex.position - sample_value.origin;
-  float distance_squared = dot(w_o, w_o);
-  if (distance_squared <= kEpsilon) {
-    return 0.0f;
-  }
-
-  w_o *= rsqrt(distance_squared);
-  float exponent = scene_math_shared_collimation_to_exponent(emitter_material.emission_collimation);
-  float pdf_dir = pow(max(0.0f, dot(sample_value.normal, w_o)), exponent) * kInvPi;
-  return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, sample_value.origin, current_vertex.position, wavefront_path_vertex_is_surface(current_vertex), current_vertex.normal);
-}
-
-float wavefront_direct_light_mis_camera(uint camera_path_length, GPUWavefrontPathVertex current_vertex, GPUWavefrontPathVertex previous_vertex, float current_backward_pdf,
-  float previous_backward_pdf) {
-  float result_accumulated = 0.0f;
-  float previous_connectible = wavefront_path_vertex_connectible(previous_vertex) ? 1.0f : 0.0f;
-  if (camera_path_length > 1u) {
-    float r1 = wavefront_safe_div(previous_backward_pdf, previous_vertex.pdf_from_prev);
-    float previous_mis_connectible = wavefront_path_vertex_mis_connectible(previous_vertex) ? 1.0f : 0.0f;
-    result_accumulated = r1 * (previous_mis_connectible + previous_vertex.pdf_history);
-  }
-  float r0 = wavefront_safe_div(current_backward_pdf, current_vertex.pdf_from_prev);
-  result_accumulated = r0 * (previous_connectible + result_accumulated);
-  return result_accumulated;
-}
-
 float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval), inout Sampler sampler) {
   if (wavefront_scene_multiple_importance_sampling_enabled() == false) {
     return 1.0f;
@@ -146,46 +98,22 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
     return power_heuristic(sampling_pdf, direct_pdf);
   }
 
-  float p_sample = wavefront_direct_light_emitter_sample_pdf(input_value.sample_value);
-  float p_fwd = input_value.previous_vertex.pdf_from_prev * input_value.current_vertex.pdf_from_prev;
-  float p_connection = p_fwd * p_sample;
-  bool sampled_light_is_surface = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Distant) == 0u;
-  float p_bsdf_sample = sampled_light_is_surface ? wavefront_convert_solid_angle_pdf_to_area(bsdf_eval.pdf, input_value.current_vertex.position, input_value.sample_value.origin,
-                                                     true, input_value.sample_value.normal)
-                                                 : bsdf_eval.pdf;
-  float p_direct = 0.0f;
-  if (sampled_light_is_delta == false) {
-    p_direct = p_fwd * p_bsdf_sample;
-  }
-
   BSDFData reverse_data =
     wavefront_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.current_vertex.medium_index, -input_value.sample_value.direction);
   reverse_data.path_source = PathSource::Light;
   float3 previous_direction = normalize(input_value.previous_vertex.position - input_value.current_vertex.position);
   float reverse_pdf = wavefront_direct_light_stage_bsdf_pdf(wavefront_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
-  if (scene_path_mode_is_vcm()) {
-    float w_light = sampled_light_is_delta ? 0.0f : wavefront_safe_div(bsdf_eval.pdf, sampling_pdf);
-    float camera_factor = wavefront_path_vertex_is_surface(input_value.current_vertex) ? abs(dot(input_value.sample_value.direction, input_value.current_vertex.geo_normal)) : 1.0f;
-    float emitter_cosine = abs(dot(input_value.sample_value.direction, input_value.sample_value.normal));
-    float density_ratio = wavefront_safe_div(input_value.sample_value.pdf_dir * emitter_cosine, input_value.sample_value.pdf_dir_out * camera_factor);
-    float w_camera = (density_ratio > 0.0f)
-                       ? wavefront_safe_div(constants.vcm_vm_weight + input_value.current_vertex.forward_pdf + input_value.current_vertex.reverse_pdf * reverse_pdf, density_ratio)
-                       : 0.0f;
-    return 1.0f / (1.0f + w_light + w_camera);
+  float w_light = sampled_light_is_delta ? 0.0f : wavefront_safe_div(bsdf_eval.pdf, sampling_pdf);
+  float camera_factor = wavefront_path_vertex_is_surface(input_value.current_vertex) ? abs(dot(input_value.sample_value.direction, input_value.current_vertex.geo_normal)) : 1.0f;
+  float emitter_cosine = abs(dot(input_value.sample_value.direction, input_value.sample_value.normal));
+  float density_ratio = wavefront_safe_div(input_value.sample_value.pdf_dir * emitter_cosine, input_value.sample_value.pdf_dir_out * camera_factor);
+  float adjacent_connection = input_value.current_vertex.forward_pdf;
+  if (scene_path_mode_uses_bdpt_fast() && (input_value.camera_path_length != 1u)) {
+    adjacent_connection = 0.0f;
   }
-  float z_prev_backward_pdf = wavefront_convert_solid_angle_pdf_to_area(reverse_pdf, input_value.current_vertex.position, input_value.previous_vertex.position,
-    wavefront_path_vertex_is_surface(input_value.previous_vertex), input_value.previous_vertex.normal);
-  float p_bck = input_value.previous_vertex.pdf_history * ((input_value.camera_path_length > 1u) ? z_prev_backward_pdf : 1.0f);
-  float from_emitter = wavefront_direct_light_from_emitter_pdf(input_value.sample_value, input_value.current_vertex);
-  if (scene_path_mode_is_bdpt_full()) {
-    float w_camera = wavefront_direct_light_mis_camera(input_value.camera_path_length, input_value.current_vertex, input_value.previous_vertex, from_emitter, z_prev_backward_pdf);
-    float w_light = sampled_light_is_delta ? 0.0f : wavefront_safe_div(p_bsdf_sample, p_sample);
-    return 1.0f / (1.0f + w_camera + w_light);
-  }
-
-  float p_light_path = p_sample * from_emitter * p_bck;
-
-  return balance_heuristic(p_connection, p_direct, p_light_path);
+  float vm_light = scene_path_mode_is_vcm() ? constants.vcm_vm_weight : 0.0f;
+  float w_camera = (density_ratio > 0.0f) ? wavefront_safe_div(vm_light + adjacent_connection + input_value.current_vertex.reverse_pdf * reverse_pdf, density_ratio) : 0.0f;
+  return 1.0f / (1.0f + w_light + w_camera);
 #endif
 }
 

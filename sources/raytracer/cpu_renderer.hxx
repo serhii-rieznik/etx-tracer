@@ -5,7 +5,6 @@
 
 #include <etx/rt/rt.hxx>
 #include <etx/rt/integrators/debug.hxx>
-#include <etx/rt/integrators/path_tracing.hxx>
 #include <etx/rt/integrators/bidirectional.hxx>
 #include <etx/rt/integrators/vcm_cpu.hxx>
 
@@ -88,7 +87,7 @@ struct CPURaytracingRenderer : public Renderer {
   IntegratorThread _integrator_thread;
 
   CPUDebugIntegrator _debug = {_raytracing};
-  CPUPathTracing _cpu_pt = {_raytracing};
+  CPUBidirectional _cpu_pt = {_raytracing, BDPTMode::PathTracing, Integrator::Type::PathTracing};
   CPUBidirectional _cpu_bidir = {_raytracing};
   CPUVCM _cpu_vcm = {_raytracing};
 

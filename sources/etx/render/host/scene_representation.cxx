@@ -732,41 +732,46 @@ struct SceneRepresentationImpl {
 
   void validate_normals(std::vector<bool>& referenced_vertices, bool& has_invalid_tangents) {
     std::vector<bool> init_normals(data.vertices.nrm.size(), false);
+    std::vector<bool> reconstruct_normals(data.vertices.nrm.size(), false);
     referenced_vertices.resize(data.vertices.nrm.size());
+
+    for (uint64_t i = 0, e = data.vertices.nrm.size(); i < e; ++i) {
+      reconstruct_normals[i] = is_valid_vector(data.vertices.nrm[i]) == false;
+    }
 
     bool has_tangents = data.vertices.tan.size() == data.vertices.nrm.size();
     if (has_tangents == false)
       has_invalid_tangents = true;
 
-    scheduler.execute(data.triangles.size(), [&](uint32_t begin, uint32_t end, uint32_t) {
-      for (uint32_t t = begin; t < end; ++t) {
-        const auto& tri = data.triangles[t];
-        const float tri_area = triangle_area(tri);
-        for (uint32_t i = 0; i < 3; ++i) {
-          uint32_t index = tri.i[i];
-          ETX_CRITICAL(is_valid_vector(tri.geo_n));
-          referenced_vertices[index] = true;
+    for (const auto& tri : data.triangles) {
+      const float tri_area = triangle_area(tri);
+      for (uint32_t i = 0; i < 3; ++i) {
+        uint32_t index = tri.i[i];
+        ETX_CRITICAL(is_valid_vector(tri.geo_n));
+        referenced_vertices[index] = true;
 
-          if (has_tangents && (is_valid_vector(data.vertices.tan[index]) == false)) {
-            has_invalid_tangents = true;
-          }
+        if (has_tangents && (is_valid_vector(data.vertices.tan[index]) == false)) {
+          has_invalid_tangents = true;
+        }
 
-          if (is_valid_vector(data.vertices.nrm[index]))
-            continue;
+        if (reconstruct_normals[index] == false) {
+          continue;
+        }
 
-          if (init_normals[index]) {
-            data.vertices.nrm[index] += tri.geo_n * tri_area;
-          } else {
-            init_normals[index] = true;
-            data.vertices.nrm[index] = tri.geo_n * tri_area;
-          }
+        if (init_normals[index]) {
+          data.vertices.nrm[index] += tri.geo_n * tri_area;
+        } else {
+          init_normals[index] = true;
+          data.vertices.nrm[index] = tri.geo_n * tri_area;
         }
       }
-    });
+    }
 
-    scheduler.execute(data.vertices.nrm.size(), [this](uint32_t begin, uint32_t end, uint32_t) {
+    scheduler.execute(data.vertices.nrm.size(), [this, &referenced_vertices](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
-        data.vertices.nrm[i] = normalize(data.vertices.nrm[i]);
+        if (referenced_vertices[i]) {
+          data.vertices.nrm[i] = normalize(data.vertices.nrm[i]);
+        }
       }
     });
   }

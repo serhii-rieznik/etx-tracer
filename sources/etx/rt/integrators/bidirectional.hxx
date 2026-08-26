@@ -1,19 +1,21 @@
 #pragma once
 
 #include <etx/rt/integrators/integrator.hxx>
+#include <etx/rt/shared/bdpt_mode.hxx>
 
 namespace etx {
 
 struct CPUBidirectional : public Integrator {
   CPUBidirectional(Raytracing&);
+  CPUBidirectional(Raytracing&, BDPTMode, Integrator::Type);
   ~CPUBidirectional();
 
   const char* name() override {
-    return "Bidirectional (CPU)";
+    return (_type == Integrator::Type::PathTracing) ? "Path Tracing (CPU)" : "Bidirectional (CPU)";
   }
 
   Integrator::Type type() const override {
-    return Integrator::Type::Bidirectional;
+    return _type;
   }
 
   void run() override;
@@ -27,6 +29,7 @@ struct CPUBidirectional : public Integrator {
 
  private:
   ETX_DECLARE_PIMPL(CPUBidirectional, 256);
+  Integrator::Type _type = Integrator::Type::Bidirectional;
 };
 
 }  // namespace etx

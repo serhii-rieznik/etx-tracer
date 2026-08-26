@@ -305,20 +305,11 @@ const CPUComparisonTechniqueInfo kCPUComparisonTechniques[] = {
   {
     .file_tag = "pt",
     .display_name = "PT",
-    .description = "Standalone CPU path tracing reference.",
-    .integrator = Integrator::Type::PathTracing,
-    .bdpt_mode = BDPTMode::PathTracing,
-    .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight,
-    .reference = true,
-  },
-  {
-    .file_tag = "bdpt-pt",
-    .display_name = "BDPT PT",
     .description = "Bidirectional integrator in path-tracing mode.",
     .integrator = Integrator::Type::Bidirectional,
     .bdpt_mode = BDPTMode::PathTracing,
     .strategy_flags = Scene::Strategy::DirectHit | Scene::Strategy::ConnectToLight,
-    .reference = false,
+    .reference = true,
   },
   {
     .file_tag = "bdpt-lt",

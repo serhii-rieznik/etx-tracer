@@ -429,8 +429,11 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
 
   float weight = 1.0f;
   if (scene_multiple_importance_sampling_enabled()) {
-    if (scene_path_mode_is_vcm()) {
-      float vm_pair = (wavefront_path_vertex_is_medium(input_value.camera_vertex) || wavefront_path_vertex_is_medium(input_value.light_vertex)) ? 0.0f : constants.vcm_vm_weight;
+    if (scene_path_mode_is_vcm() || scene_path_mode_is_bdpt_full()) {
+      float vm_pair =
+        scene_path_mode_is_vcm() && (wavefront_path_vertex_is_medium(input_value.camera_vertex) == false) && (wavefront_path_vertex_is_medium(input_value.light_vertex) == false)
+          ? constants.vcm_vm_weight
+          : 0.0f;
       float w_light = y_curr_pdf * (vm_pair + input_value.light_vertex.forward_pdf + input_value.light_vertex.reverse_pdf * y_prev_pdf_dir);
       float w_camera = z_curr_pdf * (vm_pair + input_value.camera_vertex.forward_pdf + input_value.camera_vertex.reverse_pdf * z_prev_pdf_dir);
       weight = 1.0f / (1.0f + w_light + w_camera);
