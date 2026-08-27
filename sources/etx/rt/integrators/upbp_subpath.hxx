@@ -234,10 +234,17 @@ inline bool upbp_build_subpath(const Raytracing& rt, const Scene& scene, const U
   result.terminal_ray = initial_ray;
   result.active_medium_index = initial_medium_index;
 
-  if (((input.source != PathSource::Camera) && (input.source != PathSource::Light)) || (input.maximum_physical_vertices < 2u) || initial_throughput.is_zero() ||
-      (result.path.append_endpoint(endpoint) == false)) {
+  if (((input.source != PathSource::Camera) && (input.source != PathSource::Light)) || (input.maximum_physical_vertices < 2u) || (result.path.append_endpoint(endpoint) == false)) {
     result.failure = UPBPSubpathFailure::InvalidInput;
     return false;
+  }
+  if (initial_throughput.is_zero()) {
+    if (input.source != PathSource::Light) {
+      result.failure = UPBPSubpathFailure::InvalidInput;
+      return false;
+    }
+    result.terminal = UPBPSceneSegmentTerminal::Absorb;
+    return true;
   }
 
   if ((input.source == PathSource::Light) && endpoint.distant_endpoint &&
@@ -496,7 +503,7 @@ inline bool upbp_build_light_subpath(const Raytracing& rt, const Scene& scene, c
   result.emitter_sample = {};
   Sampler path_sampler{upbp_sampler_seed(render_seed, iteration, path_index, 0u, 0u, UPBPRandomDomain::LightPath)};
   result.emitter_sample = sample_emission(spect, path_sampler);
-  if ((result.emitter_sample.pdf_area <= 0.0f) || (result.emitter_sample.pdf_dir <= 0.0f) || (result.emitter_sample.pdf_sample <= 0.0f) || result.emitter_sample.value.is_zero()) {
+  if ((result.emitter_sample.pdf_area <= 0.0f) || (result.emitter_sample.pdf_dir <= 0.0f) || (result.emitter_sample.pdf_sample <= 0.0f)) {
     result.subpath.failure = UPBPSubpathFailure::InvalidInput;
     return false;
   }

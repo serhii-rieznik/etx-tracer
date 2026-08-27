@@ -863,10 +863,7 @@ float3 wavefront_spectral_estimate(SpectralResponse value, SpectralQuery spect) 
 SpectralQuery wavefront_vcm_iteration_spectral_query() {
   SpectralQuery spect = spectral_query_sample();
   if (scene_uses_spectral_mode()) {
-    const uint wavelength_scramble = scene_random_seed(0u, 0u);
-    const uint wavelength_bits = reversebits(constants.sample_index) ^ wavelength_scramble;
-    const float wavelength_sample = (float(wavelength_bits) + 0.5f) * (1.0f / 4294967296.0f);
-    spect = spectral_query_spectral_sample(wavelength_sample);
+    spect = spectral_query_progressive_sample(constants.sample_index, load_scene_options_random_seed());
   }
   return spect;
 }

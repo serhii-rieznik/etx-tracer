@@ -124,6 +124,96 @@ bool validate_spectral_sample_invariants() {
   return valid;
 }
 
+bool validate_spectral_sampling_distribution() {
+  constexpr uint32_t kProgressiveBlockSize = 32u;
+  constexpr uint32_t kEarlySampleCount = 12u;
+  constexpr uint32_t kRandomSeed = 0u;
+
+  std::vector<double> sensor_importance(WavelengthCount - 1u);
+  double total_sensor_importance = 0.0;
+  for (uint32_t i = 0u; i < (WavelengthCount - 1u); ++i) {
+    const float3 xyz = 0.5f * (::spectral_xyz(i) + ::spectral_xyz(i + 1u));
+    const float3 rgb = ::spectral_xyz_to_rgb(xyz);
+    sensor_importance[i] = std::sqrt(double(dot(rgb, rgb)));
+    total_sensor_importance += sensor_importance[i];
+  }
+
+  double pdf_integral = 0.0;
+  float3 estimated_unit_radiance_xyz = {};
+  float3 reference_unit_radiance_xyz = {};
+  bool valid = true;
+  valid = close_value(kWavelengthSamplingCDF[0], 0.0f, 0.0f) && close_value(kWavelengthSamplingCDF[WavelengthCount - 1u], 1.0f, 0.0f) && valid;
+  for (uint32_t i = 0u; i < (WavelengthCount - 1u); ++i) {
+    const float interval_probability = kWavelengthSamplingCDF[i + 1u] - kWavelengthSamplingCDF[i];
+    const double expected_probability =
+      (1.0 - double(kWavelengthSamplingUniformMixture)) * sensor_importance[i] / total_sensor_importance + double(kWavelengthSamplingUniformMixture) / double(WavelengthCount - 1u);
+    valid = std::isfinite(interval_probability) && (interval_probability > 0.0f) && valid;
+    valid = (std::abs(double(interval_probability) - expected_probability) <= 1.0e-6) && valid;
+    valid = close_value(::spectral_query_wavelength_pdf(kShortestWavelength + float(i) + 0.5f), interval_probability, 1.0e-7f) && valid;
+    pdf_integral += double(interval_probability);
+
+    const ::SpectralQuery query = ::spectral_query_spectral_sample(0.5f * (kWavelengthSamplingCDF[i] + kWavelengthSamplingCDF[i + 1u]));
+    const ::SpectralResponse response = ::spectral_response_make(query, 1.0f);
+    estimated_unit_radiance_xyz += interval_probability * ::spectral_response_to_xyz_estimate(response);
+    reference_unit_radiance_xyz += 0.5f * kInvCIEYIntegral * (::spectral_xyz(i) + ::spectral_xyz(i + 1u));
+  }
+  valid = (std::abs(pdf_integral - 1.0) <= 1.0e-6) && valid;
+  valid = close_value(estimated_unit_radiance_xyz.x, reference_unit_radiance_xyz.x, 1.0e-5f) &&
+          close_value(estimated_unit_radiance_xyz.y, reference_unit_radiance_xyz.y, 1.0e-5f) &&
+          close_value(estimated_unit_radiance_xyz.z, reference_unit_radiance_xyz.z, 1.0e-5f) && valid;
+  valid = (::spectral_query_wavelength_pdf(kShortestWavelength - 1.0f) == 0.0f) && (::spectral_query_wavelength_pdf(kLongestWavelength + 1.0f) == 0.0f) && valid;
+
+  const uint32_t scramble = ::sampler_random_seed(0u, kRandomSeed);
+  for (uint32_t block_size = 4u; block_size <= kProgressiveBlockSize; block_size *= 2u) {
+    bool occupied[kProgressiveBlockSize] = {};
+    for (uint32_t i = 0u; i < block_size; ++i) {
+      const float sample = ::sampler_scrambled_radical_inverse_base2(i, scramble);
+      const uint32_t bin = min(uint32_t(sample * float(block_size)), block_size - 1u);
+      valid = (occupied[bin] == false) && valid;
+      occupied[bin] = true;
+    }
+    for (uint32_t i = 0u; i < block_size; ++i) {
+      valid = occupied[i] && valid;
+    }
+  }
+
+  std::vector<float> early_samples;
+  early_samples.reserve(kEarlySampleCount);
+  float minimum_weighted_sensor_response = std::numeric_limits<float>::max();
+  float maximum_weighted_sensor_response = 0.0f;
+  for (uint32_t i = 0u; i < kEarlySampleCount; ++i) {
+    const float sample = ::sampler_scrambled_radical_inverse_base2(i, scramble);
+    const etx::SpectralQuery query = etx::SpectralQuery::progressive_sample(i, kRandomSeed);
+    const ::SpectralQuery expected_query = ::spectral_query_spectral_sample(sample);
+    valid = close_value(query.wavelength, expected_query.wavelength, 1.0e-6f) && valid;
+
+    const uint32_t wavelength_index = min(uint32_t(floorf(query.wavelength) - kShortestWavelength), WavelengthCount - 2u);
+    const float wavelength_fraction = query.wavelength - floorf(query.wavelength);
+    const float3 xyz = lerp(::spectral_xyz(wavelength_index), ::spectral_xyz(wavelength_index + 1u), wavelength_fraction);
+    const float3 rgb = ::spectral_xyz_to_rgb(xyz);
+    const float weighted_sensor_response = sqrtf(dot(rgb, rgb)) / query.sampling_pdf();
+    minimum_weighted_sensor_response = min(minimum_weighted_sensor_response, weighted_sensor_response);
+    maximum_weighted_sensor_response = max(maximum_weighted_sensor_response, weighted_sensor_response);
+
+    const uint32_t interval = min(uint32_t(query.wavelength - kShortestWavelength), WavelengthCount - 2u);
+    const float reconstructed_sample =
+      kWavelengthSamplingCDF[interval] + (query.wavelength - (kShortestWavelength + float(interval))) * (kWavelengthSamplingCDF[interval + 1u] - kWavelengthSamplingCDF[interval]);
+    valid = close_value(reconstructed_sample, sample, 2.0e-6f) && valid;
+    early_samples.emplace_back(sample);
+  }
+  valid = (maximum_weighted_sensor_response <= (1.1f * minimum_weighted_sensor_response)) && valid;
+  std::sort(early_samples.begin(), early_samples.end());
+  float previous_sample = 0.0f;
+  for (const float sample : early_samples) {
+    valid = ((sample - previous_sample) <= (1.0f / 8.0f + 1.0e-6f)) && valid;
+    previous_sample = sample;
+  }
+  valid = ((1.0f - previous_sample) <= (1.0f / 8.0f + 1.0e-6f)) && valid;
+
+  std::printf("spectral sampling distribution %s (pdf integral %.8f)\n", valid ? "valid" : "failed", pdf_integral);
+  return valid;
+}
+
 ::RefractiveIndexSample make_spectral_ior(const etx::SpectralQuery& query, const float eta, const float k = 0.0f, const uint32_t cls = etx::SpectralDistribution::Dielectric) {
   ::RefractiveIndexSample result = {};
   result.cls = cls;
@@ -3415,6 +3505,9 @@ int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
   etx::env().setup("bin/bsdf_validation.exe");
   if (validate_spectral_sample_invariants() == false) {
+    return 1;
+  }
+  if (validate_spectral_sampling_distribution() == false) {
     return 1;
   }
   bool runtime_only = false;

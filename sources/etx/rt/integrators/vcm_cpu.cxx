@@ -208,7 +208,9 @@ struct CPUVCMImpl {
 
   void complete_camera_vertices() {
     const auto& scene = rt.scene();
-    rt.film().commit_iteration(vcm_iteration.iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp);
+    const Film::NoiseEstimationSchedule noise_estimation_schedule =
+      scene.spectral() ? Film::NoiseEstimationSchedule::PowerOfTwoSampleCount : Film::NoiseEstimationSchedule::EveryOtherIteration;
+    rt.film().commit_iteration(vcm_iteration.iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp, noise_estimation_schedule);
     status.completed_iterations += 1u;
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;

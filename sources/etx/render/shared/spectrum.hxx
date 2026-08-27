@@ -99,6 +99,11 @@ struct SpectralQuery : public ::SpectralQuery {
     return SpectralQuery{query.wavelength, query.flags};
   }
 
+  static SpectralQuery progressive_sample(uint32_t iteration, uint32_t random_seed) {
+    const ::SpectralQuery query = ::spectral_query_progressive_sample(iteration, random_seed);
+    return SpectralQuery{query.wavelength, query.flags};
+  }
+
   float static const spectral_sample_pdf(float wavelength) {
     return ::spectral_query_wavelength_pdf(wavelength);
   }
@@ -197,7 +202,7 @@ struct SpectralResponse : public ::SpectralResponse {
   }
 
 #define SPECTRAL_OP(OP, FUNCTION)                                                                                                                       \
-  ETX_SHARED_INLINE SpectralResponse& operator OP(const SpectralResponse& other) {                                                                      \
+  ETX_SHARED_INLINE SpectralResponse& operator OP(const SpectralResponse & other) {                                                                     \
     ETX_ASSERT_EQUAL(wavelength, other.wavelength);                                                                                                     \
     static_cast<::SpectralResponse&>(*this) = ::FUNCTION(static_cast<const ::SpectralResponse&>(*this), static_cast<const ::SpectralResponse&>(other)); \
     return *this;                                                                                                                                       \

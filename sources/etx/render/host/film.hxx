@@ -9,6 +9,11 @@ struct TaskScheduler;
 
 struct FilmImpl;
 struct Film {
+  enum class NoiseEstimationSchedule : uint32_t {
+    EveryOtherIteration,
+    PowerOfTwoSampleCount,
+  };
+
   struct MemoryStats {
     uint64_t accumulation_bytes = 0u;
     uint64_t adaptive_bytes = 0u;
@@ -52,6 +57,7 @@ struct Film {
   void submit(const float3& value, const float2& ndc_coord);
   void submit(const float3& value, const float3& normal, const float3& albedo, const uint2& pixel);
   void commit_iteration(uint32_t sample_index, uint32_t total_samples, float noise_threshold, float radiance_clamp);
+  void commit_iteration(uint32_t sample_index, uint32_t total_samples, float noise_threshold, float radiance_clamp, NoiseEstimationSchedule noise_estimation_schedule);
 
   void clear(uint32_t clear_options);
 

@@ -938,12 +938,17 @@ bool validate_point_index() {
   }
 
   etx::UPBPPointIndex point_index = {};
-  etx::UPBPPointIndex beam_index = {};
-  etx::UPBPSpatialQueryState query_state = {};
+  etx::UPBPPointBeamIndex beam_index = {};
+  uint64_t projected_beam_storage = 0u;
   bool valid = point_index.build(points.data(), static_cast<uint32_t>(points.size()), radius);
-  float beam_cell_size = 0.0f;
-  valid = etx::UPBPPointIndex::beam_query_cell_size(points.data(), static_cast<uint32_t>(points.size()), radius, beam_cell_size) && (beam_cell_size >= radius) && valid;
-  valid = beam_index.build(points.data(), static_cast<uint32_t>(points.size()), beam_cell_size) && valid;
+  const bool projected_storage_valid = beam_index.projected_storage_bytes(static_cast<uint32_t>(points.size()), projected_beam_storage);
+  const bool beam_index_valid = beam_index.build(points.data(), static_cast<uint32_t>(points.size()));
+  const bool beam_storage_valid = projected_beam_storage >= beam_index.storage_bytes();
+  if ((projected_storage_valid == false) || (beam_index_valid == false) || (beam_storage_valid == false)) {
+    std::printf("point-beam storage failed: projected %llu actual %llu\n", static_cast<unsigned long long>(projected_beam_storage),
+      static_cast<unsigned long long>(beam_index.storage_bytes()));
+  }
+  valid = projected_storage_valid && beam_index_valid && beam_storage_valid && valid;
   valid = (point_index.size() == point_count) && (beam_index.size() == point_count) && valid;
   for (uint32_t probe_index = 0u; probe_index < 256u; ++probe_index) {
     const float2 probe_xy = sampler.next_2d();
@@ -986,10 +991,17 @@ bool validate_point_index() {
     direction = normalize(direction);
     const etx::UPBPBeamReference beam = {origin, direction, 0.25f + 20.0f * sampler.next()};
     std::vector<uint64_t> accelerated;
-    const bool query_valid = beam_index.query_beam(beam, radius, query_state, [&accelerated](const etx::UPBPPointReference& point, const etx::UPBPPointBeamIntersection&) {
-      accelerated.emplace_back((static_cast<uint64_t>(point.path_index) << 32u) | point.vertex_index);
-    });
+    uint64_t candidate_count = 0u;
+    const bool query_valid = beam_index.query_beam(
+      beam, radius, candidate_count,
+      [](const etx::UPBPPointReference&, const uint32_t) {
+        return true;
+      },
+      [&accelerated](const etx::UPBPPointReference& point, const etx::UPBPPointBeamIntersection&) {
+        accelerated.emplace_back((static_cast<uint64_t>(point.path_index) << 32u) | point.vertex_index);
+      });
     valid = query_valid && valid;
+    valid = (candidate_count >= accelerated.size()) && valid;
 
     std::vector<uint64_t> exhaustive;
     for (const etx::UPBPPointReference& point : points) {
@@ -1005,6 +1017,15 @@ bool validate_point_index() {
     }
     valid = (accelerated == exhaustive) && valid;
   }
+
+  const etx::UPBPBeamReference axis_beam = {{-1.0f, 0.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, 2.0f};
+  const bool near_corner = etx::upbp_capsule_intersects_aabb(axis_beam, 0.25f, {-0.1f, 0.17f, 0.17f}, {0.1f, 0.3f, 0.3f});
+  const bool far_corner = etx::upbp_capsule_intersects_aabb(axis_beam, 0.25f, {-0.1f, 0.18f, 0.18f}, {0.1f, 0.3f, 0.3f});
+  const bool tangent = etx::upbp_capsule_intersects_aabb(axis_beam, 0.25f, {-0.1f, 0.25f, -0.1f}, {0.1f, 0.3f, 0.1f});
+  if ((near_corner == false) || far_corner || (tangent == false)) {
+    std::printf("capsule bounds failed: near %u far %u tangent %u\n", static_cast<uint32_t>(near_corner), static_cast<uint32_t>(far_corner), static_cast<uint32_t>(tangent));
+  }
+  valid = near_corner && (far_corner == false) && tangent && valid;
 
   valid = (point_index.query({}, radius * 2.0f,
              [](const etx::UPBPPointReference&, float) {
@@ -1190,8 +1211,10 @@ bool validate_beam_geometry_and_index() {
     const float3 point = (float3{point_xy.x, point_xy.y, sampler.next()} - float3{0.5f, 0.5f, 0.5f}) * 12.0f;
     std::vector<uint32_t> accelerated;
     std::vector<uint32_t> sequential;
+    uint64_t accelerated_candidate_count = 0u;
+    uint64_t sequential_candidate_count = 0u;
     valid = index.query_point_intersections(
-              point, radius,
+              point, radius, accelerated_candidate_count,
               [](const etx::UPBPBeamReference&, const uint32_t) {
                 return true;
               },
@@ -1200,7 +1223,7 @@ bool validate_beam_geometry_and_index() {
               }) &&
             valid;
     valid = sequential_index.query_point_intersections(
-              point, radius,
+              point, radius, sequential_candidate_count,
               [](const etx::UPBPBeamReference&, const uint32_t) {
                 return true;
               },
@@ -1208,7 +1231,7 @@ bool validate_beam_geometry_and_index() {
                 sequential.emplace_back(beam.path_index);
               }) &&
             valid;
-    valid = (accelerated == sequential) && valid;
+    valid = (accelerated == sequential) && (accelerated_candidate_count == sequential_candidate_count) && valid;
 
     std::vector<uint32_t> exhaustive;
     for (const etx::UPBPBeamReference& beam : beams) {
@@ -1229,8 +1252,10 @@ bool validate_beam_geometry_and_index() {
     const etx::UPBPBeamReference& probe = beams[probe_index * 7u];
     std::vector<uint32_t> accelerated;
     std::vector<uint32_t> sequential;
+    uint64_t accelerated_candidate_count = 0u;
+    uint64_t sequential_candidate_count = 0u;
     valid = index.query_beam_intersections(
-              probe, radius, query_state,
+              probe, radius, query_state, accelerated_candidate_count,
               [](const etx::UPBPBeamReference&, const uint32_t) {
                 return true;
               },
@@ -1239,7 +1264,7 @@ bool validate_beam_geometry_and_index() {
               }) &&
             valid;
     valid = sequential_index.query_beam_intersections(
-              probe, radius, sequential_query_state,
+              probe, radius, sequential_query_state, sequential_candidate_count,
               [](const etx::UPBPBeamReference&, const uint32_t) {
                 return true;
               },
@@ -1247,7 +1272,7 @@ bool validate_beam_geometry_and_index() {
                 sequential.emplace_back(beam.path_index);
               }) &&
             valid;
-    valid = (accelerated == sequential) && valid;
+    valid = (accelerated == sequential) && (accelerated_candidate_count == sequential_candidate_count) && valid;
 
     std::vector<uint32_t> exhaustive;
     for (const etx::UPBPBeamReference& beam : beams) {

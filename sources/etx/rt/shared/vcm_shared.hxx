@@ -155,10 +155,8 @@ constexpr uint64_t kVCMPathStateSize = sizeof(VCMPathState);
 // complete path to RGB. All paths in one VCM iteration must therefore use the
 // same wavelength.
 ETX_SHARED_INLINE SpectralQuery vcm_iteration_spectral_query(const Scene& scene, ETX_IN(VCMIteration, iteration)) {
-  Sampler sampler = {};
-  sampler.init(0u, iteration.iteration ^ scene.options.random_seed);
   if (scene.spectral()) {
-    return SpectralQuery::spectral_sample(sampler.next());
+    return SpectralQuery::progressive_sample(iteration.iteration, scene.options.random_seed);
   }
   return SpectralQuery::sample();
 }

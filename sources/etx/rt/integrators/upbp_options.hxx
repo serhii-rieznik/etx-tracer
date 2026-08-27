@@ -83,10 +83,10 @@ struct UPBPOptions {
     options.set_float("upbp-beam-selection-probability", beam_selection_probability, "BB1D light-beam selection probability", {0.001f, 1.0f});
     options.set_integral("upbp-maximum-boundaries", maximum_boundary_count, "Maximum boundaries per segment", 0u, {1u, kMaximumBoundaryCount});
     options.set_integral("upbp-maximum-null-events", maximum_null_events_per_interval, "Maximum null events per medium interval", 0u, {1u, kMaximumNullEventsPerInterval});
-    options.set_integral("upbp-light-path-count", maximum_light_path_count, "Maximum light paths per iteration (0 = memory budget)", 0u, {0u, kMaximumLightPathCount});
+    options.set_integral("upbp-light-path-count", maximum_light_path_count, "Maximum light paths per iteration (0 = camera path count)", 0u, {0u, kMaximumLightPathCount});
     options.set_integral("upbp-bb1d-light-path-count", maximum_bb1d_light_path_count, "Light paths assigned to BB1D per iteration (0 = all retained light paths)", 0u,
       {0u, kMaximumLightPathCount});
-    options.set_integral("upbp-memory-budget-mb", memory_budget_mb, "Retained light storage budget (MiB)", 0u, {kMinimumMemoryBudgetMiB, kMaximumMemoryBudgetMiB});
+    options.set_integral("upbp-memory-budget-mb", memory_budget_mb, "Light storage target (MiB)", 0u, {kMinimumMemoryBudgetMiB, kMaximumMemoryBudgetMiB});
   }
 };
 

@@ -20,6 +20,19 @@ ETX_SHARED_INLINE uint32_t sampler_random_seed(uint32_t val0, uint32_t val1) {
   return v0;
 }
 
+ETX_SHARED_INLINE uint32_t sampler_reverse_bits_32(uint32_t value) {
+  value = ((value & 0x55555555u) << 1u) | ((value >> 1u) & 0x55555555u);
+  value = ((value & 0x33333333u) << 2u) | ((value >> 2u) & 0x33333333u);
+  value = ((value & 0x0f0f0f0fu) << 4u) | ((value >> 4u) & 0x0f0f0f0fu);
+  value = ((value & 0x00ff00ffu) << 8u) | ((value >> 8u) & 0x00ff00ffu);
+  return (value << 16u) | (value >> 16u);
+}
+
+ETX_SHARED_INLINE float sampler_scrambled_radical_inverse_base2(uint32_t index, uint32_t scramble) {
+  const uint32_t bits = sampler_reverse_bits_32(index) ^ scramble;
+  return (float(bits) + 0.5f) * (1.0f / 4294967296.0f);
+}
+
 ETX_SHARED_INLINE float sampler_as_float(uint32_t bits) {
 #if defined(__cplusplus)
   float result = 0.0f;

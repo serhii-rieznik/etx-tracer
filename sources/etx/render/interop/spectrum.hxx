@@ -1,6 +1,7 @@
 #pragma once
 
 #include "interop.hxx"
+#include "sampler.hxx"
 
 #define ETX_SPECTRAL_MODE_RUNTIME  0
 #define ETX_SPECTRAL_MODE_RGB      1
@@ -24,6 +25,7 @@ ETX_STATIC_CONST float kRGBResponseLongestWavelength = float(RGBResponseLongestW
 ETX_STATIC_CONST float kRGBResponseWavelengthCount = float(RGBResponseWavelengthCount);
 ETX_STATIC_CONST float kUndefinedWavelength = -1.0f;
 ETX_STATIC_CONST float kInvCIEYIntegral = 1.0f / 106.856895f;
+ETX_STATIC_CONST float kWavelengthSamplingUniformMixture = 0.05f;
 ETX_STATIC_CONST float3 kSpectralDistributionRGBLuminanceScale = float3(0.817660332f, 1.05418909f, 1.09945524f);
 
 ETX_STATIC_CONST float3 kCIE2006[WavelengthCount] = {
@@ -32,6 +34,12 @@ ETX_STATIC_CONST float3 kCIE2006[WavelengthCount] = {
 
 ETX_STATIC_CONST float3 kRGBResponse[RGBResponseWavelengthCount] = {
 #include "spectrum_rgb_response_table.inl"
+};
+
+// Each 1 nm interval combines normalized CIE-to-linear-RGB response magnitude
+// with uniform support. Sampling is uniform inside the selected interval.
+ETX_STATIC_CONST float kWavelengthSamplingCDF[WavelengthCount] = {
+#include "spectrum_sampling_cdf_table.inl"
 };
 
 struct SpectralFlags {
@@ -124,11 +132,12 @@ ETX_SHARED_INLINE bool spectral_query_is_spectral(ETX_IN(SpectralQuery, query)) 
 }
 
 ETX_SHARED_INLINE float spectral_query_wavelength_pdf(float wavelength) {
-  float x = 0.0072f * (wavelength - 538.0f);
-  float x_exp = exp(x);
-  float x_inv_exp = 1.0f / x_exp;
-  float x_cosh = 0.5f * (x_exp + x_inv_exp);
-  return 0.0039398042f / (x_cosh * x_cosh);
+  if ((wavelength < kShortestWavelength) || (wavelength > kLongestWavelength)) {
+    return 0.0f;
+  }
+
+  const uint32_t interval = min(uint32_t(wavelength - kShortestWavelength), WavelengthCount - 2u);
+  return kWavelengthSamplingCDF[interval + 1u] - kWavelengthSamplingCDF[interval];
 }
 
 ETX_SHARED_INLINE float spectral_query_sampling_pdf(ETX_IN(SpectralQuery, query)) {
@@ -143,17 +152,32 @@ ETX_SHARED_INLINE SpectralQuery spectral_query_sample() {
 }
 
 ETX_SHARED_INLINE SpectralQuery spectral_query_spectral_sample(float rnd) {
-  const float kSamplingOffset = 0.03781818226f;
-  const float kSamplingScale = 1.0f - kSamplingOffset;
   float clamped_rnd = clamp(rnd, 0.0f, 1.0f - kEpsilon);
-  float x = 0.85691062f - 1.82750197f * (clamped_rnd * kSamplingScale + kSamplingOffset);
-  x = clamp(x, -0.999999f, 0.999999f);
-  float inverse_hyperbolic_tangent = 0.5f * log((1.0f + x) / (1.0f - x));
+
+  uint32_t begin = 0u;
+  uint32_t end = WavelengthCount - 1u;
+  while ((end - begin) > 1u) {
+    const uint32_t middle = begin + (end - begin) / 2u;
+    if (kWavelengthSamplingCDF[middle] <= clamped_rnd) {
+      begin = middle;
+    } else {
+      end = middle;
+    }
+  }
+
+  const float interval_begin = kWavelengthSamplingCDF[begin];
+  const float interval_probability = kWavelengthSamplingCDF[begin + 1u] - interval_begin;
+  const float interval_sample = (clamped_rnd - interval_begin) / interval_probability;
 
   SpectralQuery result;
-  result.wavelength = clamp(538.0f - 138.888889f * inverse_hyperbolic_tangent, kShortestWavelength, kLongestWavelength);
+  result.wavelength = kShortestWavelength + float(begin) + interval_sample;
   result.flags = SpectralFlags::Spectral;
   return result;
+}
+
+ETX_SHARED_INLINE SpectralQuery spectral_query_progressive_sample(uint32_t iteration, uint32_t random_seed) {
+  const uint32_t scramble = sampler_random_seed(0u, random_seed);
+  return spectral_query_spectral_sample(sampler_scrambled_radical_inverse_base2(iteration, scramble));
 }
 
 ETX_SHARED_INLINE bool spectral_query_compatible(ETX_IN(SpectralQuery, a), ETX_IN(SpectralQuery, b)) {

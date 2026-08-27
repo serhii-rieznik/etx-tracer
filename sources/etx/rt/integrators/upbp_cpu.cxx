@@ -14,7 +14,6 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
-#include <type_traits>
 #include <vector>
 
 namespace etx {
@@ -46,19 +45,6 @@ bool upbp_checked_add(const uint64_t first, const uint64_t second, uint64_t& res
   return true;
 }
 
-bool upbp_checked_multiply(const uint64_t first, const uint64_t second, uint64_t& result) {
-  if ((first != 0u) && (second > std::numeric_limits<uint64_t>::max() / first)) {
-    return false;
-  }
-  result = first * second;
-  return true;
-}
-
-uint64_t upbp_bytes_to_mib_ceil(const uint64_t bytes) {
-  constexpr uint64_t bytes_per_mib = 1024u * 1024u;
-  return bytes / bytes_per_mib + static_cast<uint64_t>((bytes % bytes_per_mib) != 0u);
-}
-
 uint64_t upbp_segment_storage_bytes(const UPBPSegmentRecord& segment) {
   return static_cast<uint64_t>(segment.events.capacity()) * sizeof(UPBPMediumTrackingEventRecord);
 }
@@ -86,32 +72,6 @@ uint64_t upbp_path_storage_bytes(const UPBPPathRecord& path) {
 uint64_t upbp_recursive_storage_bytes(const UPBPRecursivePathWeights& weights) {
   return static_cast<uint64_t>(weights.arrivals.capacity()) * sizeof(UPBPRecursiveVertexWeights) +
          static_cast<uint64_t>(weights.departures.capacity()) * sizeof(UPBPRecursiveState) + static_cast<uint64_t>(weights.has_departure.capacity() + 7u) / 8u;
-}
-
-template <typename T>
-bool upbp_projected_vector_storage_bytes(const std::vector<T>& values, const uint64_t count, uint64_t& result) {
-  if (count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-    return false;
-  }
-  const uint64_t capacity = max(static_cast<uint64_t>(values.capacity()), count);
-  if (capacity > std::numeric_limits<uint64_t>::max() / sizeof(T)) {
-    return false;
-  }
-  result = capacity * sizeof(T);
-  return true;
-}
-
-bool upbp_fixed_depth_light_path_storage_bytes(const uint32_t maximum_vertices, const bool include_light_splats, uint64_t& result) {
-  result = sizeof(UPBPLightSubpathResult) + sizeof(UPBPRecursivePathWeights) + sizeof(std::vector<UPBPLightSplat>);
-  const uint64_t segment_count = maximum_vertices > 0u ? static_cast<uint64_t>(maximum_vertices - 1u) : 0u;
-  auto add_product = [&result](const uint64_t count, const uint64_t size) {
-    uint64_t product = 0u;
-    return upbp_checked_multiply(count, size, product) && upbp_checked_add(result, product, result);
-  };
-  return add_product(maximum_vertices, sizeof(UPBPPathVertexRecord)) && add_product(segment_count, sizeof(UPBPTransportSegmentRecord)) &&
-         add_product(maximum_vertices, sizeof(UPBPRecursiveVertexWeights)) && add_product(maximum_vertices, sizeof(UPBPRecursiveState)) &&
-         ((include_light_splats == false) || add_product(maximum_vertices, sizeof(UPBPLightSplat))) &&
-         upbp_checked_add(result, (static_cast<uint64_t>(maximum_vertices) + 7u) / 8u, result);
 }
 
 bool upbp_options_valid(const UPBPOptions& options, std::string& reason) {
@@ -165,7 +125,7 @@ bool upbp_options_valid(const UPBPOptions& options, std::string& reason) {
     return false;
   }
   if ((options.memory_budget_mb < UPBPOptions::kMinimumMemoryBudgetMiB) || (options.memory_budget_mb > UPBPOptions::kMaximumMemoryBudgetMiB)) {
-    reason = "UPBP memory budget is outside the supported range";
+    reason = "UPBP light-storage target is outside the supported range";
     return false;
   }
   return true;
@@ -248,19 +208,30 @@ struct CPUUPBPImpl {
   static constexpr uint32_t camera_timing_sample_rate = 16u;
   static_assert((camera_timing_sample_rate & (camera_timing_sample_rate - 1u)) == 0u);
 
-  struct CameraEvaluationStatistics {
-    uint64_t camera_paths = 0u;
+  enum SpatialStatisticIndex : uint32_t {
+    SpatialStatisticBP2D,
+    SpatialStatisticPB2D,
+    SpatialStatisticBB1D,
+    SpatialStatisticCount,
+  };
+
+  struct SpatialTechniqueStatistics {
     uint64_t queries = 0u;
     uint64_t candidates = 0u;
     uint64_t eligible_candidates = 0u;
     uint64_t intersections = 0u;
     uint64_t contributions = 0u;
-    uint64_t published_camera_paths = 0u;
     uint64_t published_queries = 0u;
     uint64_t published_candidates = 0u;
     uint64_t published_eligible_candidates = 0u;
     uint64_t published_intersections = 0u;
     uint64_t published_contributions = 0u;
+  };
+
+  struct CameraEvaluationStatistics {
+    uint64_t camera_paths = 0u;
+    uint64_t published_camera_paths = 0u;
+    std::array<SpatialTechniqueStatistics, SpatialStatisticCount> spatial = {};
     std::array<uint64_t, CameraTimingStageCount> stage_times = {};
     std::array<uint64_t, CameraTimingStageCount> published_stage_times = {};
   };
@@ -270,7 +241,6 @@ struct CPUUPBPImpl {
     UPBPRecursivePathWeights weights = {};
     std::vector<UPBPBeamReference> beams = {};
     std::vector<UPBPPreparedBeam> prepared_beams = {};
-    UPBPSpatialQueryState pb2d_query_state = {};
     UPBPSpatialQueryState bb1d_query_state = {};
   };
 
@@ -335,6 +305,18 @@ struct CPUUPBPImpl {
     DebugCameraPB2DTime,
     DebugCameraBB1DTime,
     DebugCameraFilmSubmissionTime,
+    DebugBP2DQueries,
+    DebugBP2DCandidates,
+    DebugBP2DEligibleCandidates,
+    DebugBP2DIntersections,
+    DebugBP2DContributions,
+    DebugBP2DCandidatesPerQuery,
+    DebugPB2DQueries,
+    DebugPB2DCandidates,
+    DebugPB2DEligibleCandidates,
+    DebugPB2DIntersections,
+    DebugPB2DContributions,
+    DebugPB2DCandidatesPerQuery,
     DebugBB1DQueries,
     DebugBB1DCandidates,
     DebugBB1DEligibleCandidates,
@@ -374,7 +356,7 @@ struct CPUUPBPImpl {
   std::vector<UPBPPreparedMedium> prepared_mediums = {};
   UPBPPointIndex surface_index = {};
   UPBPPointIndex pp3d_index = {};
-  UPBPPointIndex pb2d_index = {};
+  UPBPPointBeamIndex pb2d_index = {};
   UPBPBeamGrid bp2d_index = {};
   UPBPBeamGrid bb1d_index = {};
   std::vector<CameraWorkspace> camera_workspaces = {};
@@ -383,16 +365,14 @@ struct CPUUPBPImpl {
   std::atomic<bool> failed = false;
   std::mutex failure_lock = {};
   std::string failure_reason = {};
-  uint64_t memory_budget_bytes = 0u;
-  uint64_t fixed_depth_light_path_storage_bytes = 0u;
-  std::atomic<uint64_t> accounted_light_storage_bytes = 0u;
+  uint64_t memory_target_bytes = 0u;
   std::atomic<uint64_t> evaluated_light_path_count = 0u;
   std::atomic<uint64_t> evaluated_camera_path_count = 0u;
-  std::atomic<uint64_t> bb1d_query_count = 0u;
-  std::atomic<uint64_t> bb1d_candidate_count = 0u;
-  std::atomic<uint64_t> bb1d_eligible_candidate_count = 0u;
-  std::atomic<uint64_t> bb1d_intersection_count = 0u;
-  std::atomic<uint64_t> bb1d_contribution_count = 0u;
+  std::array<std::atomic<uint64_t>, SpatialStatisticCount> spatial_query_counts = {};
+  std::array<std::atomic<uint64_t>, SpatialStatisticCount> spatial_candidate_counts = {};
+  std::array<std::atomic<uint64_t>, SpatialStatisticCount> spatial_eligible_candidate_counts = {};
+  std::array<std::atomic<uint64_t>, SpatialStatisticCount> spatial_intersection_counts = {};
+  std::array<std::atomic<uint64_t>, SpatialStatisticCount> spatial_contribution_counts = {};
   std::array<std::atomic<uint64_t>, CameraTimingStageCount> camera_stage_times = {};
   double iteration_setup_time_ms = 0.0;
   double light_path_time_ms = 0.0;
@@ -418,10 +398,10 @@ struct CPUUPBPImpl {
     debug_info[DebugBB1DLightPaths].title = "BB1D light paths";
     debug_info[DebugBB1DLightBeams].title = "BB1D light beams";
     debug_info[DebugLightStorage].title = "Light storage (MiB)";
-    debug_info[DebugLightBudget].title = "Light budget (MiB)";
+    debug_info[DebugLightBudget].title = "Light target (MiB)";
     debug_info[DebugIterationSetupTime].title = "Iteration setup (ms)";
     debug_info[DebugLightPathTime].title = "Light paths (ms)";
-    debug_info[DebugStorageValidationTime].title = "Storage validation (ms)";
+    debug_info[DebugStorageValidationTime].title = "Storage accounting (ms)";
     debug_info[DebugPrimitiveCollectionTime].title = "Primitive collection (ms)";
     debug_info[DebugSpatialIndexTime].title = "Spatial indices (ms)";
     debug_info[DebugLightSplatTime].title = "Light splats (ms)";
@@ -437,12 +417,26 @@ struct CPUUPBPImpl {
     debug_info[DebugCameraPB2DTime].title = "Camera PB2D (estimated CPU ms)";
     debug_info[DebugCameraBB1DTime].title = "Camera BB1D (estimated CPU ms)";
     debug_info[DebugCameraFilmSubmissionTime].title = "Camera film submission (estimated CPU ms)";
+    debug_info[DebugBP2DQueries].title = "BP2D queries (M)";
+    debug_info[DebugBP2DCandidates].title = "BP2D candidates (M)";
+    debug_info[DebugBP2DEligibleCandidates].title = "BP2D eligible candidates (M)";
+    debug_info[DebugBP2DIntersections].title = "BP2D intersections (M)";
+    debug_info[DebugBP2DContributions].title = "BP2D contributions (M)";
+    debug_info[DebugBP2DCandidatesPerQuery].title = "BP2D candidates/query";
+    debug_info[DebugPB2DQueries].title = "PB2D queries (M)";
+    debug_info[DebugPB2DCandidates].title = "PB2D candidates (M)";
+    debug_info[DebugPB2DEligibleCandidates].title = "PB2D eligible candidates (M)";
+    debug_info[DebugPB2DIntersections].title = "PB2D intersections (M)";
+    debug_info[DebugPB2DContributions].title = "PB2D contributions (M)";
+    debug_info[DebugPB2DCandidatesPerQuery].title = "PB2D candidates/query";
     debug_info[DebugBB1DQueries].title = "BB1D queries (M)";
     debug_info[DebugBB1DCandidates].title = "BB1D candidates (M)";
     debug_info[DebugBB1DEligibleCandidates].title = "BB1D eligible candidates (M)";
     debug_info[DebugBB1DIntersections].title = "BB1D intersections (M)";
     debug_info[DebugBB1DContributions].title = "BB1D contributions (M)";
     debug_info[DebugBB1DCandidatesPerQuery].title = "BB1D candidates/query";
+    static_assert(DebugPB2DQueries == DebugBP2DQueries + 6u);
+    static_assert(DebugBB1DQueries == DebugPB2DQueries + 6u);
     status.debug_info = debug_info.data();
     status.debug_info_count = static_cast<uint32_t>(debug_info.size());
   }
@@ -505,11 +499,13 @@ struct CPUUPBPImpl {
     camera_evaluation_time_ms = 0.0;
     evaluated_light_path_count.store(0u, std::memory_order_relaxed);
     evaluated_camera_path_count.store(0u, std::memory_order_relaxed);
-    bb1d_query_count.store(0u, std::memory_order_relaxed);
-    bb1d_candidate_count.store(0u, std::memory_order_relaxed);
-    bb1d_eligible_candidate_count.store(0u, std::memory_order_relaxed);
-    bb1d_intersection_count.store(0u, std::memory_order_relaxed);
-    bb1d_contribution_count.store(0u, std::memory_order_relaxed);
+    for (uint32_t technique_index = 0u; technique_index < SpatialStatisticCount; ++technique_index) {
+      spatial_query_counts[technique_index].store(0u, std::memory_order_relaxed);
+      spatial_candidate_counts[technique_index].store(0u, std::memory_order_relaxed);
+      spatial_eligible_candidate_counts[technique_index].store(0u, std::memory_order_relaxed);
+      spatial_intersection_counts[technique_index].store(0u, std::memory_order_relaxed);
+      spatial_contribution_counts[technique_index].store(0u, std::memory_order_relaxed);
+    }
     for (std::atomic<uint64_t>& camera_stage_time : camera_stage_times) {
       camera_stage_time.store(0u, std::memory_order_relaxed);
     }
@@ -541,17 +537,20 @@ struct CPUUPBPImpl {
       const uint64_t stage_time = camera_stage_times[stage_index].load(std::memory_order_relaxed);
       debug_info[DebugCameraSubpathTime + stage_index].value = static_cast<float>(static_cast<double>(stage_time) * static_cast<double>(camera_timing_sample_rate) / one_million);
     }
-    const uint64_t queries = bb1d_query_count.load(std::memory_order_relaxed);
-    const uint64_t candidates = bb1d_candidate_count.load(std::memory_order_relaxed);
-    const uint64_t eligible_candidates = bb1d_eligible_candidate_count.load(std::memory_order_relaxed);
-    const uint64_t intersections = bb1d_intersection_count.load(std::memory_order_relaxed);
-    const uint64_t contributions = bb1d_contribution_count.load(std::memory_order_relaxed);
-    debug_info[DebugBB1DQueries].value = static_cast<float>(static_cast<double>(queries) / one_million);
-    debug_info[DebugBB1DCandidates].value = static_cast<float>(static_cast<double>(candidates) / one_million);
-    debug_info[DebugBB1DEligibleCandidates].value = static_cast<float>(static_cast<double>(eligible_candidates) / one_million);
-    debug_info[DebugBB1DIntersections].value = static_cast<float>(static_cast<double>(intersections) / one_million);
-    debug_info[DebugBB1DContributions].value = static_cast<float>(static_cast<double>(contributions) / one_million);
-    debug_info[DebugBB1DCandidatesPerQuery].value = queries > 0u ? static_cast<float>(static_cast<double>(candidates) / static_cast<double>(queries)) : 0.0f;
+    for (uint32_t technique_index = 0u; technique_index < SpatialStatisticCount; ++technique_index) {
+      const uint64_t queries = spatial_query_counts[technique_index].load(std::memory_order_relaxed);
+      const uint64_t candidates = spatial_candidate_counts[technique_index].load(std::memory_order_relaxed);
+      const uint64_t eligible_candidates = spatial_eligible_candidate_counts[technique_index].load(std::memory_order_relaxed);
+      const uint64_t intersections = spatial_intersection_counts[technique_index].load(std::memory_order_relaxed);
+      const uint64_t contributions = spatial_contribution_counts[technique_index].load(std::memory_order_relaxed);
+      const uint32_t debug_base = DebugBP2DQueries + technique_index * 6u;
+      debug_info[debug_base].value = static_cast<float>(static_cast<double>(queries) / one_million);
+      debug_info[debug_base + 1u].value = static_cast<float>(static_cast<double>(candidates) / one_million);
+      debug_info[debug_base + 2u].value = static_cast<float>(static_cast<double>(eligible_candidates) / one_million);
+      debug_info[debug_base + 3u].value = static_cast<float>(static_cast<double>(intersections) / one_million);
+      debug_info[debug_base + 4u].value = static_cast<float>(static_cast<double>(contributions) / one_million);
+      debug_info[debug_base + 5u].value = queries > 0u ? static_cast<float>(static_cast<double>(candidates) / static_cast<double>(queries)) : 0.0f;
+    }
   }
 
   void report_live_diagnostics() {
@@ -568,19 +567,12 @@ struct CPUUPBPImpl {
     }
 
     const uint64_t evaluated_camera_paths = evaluated_camera_path_count.load(std::memory_order_relaxed);
-    const uint64_t queries = bb1d_query_count.load(std::memory_order_relaxed);
-    const uint64_t candidates = bb1d_candidate_count.load(std::memory_order_relaxed);
-    const uint64_t eligible_candidates = bb1d_eligible_candidate_count.load(std::memory_order_relaxed);
-    const uint64_t intersections = bb1d_intersection_count.load(std::memory_order_relaxed);
-    const uint64_t contributions = bb1d_contribution_count.load(std::memory_order_relaxed);
     const double camera_progress =
       iteration.camera_subpath_count > 0u ? 100.0 * static_cast<double>(evaluated_camera_paths) / static_cast<double>(iteration.camera_subpath_count) : 0.0;
-    const double candidates_per_query = queries > 0u ? static_cast<double>(candidates) / static_cast<double>(queries) : 0.0;
-    log::info(
-      "UPBP iteration %u live: camera %.2f s, %.1f%% paths; BB1D queries %.3f M, candidates %.3f M, eligible %.3f M, intersections %.3f M, contributions %.3f M, "
-      "%.2f candidates/query",
-      status.current_iteration + 1u, stage_time.measure(), camera_progress, static_cast<double>(queries) / 1.0e6, static_cast<double>(candidates) / 1.0e6,
-      static_cast<double>(eligible_candidates) / 1.0e6, static_cast<double>(intersections) / 1.0e6, static_cast<double>(contributions) / 1.0e6, candidates_per_query);
+    log::info("UPBP iteration %u live: camera %.2f s, %.1f%% paths", status.current_iteration + 1u, stage_time.measure(), camera_progress);
+    report_spatial_statistics("BP2D", SpatialStatisticBP2D);
+    report_spatial_statistics("PB2D", SpatialStatisticPB2D);
+    report_spatial_statistics("BB1D", SpatialStatisticBB1D);
     log::info(
       "UPBP estimated camera CPU totals (ms): subpath %.1f, recursive MIS %.1f, BPT/direct hit %.1f, surface %.1f, PP3D %.1f, BP2D %.1f, beam preparation %.1f, PB2D %.1f, BB1D "
       "%.1f, film "
@@ -592,36 +584,51 @@ struct CPUUPBPImpl {
       static_cast<double>(debug_info[DebugCameraBB1DTime].value), static_cast<double>(debug_info[DebugCameraFilmSubmissionTime].value));
   }
 
+  void report_spatial_statistics(const char* name, const SpatialStatisticIndex technique) const {
+    const uint64_t queries = spatial_query_counts[technique].load(std::memory_order_relaxed);
+    const uint64_t candidates = spatial_candidate_counts[technique].load(std::memory_order_relaxed);
+    const uint64_t eligible_candidates = spatial_eligible_candidate_counts[technique].load(std::memory_order_relaxed);
+    const uint64_t intersections = spatial_intersection_counts[technique].load(std::memory_order_relaxed);
+    const uint64_t contributions = spatial_contribution_counts[technique].load(std::memory_order_relaxed);
+    const double candidates_per_query = queries > 0u ? static_cast<double>(candidates) / static_cast<double>(queries) : 0.0;
+    log::info("UPBP %s: queries %.3f M, candidates %.3f M, eligible %.3f M, intersections %.3f M, contributions %.3f M, %.2f candidates/query", name,
+      static_cast<double>(queries) / 1.0e6, static_cast<double>(candidates) / 1.0e6, static_cast<double>(eligible_candidates) / 1.0e6, static_cast<double>(intersections) / 1.0e6,
+      static_cast<double>(contributions) / 1.0e6, candidates_per_query);
+  }
+
   void publish_camera_statistics(CameraEvaluationStatistics& statistics) {
     const uint64_t camera_path_delta = statistics.camera_paths - statistics.published_camera_paths;
-    const uint64_t query_delta = statistics.queries - statistics.published_queries;
-    const uint64_t candidate_delta = statistics.candidates - statistics.published_candidates;
-    const uint64_t eligible_candidate_delta = statistics.eligible_candidates - statistics.published_eligible_candidates;
-    const uint64_t intersection_delta = statistics.intersections - statistics.published_intersections;
-    const uint64_t contribution_delta = statistics.contributions - statistics.published_contributions;
     if (camera_path_delta > 0u) {
       evaluated_camera_path_count.fetch_add(camera_path_delta, std::memory_order_relaxed);
       statistics.published_camera_paths = statistics.camera_paths;
     }
-    if (query_delta > 0u) {
-      bb1d_query_count.fetch_add(query_delta, std::memory_order_relaxed);
-      statistics.published_queries = statistics.queries;
-    }
-    if (candidate_delta > 0u) {
-      bb1d_candidate_count.fetch_add(candidate_delta, std::memory_order_relaxed);
-      statistics.published_candidates = statistics.candidates;
-    }
-    if (eligible_candidate_delta > 0u) {
-      bb1d_eligible_candidate_count.fetch_add(eligible_candidate_delta, std::memory_order_relaxed);
-      statistics.published_eligible_candidates = statistics.eligible_candidates;
-    }
-    if (intersection_delta > 0u) {
-      bb1d_intersection_count.fetch_add(intersection_delta, std::memory_order_relaxed);
-      statistics.published_intersections = statistics.intersections;
-    }
-    if (contribution_delta > 0u) {
-      bb1d_contribution_count.fetch_add(contribution_delta, std::memory_order_relaxed);
-      statistics.published_contributions = statistics.contributions;
+    for (uint32_t technique_index = 0u; technique_index < SpatialStatisticCount; ++technique_index) {
+      SpatialTechniqueStatistics& spatial = statistics.spatial[technique_index];
+      const uint64_t query_delta = spatial.queries - spatial.published_queries;
+      const uint64_t candidate_delta = spatial.candidates - spatial.published_candidates;
+      const uint64_t eligible_candidate_delta = spatial.eligible_candidates - spatial.published_eligible_candidates;
+      const uint64_t intersection_delta = spatial.intersections - spatial.published_intersections;
+      const uint64_t contribution_delta = spatial.contributions - spatial.published_contributions;
+      if (query_delta > 0u) {
+        spatial_query_counts[technique_index].fetch_add(query_delta, std::memory_order_relaxed);
+        spatial.published_queries = spatial.queries;
+      }
+      if (candidate_delta > 0u) {
+        spatial_candidate_counts[technique_index].fetch_add(candidate_delta, std::memory_order_relaxed);
+        spatial.published_candidates = spatial.candidates;
+      }
+      if (eligible_candidate_delta > 0u) {
+        spatial_eligible_candidate_counts[technique_index].fetch_add(eligible_candidate_delta, std::memory_order_relaxed);
+        spatial.published_eligible_candidates = spatial.eligible_candidates;
+      }
+      if (intersection_delta > 0u) {
+        spatial_intersection_counts[technique_index].fetch_add(intersection_delta, std::memory_order_relaxed);
+        spatial.published_intersections = spatial.intersections;
+      }
+      if (contribution_delta > 0u) {
+        spatial_contribution_counts[technique_index].fetch_add(contribution_delta, std::memory_order_relaxed);
+        spatial.published_contributions = spatial.contributions;
+      }
     }
     for (uint32_t stage_index = 0u; stage_index < CameraTimingStageCount; ++stage_index) {
       const uint64_t stage_time_delta = statistics.stage_times[stage_index] - statistics.published_stage_times[stage_index];
@@ -662,7 +669,6 @@ struct CPUUPBPImpl {
     pb2d_index = {};
     bp2d_index = {};
     bb1d_index = {};
-    accounted_light_storage_bytes.store(0u);
     for (Integrator::Status::DebugInfo& info : debug_info) {
       info.value = 0.0f;
     }
@@ -675,81 +681,17 @@ struct CPUUPBPImpl {
     }
   }
 
-  bool preflight_fixed_storage(const uint64_t path_count) {
-    uint64_t per_path = 0u;
-    if ((upbp_checked_add(per_path, sizeof(UPBPLightSubpathResult), per_path) == false) || (upbp_checked_add(per_path, sizeof(UPBPRecursivePathWeights), per_path) == false) ||
-        (upbp_checked_add(per_path, sizeof(std::vector<UPBPLightSplat>), per_path) == false)) {
-      fail("UPBP fixed path-container estimate overflowed 64-bit size arithmetic");
-      return false;
-    }
-    uint64_t required = 0u;
-    if (upbp_checked_multiply(path_count, per_path, required) == false) {
-      fail("UPBP memory preflight overflowed 64-bit size arithmetic");
-      return false;
-    }
-    if (required > memory_budget_bytes) {
-      fail("UPBP fixed path-container storage exceeds the configured memory budget: required " + std::to_string(upbp_bytes_to_mib_ceil(required)) + " MiB for " +
-           std::to_string(path_count) + " light paths, configured " + std::to_string(options.memory_budget_mb) + " MiB");
-      return false;
-    }
-    return true;
-  }
-
-  bool select_light_subpath_count(const uint64_t camera_subpath_count, const uint32_t maximum_vertices, uint64_t& result) {
-    if (upbp_checked_multiply(static_cast<uint64_t>(options.memory_budget_mb), 1024ull * 1024ull, memory_budget_bytes) == false) {
-      fail("UPBP memory budget overflowed 64-bit size arithmetic");
-      return false;
-    }
-    const bool include_light_splats = options.enabled(UPBPTechnique::BPT) && rt.scene().strategy_enabled(Scene::Strategy::ConnectToCamera);
-    if ((upbp_fixed_depth_light_path_storage_bytes(maximum_vertices, include_light_splats, fixed_depth_light_path_storage_bytes) == false) ||
-        (fixed_depth_light_path_storage_bytes == 0u)) {
-      fail("UPBP per-light-path storage estimate overflowed 64-bit size arithmetic");
-      return false;
-    }
-
-    uint64_t requested = camera_subpath_count;
+  void select_light_subpath_count(const uint64_t camera_subpath_count, uint64_t& result) {
+    memory_target_bytes = static_cast<uint64_t>(options.memory_budget_mb) * 1024ull * 1024ull;
+    result = camera_subpath_count;
     if (options.maximum_light_path_count > 0u) {
-      requested = min(requested, static_cast<uint64_t>(options.maximum_light_path_count));
+      result = min(result, static_cast<uint64_t>(options.maximum_light_path_count));
     }
-    const uint64_t budget_limited_count = memory_budget_bytes / fixed_depth_light_path_storage_bytes;
-    result = min(requested, budget_limited_count);
-    if (result == 0u) {
-      fail("UPBP memory budget cannot hold one fixed-depth light-path record: required " + std::to_string(upbp_bytes_to_mib_ceil(fixed_depth_light_path_storage_bytes)) +
-           " MiB, configured " + std::to_string(options.memory_budget_mb) + " MiB");
-      return false;
-    }
-    return true;
   }
 
   uint64_t fixed_light_storage_bytes() const {
     return static_cast<uint64_t>(light_paths.capacity()) * sizeof(UPBPLightSubpathResult) + static_cast<uint64_t>(light_weights.capacity()) * sizeof(UPBPRecursivePathWeights) +
            static_cast<uint64_t>(light_splats.capacity()) * sizeof(std::vector<UPBPLightSplat>);
-  }
-
-  uint64_t dynamic_light_path_storage_bytes(const uint32_t path_index) const {
-    return upbp_path_storage_bytes(light_paths[path_index].subpath.path) + upbp_recursive_storage_bytes(light_weights[path_index]) +
-           static_cast<uint64_t>(light_splats[path_index].capacity()) * sizeof(UPBPLightSplat);
-  }
-
-  bool account_light_path_storage(const uint32_t path_index) {
-    const uint64_t path_storage = dynamic_light_path_storage_bytes(path_index);
-    uint64_t previous = accounted_light_storage_bytes.load(std::memory_order_relaxed);
-    for (;;) {
-      uint64_t required = 0u;
-      if (upbp_checked_add(previous, path_storage, required) == false) {
-        fail("UPBP light-path storage accounting overflowed 64-bit size arithmetic");
-        return false;
-      }
-      if (required > memory_budget_bytes) {
-        fail("UPBP light-path storage exceeds the configured memory budget while publishing path " + std::to_string(path_index + 1u) + " of " +
-             std::to_string(iteration.light_subpath_count) + ": required " + std::to_string(upbp_bytes_to_mib_ceil(required)) + " MiB, configured " +
-             std::to_string(options.memory_budget_mb) + " MiB");
-        return false;
-      }
-      if (accounted_light_storage_bytes.compare_exchange_weak(previous, required, std::memory_order_relaxed)) {
-        return true;
-      }
-    }
   }
 
   uint64_t current_light_storage_bytes() const {
@@ -778,16 +720,6 @@ struct CPUUPBPImpl {
     return result;
   }
 
-  bool memory_within_budget(const char* stage_name) {
-    const uint64_t required = current_light_storage_bytes();
-    if (required <= memory_budget_bytes) {
-      return true;
-    }
-    fail(std::string{"UPBP "} + stage_name + " storage exceeds the configured memory budget: required " + std::to_string(upbp_bytes_to_mib_ceil(required)) + " MiB, configured " +
-         std::to_string(options.memory_budget_mb) + " MiB");
-    return false;
-  }
-
   void start(const Options& integrator_options) {
     wait_for_tasks();
     status = {};
@@ -814,12 +746,8 @@ struct CPUUPBPImpl {
     reset_iteration_diagnostics();
     status.current_iteration = iteration_index;
     const uint64_t camera_subpath_count = rt.film().current_pixel_count();
-    const uint32_t maximum_vertices = rt.scene().options.max_path_length + 1u;
     uint64_t light_subpath_count = 0u;
-    if (select_light_subpath_count(camera_subpath_count, maximum_vertices, light_subpath_count) == false) {
-      *state = Integrator::State::Stopped;
-      return;
-    }
+    select_light_subpath_count(camera_subpath_count, light_subpath_count);
     iteration = upbp_iteration_parameters(options, rt.scene(), rt.film(), iteration_index, light_subpath_count);
     prepared_bb1d = iteration.mis.enabled(UPBPTechnique::BB1D)
                       ? upbp_prepare_bb1d(options.kernel, iteration.bb1d_radius, iteration.bb1d_light_subpath_count, options.beam_selection_probability)
@@ -836,7 +764,7 @@ struct CPUUPBPImpl {
       return;
     }
     if (status.current_iteration == 0u) {
-      log::info("UPBP selected %llu light paths for %llu camera paths within the %u MiB memory budget; %llu assigned to BB1D",
+      log::info("UPBP selected %llu light paths for %llu camera paths; advisory memory target %u MiB; %llu assigned to BB1D",
         static_cast<unsigned long long>(iteration.light_subpath_count), static_cast<unsigned long long>(iteration.camera_subpath_count), options.memory_budget_mb,
         static_cast<unsigned long long>(iteration.bb1d_light_subpath_count));
     }
@@ -855,11 +783,6 @@ struct CPUUPBPImpl {
       *state = Integrator::State::Stopped;
       return;
     }
-    if (preflight_fixed_storage(iteration.light_subpath_count) == false) {
-      *state = Integrator::State::Stopped;
-      return;
-    }
-
     try {
       prepared_mediums.resize(rt.scene().mediums.count);
       for (uint32_t medium_index = 0u; medium_index < rt.scene().mediums.count; ++medium_index) {
@@ -880,15 +803,6 @@ struct CPUUPBPImpl {
       *state = Integrator::State::Stopped;
       return;
     }
-
-    const uint64_t fixed_storage = current_light_storage_bytes();
-    if (fixed_storage > memory_budget_bytes) {
-      fail("UPBP allocated path-container storage exceeds the configured memory budget: required " + std::to_string(upbp_bytes_to_mib_ceil(fixed_storage)) + " MiB, configured " +
-           std::to_string(options.memory_budget_mb) + " MiB");
-      *state = Integrator::State::Stopped;
-      return;
-    }
-    accounted_light_storage_bytes.store(fixed_storage);
 
     surface_points.clear();
     medium_points.clear();
@@ -942,35 +856,37 @@ struct CPUUPBPImpl {
             options.maximum_null_events_per_interval, light_path) == false) {
         fail("UPBP light subpath failed at path " + std::to_string(path_index) + ", failure " + std::to_string(static_cast<uint32_t>(light_path.subpath.failure)) +
              ", segment failure " + std::to_string(static_cast<uint32_t>(light_path.subpath.segment_failure)) + ", vertices " +
-             std::to_string(light_path.subpath.path.vertices.size()) + ", ray origin (" + std::to_string(light_path.subpath.terminal_ray.o.x) + ", " +
-             std::to_string(light_path.subpath.terminal_ray.o.y) + ", " + std::to_string(light_path.subpath.terminal_ray.o.z) + "), direction (" +
+             std::to_string(light_path.subpath.path.vertices.size()) + ", emitter " + std::to_string(light_path.emitter_sample.emitter_index) + ", triangle " +
+             std::to_string(light_path.emitter_sample.triangle_index) + ", emitter PDFs (" + std::to_string(light_path.emitter_sample.pdf_area) + ", " +
+             std::to_string(light_path.emitter_sample.pdf_dir) + ", " + std::to_string(light_path.emitter_sample.pdf_sample) + "), emitter cosine " +
+             std::to_string(dot(light_path.emitter_sample.direction, light_path.emitter_sample.normal)) + ", ray origin (" + std::to_string(light_path.subpath.terminal_ray.o.x) +
+             ", " + std::to_string(light_path.subpath.terminal_ray.o.y) + ", " + std::to_string(light_path.subpath.terminal_ray.o.z) + "), direction (" +
              std::to_string(light_path.subpath.terminal_ray.d.x) + ", " + std::to_string(light_path.subpath.terminal_ray.d.y) + ", " +
              std::to_string(light_path.subpath.terminal_ray.d.z) + ")");
         return;
       }
-      if (upbp_compute_recursive_path_weights(scene, light_path.subpath.path, iteration.mis, iteration.light_subpath_count, iteration.bpt_sample_count,
-            light_weights[path_index]) == false) {
-        fail("UPBP recursive light-path MIS failed at path " + std::to_string(path_index) + ", vertex " + std::to_string(light_weights[path_index].failure_vertex_index) +
-             ", failure " + std::to_string(static_cast<uint32_t>(light_weights[path_index].failure)));
-        return;
-      }
-      if (iteration.mis.enabled(UPBPTechnique::BPT) && scene.strategy_enabled(Scene::Strategy::ConnectToCamera)) {
-        UPBPLightSplatEvaluationFailure splat_failure = UPBPLightSplatEvaluationFailure::None;
-        UPBPLightToCameraFailure connection_failure = UPBPLightToCameraFailure::None;
-        UPBPSceneSegmentFailure segment_failure = UPBPSceneSegmentFailure::None;
-        UPBPPathProbabilityFailure probability_failure = UPBPPathProbabilityFailure::None;
-        uint32_t failure_vertex_count = 0u;
-        if (upbp_evaluate_light_splats(rt, scene, iteration.spect, light_path.subpath.path, scene.options.random_seed, status.current_iteration, path_index,
-              options.maximum_boundary_count, options.maximum_null_events_per_interval, light_weights[path_index], iteration.mis, iteration.camera_subpath_count,
-              iteration.light_subpath_count, light_splats[path_index], splat_failure, connection_failure, segment_failure, probability_failure, failure_vertex_count) == false) {
-          fail("UPBP light tracing failed at path " + std::to_string(path_index) + ", vertex count " + std::to_string(failure_vertex_count) + ", failure " +
-               std::to_string(static_cast<uint32_t>(splat_failure)) + ", connection failure " + std::to_string(static_cast<uint32_t>(connection_failure)) + ", segment failure " +
-               std::to_string(static_cast<uint32_t>(segment_failure)) + ", probability failure " + std::to_string(static_cast<uint32_t>(probability_failure)));
+      if (light_path.subpath.path.vertices.size() > 1u) {
+        if (upbp_compute_recursive_path_weights(scene, light_path.subpath.path, iteration.mis, iteration.light_subpath_count, iteration.bpt_sample_count,
+              light_weights[path_index]) == false) {
+          fail("UPBP recursive light-path MIS failed at path " + std::to_string(path_index) + ", vertex " + std::to_string(light_weights[path_index].failure_vertex_index) +
+               ", failure " + std::to_string(static_cast<uint32_t>(light_weights[path_index].failure)));
           return;
         }
-      }
-      if (account_light_path_storage(path_index) == false) {
-        return;
+        if (iteration.mis.enabled(UPBPTechnique::BPT) && scene.strategy_enabled(Scene::Strategy::ConnectToCamera)) {
+          UPBPLightSplatEvaluationFailure splat_failure = UPBPLightSplatEvaluationFailure::None;
+          UPBPLightToCameraFailure connection_failure = UPBPLightToCameraFailure::None;
+          UPBPSceneSegmentFailure segment_failure = UPBPSceneSegmentFailure::None;
+          UPBPPathProbabilityFailure probability_failure = UPBPPathProbabilityFailure::None;
+          uint32_t failure_vertex_count = 0u;
+          if (upbp_evaluate_light_splats(rt, scene, iteration.spect, light_path.subpath.path, scene.options.random_seed, status.current_iteration, path_index,
+                options.maximum_boundary_count, options.maximum_null_events_per_interval, light_weights[path_index], iteration.mis, iteration.camera_subpath_count,
+                iteration.light_subpath_count, light_splats[path_index], splat_failure, connection_failure, segment_failure, probability_failure, failure_vertex_count) == false) {
+            fail("UPBP light tracing failed at path " + std::to_string(path_index) + ", vertex count " + std::to_string(failure_vertex_count) + ", failure " +
+                 std::to_string(static_cast<uint32_t>(splat_failure)) + ", connection failure " + std::to_string(static_cast<uint32_t>(connection_failure)) + ", segment failure " +
+                 std::to_string(static_cast<uint32_t>(segment_failure)) + ", probability failure " + std::to_string(static_cast<uint32_t>(probability_failure)));
+            return;
+          }
+        }
       }
       ++unpublished_path_count;
       if (unpublished_path_count >= publish_interval) {
@@ -1073,35 +989,9 @@ struct CPUUPBPImpl {
       return false;
     }
 
-    uint64_t required = current_light_storage_bytes();
-    auto add_vector_growth = [this, &required](const auto& values, const uint64_t count) {
-      uint64_t projected = 0u;
-      if (upbp_projected_vector_storage_bytes(values, count, projected) == false) {
-        fail("UPBP primitive storage estimate overflowed 64-bit size arithmetic");
-        return false;
-      }
-      const uint64_t current = static_cast<uint64_t>(values.capacity()) * sizeof(typename std::decay_t<decltype(values)>::value_type);
-      return upbp_checked_add(required, projected - current, required);
-    };
     const bool prepare_light_medium_vertices = iteration.mis.enabled(UPBPTechnique::PB2D);
-    uint64_t light_vertex_offset_count = 0u;
-    if (prepare_light_medium_vertices && (upbp_checked_add(static_cast<uint64_t>(light_paths.size()), 1u, light_vertex_offset_count) == false)) {
-      fail("UPBP light-vertex offset count overflowed 64-bit size arithmetic");
-      return false;
-    }
-    if ((add_vector_growth(surface_points, surface_point_count) == false) || (add_vector_growth(medium_points, medium_point_count) == false) ||
-        (add_vector_growth(light_vertex_offsets, light_vertex_offset_count) == false) ||
-        (add_vector_growth(prepared_light_vertex_throughputs, prepare_light_medium_vertices ? light_vertex_count : 0u) == false) ||
-        (add_vector_growth(prepared_light_vertex_validity, prepare_light_medium_vertices ? light_vertex_count : 0u) == false) ||
-        (add_vector_growth(light_beams, light_beam_count) == false) || (add_vector_growth(prepared_bp2d_beams, light_beam_count) == false) ||
-        (add_vector_growth(prepared_bp2d_validity, light_beam_count) == false) || (add_vector_growth(selected_bb1d_beams, selected_beam_count) == false) ||
-        (add_vector_growth(prepared_bb1d_beams, selected_beam_count) == false) || (add_vector_growth(prepared_bb1d_validity, selected_beam_count) == false)) {
-      fail("UPBP primitive storage preflight overflowed 64-bit size arithmetic");
-      return false;
-    }
-    if (required > memory_budget_bytes) {
-      fail("UPBP projected light-path and primitive storage exceeds the configured memory budget: required " + std::to_string(upbp_bytes_to_mib_ceil(required)) +
-           " MiB, configured " + std::to_string(options.memory_budget_mb) + " MiB");
+    if (prepare_light_medium_vertices && (light_vertex_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))) {
+      fail("UPBP light-vertex preparation exceeds the platform container limit");
       return false;
     }
     return true;
@@ -1206,29 +1096,10 @@ struct CPUUPBPImpl {
       fail("UPBP deterministic point and beam storage exceeds the platform container limit");
       return false;
     }
-    return memory_within_budget("light-path and primitive");
+    return true;
   }
 
   bool build_spatial_indices() {
-    uint64_t required = current_light_storage_bytes();
-    auto add_point_index_growth = [this, &required](const UPBPPointIndex& index, const uint32_t count) {
-      uint64_t projected = 0u;
-      if (index.projected_storage_bytes(count, projected) == false) {
-        fail("UPBP spatial-index storage estimate overflowed 64-bit size arithmetic");
-        return false;
-      }
-      const uint64_t current = index.storage_bytes();
-      return upbp_checked_add(required, projected - current, required);
-    };
-    auto add_beam_grid_growth = [this, &required](const UPBPBeamGrid& index, const UPBPBeamReference* beams, const uint32_t count, const float radius) {
-      uint64_t projected = 0u;
-      if (index.projected_storage_bytes(beams, count, radius, projected) == false) {
-        fail("UPBP beam-grid storage projection failed");
-        return false;
-      }
-      const uint64_t current = index.storage_bytes();
-      return upbp_checked_add(required, projected - current, required);
-    };
     uint64_t selected_tracking_event_count = 0u;
     for (const UPBPPreparedBeam& prepared_beam : prepared_bb1d_beams) {
       if ((prepared_beam.tracking_events != nullptr) &&
@@ -1237,29 +1108,8 @@ struct CPUUPBPImpl {
         return false;
       }
     }
-    uint64_t projected_tracking_event_storage = 0u;
-    if (upbp_projected_vector_storage_bytes(prepared_bb1d_tracking_events, selected_tracking_event_count, projected_tracking_event_storage) == false) {
-      fail("UPBP selected BB1D tracking-event storage estimate overflowed 64-bit size arithmetic");
-      return false;
-    }
-    const uint64_t current_tracking_event_storage = static_cast<uint64_t>(prepared_bb1d_tracking_events.capacity()) * sizeof(UPBPMediumTrackingEventRecord);
-    if (upbp_checked_add(required, projected_tracking_event_storage - current_tracking_event_storage, required) == false) {
-      fail("UPBP selected BB1D tracking-event storage preflight overflowed 64-bit size arithmetic");
-      return false;
-    }
-    if ((iteration.mis.enabled(UPBPTechnique::Surface) && (add_point_index_growth(surface_index, static_cast<uint32_t>(surface_points.size())) == false)) ||
-        (iteration.mis.enabled(UPBPTechnique::PP3D) && (add_point_index_growth(pp3d_index, static_cast<uint32_t>(medium_points.size())) == false)) ||
-        (iteration.mis.enabled(UPBPTechnique::PB2D) && (add_point_index_growth(pb2d_index, static_cast<uint32_t>(medium_points.size())) == false)) ||
-        (iteration.mis.enabled(UPBPTechnique::BP2D) &&
-          (add_beam_grid_growth(bp2d_index, light_beams.data(), static_cast<uint32_t>(light_beams.size()), static_cast<float>(iteration.bp2d_radius)) == false)) ||
-        (iteration.mis.enabled(UPBPTechnique::BB1D) &&
-          (add_beam_grid_growth(bb1d_index, selected_bb1d_beams.data(), static_cast<uint32_t>(selected_bb1d_beams.size()), static_cast<float>(iteration.bb1d_radius)) == false))) {
-      fail("UPBP spatial-index storage preflight overflowed 64-bit size arithmetic");
-      return false;
-    }
-    if (required > memory_budget_bytes) {
-      fail("UPBP projected spatial-index storage exceeds the configured memory budget: required " + std::to_string(upbp_bytes_to_mib_ceil(required)) + " MiB, configured " +
-           std::to_string(options.memory_budget_mb) + " MiB");
+    if (selected_tracking_event_count > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+      fail("UPBP selected BB1D tracking-event storage exceeds the platform container limit");
       return false;
     }
 
@@ -1275,10 +1125,7 @@ struct CPUUPBPImpl {
         return false;
       }
       if (iteration.mis.enabled(UPBPTechnique::PB2D) && (medium_points.empty() == false)) {
-        float cell_size = 0.0f;
-        if ((UPBPPointIndex::beam_query_cell_size(medium_points.data(), static_cast<uint32_t>(medium_points.size()), static_cast<float>(iteration.pb2d_radius), cell_size) ==
-              false) ||
-            (pb2d_index.build(medium_points.data(), static_cast<uint32_t>(medium_points.size()), cell_size) == false)) {
+        if (pb2d_index.build(medium_points.data(), static_cast<uint32_t>(medium_points.size())) == false) {
           fail("UPBP PB2D point index construction failed");
           return false;
         }
@@ -1312,7 +1159,7 @@ struct CPUUPBPImpl {
       fail("UPBP spatial acceleration storage exceeds the platform container limit");
       return false;
     }
-    return memory_within_budget("spatial-index");
+    return true;
   }
 
   void submit_light_splats() {
@@ -1366,8 +1213,8 @@ struct CPUUPBPImpl {
     return query_valid && evaluation_valid;
   }
 
-  bool evaluate_pb2d(const std::vector<UPBPBeamReference>& camera_beams, const std::vector<UPBPPreparedBeam>& prepared_camera_beams, UPBPSpatialQueryState& query_state,
-    SpectralResponse& value) {
+  bool evaluate_pb2d(const std::vector<UPBPBeamReference>& camera_beams, const std::vector<UPBPPreparedBeam>& prepared_camera_beams, SpectralResponse& value,
+    CameraEvaluationStatistics& statistics) {
     if (pb2d_index.size() == 0u) {
       return true;
     }
@@ -1384,28 +1231,48 @@ struct CPUUPBPImpl {
         continue;
       }
       const Medium& medium = rt.scene().mediums[camera_beam.medium_index];
+      SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticPB2D];
+      ++spatial.queries;
       bool evaluation_valid = true;
-      const bool query_valid = pb2d_index.query_beam(camera_beam, static_cast<float>(iteration.pb2d_radius), query_state,
-        [this, &medium, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid](const UPBPPointReference& point, const UPBPPointBeamIntersection& intersection) {
+      uint64_t query_candidate_count = 0u;
+      const bool query_valid = pb2d_index.query_beam(
+        camera_beam, static_cast<float>(iteration.pb2d_radius), query_candidate_count,
+        [this, &camera_beam, &evaluation_valid, &statistics](const UPBPPointReference& point, const uint32_t) {
           if (evaluation_valid == false) {
-            return;
+            return false;
           }
           if ((point.path_index >= light_paths.size()) || (point.vertex_index >= light_paths[point.path_index].subpath.path.vertices.size()) ||
               (point.vertex_index >= light_weights[point.path_index].arrivals.size())) {
-            evaluation_valid = false;
-            return;
+            return true;
           }
           const UPBPPathVertexRecord& light_vertex = light_paths[point.path_index].subpath.path.vertices[point.vertex_index];
           const uint32_t path_length = point.vertex_index + camera_beam.source_vertex_index + 1u;
           if ((light_vertex.cls != UPBPVertexClass::Medium) || (light_vertex.medium.index != camera_beam.medium_index) ||
               (spectral_query_compatible(light_vertex.throughput.as_query(), camera_beam.throughput_at_origin.as_query()) == false) ||
               (path_length < rt.scene().options.min_path_length) || (path_length > rt.scene().options.max_path_length)) {
-            return;
+            return false;
           }
           if (point.path_index + 1u >= light_vertex_offsets.size()) {
+            return true;
+          }
+          const uint64_t prepared_index = light_vertex_offsets[point.path_index] + point.vertex_index;
+          if ((prepared_index >= light_vertex_offsets[point.path_index + 1u]) || (prepared_index >= prepared_light_vertex_throughputs.size()) ||
+              (prepared_light_vertex_validity[static_cast<size_t>(prepared_index)] == 0u)) {
+            return true;
+          }
+          ++statistics.spatial[SpatialStatisticPB2D].eligible_candidates;
+          return true;
+        },
+        [this, &medium, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPPointReference& point,
+          const UPBPPointBeamIntersection& intersection) {
+          SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticPB2D];
+          ++spatial.intersections;
+          if ((point.path_index >= light_paths.size()) || (point.vertex_index >= light_paths[point.path_index].subpath.path.vertices.size()) ||
+              (point.vertex_index >= light_weights[point.path_index].arrivals.size()) || (point.path_index + 1u >= light_vertex_offsets.size())) {
             evaluation_valid = false;
             return;
           }
+          const UPBPPathVertexRecord& light_vertex = light_paths[point.path_index].subpath.path.vertices[point.vertex_index];
           const uint64_t prepared_index = light_vertex_offsets[point.path_index] + point.vertex_index;
           if ((prepared_index >= light_vertex_offsets[point.path_index + 1u]) || (prepared_index >= prepared_light_vertex_throughputs.size()) ||
               (prepared_light_vertex_validity[static_cast<size_t>(prepared_index)] == 0u)) {
@@ -1420,9 +1287,11 @@ struct CPUUPBPImpl {
             return;
           }
           if (contribution.applicable) {
+            ++spatial.contributions;
             value += contribution.contribution;
           }
         });
+      spatial.candidates += query_candidate_count;
       if ((query_valid == false) || (evaluation_valid == false)) {
         return false;
       }
@@ -1430,7 +1299,8 @@ struct CPUUPBPImpl {
     return true;
   }
 
-  bool evaluate_bp2d(const UPBPPathRecord& camera_path, const UPBPRecursivePathWeights& camera_weights, const uint32_t camera_vertex_index, SpectralResponse& value) {
+  bool evaluate_bp2d(const UPBPPathRecord& camera_path, const UPBPRecursivePathWeights& camera_weights, const uint32_t camera_vertex_index, SpectralResponse& value,
+    CameraEvaluationStatistics& statistics) {
     if (bp2d_index.size() == 0u) {
       return true;
     }
@@ -1452,24 +1322,27 @@ struct CPUUPBPImpl {
       return false;
     }
     const UPBPPointMergeMISInput::Weights prepared_camera_weights = upbp_point_merge_weights(camera_weights.arrivals[camera_vertex_index]);
+    SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticBP2D];
+    ++spatial.queries;
     bool evaluation_valid = true;
+    uint64_t query_candidate_count = 0u;
     const bool query_valid = bp2d_index.query_point_intersections(
-      camera_vertex.position, static_cast<float>(iteration.bp2d_radius),
-      [this, &camera_vertex, camera_vertex_index, &evaluation_valid](const UPBPBeamReference& beam, const uint32_t beam_index) {
+      camera_vertex.position, static_cast<float>(iteration.bp2d_radius), query_candidate_count,
+      [this, &camera_vertex, camera_vertex_index, &evaluation_valid, &statistics](const UPBPBeamReference& beam, const uint32_t beam_index) {
         if (evaluation_valid == false) {
           return false;
         }
-        if ((beam.path_index >= light_paths.size()) || (beam_index >= prepared_bp2d_validity.size())) {
-          evaluation_valid = false;
-          return false;
-        }
         const uint32_t path_length = beam.source_vertex_index + 1u + camera_vertex_index;
-        return (prepared_bp2d_validity[beam_index] != 0u) && (beam.medium_index == camera_vertex.medium.index) &&
-               spectral_query_compatible(camera_vertex.throughput.as_query(), beam.throughput_at_origin.as_query()) && (path_length >= rt.scene().options.min_path_length) &&
-               (path_length <= rt.scene().options.max_path_length);
+        const bool eligible = (prepared_bp2d_validity[beam_index] != 0u) && (beam.medium_index == camera_vertex.medium.index) &&
+                              spectral_query_compatible(camera_vertex.throughput.as_query(), beam.throughput_at_origin.as_query()) &&
+                              (path_length >= rt.scene().options.min_path_length) && (path_length <= rt.scene().options.max_path_length);
+        statistics.spatial[SpatialStatisticBP2D].eligible_candidates += static_cast<uint64_t>(eligible);
+        return eligible;
       },
-      [this, &medium, &camera_vertex, &prepared_camera_weights, &camera_throughput, &scattering, &value, &evaluation_valid](const UPBPBeamReference& beam,
+      [this, &medium, &camera_vertex, &prepared_camera_weights, &camera_throughput, &scattering, &value, &evaluation_valid, &statistics](const UPBPBeamReference& beam,
         const uint32_t beam_index, const UPBPPointBeamIntersection& intersection) {
+        SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticBP2D];
+        ++spatial.intersections;
         UPBPBeamContribution contribution;
         if (upbp_evaluate_prepared_bp2d(medium, prepared_mediums[camera_vertex.medium.index], prepared_bp2d_beams[beam_index], beam, intersection, camera_vertex.intersection.w_i,
               prepared_camera_weights, camera_throughput, scattering, iteration.mis, options.kernel, iteration.bp2d_radius, iteration.light_subpath_count,
@@ -1478,9 +1351,11 @@ struct CPUUPBPImpl {
           return;
         }
         if (contribution.applicable) {
+          ++spatial.contributions;
           value += contribution.contribution;
         }
       });
+    spatial.candidates += query_candidate_count;
     return query_valid && evaluation_valid;
   }
 
@@ -1499,28 +1374,26 @@ struct CPUUPBPImpl {
         return false;
       }
       const bool prepared_camera_beam_valid = prepared_camera_beam.valid;
-      ++statistics.queries;
+      SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticBB1D];
+      ++spatial.queries;
       bool evaluation_valid = true;
+      uint64_t query_candidate_count = 0u;
       const bool query_valid = bb1d_index.query_beam_intersections(
-        camera_beam, static_cast<float>(iteration.bb1d_radius), query_state,
+        camera_beam, static_cast<float>(iteration.bb1d_radius), query_state, query_candidate_count,
         [this, &camera_beam, prepared_camera_beam_valid, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam, const uint32_t light_beam_index) {
-          ++statistics.candidates;
-          constexpr uint64_t publish_interval = 65536u;
-          if ((statistics.candidates - statistics.published_candidates) >= publish_interval) {
-            publish_camera_statistics(statistics);
-          }
           if (evaluation_valid == false) {
             return false;
           }
           const uint32_t path_length = light_beam.source_vertex_index + camera_beam.source_vertex_index + 2u;
           const bool eligible = (prepared_bb1d_validity[light_beam_index] != 0u) && prepared_camera_beam_valid && (light_beam.medium_index == camera_beam.medium_index) &&
                                 (path_length >= rt.scene().options.min_path_length) && (path_length <= rt.scene().options.max_path_length);
-          statistics.eligible_candidates += static_cast<uint64_t>(eligible);
+          statistics.spatial[SpatialStatisticBB1D].eligible_candidates += static_cast<uint64_t>(eligible);
           return eligible;
         },
         [this, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam, const uint32_t light_beam_index,
           const UPBPBeamBeamIntersection& intersection) {
-          ++statistics.intersections;
+          SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticBB1D];
+          ++spatial.intersections;
           UPBPBeamContribution contribution;
           if (upbp_evaluate_bb1d(rt.scene().mediums[camera_beam.medium_index], prepared_mediums[camera_beam.medium_index], prepared_bb1d_beams[light_beam_index], light_beam,
                 prepared_camera_beam, camera_beam, intersection, iteration.mis, prepared_bb1d, iteration.bpt_sample_count, contribution) == false) {
@@ -1528,10 +1401,11 @@ struct CPUUPBPImpl {
             return;
           }
           if (contribution.applicable) {
-            ++statistics.contributions;
+            ++spatial.contributions;
             value += contribution.contribution;
           }
         });
+      spatial.candidates += query_candidate_count;
       if ((query_valid == false) || (evaluation_valid == false)) {
         return false;
       }
@@ -1651,7 +1525,7 @@ struct CPUUPBPImpl {
         }
         if ((vertex.cls == UPBPVertexClass::Medium) && iteration.mis.enabled(UPBPTechnique::BP2D)) {
           begin_camera_phase();
-          if (evaluate_bp2d(camera.subpath.path, camera_weights, camera_vertex_index, value) == false) {
+          if (evaluate_bp2d(camera.subpath.path, camera_weights, camera_vertex_index, value, statistics) == false) {
             fail("UPBP BP2D evaluation failed at pixel path " + std::to_string(path_index));
             return;
           }
@@ -1680,7 +1554,7 @@ struct CPUUPBPImpl {
       }
       if (iteration.mis.enabled(UPBPTechnique::PB2D)) {
         begin_camera_phase();
-        if (evaluate_pb2d(camera_beams, prepared_camera_beams, workspace.pb2d_query_state, value) == false) {
+        if (evaluate_pb2d(camera_beams, prepared_camera_beams, value, statistics) == false) {
           fail("UPBP PB2D evaluation failed at pixel path " + std::to_string(path_index));
           return;
         }
@@ -1722,13 +1596,6 @@ struct CPUUPBPImpl {
     }
 
     TimeMeasure phase_time = {};
-    if (memory_within_budget("light-path") == false) {
-      storage_validation_time_ms = phase_time.measure_ms();
-      *state = Integrator::State::Stopped;
-      return;
-    }
-    storage_validation_time_ms = phase_time.measure_ms();
-
     phase_time.reset();
     if (collect_light_vertices() == false) {
       primitive_collection_time_ms = phase_time.measure_ms();
@@ -1752,11 +1619,19 @@ struct CPUUPBPImpl {
     debug_info[DebugMediumPoints].value = static_cast<float>(medium_points.size());
     debug_info[DebugLightBeams].value = static_cast<float>(light_beams.size());
     debug_info[DebugBB1DLightBeams].value = static_cast<float>(selected_bb1d_beams.size());
-    debug_info[DebugLightStorage].value = static_cast<float>(current_light_storage_bytes()) / (1024.0f * 1024.0f);
+    phase_time.reset();
+    const uint64_t light_storage_bytes = current_light_storage_bytes();
+    storage_validation_time_ms = phase_time.measure_ms();
+    debug_info[DebugLightStorage].value = static_cast<float>(light_storage_bytes) / (1024.0f * 1024.0f);
     refresh_live_diagnostics();
     if (status.current_iteration == 0u) {
-      log::info("UPBP retained %.1f MiB for %llu light paths after spatial-index construction", static_cast<double>(debug_info[DebugLightStorage].value),
-        static_cast<unsigned long long>(iteration.light_subpath_count));
+      if (light_storage_bytes > memory_target_bytes) {
+        log::warning("UPBP retained %.1f MiB for %llu light paths, exceeding the advisory %u MiB CPU memory target; rendering continues",
+          static_cast<double>(debug_info[DebugLightStorage].value), static_cast<unsigned long long>(iteration.light_subpath_count), options.memory_budget_mb);
+      } else {
+        log::info("UPBP retained %.1f MiB for %llu light paths; advisory CPU memory target %u MiB", static_cast<double>(debug_info[DebugLightStorage].value),
+          static_cast<unsigned long long>(iteration.light_subpath_count), options.memory_budget_mb);
+      }
     }
     stage = Stage::Camera;
     stage_time.reset();
@@ -1772,23 +1647,21 @@ struct CPUUPBPImpl {
       return;
     }
     const Scene& scene = rt.scene();
-    rt.film().commit_iteration(status.current_iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp);
+    const Film::NoiseEstimationSchedule noise_estimation_schedule =
+      scene.spectral() ? Film::NoiseEstimationSchedule::PowerOfTwoSampleCount : Film::NoiseEstimationSchedule::EveryOtherIteration;
+    rt.film().commit_iteration(status.current_iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp, noise_estimation_schedule);
     status.completed_iterations += 1u;
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;
     if (status.current_iteration == 0u) {
-      const uint64_t queries = bb1d_query_count.load(std::memory_order_relaxed);
-      const uint64_t candidates = bb1d_candidate_count.load(std::memory_order_relaxed);
-      const uint64_t eligible_candidates = bb1d_eligible_candidate_count.load(std::memory_order_relaxed);
-      const uint64_t intersections = bb1d_intersection_count.load(std::memory_order_relaxed);
-      const uint64_t contributions = bb1d_contribution_count.load(std::memory_order_relaxed);
-      const double candidates_per_query = queries > 0u ? static_cast<double>(candidates) / static_cast<double>(queries) : 0.0;
       log::info(
-        "UPBP first-iteration timing: setup %.2f ms, light paths %.2f ms, storage validation %.2f ms, primitive collection %.2f ms, spatial indices %.2f ms, light splats "
-        "%.2f ms, camera evaluation %.2f ms; BB1D queries %llu, candidates %llu, eligible %llu, intersections %llu, contributions %llu, %.2f candidates/query",
+        "UPBP first-iteration timing: setup %.2f ms, light paths %.2f ms, storage accounting %.2f ms, primitive collection %.2f ms, spatial indices %.2f ms, light splats "
+        "%.2f ms, camera evaluation %.2f ms",
         iteration_setup_time_ms, light_path_time_ms, storage_validation_time_ms, primitive_collection_time_ms, spatial_index_time_ms, light_splat_time_ms,
-        camera_evaluation_time_ms, static_cast<unsigned long long>(queries), static_cast<unsigned long long>(candidates), static_cast<unsigned long long>(eligible_candidates),
-        static_cast<unsigned long long>(intersections), static_cast<unsigned long long>(contributions), candidates_per_query);
+        camera_evaluation_time_ms);
+      report_spatial_statistics("BP2D", SpatialStatisticBP2D);
+      report_spatial_statistics("PB2D", SpatialStatisticPB2D);
+      report_spatial_statistics("BB1D", SpatialStatisticBB1D);
       log::info(
         "UPBP first-iteration estimated camera CPU totals (ms): subpath %.1f, recursive MIS %.1f, BPT/direct hit %.1f, surface %.1f, PP3D %.1f, BP2D %.1f, beam preparation "
         "%.1f, PB2D %.1f, BB1D %.1f, film %.1f",

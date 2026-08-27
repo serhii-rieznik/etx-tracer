@@ -103,8 +103,9 @@ struct FilmImpl {
     return render_window_size;
   }
 
-  void commit_iteration(float radiance_clamp);
-  void estimate_noise(uint32_t sample_index, uint32_t total_samples, float threshold);
+  void commit_iteration(float radiance_clamp, Film::NoiseEstimationSchedule schedule);
+  void estimate_noise(uint32_t sample_index, uint32_t total_samples, float threshold, Film::NoiseEstimationSchedule schedule);
+  void snapshot_noise_reference();
 };
 
 Film::Film(TaskScheduler& t) {
@@ -259,10 +260,16 @@ void Film::submit(const float3& value, const float2& ndc_coord) {
   }
 }
 
-void FilmImpl::estimate_noise(uint32_t sample_index, uint32_t total_samples, float threshold) {
+void FilmImpl::estimate_noise(uint32_t sample_index, uint32_t total_samples, float threshold, Film::NoiseEstimationSchedule schedule) {
   max_sample_count = total_samples;
 
-  if ((threshold == 0.0f) || (sample_index < kMinSamples) || (sample_index % 2) != 0)
+  bool estimate = (sample_index >= kMinSamples) && ((sample_index % 2u) == 0u);
+  if (schedule == Film::NoiseEstimationSchedule::PowerOfTwoSampleCount) {
+    const uint32_t sample_count = sample_index + 1u;
+    estimate = (sample_count >= kMinSamples) && ((sample_count & (sample_count - 1u)) == 0u);
+  }
+
+  if ((threshold == 0.0f) || (estimate == false))
     return;
 
 #if (ETX_LOG_NOISE_LEVEL)
@@ -358,10 +365,11 @@ void FilmImpl::estimate_noise(uint32_t sample_index, uint32_t total_samples, flo
 #endif
 }
 
-void FilmImpl::commit_iteration(float radiance_clamp) {
+void FilmImpl::commit_iteration(float radiance_clamp, Film::NoiseEstimationSchedule schedule) {
   auto int_data = internal_data.data();
   auto accumumlation = storage_buffers[StorageAccumulation].data();
   auto adaptive = storage_buffers[StorageAdaptive].data();
+  const bool update_alternating_reference = schedule == Film::NoiseEstimationSchedule::EveryOtherIteration;
 
   uint64_t pixel_count = total_pixel_count();
   for (uint64_t i = 0; i < pixel_count; ++i) {
@@ -381,11 +389,13 @@ void FilmImpl::commit_iteration(float radiance_clamp) {
 
     if (sample_count == 0) {
       accumumlation[i] = idata.color;
-      adaptive[i] = idata.color;
+      if (update_alternating_reference) {
+        adaptive[i] = idata.color;
+      }
     } else {
       float t = float(double(sample_count) / double(sample_count + 1u));
       accumumlation[i] = lerp(idata.color, accumumlation[i], t);
-      if (sample_count % 2 == 0) {
+      if (update_alternating_reference && ((sample_count % 2u) == 0u)) {
         uint32_t adaptive_sample_count = sample_count / 2u;
         t = float(double(adaptive_sample_count) / double(adaptive_sample_count + 1u));
         adaptive[i] = lerp(idata.color, adaptive[i], t);
@@ -398,9 +408,25 @@ void FilmImpl::commit_iteration(float radiance_clamp) {
   }
 }
 
+void FilmImpl::snapshot_noise_reference() {
+  const auto& accumulation = storage_buffers[StorageAccumulation];
+  auto& adaptive = storage_buffers[StorageAdaptive];
+  memcpy(adaptive.data(), accumulation.data(), accumulation.size() * sizeof(accumulation[0]));
+}
+
 void Film::commit_iteration(uint32_t sample_index, uint32_t total_samples, float noise_threshold, float radiance_clamp) {
-  _private->commit_iteration(radiance_clamp);
-  _private->estimate_noise(sample_index, total_samples, noise_threshold);
+  commit_iteration(sample_index, total_samples, noise_threshold, radiance_clamp, NoiseEstimationSchedule::EveryOtherIteration);
+}
+
+void Film::commit_iteration(uint32_t sample_index, uint32_t total_samples, float noise_threshold, float radiance_clamp, NoiseEstimationSchedule noise_estimation_schedule) {
+  _private->commit_iteration(radiance_clamp, noise_estimation_schedule);
+  _private->estimate_noise(sample_index, total_samples, noise_threshold, noise_estimation_schedule);
+  if (noise_estimation_schedule == NoiseEstimationSchedule::PowerOfTwoSampleCount) {
+    const uint32_t sample_count = sample_index + 1u;
+    if ((sample_count >= (kMinSamples / 2u)) && ((sample_count & (sample_count - 1u)) == 0u)) {
+      _private->snapshot_noise_reference();
+    }
+  }
 }
 
 void Film::clear(uint32_t options) {

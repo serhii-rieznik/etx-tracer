@@ -1,8 +1,8 @@
 #class:dielectric
-#title:Glass
+#title:N-BK7
 #source:SCHOTT N-BK7 optical glass datasheet, data status 2023-12-01
 #source_url:https://media.schott.com/api/public/content/41e799d0bf874807a0bb8e702fbb75b5?v=54856406
-#model:Legacy glass identifier defined as SCHOTT N-BK7; SCHOTT Sellmeier equation; wavelength in micrometres
+#model:SCHOTT Sellmeier equation; wavelength in micrometres
 #coefficients:B1=1.03961212 B2=0.231792344 B3=1.01046945 C1=0.006000699 C2=0.0200179144 C3=103.560653
 #sampling:1 nm from 390 nm through 830 nm inclusive
 0.390 1.532236139
