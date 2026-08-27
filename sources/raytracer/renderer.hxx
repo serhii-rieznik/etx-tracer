@@ -77,12 +77,21 @@ enum class RendererProgressKind : uint32_t {
   Steps,
 };
 
+enum class RendererPathPhase : uint32_t {
+  None,
+  Light,
+  Camera,
+};
+
 struct RendererStatus {
   RendererMode mode = RendererMode::CPURaytracing;
   RendererStatusState state = RendererStatusState::Unavailable;
   RendererProgressKind progress_kind = RendererProgressKind::None;
   uint32_t completed_units = 0u;
   uint32_t total_units = 0u;
+  RendererPathPhase path_phase = RendererPathPhase::None;
+  uint64_t completed_path_count = 0u;
+  uint64_t total_path_count = 0u;
   double elapsed_seconds = 0.0;
   double remaining_seconds = 0.0;
   bool elapsed_available = false;

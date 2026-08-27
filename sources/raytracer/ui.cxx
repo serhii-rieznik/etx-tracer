@@ -200,6 +200,21 @@ const char* renderer_progress_unit_name(RendererProgressKind kind) {
   }
 }
 
+const char* renderer_path_phase_name(RendererPathPhase phase) {
+  switch (phase) {
+    case RendererPathPhase::Light:
+      return "Light paths";
+    case RendererPathPhase::Camera:
+      return "Camera paths";
+    default:
+      return "Paths";
+  }
+}
+
+const char* renderer_path_phase_short_name(RendererPathPhase phase) {
+  return phase == RendererPathPhase::Light ? "Light" : "Camera";
+}
+
 std::string compact_duration_string(double seconds) {
   if (seconds < 0.0) {
     return "-";
@@ -214,6 +229,25 @@ std::string compact_duration_string(double seconds) {
     return buffer;
   }
   return duration_string(seconds);
+}
+
+void draw_workspace_splitter(ImGuiMouseCursor cursor) {
+  const bool active = ImGui::IsItemActive();
+  const bool hovered = ImGui::IsItemHovered();
+  const ImVec2 minimum = ImGui::GetItemRectMin();
+  const ImVec2 maximum = ImGui::GetItemRectMax();
+  const ImU32 color = ImGui::GetColorU32(active ? ImGuiCol_SeparatorActive : (hovered ? ImGuiCol_SeparatorHovered : ImGuiCol_Separator));
+  const float thickness = active ? 2.0f : 1.0f;
+  if (cursor == ImGuiMouseCursor_ResizeEW) {
+    const float x = 0.5f * (minimum.x + maximum.x);
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(x, minimum.y), ImVec2(x, maximum.y), color, thickness);
+  } else {
+    const float y = 0.5f * (minimum.y + maximum.y);
+    ImGui::GetWindowDrawList()->AddLine(ImVec2(minimum.x, y), ImVec2(maximum.x, y), color, thickness);
+  }
+  if (hovered || active) {
+    ImGui::SetMouseCursor(cursor);
+  }
 }
 
 std::string memory_size_string(uint64_t bytes) {
@@ -3477,6 +3511,13 @@ void UI::build_status_bar(const BuildContext& ctx) {
         core_status += format_string("  |  %u %s", status.completed_units, unit);
       }
     }
+    const bool path_progress_visible = ((status.state == RendererStatusState::Running) || (status.state == RendererStatusState::Finishing)) &&
+                                       (status.path_phase != RendererPathPhase::None) && (status.total_path_count > 0u);
+    double path_progress = 0.0;
+    if (path_progress_visible) {
+      path_progress = std::min(1.0, static_cast<double>(status.completed_path_count) / static_cast<double>(status.total_path_count));
+      core_status += format_string("  |  %s %.1f%%", renderer_path_phase_short_name(status.path_phase), 100.0 * path_progress);
+    }
 
     std::string timing_status = {};
     if (status.elapsed_available) {
@@ -3503,8 +3544,15 @@ void UI::build_status_bar(const BuildContext& ctx) {
     const bool performance_fits = (ImGui::CalcTextSize(primary_status.c_str()).x + reserved_width) <= available_width;
 
     std::string detailed_status = {};
+    if (path_progress_visible) {
+      detailed_status = format_string("%s: %llu / %llu (%.1f%%)", renderer_path_phase_name(status.path_phase), static_cast<unsigned long long>(status.completed_path_count),
+        static_cast<unsigned long long>(status.total_path_count), 100.0 * path_progress);
+    }
     if (status.elapsed_available) {
-      detailed_status = "Elapsed: " + duration_string(status.elapsed_seconds);
+      if (detailed_status.empty() == false) {
+        detailed_status += "\n";
+      }
+      detailed_status += "Elapsed: " + duration_string(status.elapsed_seconds);
     }
     if (status.remaining_available) {
       if (detailed_status.empty() == false) {
@@ -3561,7 +3609,7 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
   const bool explorer_visible = (_ui_setup & UIObjects) != 0u;
   const bool inspector_visible = (_ui_setup & UIProperties) != 0u;
   const bool diagnostics_visible = (_ui_setup & UIMemoryDiagnostics) != 0u;
-  constexpr float splitter_size = 5.0f;
+  constexpr float splitter_size = 8.0f;
   constexpr float minimum_viewport_width = 320.0f;
   constexpr float minimum_panel_width = 220.0f;
   constexpr float minimum_inspector_width = 300.0f;
@@ -3624,9 +3672,7 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
     if (ImGui::IsItemActive()) {
       _explorer_width = std::max(minimum_panel_width, _explorer_width + ImGui::GetIO().MouseDelta.x);
     }
-    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    }
+    draw_workspace_splitter(ImGuiMouseCursor_ResizeEW);
     ImGui::EndChild();
     ImGui::PopStyleVar();
     cursor_x += splitter_size;
@@ -3715,9 +3761,7 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
     if (ImGui::IsItemActive()) {
       _inspector_width = std::max(minimum_inspector_width, _inspector_width - ImGui::GetIO().MouseDelta.x);
     }
-    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-    }
+    draw_workspace_splitter(ImGuiMouseCursor_ResizeEW);
     ImGui::EndChild();
     ImGui::PopStyleVar();
     cursor_x += splitter_size;
@@ -3746,9 +3790,7 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
     if (ImGui::IsItemActive()) {
       _diagnostics_height = std::max(150.0f, _diagnostics_height - ImGui::GetIO().MouseDelta.y);
     }
-    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-    }
+    draw_workspace_splitter(ImGuiMouseCursor_ResizeNS);
     ImGui::EndChild();
     ImGui::PopStyleVar();
 
@@ -3818,8 +3860,14 @@ void UI::build_debug_info_content() {
 
   if (has_integrator_debug_info) {
     const auto debug_info = _current_integrator->status().debug_info;
-    if (ImGui::BeginTable("##integrator_debug_info", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-      ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthStretch);
+    float metric_width = 160.0f;
+    for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
+      metric_width = std::max(metric_width, ImGui::CalcTextSize(debug_info[i].title).x);
+    }
+    metric_width = std::min(metric_width, 480.0f);
+    const ImGuiTableFlags table_flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX | ImGuiTableFlags_BordersInnerV;
+    if (ImGui::BeginTable("##integrator_debug_info", 2, table_flags)) {
+      ImGui::TableSetupColumn("Metric", ImGuiTableColumnFlags_WidthFixed, metric_width);
       ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthFixed, 88.0f);
       for (uint64_t i = 0, e = _current_integrator->status().debug_info_count; i < e; ++i) {
         ImGui::TableNextRow();

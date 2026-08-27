@@ -270,6 +270,8 @@ struct CPUUPBPImpl {
     UPBPRecursivePathWeights weights = {};
     std::vector<UPBPBeamReference> beams = {};
     std::vector<UPBPPreparedBeam> prepared_beams = {};
+    UPBPSpatialQueryState pb2d_query_state = {};
+    UPBPSpatialQueryState bb1d_query_state = {};
   };
 
   struct LightTask : public Task {
@@ -373,8 +375,8 @@ struct CPUUPBPImpl {
   UPBPPointIndex surface_index = {};
   UPBPPointIndex pp3d_index = {};
   UPBPPointIndex pb2d_index = {};
-  UPBPBeamIndex bp2d_index = {};
-  UPBPBeamIndex bb1d_index = {};
+  UPBPBeamGrid bp2d_index = {};
+  UPBPBeamGrid bb1d_index = {};
   std::vector<CameraWorkspace> camera_workspaces = {};
 
   std::atomic<bool> failure_claimed = false;
@@ -384,6 +386,7 @@ struct CPUUPBPImpl {
   uint64_t memory_budget_bytes = 0u;
   uint64_t fixed_depth_light_path_storage_bytes = 0u;
   std::atomic<uint64_t> accounted_light_storage_bytes = 0u;
+  std::atomic<uint64_t> evaluated_light_path_count = 0u;
   std::atomic<uint64_t> evaluated_camera_path_count = 0u;
   std::atomic<uint64_t> bb1d_query_count = 0u;
   std::atomic<uint64_t> bb1d_candidate_count = 0u;
@@ -477,6 +480,21 @@ struct CPUUPBPImpl {
     return stage == Stage::Light ? "UPBP building light paths" : "UPBP evaluating camera paths";
   }
 
+  Integrator::PathProgress path_progress() const {
+    if (stage == Stage::Light) {
+      return {
+        .phase = Integrator::PathProgress::Phase::Light,
+        .completed_path_count = evaluated_light_path_count.load(std::memory_order_relaxed),
+        .total_path_count = iteration.light_subpath_count,
+      };
+    }
+    return {
+      .phase = Integrator::PathProgress::Phase::Camera,
+      .completed_path_count = evaluated_camera_path_count.load(std::memory_order_relaxed),
+      .total_path_count = iteration.camera_subpath_count,
+    };
+  }
+
   void reset_iteration_diagnostics() {
     iteration_setup_time_ms = 0.0;
     light_path_time_ms = 0.0;
@@ -485,6 +503,7 @@ struct CPUUPBPImpl {
     spatial_index_time_ms = 0.0;
     light_splat_time_ms = 0.0;
     camera_evaluation_time_ms = 0.0;
+    evaluated_light_path_count.store(0u, std::memory_order_relaxed);
     evaluated_camera_path_count.store(0u, std::memory_order_relaxed);
     bb1d_query_count.store(0u, std::memory_order_relaxed);
     bb1d_candidate_count.store(0u, std::memory_order_relaxed);
@@ -915,6 +934,8 @@ struct CPUUPBPImpl {
   void build_light_paths_impl(const uint32_t begin, const uint32_t end, const uint32_t) {
     const Scene& scene = rt.scene();
     const uint32_t maximum_vertices = scene.options.max_path_length + 1u;
+    uint64_t unpublished_path_count = 0u;
+    constexpr uint64_t publish_interval = 16u;
     for (uint32_t path_index = begin; running() && (path_index < end); ++path_index) {
       UPBPLightSubpathResult& light_path = light_paths[path_index];
       if (upbp_build_light_subpath(rt, scene, iteration.spect, scene.options.random_seed, status.current_iteration, path_index, maximum_vertices, options.maximum_boundary_count,
@@ -951,6 +972,14 @@ struct CPUUPBPImpl {
       if (account_light_path_storage(path_index) == false) {
         return;
       }
+      ++unpublished_path_count;
+      if (unpublished_path_count >= publish_interval) {
+        evaluated_light_path_count.fetch_add(unpublished_path_count, std::memory_order_relaxed);
+        unpublished_path_count = 0u;
+      }
+    }
+    if (unpublished_path_count > 0u) {
+      evaluated_light_path_count.fetch_add(unpublished_path_count, std::memory_order_relaxed);
     }
   }
 
@@ -1182,19 +1211,19 @@ struct CPUUPBPImpl {
 
   bool build_spatial_indices() {
     uint64_t required = current_light_storage_bytes();
-    auto add_point_index_growth = [this, &required](const UPBPPointIndex& index, const uint32_t count, const bool include_beam_acceleration) {
+    auto add_point_index_growth = [this, &required](const UPBPPointIndex& index, const uint32_t count) {
       uint64_t projected = 0u;
-      if (index.projected_storage_bytes(count, include_beam_acceleration, projected) == false) {
+      if (index.projected_storage_bytes(count, projected) == false) {
         fail("UPBP spatial-index storage estimate overflowed 64-bit size arithmetic");
         return false;
       }
       const uint64_t current = index.storage_bytes();
       return upbp_checked_add(required, projected - current, required);
     };
-    auto add_beam_index_growth = [this, &required](const UPBPBeamIndex& index, const uint32_t count) {
+    auto add_beam_grid_growth = [this, &required](const UPBPBeamGrid& index, const UPBPBeamReference* beams, const uint32_t count, const float radius) {
       uint64_t projected = 0u;
-      if (index.projected_storage_bytes(count, projected) == false) {
-        fail("UPBP spatial-index storage estimate overflowed 64-bit size arithmetic");
+      if (index.projected_storage_bytes(beams, count, radius, projected) == false) {
+        fail("UPBP beam-grid storage projection failed");
         return false;
       }
       const uint64_t current = index.storage_bytes();
@@ -1218,11 +1247,13 @@ struct CPUUPBPImpl {
       fail("UPBP selected BB1D tracking-event storage preflight overflowed 64-bit size arithmetic");
       return false;
     }
-    if ((iteration.mis.enabled(UPBPTechnique::Surface) && (add_point_index_growth(surface_index, static_cast<uint32_t>(surface_points.size()), false) == false)) ||
-        (iteration.mis.enabled(UPBPTechnique::PP3D) && (add_point_index_growth(pp3d_index, static_cast<uint32_t>(medium_points.size()), false) == false)) ||
-        (iteration.mis.enabled(UPBPTechnique::PB2D) && (add_point_index_growth(pb2d_index, static_cast<uint32_t>(medium_points.size()), true) == false)) ||
-        (iteration.mis.enabled(UPBPTechnique::BP2D) && (add_beam_index_growth(bp2d_index, static_cast<uint32_t>(light_beams.size())) == false)) ||
-        (iteration.mis.enabled(UPBPTechnique::BB1D) && (add_beam_index_growth(bb1d_index, static_cast<uint32_t>(selected_bb1d_beams.size())) == false))) {
+    if ((iteration.mis.enabled(UPBPTechnique::Surface) && (add_point_index_growth(surface_index, static_cast<uint32_t>(surface_points.size())) == false)) ||
+        (iteration.mis.enabled(UPBPTechnique::PP3D) && (add_point_index_growth(pp3d_index, static_cast<uint32_t>(medium_points.size())) == false)) ||
+        (iteration.mis.enabled(UPBPTechnique::PB2D) && (add_point_index_growth(pb2d_index, static_cast<uint32_t>(medium_points.size())) == false)) ||
+        (iteration.mis.enabled(UPBPTechnique::BP2D) &&
+          (add_beam_grid_growth(bp2d_index, light_beams.data(), static_cast<uint32_t>(light_beams.size()), static_cast<float>(iteration.bp2d_radius)) == false)) ||
+        (iteration.mis.enabled(UPBPTechnique::BB1D) &&
+          (add_beam_grid_growth(bb1d_index, selected_bb1d_beams.data(), static_cast<uint32_t>(selected_bb1d_beams.size()), static_cast<float>(iteration.bb1d_radius)) == false))) {
       fail("UPBP spatial-index storage preflight overflowed 64-bit size arithmetic");
       return false;
     }
@@ -1234,44 +1265,32 @@ struct CPUUPBPImpl {
 
     try {
       if (iteration.mis.enabled(UPBPTechnique::Surface) && (surface_points.empty() == false) &&
-          (surface_index.build(surface_points.data(), static_cast<uint32_t>(surface_points.size()), static_cast<float>(iteration.surface_radius), false) == false)) {
+          (surface_index.build(surface_points.data(), static_cast<uint32_t>(surface_points.size()), static_cast<float>(iteration.surface_radius)) == false)) {
         fail("UPBP surface-point index construction failed");
         return false;
       }
       if (iteration.mis.enabled(UPBPTechnique::PP3D) && (medium_points.empty() == false) &&
-          (pp3d_index.build(medium_points.data(), static_cast<uint32_t>(medium_points.size()), static_cast<float>(iteration.pp3d_radius), false) == false)) {
+          (pp3d_index.build(medium_points.data(), static_cast<uint32_t>(medium_points.size()), static_cast<float>(iteration.pp3d_radius)) == false)) {
         fail("UPBP PP3D point index construction failed");
         return false;
       }
-      if (iteration.mis.enabled(UPBPTechnique::PB2D) && (medium_points.empty() == false) &&
-          (pb2d_index.build(medium_points.data(), static_cast<uint32_t>(medium_points.size()), static_cast<float>(iteration.pb2d_radius), true) == false)) {
-        fail("UPBP PB2D point index construction failed");
-        return false;
+      if (iteration.mis.enabled(UPBPTechnique::PB2D) && (medium_points.empty() == false)) {
+        float cell_size = 0.0f;
+        if ((UPBPPointIndex::beam_query_cell_size(medium_points.data(), static_cast<uint32_t>(medium_points.size()), static_cast<float>(iteration.pb2d_radius), cell_size) ==
+              false) ||
+            (pb2d_index.build(medium_points.data(), static_cast<uint32_t>(medium_points.size()), cell_size) == false)) {
+          fail("UPBP PB2D point index construction failed");
+          return false;
+        }
       }
       if (iteration.mis.enabled(UPBPTechnique::BP2D) && (light_beams.empty() == false) &&
-          (bp2d_index.build(light_beams.data(), static_cast<uint32_t>(light_beams.size()), static_cast<float>(iteration.bp2d_radius)) == false)) {
+          (bp2d_index.build(light_beams.data(), static_cast<uint32_t>(light_beams.size()), static_cast<float>(iteration.bp2d_radius), rt.scheduler()) == false)) {
         fail("UPBP BP2D beam index construction failed");
         return false;
       }
-      if (iteration.mis.enabled(UPBPTechnique::BP2D) && (light_beams.empty() == false) && (bp2d_index.reorder_by_leaf_layout(prepared_bp2d_beams) == false)) {
-        fail("UPBP BP2D prepared-beam layout failed");
-        return false;
-      }
-      if (iteration.mis.enabled(UPBPTechnique::BP2D) && (light_beams.empty() == false) && (bp2d_index.reorder_by_leaf_layout(prepared_bp2d_validity) == false)) {
-        fail("UPBP BP2D validity layout failed");
-        return false;
-      }
       if (iteration.mis.enabled(UPBPTechnique::BB1D) && (selected_bb1d_beams.empty() == false) &&
-          (bb1d_index.build(selected_bb1d_beams.data(), static_cast<uint32_t>(selected_bb1d_beams.size()), static_cast<float>(iteration.bb1d_radius)) == false)) {
+          (bb1d_index.build(selected_bb1d_beams.data(), static_cast<uint32_t>(selected_bb1d_beams.size()), static_cast<float>(iteration.bb1d_radius), rt.scheduler()) == false)) {
         fail("UPBP BB1D beam index construction failed");
-        return false;
-      }
-      if (iteration.mis.enabled(UPBPTechnique::BB1D) && (selected_bb1d_beams.empty() == false) && (bb1d_index.reorder_by_leaf_layout(prepared_bb1d_beams) == false)) {
-        fail("UPBP BB1D prepared-beam layout failed");
-        return false;
-      }
-      if (iteration.mis.enabled(UPBPTechnique::BB1D) && (selected_bb1d_beams.empty() == false) && (bb1d_index.reorder_by_leaf_layout(prepared_bb1d_validity) == false)) {
-        fail("UPBP BB1D validity layout failed");
         return false;
       }
       if (iteration.mis.enabled(UPBPTechnique::BB1D) && (selected_bb1d_beams.empty() == false)) {
@@ -1347,7 +1366,8 @@ struct CPUUPBPImpl {
     return query_valid && evaluation_valid;
   }
 
-  bool evaluate_pb2d(const std::vector<UPBPBeamReference>& camera_beams, const std::vector<UPBPPreparedBeam>& prepared_camera_beams, SpectralResponse& value) {
+  bool evaluate_pb2d(const std::vector<UPBPBeamReference>& camera_beams, const std::vector<UPBPPreparedBeam>& prepared_camera_beams, UPBPSpatialQueryState& query_state,
+    SpectralResponse& value) {
     if (pb2d_index.size() == 0u) {
       return true;
     }
@@ -1365,7 +1385,7 @@ struct CPUUPBPImpl {
       }
       const Medium& medium = rt.scene().mediums[camera_beam.medium_index];
       bool evaluation_valid = true;
-      const bool query_valid = pb2d_index.query_beam(camera_beam, static_cast<float>(iteration.pb2d_radius),
+      const bool query_valid = pb2d_index.query_beam(camera_beam, static_cast<float>(iteration.pb2d_radius), query_state,
         [this, &medium, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid](const UPBPPointReference& point, const UPBPPointBeamIntersection& intersection) {
           if (evaluation_valid == false) {
             return;
@@ -1464,8 +1484,8 @@ struct CPUUPBPImpl {
     return query_valid && evaluation_valid;
   }
 
-  bool evaluate_bb1d(const std::vector<UPBPBeamReference>& camera_beams, const std::vector<UPBPPreparedBeam>& prepared_camera_beams, SpectralResponse& value,
-    CameraEvaluationStatistics& statistics) {
+  bool evaluate_bb1d(const std::vector<UPBPBeamReference>& camera_beams, const std::vector<UPBPPreparedBeam>& prepared_camera_beams, UPBPSpatialQueryState& query_state,
+    SpectralResponse& value, CameraEvaluationStatistics& statistics) {
     if (bb1d_index.size() == 0u) {
       return true;
     }
@@ -1482,7 +1502,7 @@ struct CPUUPBPImpl {
       ++statistics.queries;
       bool evaluation_valid = true;
       const bool query_valid = bb1d_index.query_beam_intersections(
-        camera_beam, static_cast<float>(iteration.bb1d_radius),
+        camera_beam, static_cast<float>(iteration.bb1d_radius), query_state,
         [this, &camera_beam, prepared_camera_beam_valid, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam, const uint32_t light_beam_index) {
           ++statistics.candidates;
           constexpr uint64_t publish_interval = 65536u;
@@ -1660,7 +1680,7 @@ struct CPUUPBPImpl {
       }
       if (iteration.mis.enabled(UPBPTechnique::PB2D)) {
         begin_camera_phase();
-        if (evaluate_pb2d(camera_beams, prepared_camera_beams, value) == false) {
+        if (evaluate_pb2d(camera_beams, prepared_camera_beams, workspace.pb2d_query_state, value) == false) {
           fail("UPBP PB2D evaluation failed at pixel path " + std::to_string(path_index));
           return;
         }
@@ -1668,7 +1688,7 @@ struct CPUUPBPImpl {
       }
       if (iteration.mis.enabled(UPBPTechnique::BB1D)) {
         begin_camera_phase();
-        if (evaluate_bb1d(camera_beams, prepared_camera_beams, value, statistics) == false) {
+        if (evaluate_bb1d(camera_beams, prepared_camera_beams, workspace.bb1d_query_state, value, statistics) == false) {
           fail("UPBP BB1D evaluation failed at pixel path " + std::to_string(path_index));
           return;
         }
@@ -1799,6 +1819,10 @@ CPUUPBP::~CPUUPBP() {
 
 const char* CPUUPBP::status_str() const {
   return _private->status_string();
+}
+
+Integrator::PathProgress CPUUPBP::path_progress() const {
+  return current_state == State::Stopped ? PathProgress{} : _private->path_progress();
 }
 
 void CPUUPBP::run() {

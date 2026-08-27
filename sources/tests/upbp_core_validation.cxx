@@ -937,15 +937,20 @@ bool validate_point_index() {
     points.emplace_back(etx::UPBPPointReference{position, index / 8u, index % 8u});
   }
 
-  etx::UPBPPointIndex index = {};
-  bool valid = index.build(points.data(), static_cast<uint32_t>(points.size()), radius, true);
-  valid = (index.size() == point_count) && valid;
+  etx::UPBPPointIndex point_index = {};
+  etx::UPBPPointIndex beam_index = {};
+  etx::UPBPSpatialQueryState query_state = {};
+  bool valid = point_index.build(points.data(), static_cast<uint32_t>(points.size()), radius);
+  float beam_cell_size = 0.0f;
+  valid = etx::UPBPPointIndex::beam_query_cell_size(points.data(), static_cast<uint32_t>(points.size()), radius, beam_cell_size) && (beam_cell_size >= radius) && valid;
+  valid = beam_index.build(points.data(), static_cast<uint32_t>(points.size()), beam_cell_size) && valid;
+  valid = (point_index.size() == point_count) && (beam_index.size() == point_count) && valid;
   for (uint32_t probe_index = 0u; probe_index < 256u; ++probe_index) {
     const float2 probe_xy = sampler.next_2d();
     const float3 probe = (float3{probe_xy.x, probe_xy.y, sampler.next()} - float3{0.5f, 0.5f, 0.5f}) * 20.0f;
     std::vector<uint64_t> accelerated;
     double accelerated_estimate = 0.0;
-    const bool query_valid = index.query(probe, radius, [&accelerated, &accelerated_estimate](const etx::UPBPPointReference& point, const float distance_squared) {
+    const bool query_valid = point_index.query(probe, radius, [&accelerated, &accelerated_estimate](const etx::UPBPPointReference& point, const float distance_squared) {
       accelerated.emplace_back((static_cast<uint64_t>(point.path_index) << 32u) | point.vertex_index);
       const double value = 1.0 + static_cast<double>(point.path_index) * 0.01 + static_cast<double>(point.vertex_index) * 0.001;
       accelerated_estimate += value * etx::upbp_kernel_value(etx::UPBPKernel::Epanechnikov, 3u, radius, distance_squared);
@@ -981,7 +986,7 @@ bool validate_point_index() {
     direction = normalize(direction);
     const etx::UPBPBeamReference beam = {origin, direction, 0.25f + 20.0f * sampler.next()};
     std::vector<uint64_t> accelerated;
-    const bool query_valid = index.query_beam(beam, radius, [&accelerated](const etx::UPBPPointReference& point, const etx::UPBPPointBeamIntersection&) {
+    const bool query_valid = beam_index.query_beam(beam, radius, query_state, [&accelerated](const etx::UPBPPointReference& point, const etx::UPBPPointBeamIntersection&) {
       accelerated.emplace_back((static_cast<uint64_t>(point.path_index) << 32u) | point.vertex_index);
     });
     valid = query_valid && valid;
@@ -1001,7 +1006,7 @@ bool validate_point_index() {
     valid = (accelerated == exhaustive) && valid;
   }
 
-  valid = (index.query({}, radius * 2.0f,
+  valid = (point_index.query({}, radius * 2.0f,
              [](const etx::UPBPPointReference&, float) {
              }) == false) &&
           valid;
@@ -1169,19 +1174,41 @@ bool validate_beam_geometry_and_index() {
     beams.emplace_back(etx::UPBPBeamReference{origin, direction, 0.1f + 2.9f * sampler.next(), index % 3u, index, index % 8u});
   }
 
-  etx::UPBPBeamIndex index = {};
-  bool valid = index.build(beams.data(), static_cast<uint32_t>(beams.size()), radius);
+  etx::UPBPBeamGrid index = {};
+  etx::UPBPBeamGrid sequential_index = {};
+  etx::UPBPSpatialQueryState query_state = {};
+  etx::UPBPSpatialQueryState sequential_query_state = {};
+  etx::TaskScheduler scheduler = {};
+  uint64_t projected_storage = 0u;
+  bool valid = index.projected_storage_bytes(beams.data(), static_cast<uint32_t>(beams.size()), radius, projected_storage);
+  valid = index.build(beams.data(), static_cast<uint32_t>(beams.size()), radius, scheduler) && valid;
+  valid = sequential_index.build(beams.data(), static_cast<uint32_t>(beams.size()), radius) && valid;
   valid = (index.size() == beam_count) && valid;
+  valid = (sequential_index.size() == beam_count) && (projected_storage >= index.storage_bytes()) && valid;
   for (uint32_t probe_index = 0u; probe_index < 128u; ++probe_index) {
     const float2 point_xy = sampler.next_2d();
     const float3 point = (float3{point_xy.x, point_xy.y, sampler.next()} - float3{0.5f, 0.5f, 0.5f}) * 12.0f;
     std::vector<uint32_t> accelerated;
-    valid = index.query_point(point, [&accelerated, &point](const etx::UPBPBeamReference& beam) {
-      etx::UPBPPointBeamIntersection intersection = {};
-      if (etx::upbp_intersect_point_beam(point, beam, radius, intersection)) {
-        accelerated.emplace_back(beam.path_index);
-      }
-    }) && valid;
+    std::vector<uint32_t> sequential;
+    valid = index.query_point_intersections(
+              point, radius,
+              [](const etx::UPBPBeamReference&, const uint32_t) {
+                return true;
+              },
+              [&accelerated](const etx::UPBPBeamReference& beam, const uint32_t, const etx::UPBPPointBeamIntersection&) {
+                accelerated.emplace_back(beam.path_index);
+              }) &&
+            valid;
+    valid = sequential_index.query_point_intersections(
+              point, radius,
+              [](const etx::UPBPBeamReference&, const uint32_t) {
+                return true;
+              },
+              [&sequential](const etx::UPBPBeamReference& beam, const uint32_t, const etx::UPBPPointBeamIntersection&) {
+                sequential.emplace_back(beam.path_index);
+              }) &&
+            valid;
+    valid = (accelerated == sequential) && valid;
 
     std::vector<uint32_t> exhaustive;
     for (const etx::UPBPBeamReference& beam : beams) {
@@ -1201,12 +1228,26 @@ bool validate_beam_geometry_and_index() {
   for (uint32_t probe_index = 0u; probe_index < 64u; ++probe_index) {
     const etx::UPBPBeamReference& probe = beams[probe_index * 7u];
     std::vector<uint32_t> accelerated;
-    valid = index.query_beam(probe, radius, [&accelerated, &probe](const etx::UPBPBeamReference& beam) {
-      etx::UPBPBeamBeamIntersection intersection = {};
-      if (etx::upbp_intersect_beams(probe, beam, radius, intersection)) {
-        accelerated.emplace_back(beam.path_index);
-      }
-    }) && valid;
+    std::vector<uint32_t> sequential;
+    valid = index.query_beam_intersections(
+              probe, radius, query_state,
+              [](const etx::UPBPBeamReference&, const uint32_t) {
+                return true;
+              },
+              [&accelerated](const etx::UPBPBeamReference& beam, const uint32_t, const etx::UPBPBeamBeamIntersection&) {
+                accelerated.emplace_back(beam.path_index);
+              }) &&
+            valid;
+    valid = sequential_index.query_beam_intersections(
+              probe, radius, sequential_query_state,
+              [](const etx::UPBPBeamReference&, const uint32_t) {
+                return true;
+              },
+              [&sequential](const etx::UPBPBeamReference& beam, const uint32_t, const etx::UPBPBeamBeamIntersection&) {
+                sequential.emplace_back(beam.path_index);
+              }) &&
+            valid;
+    valid = (accelerated == sequential) && valid;
 
     std::vector<uint32_t> exhaustive;
     for (const etx::UPBPBeamReference& beam : beams) {
@@ -1228,19 +1269,6 @@ bool validate_beam_geometry_and_index() {
     std::sort(accelerated.begin(), accelerated.end());
     std::sort(exhaustive.begin(), exhaustive.end());
     valid = (accelerated == exhaustive) && valid;
-
-    std::vector<uint32_t> fused;
-    valid = index.query_beam_intersections(
-              probe, radius,
-              [](const etx::UPBPBeamReference&, const uint32_t) {
-                return true;
-              },
-              [&fused](const etx::UPBPBeamReference& beam, const uint32_t, const etx::UPBPBeamBeamIntersection&) {
-                fused.emplace_back(beam.path_index);
-              }) &&
-            valid;
-    std::sort(fused.begin(), fused.end());
-    valid = (fused == exhaustive) && valid;
   }
 
   const etx::UPBPBeamReference parallel_a = {{}, {1.0f, 0.0f, 0.0f}, 2.0f, 0u, 0u, 0u};

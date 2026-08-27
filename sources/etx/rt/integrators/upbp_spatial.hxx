@@ -1,18 +1,53 @@
 #pragma once
 
 #include <etx/rt/integrators/upbp_core.hxx>
+#include <etx/render/host/tasks.hxx>
 
 #include <cmath>
 #include <array>
 #include <algorithm>
 #include <cstdint>
 #include <limits>
+#include <new>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace etx {
 
 struct UPBPBeamReference;
 struct UPBPPointBeamIntersection;
+
+struct UPBPSpatialQueryState {
+  void begin(const uint32_t item_count) {
+    if (_visited.size() != item_count) {
+      _visited.assign(item_count, 0u);
+      _generation = 1u;
+      return;
+    }
+    if (_generation == std::numeric_limits<uint32_t>::max()) {
+      std::fill(_visited.begin(), _visited.end(), 0u);
+      _generation = 1u;
+    } else {
+      ++_generation;
+    }
+  }
+
+  bool mark(const uint32_t item_index) {
+    if (item_index >= _visited.size()) {
+      return false;
+    }
+    if (_visited[item_index] == _generation) {
+      return false;
+    }
+    _visited[item_index] = _generation;
+    return true;
+  }
+
+ private:
+  std::vector<uint32_t> _visited = {};
+  uint32_t _generation = 0u;
+};
 
 struct UPBPPointReference {
   float3 position = {};
@@ -40,20 +75,7 @@ struct UPBPPointIndex {
     uint32_t count = 0u;
   };
 
-  struct Bounds {
-    float3 minimum = {kMaxFloat, kMaxFloat, kMaxFloat};
-    float3 maximum = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
-  };
-
-  struct Node {
-    Bounds bounds = {};
-    uint32_t first = 0u;
-    uint32_t count = 0u;
-    uint32_t left = kInvalidIndex;
-    uint32_t right = kInvalidIndex;
-  };
-
-  bool build(const UPBPPointReference* points, const uint32_t point_count, const float cell_size, const bool build_beam_acceleration) {
+  bool build(const UPBPPointReference* points, const uint32_t point_count, const float cell_size) {
     clear();
     if ((points == nullptr) || (point_count == 0u) || (cell_size <= 0.0f) || (std::isfinite(cell_size) == false)) {
       return false;
@@ -86,23 +108,39 @@ struct UPBPPointIndex {
       clear();
       return false;
     }
-    if (build_beam_acceleration) {
-      _indices.resize(point_count);
-      for (uint32_t index = 0u; index < point_count; ++index) {
-        _indices[index] = index;
-      }
-      _nodes.reserve(static_cast<size_t>(point_count) * 2u);
-      build_node(0u, point_count);
-    }
     return true;
+  }
+
+  static bool beam_query_cell_size(const UPBPPointReference* points, const uint32_t point_count, const float radius, float& result) {
+    if ((points == nullptr) || (point_count == 0u) || (radius <= 0.0f) || (std::isfinite(radius) == false)) {
+      return false;
+    }
+    float3 minimum = {kMaxFloat, kMaxFloat, kMaxFloat};
+    float3 maximum = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
+    for (uint32_t point_index = 0u; point_index < point_count; ++point_index) {
+      const float3& position = points[point_index].position;
+      if ((std::isfinite(position.x) == false) || (std::isfinite(position.y) == false) || (std::isfinite(position.z) == false)) {
+        return false;
+      }
+      minimum = min(minimum, position);
+      maximum = max(maximum, position);
+    }
+    const float3 extent = maximum - minimum;
+    const float maximum_extent = max(extent.x, max(extent.y, extent.z));
+    if ((maximum_extent < 0.0f) || (std::isfinite(maximum_extent) == false)) {
+      return false;
+    }
+    constexpr double target_points_per_cell = 4.0;
+    const double resolution = cbrt(max(1.0, static_cast<double>(point_count) / target_points_per_cell));
+    const float population_cell_size = static_cast<float>(static_cast<double>(maximum_extent) / resolution);
+    result = max(radius, std::nextafter(population_cell_size, std::numeric_limits<float>::infinity()));
+    return (result > 0.0f) && std::isfinite(result);
   }
 
   void clear() {
     _entries.clear();
     _cell_ranges.clear();
     _cell_slots.clear();
-    _indices.clear();
-    _nodes.clear();
     _cell_size = 0.0f;
     _inverse_cell_size = 0.0f;
   }
@@ -121,7 +159,7 @@ struct UPBPPointIndex {
     for (int32_t z = center.z - 1; z <= center.z + 1; ++z) {
       for (int32_t y = center.y - 1; y <= center.y + 1; ++y) {
         for (int32_t x = center.x - 1; x <= center.x + 1; ++x) {
-          visit_cell({x, y, z}, [&position, radius_squared, &visitor](const UPBPPointReference& point) {
+          visit_cell({x, y, z}, [&position, radius_squared, &visitor](const UPBPPointReference& point, const uint32_t) {
             const float3 delta = point.position - position;
             const float distance_squared = dot(delta, delta);
             if (distance_squared < radius_squared) {
@@ -135,7 +173,7 @@ struct UPBPPointIndex {
   }
 
   template <typename Visitor>
-  bool query_beam(const UPBPBeamReference& beam, float radius, Visitor&& visitor) const;
+  bool query_beam(const UPBPBeamReference& beam, float radius, UPBPSpatialQueryState& query_state, Visitor&& visitor) const;
 
   uint32_t size() const {
     return static_cast<uint32_t>(_entries.size());
@@ -143,11 +181,10 @@ struct UPBPPointIndex {
 
   uint64_t storage_bytes() const {
     return static_cast<uint64_t>(_entries.capacity()) * sizeof(Entry) + static_cast<uint64_t>(_cell_ranges.capacity()) * sizeof(CellRange) +
-           static_cast<uint64_t>(_cell_slots.capacity()) * sizeof(uint32_t) + static_cast<uint64_t>(_indices.capacity()) * sizeof(uint32_t) +
-           static_cast<uint64_t>(_nodes.capacity()) * sizeof(Node);
+           static_cast<uint64_t>(_cell_slots.capacity()) * sizeof(uint32_t);
   }
 
-  bool projected_storage_bytes(const uint32_t point_count, const bool include_beam_acceleration, uint64_t& result) const {
+  bool projected_storage_bytes(const uint32_t point_count, uint64_t& result) const {
     const uint64_t capacity = max(static_cast<uint64_t>(_entries.capacity()), static_cast<uint64_t>(point_count));
     if (capacity > std::numeric_limits<uint64_t>::max() / sizeof(Entry)) {
       return false;
@@ -168,22 +205,6 @@ struct UPBPPointIndex {
       return false;
     }
     result += cell_range_bytes + cell_slot_bytes;
-    if (include_beam_acceleration == false) {
-      return true;
-    }
-
-    const uint64_t index_capacity = max(static_cast<uint64_t>(_indices.capacity()), static_cast<uint64_t>(point_count));
-    const uint64_t node_count = static_cast<uint64_t>(point_count) * 2u;
-    const uint64_t node_capacity = max(static_cast<uint64_t>(_nodes.capacity()), node_count);
-    if ((index_capacity > std::numeric_limits<uint64_t>::max() / sizeof(uint32_t)) || (node_capacity > std::numeric_limits<uint64_t>::max() / sizeof(Node))) {
-      return false;
-    }
-    const uint64_t index_bytes = index_capacity * sizeof(uint32_t);
-    const uint64_t node_bytes = node_capacity * sizeof(Node);
-    if ((result > std::numeric_limits<uint64_t>::max() - index_bytes) || ((result + index_bytes) > std::numeric_limits<uint64_t>::max() - node_bytes)) {
-      return false;
-    }
-    result += index_bytes + node_bytes;
     return true;
   }
 
@@ -261,82 +282,6 @@ struct UPBPPointIndex {
     return true;
   }
 
-  static void extend(Bounds& target, const Bounds& source) {
-    target.minimum = min(target.minimum, source.minimum);
-    target.maximum = max(target.maximum, source.maximum);
-  }
-
-  static bool overlaps(const Bounds& first, const Bounds& second) {
-    return (first.minimum.x <= second.maximum.x) && (first.maximum.x >= second.minimum.x) && (first.minimum.y <= second.maximum.y) && (first.maximum.y >= second.minimum.y) &&
-           (first.minimum.z <= second.maximum.z) && (first.maximum.z >= second.minimum.z);
-  }
-
-  float point_component(const uint32_t entry_index, const uint32_t axis) const {
-    const float3& position = _entries[entry_index].point.position;
-    return axis == 0u ? position.x : (axis == 1u ? position.y : position.z);
-  }
-
-  uint32_t build_node(const uint32_t first, const uint32_t count) {
-    const uint32_t node_index = static_cast<uint32_t>(_nodes.size());
-    _nodes.emplace_back();
-    Bounds bounds = {};
-    for (uint32_t offset = 0u; offset < count; ++offset) {
-      const float3& position = _entries[_indices[first + offset]].point.position;
-      extend(bounds, {position, position});
-    }
-
-    _nodes[node_index].bounds = bounds;
-    _nodes[node_index].first = first;
-    _nodes[node_index].count = count;
-    if (count <= 8u) {
-      return node_index;
-    }
-
-    const float3 extent = bounds.maximum - bounds.minimum;
-    const uint32_t axis = (extent.x >= extent.y) && (extent.x >= extent.z) ? 0u : ((extent.y >= extent.z) ? 1u : 2u);
-    const uint32_t middle = first + count / 2u;
-    std::nth_element(_indices.begin() + first, _indices.begin() + middle, _indices.begin() + first + count, [this, axis](const uint32_t first_index, const uint32_t second_index) {
-      const float first_position = point_component(first_index, axis);
-      const float second_position = point_component(second_index, axis);
-      return first_position == second_position ? first_index < second_index : first_position < second_position;
-    });
-    const uint32_t left = build_node(first, middle - first);
-    const uint32_t right = build_node(middle, first + count - middle);
-    _nodes[node_index].left = left;
-    _nodes[node_index].right = right;
-    _nodes[node_index].count = 0u;
-    return node_index;
-  }
-
-  template <typename Visitor>
-  bool query_bounds(const Bounds& bounds, Visitor&& visitor) const {
-    if (_nodes.empty()) {
-      return false;
-    }
-
-    std::array<uint32_t, 128u> stack = {};
-    uint32_t stack_size = 1u;
-    stack[0u] = 0u;
-    while (stack_size > 0u) {
-      const Node& node = _nodes[stack[--stack_size]];
-      if (overlaps(node.bounds, bounds) == false) {
-        continue;
-      }
-      if (node.count > 0u) {
-        for (uint32_t offset = 0u; offset < node.count; ++offset) {
-          visitor(_entries[_indices[node.first + offset]].point);
-        }
-        continue;
-      }
-      if (stack_size + 2u > stack.size()) {
-        return false;
-      }
-      stack[stack_size++] = node.left;
-      stack[stack_size++] = node.right;
-    }
-    return true;
-  }
-
   template <typename Visitor>
   void visit_cell(const Cell& cell, Visitor&& visitor) const {
     if (_cell_slots.empty()) {
@@ -352,7 +297,8 @@ struct UPBPPointIndex {
       const CellRange& range = _cell_ranges[encoded_index - 1u];
       if (range.cell == cell) {
         for (uint32_t offset = 0u; offset < range.count; ++offset) {
-          visitor(_entries[range.first + offset].point);
+          const uint32_t entry_index = range.first + offset;
+          visitor(_entries[entry_index].point, entry_index);
         }
         return;
       }
@@ -378,8 +324,6 @@ struct UPBPPointIndex {
   std::vector<Entry> _entries = {};
   std::vector<CellRange> _cell_ranges = {};
   std::vector<uint32_t> _cell_slots = {};
-  std::vector<uint32_t> _indices = {};
-  std::vector<Node> _nodes = {};
   float _cell_size = 0.0f;
   float _inverse_cell_size = 0.0f;
 };
@@ -567,21 +511,84 @@ inline bool upbp_intersect_point_beam(const float3& point, const UPBPBeamReferen
 }
 
 template <typename Visitor>
-bool UPBPPointIndex::query_beam(const UPBPBeamReference& beam, const float radius, Visitor&& visitor) const {
-  if ((_cell_size <= 0.0f) || _nodes.empty() || (radius <= 0.0f) || (radius > _cell_size) || (std::isfinite(radius) == false) || (beam.length <= 0.0f) ||
+bool UPBPPointIndex::query_beam(const UPBPBeamReference& beam, const float radius, UPBPSpatialQueryState& query_state, Visitor&& visitor) const {
+  if ((_cell_size <= 0.0f) || _cell_slots.empty() || (radius <= 0.0f) || (radius > _cell_size) || (std::isfinite(radius) == false) || (beam.length <= 0.0f) ||
       (std::isfinite(beam.length) == false) || (fabsf(dot(beam.direction, beam.direction) - 1.0f) > 1.0e-4f)) {
     return false;
   }
 
   const float3 end = beam.origin + beam.direction * beam.length;
-  const float3 extent = {radius, radius, radius};
-  const Bounds bounds = {min(beam.origin, end) - extent, max(beam.origin, end) + extent};
-  return query_bounds(bounds, [&beam, radius, &visitor](const UPBPPointReference& point) {
-    UPBPPointBeamIntersection intersection = {};
-    if (upbp_intersect_point_beam(point.position, beam, radius, intersection)) {
-      visitor(point, intersection);
+  Cell cell = {};
+  Cell end_cell = {};
+  if ((make_cell(beam.origin, cell) == false) || (make_cell(end, end_cell) == false)) {
+    return false;
+  }
+  query_state.begin(static_cast<uint32_t>(_entries.size()));
+
+  std::array<int32_t, 3u> step = {};
+  std::array<double, 3u> next_distance = {};
+  std::array<double, 3u> distance_step = {};
+  const double infinity = std::numeric_limits<double>::infinity();
+  const std::array<int32_t, 3u> initial_cell = {cell.x, cell.y, cell.z};
+  for (uint32_t axis = 0u; axis < 3u; ++axis) {
+    const double direction = static_cast<double>(axis == 0u ? beam.direction.x : (axis == 1u ? beam.direction.y : beam.direction.z));
+    const double origin = static_cast<double>(axis == 0u ? beam.origin.x : (axis == 1u ? beam.origin.y : beam.origin.z));
+    if (direction > 0.0) {
+      step[axis] = 1;
+      const double boundary = static_cast<double>(initial_cell[axis] + 1) * static_cast<double>(_cell_size);
+      next_distance[axis] = (boundary - origin) / direction;
+      distance_step[axis] = static_cast<double>(_cell_size) / direction;
+    } else if (direction < 0.0) {
+      step[axis] = -1;
+      const double boundary = static_cast<double>(initial_cell[axis]) * static_cast<double>(_cell_size);
+      next_distance[axis] = (boundary - origin) / direction;
+      distance_step[axis] = -static_cast<double>(_cell_size) / direction;
+    } else {
+      next_distance[axis] = infinity;
+      distance_step[axis] = infinity;
     }
-  });
+    while (next_distance[axis] < 0.0) {
+      next_distance[axis] += distance_step[axis];
+    }
+  }
+
+  // With cells at least as wide as the query radius, the neighboring cells conservatively cover the beam support.
+  for (;;) {
+    for (int32_t z = cell.z - 1; z <= cell.z + 1; ++z) {
+      for (int32_t y = cell.y - 1; y <= cell.y + 1; ++y) {
+        for (int32_t x = cell.x - 1; x <= cell.x + 1; ++x) {
+          visit_cell({x, y, z}, [&beam, radius, &query_state, &visitor](const UPBPPointReference& point, const uint32_t entry_index) {
+            if (query_state.mark(entry_index) == false) {
+              return;
+            }
+            UPBPPointBeamIntersection intersection = {};
+            if (upbp_intersect_point_beam(point.position, beam, radius, intersection)) {
+              visitor(point, intersection);
+            }
+          });
+        }
+      }
+    }
+
+    const double next = min(next_distance[0u], min(next_distance[1u], next_distance[2u]));
+    if (next >= static_cast<double>(beam.length)) {
+      break;
+    }
+    for (uint32_t axis = 0u; axis < 3u; ++axis) {
+      if (next_distance[axis] != next) {
+        continue;
+      }
+      if (axis == 0u) {
+        cell.x += step[axis];
+      } else if (axis == 1u) {
+        cell.y += step[axis];
+      } else {
+        cell.z += step[axis];
+      }
+      next_distance[axis] += distance_step[axis];
+    }
+  }
+  return true;
 }
 
 struct UPBPBeamBeamIntersection {
@@ -630,176 +637,263 @@ inline bool upbp_intersect_beams(const UPBPBeamReference& first, const UPBPBeamR
   return upbp_intersect_valid_beams_squared(first, second, radius * radius, result);
 }
 
-struct UPBPBeamIndex {
+struct UPBPBeamGrid {
   struct Bounds {
     float3 minimum = {kMaxFloat, kMaxFloat, kMaxFloat};
     float3 maximum = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
   };
 
-  struct Node {
+  struct Description {
     Bounds bounds = {};
-    uint32_t first = 0u;
-    uint32_t count = 0u;
-    uint32_t escape = kInvalidIndex;
+    float cell_size = 0.0f;
+    float inverse_cell_size = 0.0f;
+    std::array<uint32_t, 3u> resolution = {};
   };
 
-  struct BeamBoundsQuery {
-    double origin_x = 0.0;
-    double origin_y = 0.0;
-    double origin_z = 0.0;
-    double direction_x = 0.0;
-    double direction_y = 0.0;
-    double direction_z = 0.0;
-    double inverse_direction_x = 0.0;
-    double inverse_direction_y = 0.0;
-    double inverse_direction_z = 0.0;
-    double maximum_distance = 0.0;
-    double radius = 0.0;
-    float radius_squared = 0.0f;
-  };
+  static constexpr uint32_t maximum_resolution = 32u;
 
-  bool build(const UPBPBeamReference* beams, const uint32_t beam_count, const float maximum_radius) {
+  bool build(const UPBPBeamReference* beams, const uint32_t beam_count, const float radius) {
+    return build_with_executor(beams, beam_count, radius, 1u, [](const uint32_t range, auto&& function) {
+      function(0u, range, 0u);
+    });
+  }
+
+  bool build(const UPBPBeamReference* beams, const uint32_t beam_count, const float radius, TaskScheduler& scheduler) {
+    return build_with_executor(beams, beam_count, radius, min(beam_count, max(1u, scheduler.max_thread_count())), [&scheduler](const uint32_t range, auto&& function) {
+      scheduler.execute(range, std::forward<decltype(function)>(function));
+    });
+  }
+
+ private:
+  template <typename Execute>
+  bool build_with_executor(const UPBPBeamReference* beams, const uint32_t beam_count, const float radius, const uint32_t shard_count, Execute&& execute) {
     clear();
-    if ((beams == nullptr) || (beam_count == 0u) || (maximum_radius <= 0.0f) || (std::isfinite(maximum_radius) == false)) {
+    Description description = {};
+    if ((describe(beams, beam_count, radius, description) == false) || (shard_count == 0u) || (shard_count > beam_count)) {
       return false;
     }
 
-    _maximum_radius = maximum_radius;
+    const uint32_t cell_count = grid_cell_count(description.resolution);
+    if (static_cast<uint64_t>(shard_count) * static_cast<uint64_t>(cell_count) > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+      return false;
+    }
+    const size_t shard_cell_count = static_cast<size_t>(shard_count) * static_cast<size_t>(cell_count);
+    std::vector<uint32_t> shard_cell_counts(shard_cell_count, 0u);
+    std::vector<uint32_t> shard_cell_marks(shard_cell_count, kInvalidIndex);
+    std::vector<uint8_t> shard_validity(shard_count, 1u);
+
+    execute(shard_count, [beams, beam_count, radius, description, cell_count, shard_count, &shard_cell_counts, &shard_cell_marks, &shard_validity](const uint32_t begin,
+                           const uint32_t end, const uint32_t) {
+      for (uint32_t shard_index = begin; shard_index < end; ++shard_index) {
+        uint32_t* counts = shard_cell_counts.data() + static_cast<size_t>(shard_index) * cell_count;
+        uint32_t* marks = shard_cell_marks.data() + static_cast<size_t>(shard_index) * cell_count;
+        const uint32_t first_beam = static_cast<uint32_t>((static_cast<uint64_t>(beam_count) * shard_index) / shard_count);
+        const uint32_t end_beam = static_cast<uint32_t>((static_cast<uint64_t>(beam_count) * (shard_index + 1u)) / shard_count);
+        for (uint32_t beam_index = first_beam; beam_index < end_beam; ++beam_index) {
+          if (enumerate_beam_cells(beams[beam_index], radius, description, [beam_index, counts, marks](const uint32_t cell_index) {
+                if (marks[cell_index] != beam_index) {
+                  marks[cell_index] = beam_index;
+                  ++counts[cell_index];
+                }
+              }) == false) {
+            shard_validity[shard_index] = 0u;
+            break;
+          }
+        }
+      }
+    });
+    if (std::find(shard_validity.begin(), shard_validity.end(), 0u) != shard_validity.end()) {
+      return false;
+    }
+
+    _cell_offsets.resize(static_cast<size_t>(cell_count) + 1u);
+    uint64_t entry_count = 0u;
+    for (uint32_t cell_index = 0u; cell_index < cell_count; ++cell_index) {
+      _cell_offsets[cell_index] = static_cast<uint32_t>(entry_count);
+      for (uint32_t shard_index = 0u; shard_index < shard_count; ++shard_index) {
+        const uint32_t count = shard_cell_counts[static_cast<size_t>(shard_index) * cell_count + cell_index];
+        if (entry_count > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) - count) {
+          clear();
+          return false;
+        }
+        entry_count += count;
+      }
+    }
+    if ((entry_count == 0u) || (entry_count >= static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()))) {
+      clear();
+      return false;
+    }
+    _cell_offsets[cell_count] = static_cast<uint32_t>(entry_count);
+    _beam_indices.resize(static_cast<size_t>(entry_count));
+
+    for (uint32_t cell_index = 0u; cell_index < cell_count; ++cell_index) {
+      uint32_t offset = _cell_offsets[cell_index];
+      for (uint32_t shard_index = 0u; shard_index < shard_count; ++shard_index) {
+        const size_t shard_cell_index = static_cast<size_t>(shard_index) * cell_count + cell_index;
+        const uint32_t count = shard_cell_counts[shard_cell_index];
+        shard_cell_counts[shard_cell_index] = offset;
+        offset += count;
+      }
+    }
+    std::fill(shard_cell_marks.begin(), shard_cell_marks.end(), kInvalidIndex);
+
     _beams.assign(beams, beams + beam_count);
-    _beam_bounds.resize(beam_count);
-    _indices.resize(beam_count);
-    for (uint32_t index = 0u; index < beam_count; ++index) {
-      _indices[index] = index;
-      if (beam_valid(_beams[index]) == false) {
-        clear();
-        return false;
+    _bounds = description.bounds;
+    _cell_size = description.cell_size;
+    _inverse_cell_size = description.inverse_cell_size;
+    _resolution = description.resolution;
+    _maximum_radius = radius;
+    std::fill(shard_validity.begin(), shard_validity.end(), 1u);
+    execute(shard_count, [this, beam_count, radius, description, cell_count, shard_count, &shard_cell_counts, &shard_cell_marks, &shard_validity](const uint32_t begin,
+                           const uint32_t end, const uint32_t) {
+      for (uint32_t shard_index = begin; shard_index < end; ++shard_index) {
+        uint32_t* offsets = shard_cell_counts.data() + static_cast<size_t>(shard_index) * cell_count;
+        uint32_t* marks = shard_cell_marks.data() + static_cast<size_t>(shard_index) * cell_count;
+        const uint32_t first_beam = static_cast<uint32_t>((static_cast<uint64_t>(beam_count) * shard_index) / shard_count);
+        const uint32_t end_beam = static_cast<uint32_t>((static_cast<uint64_t>(beam_count) * (shard_index + 1u)) / shard_count);
+        for (uint32_t beam_index = first_beam; beam_index < end_beam; ++beam_index) {
+          if (enumerate_beam_cells(_beams[beam_index], radius, description, [this, beam_index, offsets, marks](const uint32_t cell_index) {
+                if (marks[cell_index] != beam_index) {
+                  marks[cell_index] = beam_index;
+                  _beam_indices[offsets[cell_index]++] = beam_index;
+                }
+              }) == false) {
+            shard_validity[shard_index] = 0u;
+            break;
+          }
+        }
       }
-      _beam_bounds[index] = beam_bounds(_beams[index]);
+    });
+    if (std::find(shard_validity.begin(), shard_validity.end(), 0u) != shard_validity.end()) {
+      clear();
+      return false;
     }
-    _nodes.reserve(static_cast<size_t>(beam_count) * 2u);
-    build_node(0u, beam_count, 0u);
-    _source_indices = _indices;
-    for (uint32_t index = 0u; index < beam_count; ++index) {
-      _indices[_source_indices[index]] = index;
-    }
-    for (uint32_t index = 0u; index < beam_count; ++index) {
-      while (_indices[index] != index) {
-        const uint32_t destination = _indices[index];
-        std::swap(_beams[index], _beams[destination]);
-        std::swap(_beam_bounds[index], _beam_bounds[destination]);
-        std::swap(_indices[index], _indices[destination]);
-      }
-    }
-    _indices = {};
     return true;
   }
 
+ public:
   void clear() {
     _beams.clear();
-    _beam_bounds.clear();
-    _source_indices.clear();
-    _indices.clear();
-    _nodes.clear();
+    _beam_indices.clear();
+    _cell_offsets.clear();
+    _bounds = {};
+    _cell_size = 0.0f;
+    _inverse_cell_size = 0.0f;
+    _resolution = {};
     _maximum_radius = 0.0f;
-  }
-
-  template <typename Visitor>
-  bool query_point(const float3& point, Visitor&& visitor) const {
-    return query_point(point, _maximum_radius, std::forward<Visitor>(visitor));
-  }
-
-  template <typename Visitor>
-  bool query_point(const float3& point, const float radius, Visitor&& visitor) const {
-    if (_nodes.empty() || (radius <= 0.0f) || (radius > _maximum_radius) || (std::isfinite(point.x) == false) || (std::isfinite(point.y) == false) ||
-        (std::isfinite(point.z) == false)) {
-      return false;
-    }
-    return traverse(
-      [&point, radius](const Bounds& bounds) {
-        return overlaps_point(bounds, point, radius);
-      },
-      [this, &point, radius, &visitor](const uint32_t beam_index) {
-        if (overlaps_point(_beam_bounds[beam_index], point, radius)) {
-          visitor(_beams[beam_index]);
-        }
-      });
   }
 
   template <typename Candidate, typename Visitor>
   bool query_point_intersections(const float3& point, const float radius, Candidate&& candidate, Visitor&& visitor) const {
-    if (_nodes.empty() || (radius <= 0.0f) || (radius > _maximum_radius) || (std::isfinite(point.x) == false) || (std::isfinite(point.y) == false) ||
+    if (_cell_offsets.empty() || (radius <= 0.0f) || (radius > _maximum_radius) || (std::isfinite(point.x) == false) || (std::isfinite(point.y) == false) ||
         (std::isfinite(point.z) == false)) {
       return false;
     }
-    return traverse(
-      [&point, radius](const Bounds& bounds) {
-        return overlaps_point(bounds, point, radius);
-      },
-      [this, &point, radius, &candidate, &visitor](const uint32_t storage_index) {
-        const UPBPBeamReference& indexed_beam = _beams[storage_index];
-        if ((overlaps_point(_beam_bounds[storage_index], point, radius) == false) || (candidate(indexed_beam, storage_index) == false)) {
-          return;
-        }
-        UPBPPointBeamIntersection intersection = {};
-        if (upbp_intersect_point_beam(point, indexed_beam, radius, intersection)) {
-          visitor(indexed_beam, storage_index, intersection);
-        }
-      });
-  }
+    if ((point.x < _bounds.minimum.x) || (point.x > _bounds.maximum.x) || (point.y < _bounds.minimum.y) || (point.y > _bounds.maximum.y) || (point.z < _bounds.minimum.z) ||
+        (point.z > _bounds.maximum.z)) {
+      return true;
+    }
 
-  template <typename Visitor>
-  bool query_beam(const UPBPBeamReference& beam, const float radius, Visitor&& visitor) const {
-    if (_nodes.empty() || (beam_valid(beam) == false) || (radius <= 0.0f) || (radius > _maximum_radius)) {
+    std::array<int32_t, 3u> cell = {};
+    if (make_cell(point, cell) == false) {
       return false;
     }
-    const BeamBoundsQuery query = make_beam_bounds_query(beam, radius);
-    return traverse(
-      [&query](const Bounds& bounds) {
-        return overlaps_beam(bounds, query);
-      },
-      [this, &query, &visitor](const uint32_t beam_index) {
-        if (overlaps_beam(_beam_bounds[beam_index], query)) {
-          visitor(_beams[beam_index]);
-        }
-      });
+    const uint32_t cell_index = linear_cell_index(static_cast<uint32_t>(cell[0u]), static_cast<uint32_t>(cell[1u]), static_cast<uint32_t>(cell[2u]), _resolution);
+    visit_cell(cell_index, [this, &point, radius, &candidate, &visitor](const uint32_t beam_index) {
+      const UPBPBeamReference& indexed_beam = _beams[beam_index];
+      if (candidate(indexed_beam, beam_index) == false) {
+        return;
+      }
+      UPBPPointBeamIntersection intersection = {};
+      if (upbp_intersect_point_beam(point, indexed_beam, radius, intersection)) {
+        visitor(indexed_beam, beam_index, intersection);
+      }
+    });
+    return true;
   }
 
   template <typename Candidate, typename Visitor>
-  bool query_beam_intersections(const UPBPBeamReference& beam, const float radius, Candidate&& candidate, Visitor&& visitor) const {
-    if (_nodes.empty() || (beam_valid(beam) == false) || (radius <= 0.0f) || (radius > _maximum_radius)) {
+  bool query_beam_intersections(const UPBPBeamReference& beam, const float radius, UPBPSpatialQueryState& query_state, Candidate&& candidate, Visitor&& visitor) const {
+    if (_cell_offsets.empty() || (beam_valid(beam) == false) || (radius <= 0.0f) || (radius > _maximum_radius) || (std::isfinite(radius) == false)) {
       return false;
     }
-    const BeamBoundsQuery query = make_beam_bounds_query(beam, radius);
-    return traverse(
-      [&query](const Bounds& bounds) {
-        return overlaps_beam(bounds, query);
-      },
-      [this, &beam, &query, &candidate, &visitor](const uint32_t storage_index) {
-        const UPBPBeamReference& indexed_beam = _beams[storage_index];
-        if (candidate(indexed_beam, storage_index) == false) {
+    query_state.begin(static_cast<uint32_t>(_beams.size()));
+
+    double minimum_distance = 0.0;
+    double maximum_distance = static_cast<double>(beam.length);
+    if (intersect_bounds(beam, minimum_distance, maximum_distance) == false) {
+      return true;
+    }
+
+    const double start_distance = max(0.0, minimum_distance);
+    const double end_distance = min(static_cast<double>(beam.length), maximum_distance);
+    if (start_distance >= end_distance) {
+      return true;
+    }
+
+    const float3 start = beam.origin + beam.direction * static_cast<float>(start_distance);
+    std::array<int32_t, 3u> cell = {};
+    if (make_cell(start, cell) == false) {
+      return false;
+    }
+
+    std::array<int32_t, 3u> step = {};
+    std::array<double, 3u> next_distance = {};
+    std::array<double, 3u> distance_step = {};
+    const double infinity = std::numeric_limits<double>::infinity();
+    for (uint32_t axis = 0u; axis < 3u; ++axis) {
+      const double direction = static_cast<double>(component(beam.direction, axis));
+      if (direction > 0.0) {
+        step[axis] = 1;
+        const double boundary = static_cast<double>(component(_bounds.minimum, axis)) + static_cast<double>(cell[axis] + 1) * static_cast<double>(_cell_size);
+        next_distance[axis] = (boundary - static_cast<double>(component(beam.origin, axis))) / direction;
+        distance_step[axis] = static_cast<double>(_cell_size) / direction;
+      } else if (direction < 0.0) {
+        step[axis] = -1;
+        const double boundary = static_cast<double>(component(_bounds.minimum, axis)) + static_cast<double>(cell[axis]) * static_cast<double>(_cell_size);
+        next_distance[axis] = (boundary - static_cast<double>(component(beam.origin, axis))) / direction;
+        distance_step[axis] = -static_cast<double>(_cell_size) / direction;
+      } else {
+        next_distance[axis] = infinity;
+        distance_step[axis] = infinity;
+      }
+      while (next_distance[axis] < start_distance) {
+        next_distance[axis] += distance_step[axis];
+      }
+    }
+
+    const float radius_squared = radius * radius;
+    for (;;) {
+      const uint32_t cell_index = linear_cell_index(static_cast<uint32_t>(cell[0u]), static_cast<uint32_t>(cell[1u]), static_cast<uint32_t>(cell[2u]), _resolution);
+      visit_cell(cell_index, [this, &beam, radius_squared, &query_state, &candidate, &visitor](const uint32_t beam_index) {
+        if (query_state.mark(beam_index) == false) {
+          return;
+        }
+        const UPBPBeamReference& indexed_beam = _beams[beam_index];
+        if (candidate(indexed_beam, beam_index) == false) {
           return;
         }
         UPBPBeamBeamIntersection intersection = {};
-        if (upbp_intersect_valid_beams_squared(indexed_beam, beam, query.radius_squared, intersection)) {
-          visitor(indexed_beam, storage_index, intersection);
+        if (upbp_intersect_valid_beams_squared(indexed_beam, beam, radius_squared, intersection)) {
+          visitor(indexed_beam, beam_index, intersection);
         }
       });
-  }
 
-  template <typename T>
-  bool reorder_by_leaf_layout(std::vector<T>& values) const {
-    if (values.size() != _beams.size()) {
-      return false;
-    }
-    std::vector<uint32_t> destinations(values.size());
-    for (uint32_t storage_index = 0u; storage_index < _beams.size(); ++storage_index) {
-      destinations[_source_indices[storage_index]] = storage_index;
-    }
-    for (uint32_t source_index = 0u; source_index < destinations.size(); ++source_index) {
-      while (destinations[source_index] != source_index) {
-        const uint32_t destination = destinations[source_index];
-        std::swap(values[source_index], values[destination]);
-        std::swap(destinations[source_index], destinations[destination]);
+      const double next = min(next_distance[0u], min(next_distance[1u], next_distance[2u]));
+      if (next >= end_distance) {
+        break;
+      }
+      bool inside = true;
+      for (uint32_t axis = 0u; axis < 3u; ++axis) {
+        if (next_distance[axis] != next) {
+          continue;
+        }
+        cell[axis] += step[axis];
+        next_distance[axis] += distance_step[axis];
+        inside = inside && (cell[axis] >= 0) && (cell[axis] < static_cast<int32_t>(_resolution[axis]));
+      }
+      if (inside == false) {
+        break;
       }
     }
     return true;
@@ -810,60 +904,59 @@ struct UPBPBeamIndex {
   }
 
   uint64_t storage_bytes() const {
-    return static_cast<uint64_t>(_beams.capacity()) * sizeof(UPBPBeamReference) + static_cast<uint64_t>(_beam_bounds.capacity()) * sizeof(Bounds) +
-           static_cast<uint64_t>(_source_indices.capacity()) * sizeof(uint32_t) + static_cast<uint64_t>(_indices.capacity()) * sizeof(uint32_t) +
-           static_cast<uint64_t>(_nodes.capacity()) * sizeof(Node);
+    return static_cast<uint64_t>(_beams.capacity()) * sizeof(UPBPBeamReference) + static_cast<uint64_t>(_beam_indices.capacity()) * sizeof(uint32_t) +
+           static_cast<uint64_t>(_cell_offsets.capacity()) * sizeof(uint32_t);
   }
 
-  bool projected_storage_bytes(const uint32_t beam_count, uint64_t& result) const {
+  bool projected_storage_bytes(const UPBPBeamReference* beams, const uint32_t beam_count, const float radius, uint64_t& result) const {
+    if (beam_count == 0u) {
+      result = storage_bytes();
+      return true;
+    }
+    Description description = {};
+    if (describe(beams, beam_count, radius, description) == false) {
+      return false;
+    }
+    uint64_t entry_count = 0u;
+    if (count_entries(beams, beam_count, radius, description, entry_count) == false) {
+      return false;
+    }
+    if (entry_count >= static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+      return false;
+    }
+    const uint64_t cell_count = grid_cell_count(description.resolution);
+
     const uint64_t beam_capacity = max(static_cast<uint64_t>(_beams.capacity()), static_cast<uint64_t>(beam_count));
-    const uint64_t bounds_capacity = max(static_cast<uint64_t>(_beam_bounds.capacity()), static_cast<uint64_t>(beam_count));
-    const uint64_t source_index_capacity = max(static_cast<uint64_t>(_source_indices.capacity()), static_cast<uint64_t>(beam_count));
-    const uint64_t index_capacity = max(static_cast<uint64_t>(_indices.capacity()), static_cast<uint64_t>(beam_count));
-    const uint64_t node_count = static_cast<uint64_t>(beam_count) * 2u;
-    const uint64_t node_capacity = max(static_cast<uint64_t>(_nodes.capacity()), node_count);
-    if ((beam_capacity > std::numeric_limits<uint64_t>::max() / sizeof(UPBPBeamReference)) || (bounds_capacity > std::numeric_limits<uint64_t>::max() / sizeof(Bounds)) ||
-        (source_index_capacity > std::numeric_limits<uint64_t>::max() / sizeof(uint32_t)) || (index_capacity > std::numeric_limits<uint64_t>::max() / sizeof(uint32_t)) ||
-        (node_capacity > std::numeric_limits<uint64_t>::max() / sizeof(Node))) {
+    const uint64_t index_capacity = max(static_cast<uint64_t>(_beam_indices.capacity()), entry_count);
+    const uint64_t offset_capacity = max(static_cast<uint64_t>(_cell_offsets.capacity()), cell_count + 1u);
+    if ((beam_capacity > std::numeric_limits<uint64_t>::max() / sizeof(UPBPBeamReference)) || (index_capacity > std::numeric_limits<uint64_t>::max() / sizeof(uint32_t)) ||
+        (offset_capacity > std::numeric_limits<uint64_t>::max() / sizeof(uint32_t))) {
       return false;
     }
-    const uint64_t beam_bytes = beam_capacity * sizeof(UPBPBeamReference);
-    const uint64_t bounds_bytes = bounds_capacity * sizeof(Bounds);
-    const uint64_t source_index_bytes = source_index_capacity * sizeof(uint32_t);
-    const uint64_t index_bytes = index_capacity * sizeof(uint32_t);
-    const uint64_t node_bytes = node_capacity * sizeof(Node);
-    if ((beam_bytes > std::numeric_limits<uint64_t>::max() - bounds_bytes) || ((beam_bytes + bounds_bytes) > std::numeric_limits<uint64_t>::max() - source_index_bytes) ||
-        ((beam_bytes + bounds_bytes + source_index_bytes) > std::numeric_limits<uint64_t>::max() - index_bytes) ||
-        ((beam_bytes + bounds_bytes + source_index_bytes + index_bytes) > std::numeric_limits<uint64_t>::max() - node_bytes)) {
-      return false;
+    const std::array<uint64_t, 3u> storage = {
+      beam_capacity * sizeof(UPBPBeamReference),
+      index_capacity * sizeof(uint32_t),
+      offset_capacity * sizeof(uint32_t),
+    };
+    result = 0u;
+    for (const uint64_t bytes : storage) {
+      if (result > std::numeric_limits<uint64_t>::max() - bytes) {
+        return false;
+      }
+      result += bytes;
     }
-    result = beam_bytes + bounds_bytes + source_index_bytes + index_bytes + node_bytes;
     return true;
   }
 
  private:
+  static float component(const float3& value, const uint32_t axis) {
+    return axis == 0u ? value.x : (axis == 1u ? value.y : value.z);
+  }
+
   static bool beam_valid(const UPBPBeamReference& beam) {
     const float direction_length_squared = dot(beam.direction, beam.direction);
     return (beam.length > 0.0f) && std::isfinite(beam.length) && std::isfinite(beam.origin.x) && std::isfinite(beam.origin.y) && std::isfinite(beam.origin.z) &&
            std::isfinite(direction_length_squared) && (fabsf(direction_length_squared - 1.0f) <= 1.0e-4f);
-  }
-
-  static Bounds beam_bounds(const UPBPBeamReference& beam) {
-    const float3 end = beam.origin + beam.direction * beam.length;
-    const float3 minimum = min(beam.origin, end);
-    const float3 maximum = max(beam.origin, end);
-    return {
-      {
-        std::nextafter(minimum.x, -std::numeric_limits<float>::infinity()),
-        std::nextafter(minimum.y, -std::numeric_limits<float>::infinity()),
-        std::nextafter(minimum.z, -std::numeric_limits<float>::infinity()),
-      },
-      {
-        std::nextafter(maximum.x, std::numeric_limits<float>::infinity()),
-        std::nextafter(maximum.y, std::numeric_limits<float>::infinity()),
-        std::nextafter(maximum.z, std::numeric_limits<float>::infinity()),
-      },
-    };
   }
 
   static void extend(Bounds& target, const Bounds& source) {
@@ -871,203 +964,176 @@ struct UPBPBeamIndex {
     target.maximum = max(target.maximum, source.maximum);
   }
 
-  static bool overlaps_point(const Bounds& bounds, const float3& point, const float radius) {
-    return (point.x >= bounds.minimum.x - radius) && (point.x <= bounds.maximum.x + radius) && (point.y >= bounds.minimum.y - radius) && (point.y <= bounds.maximum.y + radius) &&
-           (point.z >= bounds.minimum.z - radius) && (point.z <= bounds.maximum.z + radius);
+  static Bounds support_bounds(const UPBPBeamReference& beam, const float radius) {
+    const float3 end = beam.origin + beam.direction * beam.length;
+    const float3 extent = {radius, radius, radius};
+    return {min(beam.origin, end) - extent, max(beam.origin, end) + extent};
   }
 
-  static float surface_area(const Bounds& bounds) {
-    const float3 extent = max(bounds.maximum - bounds.minimum, float3{0.0f, 0.0f, 0.0f});
-    return 2.0f * (extent.x * extent.y + extent.y * extent.z + extent.z * extent.x);
+  static bool describe(const UPBPBeamReference* beams, const uint32_t beam_count, const float radius, Description& result) {
+    if ((beams == nullptr) || (beam_count == 0u) || (radius <= 0.0f) || (std::isfinite(radius) == false)) {
+      return false;
+    }
+    result = {};
+    for (uint32_t beam_index = 0u; beam_index < beam_count; ++beam_index) {
+      if (beam_valid(beams[beam_index]) == false) {
+        return false;
+      }
+      extend(result.bounds, support_bounds(beams[beam_index], radius));
+    }
+    const float3 extent = result.bounds.maximum - result.bounds.minimum;
+    const float maximum_extent = max(extent.x, max(extent.y, extent.z));
+    if ((maximum_extent <= 0.0f) || (std::isfinite(maximum_extent) == false)) {
+      return false;
+    }
+    result.cell_size = std::nextafter(maximum_extent / static_cast<float>(maximum_resolution), std::numeric_limits<float>::infinity());
+    if ((result.cell_size <= 0.0f) || (std::isfinite(result.cell_size) == false)) {
+      return false;
+    }
+    result.inverse_cell_size = 1.0f / result.cell_size;
+    for (uint32_t axis = 0u; axis < 3u; ++axis) {
+      const double axis_extent = static_cast<double>(component(result.bounds.maximum - result.bounds.minimum, axis));
+      const uint32_t axis_resolution = static_cast<uint32_t>(ceil(axis_extent / static_cast<double>(result.cell_size)));
+      result.resolution[axis] = min(maximum_resolution, max(1u, axis_resolution));
+    }
+    result.bounds.maximum = result.bounds.minimum + float3{static_cast<float>(result.resolution[0u]) * result.cell_size,
+                                                      static_cast<float>(result.resolution[1u]) * result.cell_size, static_cast<float>(result.resolution[2u]) * result.cell_size};
+    return true;
   }
 
-  static BeamBoundsQuery make_beam_bounds_query(const UPBPBeamReference& beam, const float radius) {
-    BeamBoundsQuery result = {};
-    result.origin_x = static_cast<double>(beam.origin.x);
-    result.origin_y = static_cast<double>(beam.origin.y);
-    result.origin_z = static_cast<double>(beam.origin.z);
-    result.direction_x = static_cast<double>(beam.direction.x);
-    result.direction_y = static_cast<double>(beam.direction.y);
-    result.direction_z = static_cast<double>(beam.direction.z);
-    result.inverse_direction_x = beam.direction.x == 0.0f ? 0.0 : 1.0 / result.direction_x;
-    result.inverse_direction_y = beam.direction.y == 0.0f ? 0.0 : 1.0 / result.direction_y;
-    result.inverse_direction_z = beam.direction.z == 0.0f ? 0.0 : 1.0 / result.direction_z;
-    result.maximum_distance = static_cast<double>(beam.length);
-    result.radius = static_cast<double>(radius);
-    result.radius_squared = radius * radius;
-    return result;
+  static uint32_t linear_cell_index(const uint32_t x, const uint32_t y, const uint32_t z, const std::array<uint32_t, 3u>& resolution) {
+    return x + resolution[0u] * (y + resolution[1u] * z);
   }
 
-  static bool overlaps_beam(const Bounds& bounds, const BeamBoundsQuery& query) {
-    double minimum_distance = 0.0;
-    double maximum_distance = query.maximum_distance;
-    auto overlaps_axis = [&minimum_distance, &maximum_distance](const double origin, const double direction, const double inverse_direction, const double expanded_minimum,
-                           const double expanded_maximum) {
+  static uint32_t grid_cell_count(const std::array<uint32_t, 3u>& resolution) {
+    return resolution[0u] * resolution[1u] * resolution[2u];
+  }
+
+  static bool make_cell(const float3& position, const Description& description, std::array<uint32_t, 3u>& result) {
+    for (uint32_t axis = 0u; axis < 3u; ++axis) {
+      const double value = floor(
+        (static_cast<double>(component(position, axis)) - static_cast<double>(component(description.bounds.minimum, axis))) * static_cast<double>(description.inverse_cell_size));
+      if (std::isfinite(value) == false) {
+        return false;
+      }
+      result[axis] = static_cast<uint32_t>(min(static_cast<double>(description.resolution[axis] - 1u), max(0.0, value)));
+    }
+    return true;
+  }
+
+  bool make_cell(const float3& position, std::array<int32_t, 3u>& result) const {
+    for (uint32_t axis = 0u; axis < 3u; ++axis) {
+      const double value =
+        floor((static_cast<double>(component(position, axis)) - static_cast<double>(component(_bounds.minimum, axis))) * static_cast<double>(_inverse_cell_size));
+      if (std::isfinite(value) == false) {
+        return false;
+      }
+      result[axis] = static_cast<int32_t>(min(static_cast<double>(_resolution[axis] - 1u), max(0.0, value)));
+    }
+    return true;
+  }
+
+  template <typename Visitor>
+  static bool enumerate_beam_cells(const UPBPBeamReference& beam, const float radius, const Description& description, Visitor&& visitor) {
+    // Chopped radius-inflated bounds conservatively cover the beam support; queries still perform the exact intersection test.
+    const float3 absolute_direction = abs(beam.direction);
+    const float dominant_direction = max(absolute_direction.x, max(absolute_direction.y, absolute_direction.z));
+    const double projected_cell_count = ceil(static_cast<double>(beam.length) * static_cast<double>(dominant_direction) / static_cast<double>(description.cell_size));
+    if ((std::isfinite(projected_cell_count) == false) || (projected_cell_count > static_cast<double>(std::numeric_limits<uint32_t>::max()))) {
+      return false;
+    }
+    const uint32_t segment_count = max(1u, static_cast<uint32_t>(projected_cell_count));
+    const float inverse_segment_count = 1.0f / static_cast<float>(segment_count);
+    const float3 support_extent = {radius, radius, radius};
+    for (uint32_t segment_index = 0u; segment_index < segment_count; ++segment_index) {
+      const float first_distance = beam.length * (static_cast<float>(segment_index) * inverse_segment_count);
+      const float second_distance = beam.length * (static_cast<float>(segment_index + 1u) * inverse_segment_count);
+      const float3 first = beam.origin + beam.direction * first_distance;
+      const float3 second = beam.origin + beam.direction * second_distance;
+      std::array<uint32_t, 3u> minimum_cell = {};
+      std::array<uint32_t, 3u> maximum_cell = {};
+      if ((make_cell(min(first, second) - support_extent, description, minimum_cell) == false) ||
+          (make_cell(max(first, second) + support_extent, description, maximum_cell) == false)) {
+        return false;
+      }
+      for (uint32_t z = minimum_cell[2u]; z <= maximum_cell[2u]; ++z) {
+        for (uint32_t y = minimum_cell[1u]; y <= maximum_cell[1u]; ++y) {
+          for (uint32_t x = minimum_cell[0u]; x <= maximum_cell[0u]; ++x) {
+            visitor(linear_cell_index(x, y, z, description.resolution));
+          }
+        }
+      }
+    }
+    return true;
+  }
+
+  static bool count_entries(const UPBPBeamReference* beams, const uint32_t beam_count, const float radius, const Description& description, uint64_t& result) {
+    try {
+      std::vector<uint32_t> cell_marks(grid_cell_count(description.resolution), kInvalidIndex);
+      result = 0u;
+      for (uint32_t beam_index = 0u; beam_index < beam_count; ++beam_index) {
+        uint64_t beam_entry_count = 0u;
+        if (enumerate_beam_cells(beams[beam_index], radius, description, [beam_index, &beam_entry_count, &cell_marks](const uint32_t cell_index) {
+              if (cell_marks[cell_index] != beam_index) {
+                cell_marks[cell_index] = beam_index;
+                ++beam_entry_count;
+              }
+            }) == false) {
+          return false;
+        }
+        if (result > std::numeric_limits<uint64_t>::max() - beam_entry_count) {
+          return false;
+        }
+        result += beam_entry_count;
+      }
+    } catch (const std::bad_alloc&) {
+      return false;
+    } catch (const std::length_error&) {
+      return false;
+    }
+    return true;
+  }
+
+  template <typename Visitor>
+  void visit_cell(const uint32_t cell_index, Visitor&& visitor) const {
+    for (uint32_t index = _cell_offsets[cell_index]; index < _cell_offsets[cell_index + 1u]; ++index) {
+      visitor(_beam_indices[index]);
+    }
+  }
+
+  bool intersect_bounds(const UPBPBeamReference& beam, double& minimum_distance, double& maximum_distance) const {
+    for (uint32_t axis = 0u; axis < 3u; ++axis) {
+      const double origin = static_cast<double>(component(beam.origin, axis));
+      const double direction = static_cast<double>(component(beam.direction, axis));
+      const double minimum = static_cast<double>(component(_bounds.minimum, axis));
+      const double maximum = static_cast<double>(component(_bounds.maximum, axis));
       if (direction == 0.0) {
-        return (origin >= expanded_minimum) && (origin <= expanded_maximum);
-      }
-      double first_distance = (expanded_minimum - origin) * inverse_direction;
-      double second_distance = (expanded_maximum - origin) * inverse_direction;
-      if (first_distance > second_distance) {
-        std::swap(first_distance, second_distance);
-      }
-      minimum_distance = max(minimum_distance, first_distance);
-      maximum_distance = min(maximum_distance, second_distance);
-      return minimum_distance <= maximum_distance;
-    };
-    return overlaps_axis(query.origin_x, query.direction_x, query.inverse_direction_x, static_cast<double>(bounds.minimum.x) - query.radius,
-             static_cast<double>(bounds.maximum.x) + query.radius) &&
-           overlaps_axis(query.origin_y, query.direction_y, query.inverse_direction_y, static_cast<double>(bounds.minimum.y) - query.radius,
-             static_cast<double>(bounds.maximum.y) + query.radius) &&
-           overlaps_axis(query.origin_z, query.direction_z, query.inverse_direction_z, static_cast<double>(bounds.minimum.z) - query.radius,
-             static_cast<double>(bounds.maximum.z) + query.radius);
-  }
-
-  float centroid_component(const uint32_t beam_index, const uint32_t axis) const {
-    const Bounds& bounds = _beam_bounds[beam_index];
-    const float3 centroid = 0.5f * (bounds.minimum + bounds.maximum);
-    return axis == 0u ? centroid.x : (axis == 1u ? centroid.y : centroid.z);
-  }
-
-  void build_node(const uint32_t first, const uint32_t count, const uint32_t depth) {
-    const uint32_t node_index = static_cast<uint32_t>(_nodes.size());
-    _nodes.emplace_back();
-    Bounds bounds = {};
-    Bounds centroid_bounds = {};
-    for (uint32_t offset = 0u; offset < count; ++offset) {
-      const uint32_t beam_index = _indices[first + offset];
-      const Bounds& beam_bounds = _beam_bounds[beam_index];
-      extend(bounds, beam_bounds);
-      const float3 centroid = 0.5f * (beam_bounds.minimum + beam_bounds.maximum);
-      extend(centroid_bounds, {centroid, centroid});
-    }
-
-    _nodes[node_index].bounds = bounds;
-    _nodes[node_index].first = first;
-    _nodes[node_index].count = count;
-    if (count <= 16u) {
-      _nodes[node_index].escape = static_cast<uint32_t>(_nodes.size());
-      return;
-    }
-
-    const float3 extent = centroid_bounds.maximum - centroid_bounds.minimum;
-    constexpr uint32_t bin_count = 16u;
-    struct Bin {
-      Bounds bounds = {};
-      uint32_t count = 0u;
-    };
-    float best_cost = kMaxFloat;
-    uint32_t best_axis = kInvalidIndex;
-    uint32_t best_split = 0u;
-    constexpr uint32_t maximum_sah_depth = 64u;
-    if (depth < maximum_sah_depth) {
-      for (uint32_t axis = 0u; axis < 3u; ++axis) {
-        const float axis_extent = axis == 0u ? extent.x : (axis == 1u ? extent.y : extent.z);
-        if (axis_extent <= 0.0f) {
-          continue;
+        if ((origin < minimum) || (origin > maximum)) {
+          return false;
         }
-        const float axis_minimum = axis == 0u ? centroid_bounds.minimum.x : (axis == 1u ? centroid_bounds.minimum.y : centroid_bounds.minimum.z);
-        const float bin_scale = static_cast<float>(bin_count) / axis_extent;
-        std::array<Bin, bin_count> bins = {};
-        for (uint32_t offset = 0u; offset < count; ++offset) {
-          const uint32_t beam_index = _indices[first + offset];
-          const float centroid = centroid_component(beam_index, axis);
-          const uint32_t bin_index = min(static_cast<uint32_t>((centroid - axis_minimum) * bin_scale), bin_count - 1u);
-          extend(bins[bin_index].bounds, _beam_bounds[beam_index]);
-          ++bins[bin_index].count;
-        }
-
-        std::array<Bounds, bin_count - 1u> left_bounds = {};
-        std::array<Bounds, bin_count - 1u> right_bounds = {};
-        std::array<uint32_t, bin_count - 1u> left_counts = {};
-        std::array<uint32_t, bin_count - 1u> right_counts = {};
-        Bounds left_bounds_accumulated = {};
-        Bounds right_bounds_accumulated = {};
-        uint32_t left_count = 0u;
-        uint32_t right_count = 0u;
-        for (uint32_t split = 0u; split + 1u < bin_count; ++split) {
-          extend(left_bounds_accumulated, bins[split].bounds);
-          left_count += bins[split].count;
-          left_bounds[split] = left_bounds_accumulated;
-          left_counts[split] = left_count;
-
-          const uint32_t reverse_bin = bin_count - 1u - split;
-          extend(right_bounds_accumulated, bins[reverse_bin].bounds);
-          right_count += bins[reverse_bin].count;
-          right_bounds[bin_count - 2u - split] = right_bounds_accumulated;
-          right_counts[bin_count - 2u - split] = right_count;
-        }
-        for (uint32_t split = 0u; split + 1u < bin_count; ++split) {
-          if ((left_counts[split] == 0u) || (right_counts[split] == 0u)) {
-            continue;
-          }
-          const float cost =
-            surface_area(left_bounds[split]) * static_cast<float>(left_counts[split]) + surface_area(right_bounds[split]) * static_cast<float>(right_counts[split]);
-          if (cost < best_cost) {
-            best_cost = cost;
-            best_axis = axis;
-            best_split = split;
-          }
-        }
-      }
-    }
-
-    uint32_t middle = first + count / 2u;
-    if (best_axis != kInvalidIndex) {
-      const float axis_extent = best_axis == 0u ? extent.x : (best_axis == 1u ? extent.y : extent.z);
-      const float axis_minimum = best_axis == 0u ? centroid_bounds.minimum.x : (best_axis == 1u ? centroid_bounds.minimum.y : centroid_bounds.minimum.z);
-      const float bin_scale = static_cast<float>(bin_count) / axis_extent;
-      const auto middle_iterator =
-        std::partition(_indices.begin() + first, _indices.begin() + first + count, [this, best_axis, best_split, axis_minimum, bin_scale](const uint32_t beam_index) {
-          const float centroid = centroid_component(beam_index, best_axis);
-          const uint32_t bin_index = min(static_cast<uint32_t>((centroid - axis_minimum) * bin_scale), bin_count - 1u);
-          return bin_index <= best_split;
-        });
-      middle = static_cast<uint32_t>(middle_iterator - _indices.begin());
-    }
-    if ((middle == first) || (middle == first + count)) {
-      const uint32_t axis = (extent.x >= extent.y) && (extent.x >= extent.z) ? 0u : ((extent.y >= extent.z) ? 1u : 2u);
-      middle = first + count / 2u;
-      std::nth_element(_indices.begin() + first, _indices.begin() + middle, _indices.begin() + first + count,
-        [this, axis](const uint32_t first_index, const uint32_t second_index) {
-          const float first_centroid = centroid_component(first_index, axis);
-          const float second_centroid = centroid_component(second_index, axis);
-          return first_centroid == second_centroid ? first_index < second_index : first_centroid < second_centroid;
-        });
-    }
-    build_node(middle, first + count - middle, depth + 1u);
-    build_node(first, middle - first, depth + 1u);
-    _nodes[node_index].count = 0u;
-    _nodes[node_index].escape = static_cast<uint32_t>(_nodes.size());
-  }
-
-  template <typename Predicate, typename Visitor>
-  bool traverse(Predicate&& predicate, Visitor&& visitor) const {
-    uint32_t node_index = 0u;
-    while (node_index < _nodes.size()) {
-      const Node& node = _nodes[node_index];
-      if (predicate(node.bounds) == false) {
-        node_index = node.escape;
         continue;
       }
-
-      if (node.count > 0u) {
-        for (uint32_t offset = 0u; offset < node.count; ++offset) {
-          visitor(node.first + offset);
-        }
-        node_index = node.escape;
-      } else {
-        ++node_index;
+      double first = (minimum - origin) / direction;
+      double second = (maximum - origin) / direction;
+      if (first > second) {
+        std::swap(first, second);
+      }
+      minimum_distance = max(minimum_distance, first);
+      maximum_distance = min(maximum_distance, second);
+      if (minimum_distance > maximum_distance) {
+        return false;
       }
     }
     return true;
   }
 
   std::vector<UPBPBeamReference> _beams = {};
-  std::vector<Bounds> _beam_bounds = {};
-  std::vector<uint32_t> _source_indices = {};
-  std::vector<uint32_t> _indices = {};
-  std::vector<Node> _nodes = {};
+  std::vector<uint32_t> _beam_indices = {};
+  std::vector<uint32_t> _cell_offsets = {};
+  Bounds _bounds = {};
+  float _cell_size = 0.0f;
+  float _inverse_cell_size = 0.0f;
+  std::array<uint32_t, 3u> _resolution = {};
   float _maximum_radius = 0.0f;
 };
 

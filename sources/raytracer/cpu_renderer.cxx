@@ -102,6 +102,19 @@ RendererStatus CPURaytracingRenderer::status() const {
   result.progress_kind = RendererProgressKind::Samples;
   result.completed_units = status.completed_iterations;
   result.total_units = std::max(1u, _raytracing.scene().options.samples);
+  const Integrator::PathProgress path_progress = integrator->path_progress();
+  switch (path_progress.phase) {
+    case Integrator::PathProgress::Phase::Light:
+      result.path_phase = RendererPathPhase::Light;
+      break;
+    case Integrator::PathProgress::Phase::Camera:
+      result.path_phase = RendererPathPhase::Camera;
+      break;
+    default:
+      break;
+  }
+  result.completed_path_count = path_progress.completed_path_count;
+  result.total_path_count = path_progress.total_path_count;
 
   switch (integrator->state()) {
     case Integrator::State::Running:

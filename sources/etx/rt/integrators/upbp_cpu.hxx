@@ -17,6 +17,7 @@ struct CPUUPBP : public Integrator {
   }
 
   const char* status_str() const override;
+  PathProgress path_progress() const override;
   void run() override;
   void update() override;
   void stop(Stop) override;

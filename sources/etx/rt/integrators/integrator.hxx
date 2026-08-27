@@ -10,6 +10,17 @@ namespace etx {
 enum class SceneUpdateScope : uint32_t;
 
 struct Integrator {
+  struct PathProgress {
+    enum class Phase : uint32_t {
+      None,
+      Light,
+      Camera,
+    } phase = Phase::None;
+
+    uint64_t completed_path_count = 0u;
+    uint64_t total_path_count = 0u;
+  };
+
   enum class Type : uint32_t {
     Debug = 0,
     PathTracing = 1,
@@ -64,6 +75,10 @@ struct Integrator {
 
   virtual const char* status_str() const {
     return "Basic Integrator (not able to render anything)";
+  }
+
+  virtual PathProgress path_progress() const {
+    return {};
   }
 
   virtual void run() {
