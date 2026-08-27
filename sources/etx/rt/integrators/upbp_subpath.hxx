@@ -168,10 +168,12 @@ inline bool upbp_walk_subsurface_segment(const Raytracing& rt, const Scene& scen
     return false;
   }
   if (interval.terminal_event == MediumTrackingEventType::Scatter) {
-    result.medium_event = interval.events.back();
+    result.medium_event.type = MediumTrackingEventType::Scatter;
+    result.medium_event.position = interval.end_position;
     result.terminal = UPBPSceneSegmentTerminal::Scatter;
   } else if (interval.terminal_event == MediumTrackingEventType::Absorb) {
-    result.medium_event = interval.events.back();
+    result.medium_event.type = MediumTrackingEventType::Absorb;
+    result.medium_event.position = interval.end_position;
     result.terminal = UPBPSceneSegmentTerminal::Absorb;
   } else {
     result.intersection = exit_intersection;

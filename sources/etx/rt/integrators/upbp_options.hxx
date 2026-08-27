@@ -25,6 +25,7 @@ struct UPBPOptions {
   uint32_t maximum_boundary_count = 64u;
   uint32_t maximum_null_events_per_interval = 1024u;
   uint32_t maximum_light_path_count = 0u;
+  uint32_t maximum_bb1d_light_path_count = 4000u;
   uint32_t memory_budget_mb = 2048u;
 
   bool enabled(const UPBPTechnique technique) const {
@@ -57,6 +58,7 @@ struct UPBPOptions {
     maximum_boundary_count = options.get_integral("upbp-maximum-boundaries", maximum_boundary_count);
     maximum_null_events_per_interval = options.get_integral("upbp-maximum-null-events", maximum_null_events_per_interval);
     maximum_light_path_count = options.get_integral("upbp-light-path-count", maximum_light_path_count);
+    maximum_bb1d_light_path_count = options.get_integral("upbp-bb1d-light-path-count", maximum_bb1d_light_path_count);
     memory_budget_mb = options.get_integral("upbp-memory-budget-mb", memory_budget_mb);
   }
 
@@ -82,6 +84,8 @@ struct UPBPOptions {
     options.set_integral("upbp-maximum-boundaries", maximum_boundary_count, "Maximum boundaries per segment", 0u, {1u, kMaximumBoundaryCount});
     options.set_integral("upbp-maximum-null-events", maximum_null_events_per_interval, "Maximum null events per medium interval", 0u, {1u, kMaximumNullEventsPerInterval});
     options.set_integral("upbp-light-path-count", maximum_light_path_count, "Maximum light paths per iteration (0 = memory budget)", 0u, {0u, kMaximumLightPathCount});
+    options.set_integral("upbp-bb1d-light-path-count", maximum_bb1d_light_path_count, "Light paths assigned to BB1D per iteration (0 = all retained light paths)", 0u,
+      {0u, kMaximumLightPathCount});
     options.set_integral("upbp-memory-budget-mb", memory_budget_mb, "Retained light storage budget (MiB)", 0u, {kMinimumMemoryBudgetMiB, kMaximumMemoryBudgetMiB});
   }
 };

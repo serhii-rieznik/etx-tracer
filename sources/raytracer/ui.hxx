@@ -240,6 +240,8 @@ struct UI {
     std::function<uint32_t()> medium_added;
     std::function<void(uint32_t, const std::string&)> medium_renamed;
     std::function<void(uint32_t)> medium_changed;
+    std::function<void()> medium_interaction_started;
+    std::function<void(const std::vector<uint32_t>&)> medium_interaction_finished;
     std::function<void(uint32_t, uint32_t)> mesh_material_changed;          // mesh_index, new_material_index
     std::function<uint32_t(uint32_t, uint32_t)> mesh_material_made_unique;  // mesh_index, source_material_index
     std::function<void(uint32_t)> emitter_changed;
@@ -288,7 +290,7 @@ struct UI {
   void load_image() const;
   bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&);
   bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&, const std::vector<uint32_t>& material_indices);
-  bool build_medium(SceneRepresentation& scene_rep, Medium& medium);
+  bool build_medium(Medium& medium, SpectralDistribution* absorption, SpectralDistribution* scattering);
   bool spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool spectrum_picker(SceneRepresentation& scene_rep, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options);
@@ -311,6 +313,8 @@ struct UI {
   void apply_material_changes(SceneRepresentation& scene_rep, const std::vector<uint32_t>& material_indices, const Material& before, const Material& after) const;
   void queue_material_change(uint32_t material_index);
   void finish_material_interaction();
+  void queue_medium_change(uint32_t medium_index);
+  void finish_medium_interaction();
   void reload_geometry();
   void reload_scene();
   void set_selection(SelectionKind kind, int32_t index, bool track_history = true);
@@ -477,6 +481,9 @@ struct UI {
   bool _material_interaction_active = false;
   bool _material_editor_rendered_this_frame = false;
   std::vector<uint32_t> _material_interaction_indices = {};
+  bool _medium_interaction_active = false;
+  bool _medium_editor_rendered_this_frame = false;
+  std::vector<uint32_t> _medium_interaction_indices = {};
 
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;

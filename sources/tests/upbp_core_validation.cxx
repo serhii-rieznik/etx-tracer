@@ -138,6 +138,17 @@ bool validate_population_radius_scale() {
   return valid;
 }
 
+bool validate_automatic_initial_radius() {
+  bool valid = true;
+  valid = close_value(etx::upbp_automatic_initial_radius(12.0, 4096u, 4096u, 2u, etx::kUPBPAutomaticSurfaceRadiusScale), 0.018, 1.0e-14, "automatic surface radius") && valid;
+  valid =
+    close_value(etx::upbp_automatic_initial_radius(12.0, 4096u, 1024u, 3u, etx::kUPBPAutomaticVolumeRadiusScale), 0.012 * std::cbrt(4.0), 1.0e-14, "automatic volume radius") &&
+    valid;
+  valid = close_value(etx::upbp_automatic_initial_radius(0.0, 4096u, 4096u, 2u, etx::kUPBPAutomaticSurfaceRadiusScale), 0.0, 0.0, "invalid automatic radius") && valid;
+  std::printf("automatic initial radius %s\n", valid ? "valid" : "failed");
+  return valid;
+}
+
 bool validate_projected_measure_domain() {
   bool valid = true;
   valid = etx::upbp_projected_measure_valid(1.0) && valid;
@@ -262,7 +273,106 @@ bool validate_density_technique_factors() {
   valid = close_value(etx::upbp_density_estimator_scale(etx::UPBPTechnique::BB1D, etx::UPBPKernel::Epanechnikov, light_path_count, radius, 0.25 * radius * radius, sin_theta, 0.25),
             expected_bb_kernel / (static_cast<double>(light_path_count) * 0.25), 1.0e-14, "BB1D estimator scale") &&
           valid;
+  const etx::UPBPPreparedBB1D prepared_bb1d = etx::upbp_prepare_bb1d(etx::UPBPKernel::Epanechnikov, radius, light_path_count, 0.25);
+  valid = prepared_bb1d.valid && valid;
+  valid = close_value(prepared_bb1d.estimator_normalization, 1.0 / (static_cast<double>(light_path_count) * 0.25), 1.0e-14, "prepared BB1D estimator normalization") && valid;
+  valid = close_value(etx::upbp_evaluate_prepared_bb1d_kernel(prepared_bb1d, 0.25 * radius * radius, sin_theta), expected_bb_kernel, 1.0e-14, "prepared BB1D kernel") && valid;
   std::printf("density technique factors %s\n", valid ? "valid" : "failed");
+  return valid;
+}
+
+bool validate_recursive_local_pde_affine() {
+  etx::UPBPDensityMISConfiguration configuration = {};
+  configuration.enabled_techniques = static_cast<uint32_t>(etx::UPBPTechnique::Surface) | static_cast<uint32_t>(etx::UPBPTechnique::PP3D) |
+                                     static_cast<uint32_t>(etx::UPBPTechnique::PB2D) | static_cast<uint32_t>(etx::UPBPTechnique::BP2D) |
+                                     static_cast<uint32_t>(etx::UPBPTechnique::BB1D);
+  configuration.technique_factors = {0.0, 2.0, 3.0, 5.0, 7.0, 11.0};
+  etx::UPBPRecursiveVertexWeights weights = {};
+  weights.ray_sample_forward_pdf_inverse = 13.0;
+  weights.ray_sample_forward_ratio = 17.0;
+  constexpr double next_reverse_ratio = 19.0;
+  constexpr double sin_theta = 0.6;
+  constexpr double inverse_values[] = {1.0e-6, 0.5, 7.0, 1.0e6};
+
+  bool valid = true;
+  constexpr bool beam_modes[] = {false, true};
+  constexpr bool boolean_values[] = {false, true};
+  constexpr etx::UPBPVertexClass vertex_classes[] = {etx::UPBPVertexClass::Surface, etx::UPBPVertexClass::Medium};
+  constexpr etx::PathSource sources[] = {etx::PathSource::Light, etx::PathSource::Camera};
+  for (const bool photon_beams_long : beam_modes) {
+    for (const bool camera_beams_long : beam_modes) {
+      configuration.photon_beams_long = photon_beams_long;
+      configuration.camera_beams_long = camera_beams_long;
+      for (const etx::UPBPVertexClass vertex_class : vertex_classes) {
+        for (const bool vertex_delta : boolean_values) {
+          for (const bool vertex_density_connectible : boolean_values) {
+            for (const etx::PathSource source : sources) {
+              const etx::UPBPRecursiveLocalPDEAffine affine =
+                etx::upbp_recursive_local_pde_affine(configuration, vertex_class, vertex_delta, vertex_density_connectible, weights, next_reverse_ratio, sin_theta, source);
+              for (const double reverse_pdf_inverse : inverse_values) {
+                const double expected = etx::upbp_recursive_local_pde_factor(configuration, vertex_class, vertex_delta, vertex_density_connectible, weights, reverse_pdf_inverse,
+                  next_reverse_ratio, sin_theta, source);
+                const double actual = affine.constant + affine.reverse_pdf_inverse_coefficient * reverse_pdf_inverse;
+                const double tolerance = 1.0e-12 * fmax(1.0, fabs(expected));
+                valid = close_value(actual, expected, tolerance, "recursive local PDE affine") && valid;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  std::printf("recursive local PDE affine %s\n", valid ? "valid" : "failed");
+  return valid;
+}
+
+bool validate_prepared_medium_density() {
+  etx::Medium medium = {};
+  medium.cls = etx::Medium::Heterogeneous;
+  medium.local_bounds.p_min = {-2.0f, -1.0f, -3.0f};
+  medium.local_bounds.p_max = {2.0f, 3.0f, 1.0f};
+  medium.grid.type = MediumGridType::NoiseFunction;
+  medium.grid.noise_seed = 17u;
+  medium.grid.noise_offset = {0.37f, -0.21f, 0.13f};
+  medium.grid.noise_enable_border_fade = 1u;
+  medium.grid.noise_octaves = 5u;
+  medium.grid.noise_scale = 3.25f;
+  medium.grid.noise_lacunarity = 1.9f;
+  medium.grid.noise_persistence = 0.55f;
+  medium.grid.noise_power = 1.4f;
+  medium.grid.noise_sharpness = 0.8f;
+  medium.grid.noise_border_fade_distance = 0.17f;
+
+  bool valid = true;
+  constexpr uint32_t noise_types[] = {MediumNoiseType::Perlin, MediumNoiseType::Billow};
+  for (const uint32_t noise_type : noise_types) {
+    medium.grid.noise_type = noise_type;
+    const etx::UPBPPreparedMedium prepared = etx::upbp_prepare_medium(medium, etx::SpectralQuery::sample());
+    valid = prepared.noise_prepared && valid;
+    for (uint32_t z = 0u; z < 7u; ++z) {
+      for (uint32_t y = 0u; y < 7u; ++y) {
+        for (uint32_t x = 0u; x < 7u; ++x) {
+          const float3 local = {
+            (static_cast<float>(x) + 0.37f) / 7.0f,
+            (static_cast<float>(y) + 0.23f) / 7.0f,
+            (static_cast<float>(z) + 0.61f) / 7.0f,
+          };
+          const float3 position = bounding_box_from_local(medium.local_bounds, local);
+          const float expected = medium.sample_density_world(position);
+          const float actual = etx::upbp_prepared_medium_density(medium, prepared, position);
+          valid = close_value(actual, expected, 2.0e-6, "prepared medium density") && valid;
+        }
+      }
+    }
+  }
+
+  medium.grid.noise_type = MediumNoiseType::Worley;
+  const etx::UPBPPreparedMedium fallback = etx::upbp_prepare_medium(medium, etx::SpectralQuery::sample());
+  const float3 fallback_position = bounding_box_from_local(medium.local_bounds, float3{0.31f, 0.47f, 0.73f});
+  valid = (fallback.noise_prepared == false) && valid;
+  valid =
+    close_value(etx::upbp_prepared_medium_density(medium, fallback, fallback_position), medium.sample_density_world(fallback_position), 0.0, "prepared medium fallback") && valid;
+  std::printf("prepared medium density %s\n", valid ? "valid" : "failed");
   return valid;
 }
 
@@ -301,13 +411,12 @@ bool validate_balance_heuristic() {
 }
 
 bool validate_segment_record() {
-  const etx::SpectralQuery spect = {550.0f, 0u};
+  const etx::SpectralQuery spect = etx::SpectralQuery::sample();
   etx::MediumTrackingInput input = {};
   input.spect = spect;
   input.scattering = etx::SpectralResponse{spect, float3{0.05f, 0.1f, 0.6f}};
   input.absorption = etx::SpectralResponse{spect, float3{0.0f, 0.0f, 0.0f}};
   input.density_majorant = 1.0f;
-
   bool valid = false;
   for (uint32_t seed = 1u; seed < 4096u; ++seed) {
     etx::Sampler sampler{seed};
@@ -365,7 +474,7 @@ bool validate_segment_record() {
 }
 
 bool validate_segment_walker() {
-  const etx::SpectralQuery spect = {550.0f, 0u};
+  const etx::SpectralQuery spect = etx::SpectralQuery::sample();
   etx::MediumTrackingInput input = {};
   input.spect = spect;
   input.scattering = etx::SpectralResponse{spect, float3{0.01f, 0.01f, 1.0f}};
@@ -409,7 +518,7 @@ bool validate_segment_walker() {
 }
 
 bool validate_path_record() {
-  const etx::SpectralQuery spect = {550.0f, 0u};
+  const etx::SpectralQuery spect = etx::SpectralQuery::sample();
   etx::UPBPPathRecord path = {};
   path.reset(8u);
 
@@ -477,7 +586,7 @@ bool validate_path_storage_reservation() {
 }
 
 bool validate_transport_segment() {
-  const etx::SpectralQuery spect = {550.0f, 0u};
+  const etx::SpectralQuery spect = etx::SpectralQuery::sample();
   etx::UPBPTransportSegmentRecord transport = {};
   transport.reset(spect);
   const etx::UPBPSegmentRecord first = etx::upbp_vacuum_interval(spect, {}, float3{1.0f, 0.0f, 0.0f}, 2.0f);
@@ -596,7 +705,7 @@ bool validate_density_mis_recurrence() {
 }
 
 bool validate_augmented_recursive_weights() {
-  const etx::SpectralQuery spect = {550.0f, 0u};
+  const etx::SpectralQuery spect = etx::SpectralQuery::sample();
   etx::UPBPPathRecord path = {};
   path.reset(3u);
   etx::UPBPPathVertexRecord camera = {};
@@ -676,6 +785,42 @@ bool validate_augmented_recursive_weights() {
   return valid;
 }
 
+bool validate_zero_reverse_scattering_density() {
+  etx::UPBPPathRecord path = {};
+  path.vertices.resize(2u);
+  etx::UPBPPathVertexRecord& vertex = path.vertices[1u];
+  vertex.cls = etx::UPBPVertexClass::Medium;
+  vertex.intersection.w_i = {0.0f, 1.0f, 0.0f};
+  vertex.sampled_direction = {1.0f, 0.0f, 0.0f};
+  vertex.scatter_pdf_forward = 0.5f;
+  vertex.scatter_pdf_reverse = 0.0f;
+
+  etx::UPBPRecursiveState state = {};
+  state.weights.d_shared = 3.0;
+  state.weights.d_bpt = 5.0;
+  state.weights.d_pde = 7.0;
+  state.weights.ray_sample_reverse_pdf_inverse = 2.0;
+  etx::Scene scene = {};
+  bool valid = etx::upbp_prepare_recursive_departure(scene, path, 1u, 4u, state);
+  valid = (state.failure == etx::UPBPRecursiveWeightFailure::None) && valid;
+  valid = close_value(state.d_bpt_a, 2.0, 0.0, "zero-reverse recursive BPT coefficient") && valid;
+  valid = close_value(state.d_bpt_b, 6.0, 0.0, "zero-reverse recursive BPT constant") && valid;
+  valid = close_value(state.d_pde_a, 2.0, 0.0, "zero-reverse recursive PDE coefficient") && valid;
+  valid = close_value(state.d_pde_b, 24.0, 0.0, "zero-reverse recursive PDE constant") && valid;
+
+  vertex.scatter_pdf_reverse = -1.0f;
+  state = {};
+  valid = (etx::upbp_prepare_recursive_departure(scene, path, 1u, 4u, state) == false) && valid;
+  valid = (state.failure == etx::UPBPRecursiveWeightFailure::InvalidScatteringDensity) && valid;
+
+  vertex.scatter_pdf_reverse = std::numeric_limits<float>::infinity();
+  state = {};
+  valid = (etx::upbp_prepare_recursive_departure(scene, path, 1u, 4u, state) == false) && valid;
+  valid = (state.failure == etx::UPBPRecursiveWeightFailure::InvalidScatteringDensity) && valid;
+  std::printf("zero-reverse scattering density %s\n", valid ? "valid" : "failed");
+  return valid;
+}
+
 bool validate_point_merge_mis() {
   etx::UPBPDensityMISConfiguration configuration = {};
   configuration.enabled_techniques = static_cast<uint32_t>(etx::UPBPTechnique::BPT) | static_cast<uint32_t>(etx::UPBPTechnique::PP3D) |
@@ -717,7 +862,7 @@ bool validate_point_merge_mis() {
 }
 
 bool validate_medium_pre_collision_throughput() {
-  const etx::SpectralQuery rgb = {0.0f, 0u};
+  const etx::SpectralQuery rgb = etx::SpectralQuery::sample();
   const etx::SpectralResponse rgb_throughput{rgb, float3{1.5f, 4.0f, 0.0f}};
   const etx::SpectralResponse rgb_scattering{rgb, float3{1.5f, 2.0f, 0.0f}};
   etx::SpectralResponse result = {};
@@ -737,7 +882,7 @@ bool validate_medium_pre_collision_throughput() {
 }
 
 bool validate_bpt_cross_technique_mis() {
-  const etx::SpectralQuery spect = {550.0f, 0u};
+  const etx::SpectralQuery spect = etx::SpectralQuery::sample();
   etx::Scene scene = {};
   etx::UPBPPathVertexRecord light = {};
   light.position = {};
@@ -982,6 +1127,29 @@ bool validate_sampling_domains() {
   return valid;
 }
 
+bool reference_beam_intersection(const etx::UPBPBeamReference& first, const etx::UPBPBeamReference& second, const float radius, etx::UPBPBeamBeamIntersection& result) {
+  const float direction_dot = dot(first.direction, second.direction);
+  const float denominator = 1.0f - direction_dot * direction_dot;
+  constexpr float degeneracy_threshold = 16.0f * std::numeric_limits<float>::epsilon();
+  if (denominator <= degeneracy_threshold) {
+    return false;
+  }
+  const float3 origin_delta = first.origin - second.origin;
+  const float first_projection = dot(first.direction, origin_delta);
+  const float second_projection = dot(second.direction, origin_delta);
+  result.first_distance = (direction_dot * second_projection - first_projection) / denominator;
+  result.second_distance = (second_projection - direction_dot * first_projection) / denominator;
+  if ((result.first_distance < 0.0f) || (result.first_distance >= first.length) || (result.second_distance < 0.0f) || (result.second_distance >= second.length)) {
+    return false;
+  }
+  const float3 first_point = first.origin + first.direction * result.first_distance;
+  const float3 second_point = second.origin + second.direction * result.second_distance;
+  const float3 delta = first_point - second_point;
+  result.distance_squared = dot(delta, delta);
+  result.sin_theta = sqrtf(denominator);
+  return result.distance_squared < radius * radius;
+}
+
 bool validate_beam_geometry_and_index() {
   constexpr uint32_t beam_count = 1024u;
   constexpr float radius = 0.2f;
@@ -1042,14 +1210,37 @@ bool validate_beam_geometry_and_index() {
 
     std::vector<uint32_t> exhaustive;
     for (const etx::UPBPBeamReference& beam : beams) {
-      etx::UPBPBeamBeamIntersection intersection = {};
-      if (etx::upbp_intersect_beams(probe, beam, radius, intersection)) {
+      etx::UPBPBeamBeamIntersection optimized = {};
+      etx::UPBPBeamBeamIntersection reference = {};
+      const bool optimized_hit = etx::upbp_intersect_beams(probe, beam, radius, optimized);
+      const bool reference_hit = reference_beam_intersection(probe, beam, radius, reference);
+      valid = (optimized_hit == reference_hit) && valid;
+      if (optimized_hit && reference_hit) {
+        valid = close_value(optimized.first_distance, reference.first_distance, 2.0e-4, "beam first distance") && valid;
+        valid = close_value(optimized.second_distance, reference.second_distance, 2.0e-4, "beam second distance") && valid;
+        valid = close_value(optimized.distance_squared, reference.distance_squared, 2.0e-4, "beam distance squared") && valid;
+        valid = close_value(optimized.sin_theta, reference.sin_theta, 2.0e-5, "beam sine") && valid;
+      }
+      if (reference_hit) {
         exhaustive.emplace_back(beam.path_index);
       }
     }
     std::sort(accelerated.begin(), accelerated.end());
     std::sort(exhaustive.begin(), exhaustive.end());
     valid = (accelerated == exhaustive) && valid;
+
+    std::vector<uint32_t> fused;
+    valid = index.query_beam_intersections(
+              probe, radius,
+              [](const etx::UPBPBeamReference&, const uint32_t) {
+                return true;
+              },
+              [&fused](const etx::UPBPBeamReference& beam, const uint32_t, const etx::UPBPBeamBeamIntersection&) {
+                fused.emplace_back(beam.path_index);
+              }) &&
+            valid;
+    std::sort(fused.begin(), fused.end());
+    valid = (fused == exhaustive) && valid;
   }
 
   const etx::UPBPBeamReference parallel_a = {{}, {1.0f, 0.0f, 0.0f}, 2.0f, 0u, 0u, 0u};
@@ -1061,7 +1252,7 @@ bool validate_beam_geometry_and_index() {
 }
 
 bool validate_physical_beam_collection() {
-  const etx::SpectralQuery spect = {550.0f, 0u};
+  const etx::SpectralQuery spect = etx::SpectralQuery::sample();
   etx::UPBPPathRecord path = {};
   path.reset(4u);
   etx::UPBPPathVertexRecord endpoint = {};
@@ -1161,7 +1352,7 @@ bool validate_physical_beam_collection() {
 }
 
 bool validate_joined_path_topology() {
-  const etx::SpectralQuery spect = {550.0f, 0u};
+  const etx::SpectralQuery spect = etx::SpectralQuery::sample();
   auto make_path = [spect](const etx::UPBPVertexClass endpoint_class, const etx::PathSource source, const float start, const float step) {
     etx::UPBPPathRecord path = {};
     path.reset(4u);
@@ -1237,10 +1428,13 @@ int main() {
   valid = validate_bpt_path_length_limits() && valid;
   valid = validate_light_path_selection() && valid;
   valid = validate_population_radius_scale() && valid;
+  valid = validate_automatic_initial_radius() && valid;
   valid = validate_projected_measure_domain() && valid;
   valid = validate_medium_origin_trace_retry() && valid;
   valid = validate_bpt_strategy_controls() && valid;
   valid = validate_density_technique_factors() && valid;
+  valid = validate_recursive_local_pde_affine() && valid;
+  valid = validate_prepared_medium_density() && valid;
   valid = validate_balance_heuristic() && valid;
   valid = validate_segment_record() && valid;
   valid = validate_segment_walker() && valid;
@@ -1250,6 +1444,7 @@ int main() {
   valid = validate_recursive_balance_accumulator() && valid;
   valid = validate_density_mis_recurrence() && valid;
   valid = validate_augmented_recursive_weights() && valid;
+  valid = validate_zero_reverse_scattering_density() && valid;
   valid = validate_point_merge_mis() && valid;
   valid = validate_medium_pre_collision_throughput() && valid;
   valid = validate_bpt_cross_technique_mis() && valid;

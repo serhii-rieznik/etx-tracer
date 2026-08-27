@@ -34,6 +34,7 @@ struct UPBPIterationParameters {
   double bb1d_radius = 0.0;
   uint64_t camera_subpath_count = 0u;
   uint64_t light_subpath_count = 0u;
+  uint64_t bb1d_light_subpath_count = 0u;
   uint64_t bpt_sample_count = 0u;
 };
 
@@ -59,7 +60,7 @@ uint64_t upbp_bytes_to_mib_ceil(const uint64_t bytes) {
 }
 
 uint64_t upbp_segment_storage_bytes(const UPBPSegmentRecord& segment) {
-  return static_cast<uint64_t>(segment.events.capacity()) * sizeof(MediumTrackingEvent);
+  return static_cast<uint64_t>(segment.events.capacity()) * sizeof(UPBPMediumTrackingEventRecord);
 }
 
 uint64_t upbp_transport_storage_bytes(const UPBPTransportSegmentRecord& segment) {
@@ -159,6 +160,10 @@ bool upbp_options_valid(const UPBPOptions& options, std::string& reason) {
     reason = "UPBP maximum light-path count is outside the supported range";
     return false;
   }
+  if (options.maximum_bb1d_light_path_count > UPBPOptions::kMaximumLightPathCount) {
+    reason = "UPBP maximum BB1D light-path count is outside the supported range";
+    return false;
+  }
   if ((options.memory_budget_mb < UPBPOptions::kMinimumMemoryBudgetMiB) || (options.memory_budget_mb > UPBPOptions::kMaximumMemoryBudgetMiB)) {
     reason = "UPBP memory budget is outside the supported range";
     return false;
@@ -166,18 +171,12 @@ bool upbp_options_valid(const UPBPOptions& options, std::string& reason) {
   return true;
 }
 
-double upbp_initial_radius(const float configured_radius, const Scene& scene, const Film& film, const uint64_t camera_subpath_count, const uint64_t light_subpath_count,
-  const uint32_t dimension) {
+double upbp_initial_radius(const float configured_radius, const Scene& scene, const uint64_t camera_subpath_count, const uint64_t light_subpath_count, const uint32_t dimension,
+  const double relative_radius_scale) {
   if (configured_radius > 0.0f) {
     return configured_radius;
   }
-  const uint2 dimensions = film.current_dimensions() * film.pixel_size();
-  const uint32_t maximum_dimension = max(dimensions.x, dimensions.y);
-  if ((maximum_dimension == 0u) || (camera_subpath_count == 0u) || (light_subpath_count == 0u)) {
-    return 0.0;
-  }
-  const double population_scale = upbp_population_radius_scale(camera_subpath_count, light_subpath_count, dimension);
-  return 5.0 * static_cast<double>(scene.bounding_sphere_radius) / static_cast<double>(maximum_dimension) * population_scale;
+  return upbp_automatic_initial_radius(scene.bounding_sphere_radius, camera_subpath_count, light_subpath_count, dimension, relative_radius_scale);
 }
 
 UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& options, const Scene& scene, const Film& film, const uint64_t iteration, const uint64_t light_subpath_count) {
@@ -189,27 +188,36 @@ UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& options, co
   spectral_iteration.iteration = static_cast<uint32_t>(iteration);
   result.spect = vcm_iteration_spectral_query(scene, spectral_iteration);
 
-  result.surface_radius = upbp_progressive_radius(upbp_initial_radius(options.initial_surface_radius, scene, film, result.camera_subpath_count, result.light_subpath_count, 2u),
-    options.radius_alpha, 2u, iteration);
-  result.pp3d_radius = upbp_progressive_radius(upbp_initial_radius(options.initial_pp3d_radius, scene, film, result.camera_subpath_count, result.light_subpath_count, 3u),
-    options.radius_alpha, 3u, iteration);
-  result.pb2d_radius = upbp_progressive_radius(upbp_initial_radius(options.initial_pb2d_radius, scene, film, result.camera_subpath_count, result.light_subpath_count, 2u),
-    options.radius_alpha, 2u, iteration);
-  result.bp2d_radius = upbp_progressive_radius(upbp_initial_radius(options.initial_bp2d_radius, scene, film, result.camera_subpath_count, result.light_subpath_count, 2u),
-    options.radius_alpha, 2u, iteration);
-  result.bb1d_radius = upbp_progressive_radius(upbp_initial_radius(options.initial_bb1d_radius, scene, film, result.camera_subpath_count, result.light_subpath_count, 1u),
-    options.radius_alpha, 1u, iteration);
+  result.surface_radius = upbp_progressive_radius(
+    upbp_initial_radius(options.initial_surface_radius, scene, result.camera_subpath_count, result.light_subpath_count, 2u, kUPBPAutomaticSurfaceRadiusScale), options.radius_alpha,
+    2u, iteration);
+  result.pp3d_radius =
+    upbp_progressive_radius(upbp_initial_radius(options.initial_pp3d_radius, scene, result.camera_subpath_count, result.light_subpath_count, 3u, kUPBPAutomaticVolumeRadiusScale),
+      options.radius_alpha, 3u, iteration);
+  result.pb2d_radius =
+    upbp_progressive_radius(upbp_initial_radius(options.initial_pb2d_radius, scene, result.camera_subpath_count, result.light_subpath_count, 2u, kUPBPAutomaticVolumeRadiusScale),
+      options.radius_alpha, 2u, iteration);
+  result.bp2d_radius =
+    upbp_progressive_radius(upbp_initial_radius(options.initial_bp2d_radius, scene, result.camera_subpath_count, result.light_subpath_count, 2u, kUPBPAutomaticVolumeRadiusScale),
+      options.radius_alpha, 2u, iteration);
+  result.bb1d_radius =
+    upbp_progressive_radius(upbp_initial_radius(options.initial_bb1d_radius, scene, result.camera_subpath_count, result.light_subpath_count, 1u, kUPBPAutomaticVolumeRadiusScale),
+      options.radius_alpha, 1u, iteration);
 
   result.mis.enabled_techniques = options.technique_mask;
   if (scene.strategy_enabled(Scene::Strategy::MergeVertices) == false) {
     result.mis.enabled_techniques &= static_cast<uint32_t>(UPBPTechnique::BPT);
+  }
+  if (result.mis.enabled(UPBPTechnique::BB1D)) {
+    result.bb1d_light_subpath_count =
+      options.maximum_bb1d_light_path_count > 0u ? min(light_subpath_count, static_cast<uint64_t>(options.maximum_bb1d_light_path_count)) : light_subpath_count;
   }
   result.mis.technique_factors[0u] = result.bpt_sample_count;
   result.mis.technique_factors[1u] = upbp_density_mis_factor(UPBPTechnique::Surface, result.light_subpath_count, result.surface_radius, 1.0);
   result.mis.technique_factors[2u] = upbp_density_mis_factor(UPBPTechnique::PP3D, result.light_subpath_count, result.pp3d_radius, 1.0);
   result.mis.technique_factors[3u] = upbp_density_mis_factor(UPBPTechnique::PB2D, result.light_subpath_count, result.pb2d_radius, 1.0);
   result.mis.technique_factors[4u] = upbp_density_mis_factor(UPBPTechnique::BP2D, result.light_subpath_count, result.bp2d_radius, 1.0);
-  result.mis.technique_factors[5u] = upbp_density_mis_factor(UPBPTechnique::BB1D, result.light_subpath_count, result.bb1d_radius, options.beam_selection_probability);
+  result.mis.technique_factors[5u] = upbp_density_mis_factor(UPBPTechnique::BB1D, result.bb1d_light_subpath_count, result.bb1d_radius, options.beam_selection_probability);
   result.mis.photon_beams_long = false;
   result.mis.camera_beams_long = true;
   return result;
@@ -224,21 +232,44 @@ Sampler upbp_pair_sampler(const uint32_t render_seed, const uint64_t iteration, 
 }  // namespace
 
 struct CPUUPBPImpl {
+  enum CameraTimingStage : uint32_t {
+    CameraTimingSubpath,
+    CameraTimingRecursiveMIS,
+    CameraTimingBPT,
+    CameraTimingSurfaceMerge,
+    CameraTimingPP3D,
+    CameraTimingBP2D,
+    CameraTimingBeamPreparation,
+    CameraTimingPB2D,
+    CameraTimingBB1D,
+    CameraTimingFilmSubmission,
+    CameraTimingStageCount,
+  };
+  static constexpr uint32_t camera_timing_sample_rate = 16u;
+  static_assert((camera_timing_sample_rate & (camera_timing_sample_rate - 1u)) == 0u);
+
   struct CameraEvaluationStatistics {
     uint64_t camera_paths = 0u;
     uint64_t queries = 0u;
     uint64_t candidates = 0u;
+    uint64_t eligible_candidates = 0u;
+    uint64_t intersections = 0u;
     uint64_t contributions = 0u;
     uint64_t published_camera_paths = 0u;
     uint64_t published_queries = 0u;
     uint64_t published_candidates = 0u;
+    uint64_t published_eligible_candidates = 0u;
+    uint64_t published_intersections = 0u;
     uint64_t published_contributions = 0u;
+    std::array<uint64_t, CameraTimingStageCount> stage_times = {};
+    std::array<uint64_t, CameraTimingStageCount> published_stage_times = {};
   };
 
   struct CameraWorkspace {
     UPBPCameraSubpathResult camera = {};
     UPBPRecursivePathWeights weights = {};
     std::vector<UPBPBeamReference> beams = {};
+    std::vector<UPBPPreparedBeam> prepared_beams = {};
   };
 
   struct LightTask : public Task {
@@ -280,6 +311,8 @@ struct CPUUPBPImpl {
     DebugMediumPoints,
     DebugLightBeams,
     DebugLightPaths,
+    DebugBB1DLightPaths,
+    DebugBB1DLightBeams,
     DebugLightStorage,
     DebugLightBudget,
     DebugIterationSetupTime,
@@ -290,8 +323,20 @@ struct CPUUPBPImpl {
     DebugLightSplatTime,
     DebugCameraEvaluationTime,
     DebugCameraProgress,
+    DebugCameraSubpathTime,
+    DebugCameraRecursiveMISTime,
+    DebugCameraBPTTime,
+    DebugCameraSurfaceMergeTime,
+    DebugCameraPP3DTime,
+    DebugCameraBP2DTime,
+    DebugCameraBeamPreparationTime,
+    DebugCameraPB2DTime,
+    DebugCameraBB1DTime,
+    DebugCameraFilmSubmissionTime,
     DebugBB1DQueries,
     DebugBB1DCandidates,
+    DebugBB1DEligibleCandidates,
+    DebugBB1DIntersections,
     DebugBB1DContributions,
     DebugBB1DCandidatesPerQuery,
     DebugInfoCount,
@@ -307,14 +352,24 @@ struct CPUUPBPImpl {
   Task::Handle task_handle = {};
   UPBPOptions options = {};
   UPBPIterationParameters iteration = {};
+  UPBPPreparedBB1D prepared_bb1d = {};
 
   std::vector<UPBPLightSubpathResult> light_paths = {};
   std::vector<UPBPRecursivePathWeights> light_weights = {};
   std::vector<std::vector<UPBPLightSplat>> light_splats = {};
   std::vector<UPBPPointReference> surface_points = {};
   std::vector<UPBPPointReference> medium_points = {};
+  std::vector<uint64_t> light_vertex_offsets = {};
+  std::vector<SpectralResponse> prepared_light_vertex_throughputs = {};
+  std::vector<uint8_t> prepared_light_vertex_validity = {};
   std::vector<UPBPBeamReference> light_beams = {};
+  std::vector<UPBPPreparedBeam> prepared_bp2d_beams = {};
+  std::vector<uint8_t> prepared_bp2d_validity = {};
   std::vector<UPBPBeamReference> selected_bb1d_beams = {};
+  std::vector<UPBPPreparedBeam> prepared_bb1d_beams = {};
+  std::vector<uint8_t> prepared_bb1d_validity = {};
+  std::vector<UPBPMediumTrackingEventRecord> prepared_bb1d_tracking_events = {};
+  std::vector<UPBPPreparedMedium> prepared_mediums = {};
   UPBPPointIndex surface_index = {};
   UPBPPointIndex pp3d_index = {};
   UPBPPointIndex pb2d_index = {};
@@ -332,7 +387,10 @@ struct CPUUPBPImpl {
   std::atomic<uint64_t> evaluated_camera_path_count = 0u;
   std::atomic<uint64_t> bb1d_query_count = 0u;
   std::atomic<uint64_t> bb1d_candidate_count = 0u;
+  std::atomic<uint64_t> bb1d_eligible_candidate_count = 0u;
+  std::atomic<uint64_t> bb1d_intersection_count = 0u;
   std::atomic<uint64_t> bb1d_contribution_count = 0u;
+  std::array<std::atomic<uint64_t>, CameraTimingStageCount> camera_stage_times = {};
   double iteration_setup_time_ms = 0.0;
   double light_path_time_ms = 0.0;
   double storage_validation_time_ms = 0.0;
@@ -354,6 +412,8 @@ struct CPUUPBPImpl {
     debug_info[DebugMediumPoints].title = "Medium points";
     debug_info[DebugLightBeams].title = "Light beams";
     debug_info[DebugLightPaths].title = "Light paths";
+    debug_info[DebugBB1DLightPaths].title = "BB1D light paths";
+    debug_info[DebugBB1DLightBeams].title = "BB1D light beams";
     debug_info[DebugLightStorage].title = "Light storage (MiB)";
     debug_info[DebugLightBudget].title = "Light budget (MiB)";
     debug_info[DebugIterationSetupTime].title = "Iteration setup (ms)";
@@ -364,8 +424,20 @@ struct CPUUPBPImpl {
     debug_info[DebugLightSplatTime].title = "Light splats (ms)";
     debug_info[DebugCameraEvaluationTime].title = "Camera evaluation (ms)";
     debug_info[DebugCameraProgress].title = "Camera progress (%)";
+    debug_info[DebugCameraSubpathTime].title = "Camera subpaths (estimated CPU ms)";
+    debug_info[DebugCameraRecursiveMISTime].title = "Camera recursive MIS (estimated CPU ms)";
+    debug_info[DebugCameraBPTTime].title = "Camera BPT/direct hit (estimated CPU ms)";
+    debug_info[DebugCameraSurfaceMergeTime].title = "Camera surface merge (estimated CPU ms)";
+    debug_info[DebugCameraPP3DTime].title = "Camera PP3D (estimated CPU ms)";
+    debug_info[DebugCameraBP2DTime].title = "Camera BP2D (estimated CPU ms)";
+    debug_info[DebugCameraBeamPreparationTime].title = "Camera beam preparation (estimated CPU ms)";
+    debug_info[DebugCameraPB2DTime].title = "Camera PB2D (estimated CPU ms)";
+    debug_info[DebugCameraBB1DTime].title = "Camera BB1D (estimated CPU ms)";
+    debug_info[DebugCameraFilmSubmissionTime].title = "Camera film submission (estimated CPU ms)";
     debug_info[DebugBB1DQueries].title = "BB1D queries (M)";
     debug_info[DebugBB1DCandidates].title = "BB1D candidates (M)";
+    debug_info[DebugBB1DEligibleCandidates].title = "BB1D eligible candidates (M)";
+    debug_info[DebugBB1DIntersections].title = "BB1D intersections (M)";
     debug_info[DebugBB1DContributions].title = "BB1D contributions (M)";
     debug_info[DebugBB1DCandidatesPerQuery].title = "BB1D candidates/query";
     status.debug_info = debug_info.data();
@@ -416,7 +488,12 @@ struct CPUUPBPImpl {
     evaluated_camera_path_count.store(0u, std::memory_order_relaxed);
     bb1d_query_count.store(0u, std::memory_order_relaxed);
     bb1d_candidate_count.store(0u, std::memory_order_relaxed);
+    bb1d_eligible_candidate_count.store(0u, std::memory_order_relaxed);
+    bb1d_intersection_count.store(0u, std::memory_order_relaxed);
     bb1d_contribution_count.store(0u, std::memory_order_relaxed);
+    for (std::atomic<uint64_t>& camera_stage_time : camera_stage_times) {
+      camera_stage_time.store(0u, std::memory_order_relaxed);
+    }
     for (Integrator::Status::DebugInfo& info : debug_info) {
       info.value = 0.0f;
     }
@@ -441,11 +518,19 @@ struct CPUUPBPImpl {
       iteration.camera_subpath_count > 0u ? static_cast<float>(100.0 * static_cast<double>(evaluated_camera_paths) / static_cast<double>(iteration.camera_subpath_count)) : 0.0f;
 
     constexpr double one_million = 1.0e6;
+    for (uint32_t stage_index = 0u; stage_index < CameraTimingStageCount; ++stage_index) {
+      const uint64_t stage_time = camera_stage_times[stage_index].load(std::memory_order_relaxed);
+      debug_info[DebugCameraSubpathTime + stage_index].value = static_cast<float>(static_cast<double>(stage_time) * static_cast<double>(camera_timing_sample_rate) / one_million);
+    }
     const uint64_t queries = bb1d_query_count.load(std::memory_order_relaxed);
     const uint64_t candidates = bb1d_candidate_count.load(std::memory_order_relaxed);
+    const uint64_t eligible_candidates = bb1d_eligible_candidate_count.load(std::memory_order_relaxed);
+    const uint64_t intersections = bb1d_intersection_count.load(std::memory_order_relaxed);
     const uint64_t contributions = bb1d_contribution_count.load(std::memory_order_relaxed);
     debug_info[DebugBB1DQueries].value = static_cast<float>(static_cast<double>(queries) / one_million);
     debug_info[DebugBB1DCandidates].value = static_cast<float>(static_cast<double>(candidates) / one_million);
+    debug_info[DebugBB1DEligibleCandidates].value = static_cast<float>(static_cast<double>(eligible_candidates) / one_million);
+    debug_info[DebugBB1DIntersections].value = static_cast<float>(static_cast<double>(intersections) / one_million);
     debug_info[DebugBB1DContributions].value = static_cast<float>(static_cast<double>(contributions) / one_million);
     debug_info[DebugBB1DCandidatesPerQuery].value = queries > 0u ? static_cast<float>(static_cast<double>(candidates) / static_cast<double>(queries)) : 0.0f;
   }
@@ -466,19 +551,34 @@ struct CPUUPBPImpl {
     const uint64_t evaluated_camera_paths = evaluated_camera_path_count.load(std::memory_order_relaxed);
     const uint64_t queries = bb1d_query_count.load(std::memory_order_relaxed);
     const uint64_t candidates = bb1d_candidate_count.load(std::memory_order_relaxed);
+    const uint64_t eligible_candidates = bb1d_eligible_candidate_count.load(std::memory_order_relaxed);
+    const uint64_t intersections = bb1d_intersection_count.load(std::memory_order_relaxed);
     const uint64_t contributions = bb1d_contribution_count.load(std::memory_order_relaxed);
     const double camera_progress =
       iteration.camera_subpath_count > 0u ? 100.0 * static_cast<double>(evaluated_camera_paths) / static_cast<double>(iteration.camera_subpath_count) : 0.0;
     const double candidates_per_query = queries > 0u ? static_cast<double>(candidates) / static_cast<double>(queries) : 0.0;
-    log::info("UPBP iteration %u live: camera %.2f s, %.1f%% paths; BB1D queries %.3f M, candidates %.3f M, contributions %.3f M, %.2f candidates/query",
+    log::info(
+      "UPBP iteration %u live: camera %.2f s, %.1f%% paths; BB1D queries %.3f M, candidates %.3f M, eligible %.3f M, intersections %.3f M, contributions %.3f M, "
+      "%.2f candidates/query",
       status.current_iteration + 1u, stage_time.measure(), camera_progress, static_cast<double>(queries) / 1.0e6, static_cast<double>(candidates) / 1.0e6,
-      static_cast<double>(contributions) / 1.0e6, candidates_per_query);
+      static_cast<double>(eligible_candidates) / 1.0e6, static_cast<double>(intersections) / 1.0e6, static_cast<double>(contributions) / 1.0e6, candidates_per_query);
+    log::info(
+      "UPBP estimated camera CPU totals (ms): subpath %.1f, recursive MIS %.1f, BPT/direct hit %.1f, surface %.1f, PP3D %.1f, BP2D %.1f, beam preparation %.1f, PB2D %.1f, BB1D "
+      "%.1f, film "
+      "%.1f",
+      static_cast<double>(debug_info[DebugCameraSubpathTime].value), static_cast<double>(debug_info[DebugCameraRecursiveMISTime].value),
+      static_cast<double>(debug_info[DebugCameraBPTTime].value), static_cast<double>(debug_info[DebugCameraSurfaceMergeTime].value),
+      static_cast<double>(debug_info[DebugCameraPP3DTime].value), static_cast<double>(debug_info[DebugCameraBP2DTime].value),
+      static_cast<double>(debug_info[DebugCameraBeamPreparationTime].value), static_cast<double>(debug_info[DebugCameraPB2DTime].value),
+      static_cast<double>(debug_info[DebugCameraBB1DTime].value), static_cast<double>(debug_info[DebugCameraFilmSubmissionTime].value));
   }
 
   void publish_camera_statistics(CameraEvaluationStatistics& statistics) {
     const uint64_t camera_path_delta = statistics.camera_paths - statistics.published_camera_paths;
     const uint64_t query_delta = statistics.queries - statistics.published_queries;
     const uint64_t candidate_delta = statistics.candidates - statistics.published_candidates;
+    const uint64_t eligible_candidate_delta = statistics.eligible_candidates - statistics.published_eligible_candidates;
+    const uint64_t intersection_delta = statistics.intersections - statistics.published_intersections;
     const uint64_t contribution_delta = statistics.contributions - statistics.published_contributions;
     if (camera_path_delta > 0u) {
       evaluated_camera_path_count.fetch_add(camera_path_delta, std::memory_order_relaxed);
@@ -492,9 +592,24 @@ struct CPUUPBPImpl {
       bb1d_candidate_count.fetch_add(candidate_delta, std::memory_order_relaxed);
       statistics.published_candidates = statistics.candidates;
     }
+    if (eligible_candidate_delta > 0u) {
+      bb1d_eligible_candidate_count.fetch_add(eligible_candidate_delta, std::memory_order_relaxed);
+      statistics.published_eligible_candidates = statistics.eligible_candidates;
+    }
+    if (intersection_delta > 0u) {
+      bb1d_intersection_count.fetch_add(intersection_delta, std::memory_order_relaxed);
+      statistics.published_intersections = statistics.intersections;
+    }
     if (contribution_delta > 0u) {
       bb1d_contribution_count.fetch_add(contribution_delta, std::memory_order_relaxed);
       statistics.published_contributions = statistics.contributions;
+    }
+    for (uint32_t stage_index = 0u; stage_index < CameraTimingStageCount; ++stage_index) {
+      const uint64_t stage_time_delta = statistics.stage_times[stage_index] - statistics.published_stage_times[stage_index];
+      if (stage_time_delta > 0u) {
+        camera_stage_times[stage_index].fetch_add(stage_time_delta, std::memory_order_relaxed);
+        statistics.published_stage_times[stage_index] = statistics.stage_times[stage_index];
+      }
     }
   }
 
@@ -512,8 +627,17 @@ struct CPUUPBPImpl {
     light_splats = {};
     surface_points = {};
     medium_points = {};
+    light_vertex_offsets = {};
+    prepared_light_vertex_throughputs = {};
+    prepared_light_vertex_validity = {};
     light_beams = {};
+    prepared_bp2d_beams = {};
+    prepared_bp2d_validity = {};
     selected_bb1d_beams = {};
+    prepared_bb1d_beams = {};
+    prepared_bb1d_validity = {};
+    prepared_bb1d_tracking_events = {};
+    prepared_mediums = {};
     surface_index = {};
     pp3d_index = {};
     pb2d_index = {};
@@ -575,10 +699,6 @@ struct CPUUPBPImpl {
            " MiB, configured " + std::to_string(options.memory_budget_mb) + " MiB");
       return false;
     }
-    if ((status.current_iteration == 0u) && (result < camera_subpath_count)) {
-      log::info("UPBP selected %llu light paths for %llu camera paths within the %u MiB memory budget", static_cast<unsigned long long>(result),
-        static_cast<unsigned long long>(camera_subpath_count), options.memory_budget_mb);
-    }
     return true;
   }
 
@@ -622,7 +742,19 @@ struct CPUUPBPImpl {
     }
     result += static_cast<uint64_t>(surface_points.capacity()) * sizeof(UPBPPointReference);
     result += static_cast<uint64_t>(medium_points.capacity()) * sizeof(UPBPPointReference);
+    result += static_cast<uint64_t>(light_vertex_offsets.capacity()) * sizeof(uint64_t);
+    result += static_cast<uint64_t>(prepared_light_vertex_throughputs.capacity()) * sizeof(SpectralResponse);
+    result += static_cast<uint64_t>(prepared_light_vertex_validity.capacity()) * sizeof(uint8_t);
     result += static_cast<uint64_t>(light_beams.capacity() + selected_bb1d_beams.capacity()) * sizeof(UPBPBeamReference);
+    result += static_cast<uint64_t>(prepared_bp2d_beams.capacity()) * sizeof(UPBPPreparedBeam);
+    result += static_cast<uint64_t>(prepared_bp2d_validity.capacity()) * sizeof(uint8_t);
+    result += static_cast<uint64_t>(prepared_bb1d_beams.capacity()) * sizeof(UPBPPreparedBeam);
+    result += static_cast<uint64_t>(prepared_bb1d_validity.capacity()) * sizeof(uint8_t);
+    result += static_cast<uint64_t>(prepared_bb1d_tracking_events.capacity()) * sizeof(UPBPMediumTrackingEventRecord);
+    result += static_cast<uint64_t>(prepared_mediums.capacity()) * sizeof(UPBPPreparedMedium);
+    for (const UPBPPreparedMedium& prepared_medium : prepared_mediums) {
+      result += prepared_medium.storage_bytes();
+    }
     result += surface_index.storage_bytes() + pp3d_index.storage_bytes() + pb2d_index.storage_bytes() + bp2d_index.storage_bytes() + bb1d_index.storage_bytes();
     return result;
   }
@@ -670,11 +802,24 @@ struct CPUUPBPImpl {
       return;
     }
     iteration = upbp_iteration_parameters(options, rt.scene(), rt.film(), iteration_index, light_subpath_count);
-    if ((iteration.camera_subpath_count == 0u) || (iteration.light_subpath_count == 0u) || (iteration.mis.enabled_techniques == 0u) || (iteration.surface_radius <= 0.0) ||
-        (iteration.pp3d_radius <= 0.0) || (iteration.pb2d_radius <= 0.0) || (iteration.bp2d_radius <= 0.0) || (iteration.bb1d_radius <= 0.0)) {
+    prepared_bb1d = iteration.mis.enabled(UPBPTechnique::BB1D)
+                      ? upbp_prepare_bb1d(options.kernel, iteration.bb1d_radius, iteration.bb1d_light_subpath_count, options.beam_selection_probability)
+                      : UPBPPreparedBB1D{};
+    auto radius_valid = [this](const UPBPTechnique technique, const double radius) {
+      return (iteration.mis.enabled(technique) == false) || ((radius > 0.0) && std::isfinite(radius));
+    };
+    if ((iteration.camera_subpath_count == 0u) || (iteration.light_subpath_count == 0u) || (iteration.mis.enabled_techniques == 0u) ||
+        (radius_valid(UPBPTechnique::Surface, iteration.surface_radius) == false) || (radius_valid(UPBPTechnique::PP3D, iteration.pp3d_radius) == false) ||
+        (radius_valid(UPBPTechnique::PB2D, iteration.pb2d_radius) == false) || (radius_valid(UPBPTechnique::BP2D, iteration.bp2d_radius) == false) ||
+        (radius_valid(UPBPTechnique::BB1D, iteration.bb1d_radius) == false) || (iteration.mis.enabled(UPBPTechnique::BB1D) && (prepared_bb1d.valid == false))) {
       fail("UPBP iteration parameters are invalid for the current film and scene");
       *state = Integrator::State::Stopped;
       return;
+    }
+    if (status.current_iteration == 0u) {
+      log::info("UPBP selected %llu light paths for %llu camera paths within the %u MiB memory budget; %llu assigned to BB1D",
+        static_cast<unsigned long long>(iteration.light_subpath_count), static_cast<unsigned long long>(iteration.camera_subpath_count), options.memory_budget_mb,
+        static_cast<unsigned long long>(iteration.bb1d_light_subpath_count));
     }
     constexpr uint32_t density_technique_mask = static_cast<uint32_t>(UPBPTechnique::Surface) | static_cast<uint32_t>(UPBPTechnique::PP3D) |
                                                 static_cast<uint32_t>(UPBPTechnique::PB2D) | static_cast<uint32_t>(UPBPTechnique::BP2D) |
@@ -697,6 +842,10 @@ struct CPUUPBPImpl {
     }
 
     try {
+      prepared_mediums.resize(rt.scene().mediums.count);
+      for (uint32_t medium_index = 0u; medium_index < rt.scene().mediums.count; ++medium_index) {
+        prepared_mediums[medium_index] = upbp_prepare_medium(rt.scene().mediums[medium_index], iteration.spect);
+      }
       light_paths.clear();
       light_paths.resize(static_cast<size_t>(iteration.light_subpath_count));
       light_weights.clear();
@@ -713,7 +862,7 @@ struct CPUUPBPImpl {
       return;
     }
 
-    const uint64_t fixed_storage = fixed_light_storage_bytes();
+    const uint64_t fixed_storage = current_light_storage_bytes();
     if (fixed_storage > memory_budget_bytes) {
       fail("UPBP allocated path-container storage exceeds the configured memory budget: required " + std::to_string(upbp_bytes_to_mib_ceil(fixed_storage)) + " MiB, configured " +
            std::to_string(options.memory_budget_mb) + " MiB");
@@ -724,8 +873,16 @@ struct CPUUPBPImpl {
 
     surface_points.clear();
     medium_points.clear();
+    light_vertex_offsets.clear();
+    prepared_light_vertex_throughputs.clear();
+    prepared_light_vertex_validity.clear();
     light_beams.clear();
+    prepared_bp2d_beams.clear();
+    prepared_bp2d_validity.clear();
     selected_bb1d_beams.clear();
+    prepared_bb1d_beams.clear();
+    prepared_bb1d_validity.clear();
+    prepared_bb1d_tracking_events.clear();
     surface_index.clear();
     pp3d_index.clear();
     pb2d_index.clear();
@@ -737,6 +894,7 @@ struct CPUUPBPImpl {
     debug_info[DebugBP2DRadius].value = static_cast<float>(iteration.bp2d_radius);
     debug_info[DebugBB1DRadius].value = static_cast<float>(iteration.bb1d_radius);
     debug_info[DebugLightPaths].value = static_cast<float>(iteration.light_subpath_count);
+    debug_info[DebugBB1DLightPaths].value = static_cast<float>(iteration.bb1d_light_subpath_count);
     iteration_setup_time_ms = iteration_time.measure_ms();
     stage = Stage::Light;
     stage_time.reset();
@@ -796,14 +954,17 @@ struct CPUUPBPImpl {
     }
   }
 
-  bool preflight_light_primitives(uint64_t& surface_point_count, uint64_t& medium_point_count, uint64_t& light_beam_count, uint64_t& selected_beam_count) {
+  bool preflight_light_primitives(uint64_t& surface_point_count, uint64_t& medium_point_count, uint64_t& light_vertex_count, uint64_t& light_beam_count,
+    uint64_t& selected_beam_count) {
     surface_point_count = 0u;
     medium_point_count = 0u;
+    light_vertex_count = 0u;
     light_beam_count = 0u;
     selected_beam_count = 0u;
     const bool collect_surface_points = iteration.mis.enabled(UPBPTechnique::Surface);
     const bool collect_medium_points = iteration.mis.enabled(UPBPTechnique::PP3D) || iteration.mis.enabled(UPBPTechnique::PB2D);
-    const bool collect_light_beams = iteration.mis.enabled(UPBPTechnique::BP2D) || iteration.mis.enabled(UPBPTechnique::BB1D);
+    const bool collect_bp2d_beams = iteration.mis.enabled(UPBPTechnique::BP2D);
+    const bool collect_bb1d_beams = iteration.mis.enabled(UPBPTechnique::BB1D);
 
     auto increment = [this](uint64_t& value, const char* label) {
       if (value == std::numeric_limits<uint64_t>::max()) {
@@ -816,6 +977,10 @@ struct CPUUPBPImpl {
 
     for (uint32_t path_index = 0u; path_index < light_paths.size(); ++path_index) {
       const UPBPPathRecord& path = light_paths[path_index].subpath.path;
+      if (upbp_checked_add(light_vertex_count, static_cast<uint64_t>(path.vertices.size()), light_vertex_count) == false) {
+        fail("UPBP light-vertex count overflowed 64-bit size arithmetic");
+        return false;
+      }
       for (uint32_t vertex_index = 1u; vertex_index < path.vertices.size(); ++vertex_index) {
         const UPBPPathVertexRecord& vertex = path.vertices[vertex_index];
         if (collect_surface_points && (vertex.cls == UPBPVertexClass::Surface) && (vertex.delta == false) && vertex.density_connectible) {
@@ -830,11 +995,11 @@ struct CPUUPBPImpl {
         }
       }
 
-      if (collect_light_beams == false) {
+      if ((collect_bp2d_beams == false) && ((collect_bb1d_beams == false) || (path_index >= iteration.bb1d_light_subpath_count))) {
         continue;
       }
-      auto count_segment = [this, path_index, &light_beam_count, &selected_beam_count, &increment](const UPBPTransportSegmentRecord& segment,
-                             const uint32_t transport_segment_index) {
+      auto count_segment = [this, path_index, collect_bp2d_beams, collect_bb1d_beams, &light_beam_count, &selected_beam_count, &increment](
+                             const UPBPTransportSegmentRecord& segment, const uint32_t transport_segment_index) {
         for (uint32_t transport_interval_index = 0u; transport_interval_index < segment.intervals.size(); ++transport_interval_index) {
           const UPBPSegmentRecord& interval = segment.intervals[transport_interval_index];
           if (interval.medium_index == kInvalidIndex) {
@@ -849,10 +1014,10 @@ struct CPUUPBPImpl {
           if (distance_squared == 0.0f) {
             continue;
           }
-          if (increment(light_beam_count, "light-beam") == false) {
+          if (collect_bp2d_beams && (increment(light_beam_count, "light-beam") == false)) {
             return false;
           }
-          if (iteration.mis.enabled(UPBPTechnique::BB1D)) {
+          if (collect_bb1d_beams && (path_index < iteration.bb1d_light_subpath_count)) {
             Sampler selection_sampler{
               upbp_sampler_seed(rt.scene().options.random_seed, status.current_iteration, path_index, transport_segment_index, transport_interval_index, UPBPRandomDomain::BB1D)};
             if ((selection_sampler.next() < options.beam_selection_probability) && (increment(selected_beam_count, "selected BB1D beam") == false)) {
@@ -889,8 +1054,19 @@ struct CPUUPBPImpl {
       const uint64_t current = static_cast<uint64_t>(values.capacity()) * sizeof(typename std::decay_t<decltype(values)>::value_type);
       return upbp_checked_add(required, projected - current, required);
     };
+    const bool prepare_light_medium_vertices = iteration.mis.enabled(UPBPTechnique::PB2D);
+    uint64_t light_vertex_offset_count = 0u;
+    if (prepare_light_medium_vertices && (upbp_checked_add(static_cast<uint64_t>(light_paths.size()), 1u, light_vertex_offset_count) == false)) {
+      fail("UPBP light-vertex offset count overflowed 64-bit size arithmetic");
+      return false;
+    }
     if ((add_vector_growth(surface_points, surface_point_count) == false) || (add_vector_growth(medium_points, medium_point_count) == false) ||
-        (add_vector_growth(light_beams, light_beam_count) == false) || (add_vector_growth(selected_bb1d_beams, selected_beam_count) == false)) {
+        (add_vector_growth(light_vertex_offsets, light_vertex_offset_count) == false) ||
+        (add_vector_growth(prepared_light_vertex_throughputs, prepare_light_medium_vertices ? light_vertex_count : 0u) == false) ||
+        (add_vector_growth(prepared_light_vertex_validity, prepare_light_medium_vertices ? light_vertex_count : 0u) == false) ||
+        (add_vector_growth(light_beams, light_beam_count) == false) || (add_vector_growth(prepared_bp2d_beams, light_beam_count) == false) ||
+        (add_vector_growth(prepared_bp2d_validity, light_beam_count) == false) || (add_vector_growth(selected_bb1d_beams, selected_beam_count) == false) ||
+        (add_vector_growth(prepared_bb1d_beams, selected_beam_count) == false) || (add_vector_growth(prepared_bb1d_validity, selected_beam_count) == false)) {
       fail("UPBP primitive storage preflight overflowed 64-bit size arithmetic");
       return false;
     }
@@ -906,23 +1082,48 @@ struct CPUUPBPImpl {
     try {
       uint64_t surface_point_count = 0u;
       uint64_t medium_point_count = 0u;
+      uint64_t light_vertex_count = 0u;
       uint64_t light_beam_count = 0u;
       uint64_t selected_beam_count = 0u;
-      if (preflight_light_primitives(surface_point_count, medium_point_count, light_beam_count, selected_beam_count) == false) {
+      if (preflight_light_primitives(surface_point_count, medium_point_count, light_vertex_count, light_beam_count, selected_beam_count) == false) {
         return false;
       }
       surface_points.reserve(static_cast<size_t>(surface_point_count));
       medium_points.reserve(static_cast<size_t>(medium_point_count));
+      const bool prepare_light_medium_vertices = iteration.mis.enabled(UPBPTechnique::PB2D);
+      if (prepare_light_medium_vertices) {
+        light_vertex_offsets.resize(light_paths.size() + 1u);
+      }
+      if (prepare_light_medium_vertices) {
+        prepared_light_vertex_throughputs.resize(static_cast<size_t>(light_vertex_count));
+        prepared_light_vertex_validity.assign(static_cast<size_t>(light_vertex_count), 0u);
+      }
       light_beams.reserve(static_cast<size_t>(light_beam_count));
+      prepared_bp2d_beams.reserve(static_cast<size_t>(light_beam_count));
+      prepared_bp2d_validity.reserve(static_cast<size_t>(light_beam_count));
       selected_bb1d_beams.reserve(static_cast<size_t>(selected_beam_count));
+      prepared_bb1d_beams.reserve(static_cast<size_t>(selected_beam_count));
+      prepared_bb1d_validity.reserve(static_cast<size_t>(selected_beam_count));
       const bool collect_surface_points = iteration.mis.enabled(UPBPTechnique::Surface);
       const bool collect_medium_points = iteration.mis.enabled(UPBPTechnique::PP3D) || iteration.mis.enabled(UPBPTechnique::PB2D);
-      const bool collect_light_beams = iteration.mis.enabled(UPBPTechnique::BP2D) || iteration.mis.enabled(UPBPTechnique::BB1D);
+      const bool collect_bp2d_beams = iteration.mis.enabled(UPBPTechnique::BP2D);
+      const bool collect_bb1d_beams = iteration.mis.enabled(UPBPTechnique::BB1D);
       std::vector<UPBPBeamReference> path_beams = {};
+      uint64_t light_vertex_offset = 0u;
       for (uint32_t path_index = 0u; path_index < light_paths.size(); ++path_index) {
         const UPBPPathRecord& path = light_paths[path_index].subpath.path;
+        if (prepare_light_medium_vertices) {
+          light_vertex_offsets[path_index] = light_vertex_offset;
+        }
         for (uint32_t vertex_index = 1u; vertex_index < path.vertices.size(); ++vertex_index) {
           const UPBPPathVertexRecord& vertex = path.vertices[vertex_index];
+          const uint64_t prepared_index = light_vertex_offset + vertex_index;
+          if (prepare_light_medium_vertices && (vertex.cls == UPBPVertexClass::Medium)) {
+            SpectralResponse pre_collision_throughput = {};
+            const bool valid = upbp_medium_pre_collision_throughput(rt.scene(), iteration.spect, vertex, pre_collision_throughput);
+            prepared_light_vertex_throughputs[static_cast<size_t>(prepared_index)] = pre_collision_throughput;
+            prepared_light_vertex_validity[static_cast<size_t>(prepared_index)] = static_cast<uint8_t>(valid);
+          }
           if (collect_surface_points && (vertex.cls == UPBPVertexClass::Surface) && (vertex.delta == false) && vertex.density_connectible) {
             surface_points.emplace_back(UPBPPointReference{vertex.position, path_index, vertex_index});
           } else if (collect_medium_points && (vertex.cls == UPBPVertexClass::Medium) && (vertex.delta == false) && vertex.density_connectible &&
@@ -930,8 +1131,9 @@ struct CPUUPBPImpl {
             medium_points.emplace_back(UPBPPointReference{vertex.position, path_index, vertex_index});
           }
         }
+        light_vertex_offset += path.vertices.size();
 
-        if (collect_light_beams == false) {
+        if ((collect_bp2d_beams == false) && ((collect_bb1d_beams == false) || (path_index >= iteration.bb1d_light_subpath_count))) {
           continue;
         }
         if (upbp_collect_medium_beams(path, path_index, path_beams) == false) {
@@ -939,15 +1141,34 @@ struct CPUUPBPImpl {
           return false;
         }
         for (const UPBPBeamReference& beam : path_beams) {
-          light_beams.emplace_back(beam);
-          if (iteration.mis.enabled(UPBPTechnique::BB1D)) {
+          UPBPPreparedBeam prepared_beam = {};
+          bool beam_prepared = false;
+          if (collect_bp2d_beams) {
+            beam_prepared = upbp_prepare_beam(path, light_weights[path_index], beam, iteration.mis, prepared_beam);
+            light_beams.emplace_back(beam);
+            prepared_bp2d_validity.emplace_back(static_cast<uint8_t>(beam_prepared));
+            prepared_bp2d_beams.emplace_back(prepared_beam);
+          }
+          if (collect_bb1d_beams && (path_index < iteration.bb1d_light_subpath_count)) {
             Sampler selection_sampler{upbp_sampler_seed(rt.scene().options.random_seed, status.current_iteration, path_index, beam.transport_segment_index,
               beam.transport_interval_index, UPBPRandomDomain::BB1D)};
             if (selection_sampler.next() < options.beam_selection_probability) {
+              if (collect_bp2d_beams == false) {
+                beam_prepared = upbp_prepare_beam(path, light_weights[path_index], beam, iteration.mis, prepared_beam);
+              }
+              if (spectral_query_compatible(beam.throughput_at_origin.as_query(), iteration.spect) == false) {
+                fail("UPBP light-beam spectrum is inconsistent at path " + std::to_string(path_index));
+                return false;
+              }
               selected_bb1d_beams.emplace_back(beam);
+              prepared_bb1d_validity.emplace_back(static_cast<uint8_t>(beam_prepared));
+              prepared_bb1d_beams.emplace_back(prepared_beam);
             }
           }
         }
+      }
+      if (prepare_light_medium_vertices) {
+        light_vertex_offsets.back() = light_vertex_offset;
       }
     } catch (const std::bad_alloc&) {
       fail("UPBP failed to allocate deterministic point and beam storage");
@@ -979,6 +1200,24 @@ struct CPUUPBPImpl {
       const uint64_t current = index.storage_bytes();
       return upbp_checked_add(required, projected - current, required);
     };
+    uint64_t selected_tracking_event_count = 0u;
+    for (const UPBPPreparedBeam& prepared_beam : prepared_bb1d_beams) {
+      if ((prepared_beam.tracking_events != nullptr) &&
+          (upbp_checked_add(selected_tracking_event_count, static_cast<uint64_t>(prepared_beam.tracking_event_count), selected_tracking_event_count) == false)) {
+        fail("UPBP selected BB1D tracking-event count overflowed 64-bit size arithmetic");
+        return false;
+      }
+    }
+    uint64_t projected_tracking_event_storage = 0u;
+    if (upbp_projected_vector_storage_bytes(prepared_bb1d_tracking_events, selected_tracking_event_count, projected_tracking_event_storage) == false) {
+      fail("UPBP selected BB1D tracking-event storage estimate overflowed 64-bit size arithmetic");
+      return false;
+    }
+    const uint64_t current_tracking_event_storage = static_cast<uint64_t>(prepared_bb1d_tracking_events.capacity()) * sizeof(UPBPMediumTrackingEventRecord);
+    if (upbp_checked_add(required, projected_tracking_event_storage - current_tracking_event_storage, required) == false) {
+      fail("UPBP selected BB1D tracking-event storage preflight overflowed 64-bit size arithmetic");
+      return false;
+    }
     if ((iteration.mis.enabled(UPBPTechnique::Surface) && (add_point_index_growth(surface_index, static_cast<uint32_t>(surface_points.size()), false) == false)) ||
         (iteration.mis.enabled(UPBPTechnique::PP3D) && (add_point_index_growth(pp3d_index, static_cast<uint32_t>(medium_points.size()), false) == false)) ||
         (iteration.mis.enabled(UPBPTechnique::PB2D) && (add_point_index_growth(pb2d_index, static_cast<uint32_t>(medium_points.size()), true) == false)) ||
@@ -1014,10 +1253,38 @@ struct CPUUPBPImpl {
         fail("UPBP BP2D beam index construction failed");
         return false;
       }
+      if (iteration.mis.enabled(UPBPTechnique::BP2D) && (light_beams.empty() == false) && (bp2d_index.reorder_by_leaf_layout(prepared_bp2d_beams) == false)) {
+        fail("UPBP BP2D prepared-beam layout failed");
+        return false;
+      }
+      if (iteration.mis.enabled(UPBPTechnique::BP2D) && (light_beams.empty() == false) && (bp2d_index.reorder_by_leaf_layout(prepared_bp2d_validity) == false)) {
+        fail("UPBP BP2D validity layout failed");
+        return false;
+      }
       if (iteration.mis.enabled(UPBPTechnique::BB1D) && (selected_bb1d_beams.empty() == false) &&
           (bb1d_index.build(selected_bb1d_beams.data(), static_cast<uint32_t>(selected_bb1d_beams.size()), static_cast<float>(iteration.bb1d_radius)) == false)) {
         fail("UPBP BB1D beam index construction failed");
         return false;
+      }
+      if (iteration.mis.enabled(UPBPTechnique::BB1D) && (selected_bb1d_beams.empty() == false) && (bb1d_index.reorder_by_leaf_layout(prepared_bb1d_beams) == false)) {
+        fail("UPBP BB1D prepared-beam layout failed");
+        return false;
+      }
+      if (iteration.mis.enabled(UPBPTechnique::BB1D) && (selected_bb1d_beams.empty() == false) && (bb1d_index.reorder_by_leaf_layout(prepared_bb1d_validity) == false)) {
+        fail("UPBP BB1D validity layout failed");
+        return false;
+      }
+      if (iteration.mis.enabled(UPBPTechnique::BB1D) && (selected_bb1d_beams.empty() == false)) {
+        prepared_bb1d_tracking_events.reserve(static_cast<size_t>(selected_tracking_event_count));
+        for (UPBPPreparedBeam& prepared_beam : prepared_bb1d_beams) {
+          if (prepared_beam.tracking_events == nullptr) {
+            continue;
+          }
+          const size_t event_offset = prepared_bb1d_tracking_events.size();
+          prepared_bb1d_tracking_events.insert(prepared_bb1d_tracking_events.end(), prepared_beam.tracking_events,
+            prepared_beam.tracking_events + prepared_beam.tracking_event_count);
+          prepared_beam.tracking_events = prepared_bb1d_tracking_events.data() + event_offset;
+        }
       }
     } catch (const std::bad_alloc&) {
       fail("UPBP failed to allocate spatial acceleration structures");
@@ -1046,13 +1313,21 @@ struct CPUUPBPImpl {
     if ((index.size() == 0u) || (camera_vertex_index >= camera_path.vertices.size())) {
       return true;
     }
+    float3 camera_geometric_normal = {};
+    if (technique == UPBPTechnique::Surface) {
+      const UPBPPathVertexRecord& camera_vertex = camera_path.vertices[camera_vertex_index];
+      const Triangle& triangle = rt.scene().triangles[camera_vertex.intersection.triangle_index];
+      camera_geometric_normal = scene_triangle_world_geometric_normal(rt.scene(), triangle, camera_vertex.intersection.instance_index);
+    }
     bool evaluation_valid = true;
     const bool query_valid = index.query(camera_path.vertices[camera_vertex_index].position, static_cast<float>(radius),
-      [this, technique, radius, &camera_path, &camera_weights, camera_path_index, camera_vertex_index, &value, &evaluation_valid](const UPBPPointReference& point, const float) {
+      [this, technique, radius, &camera_path, &camera_weights, camera_path_index, camera_vertex_index, &camera_geometric_normal, &value, &evaluation_valid](
+        const UPBPPointReference& point, const float) {
         if (evaluation_valid == false) {
           return;
         }
-        if ((point.path_index >= light_paths.size()) || (point.vertex_index >= light_weights[point.path_index].arrivals.size())) {
+        if ((point.path_index >= light_paths.size()) || (point.vertex_index >= light_paths[point.path_index].subpath.path.vertices.size()) ||
+            (point.vertex_index >= light_weights[point.path_index].arrivals.size())) {
           evaluation_valid = false;
           return;
         }
@@ -1061,7 +1336,7 @@ struct CPUUPBPImpl {
         UPBPPointMergeContribution contribution = {};
         if (upbp_evaluate_point_merge(rt.scene(), iteration.spect, light_paths[point.path_index].subpath.path, point.vertex_index,
               light_weights[point.path_index].arrivals[point.vertex_index], camera_path, camera_vertex_index, camera_weights.arrivals[camera_vertex_index], iteration.mis,
-              technique, options.kernel, radius, iteration.light_subpath_count, iteration.bpt_sample_count, sampler, contribution) == false) {
+              technique, options.kernel, radius, iteration.light_subpath_count, iteration.bpt_sample_count, camera_geometric_normal, sampler, contribution) == false) {
           evaluation_valid = false;
           return;
         }
@@ -1072,26 +1347,55 @@ struct CPUUPBPImpl {
     return query_valid && evaluation_valid;
   }
 
-  bool evaluate_pb2d(const UPBPPathRecord& camera_path, const UPBPRecursivePathWeights& camera_weights, const uint32_t camera_path_index,
-    const std::vector<UPBPBeamReference>& camera_beams, SpectralResponse& value) {
+  bool evaluate_pb2d(const std::vector<UPBPBeamReference>& camera_beams, const std::vector<UPBPPreparedBeam>& prepared_camera_beams, SpectralResponse& value) {
     if (pb2d_index.size() == 0u) {
       return true;
     }
-    for (const UPBPBeamReference& camera_beam : camera_beams) {
+    if (prepared_camera_beams.size() != camera_beams.size()) {
+      return false;
+    }
+    for (uint32_t camera_beam_index = 0u; camera_beam_index < camera_beams.size(); ++camera_beam_index) {
+      const UPBPBeamReference& camera_beam = camera_beams[camera_beam_index];
+      const UPBPPreparedBeam& prepared_camera_beam = prepared_camera_beams[camera_beam_index];
+      if (camera_beam.medium_index >= prepared_mediums.size()) {
+        return false;
+      }
+      if (prepared_camera_beam.valid == false) {
+        continue;
+      }
+      const Medium& medium = rt.scene().mediums[camera_beam.medium_index];
       bool evaluation_valid = true;
       const bool query_valid = pb2d_index.query_beam(camera_beam, static_cast<float>(iteration.pb2d_radius),
-        [this, &camera_path, &camera_weights, camera_path_index, &camera_beam, &value, &evaluation_valid](const UPBPPointReference& point, const UPBPPointBeamIntersection&) {
+        [this, &medium, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid](const UPBPPointReference& point, const UPBPPointBeamIntersection& intersection) {
           if (evaluation_valid == false) {
             return;
           }
-          if ((point.path_index >= light_paths.size()) || (point.vertex_index >= light_weights[point.path_index].arrivals.size())) {
+          if ((point.path_index >= light_paths.size()) || (point.vertex_index >= light_paths[point.path_index].subpath.path.vertices.size()) ||
+              (point.vertex_index >= light_weights[point.path_index].arrivals.size())) {
             evaluation_valid = false;
             return;
           }
-          UPBPBeamContribution contribution = {};
-          if (upbp_evaluate_pb2d(rt.scene(), iteration.spect, light_paths[point.path_index].subpath.path, point.vertex_index,
-                light_weights[point.path_index].arrivals[point.vertex_index], camera_path, camera_weights, camera_beam, iteration.mis, options.kernel, iteration.pb2d_radius,
-                iteration.light_subpath_count, iteration.bpt_sample_count, contribution) == false) {
+          const UPBPPathVertexRecord& light_vertex = light_paths[point.path_index].subpath.path.vertices[point.vertex_index];
+          const uint32_t path_length = point.vertex_index + camera_beam.source_vertex_index + 1u;
+          if ((light_vertex.cls != UPBPVertexClass::Medium) || (light_vertex.medium.index != camera_beam.medium_index) ||
+              (spectral_query_compatible(light_vertex.throughput.as_query(), camera_beam.throughput_at_origin.as_query()) == false) ||
+              (path_length < rt.scene().options.min_path_length) || (path_length > rt.scene().options.max_path_length)) {
+            return;
+          }
+          if (point.path_index + 1u >= light_vertex_offsets.size()) {
+            evaluation_valid = false;
+            return;
+          }
+          const uint64_t prepared_index = light_vertex_offsets[point.path_index] + point.vertex_index;
+          if ((prepared_index >= light_vertex_offsets[point.path_index + 1u]) || (prepared_index >= prepared_light_vertex_throughputs.size()) ||
+              (prepared_light_vertex_validity[static_cast<size_t>(prepared_index)] == 0u)) {
+            evaluation_valid = false;
+            return;
+          }
+          UPBPBeamContribution contribution;
+          if (upbp_evaluate_prepared_pb2d(light_vertex, light_weights[point.path_index].arrivals[point.vertex_index],
+                prepared_light_vertex_throughputs[static_cast<size_t>(prepared_index)], medium, prepared_mediums[camera_beam.medium_index], prepared_camera_beam, camera_beam,
+                intersection, iteration.mis, options.kernel, iteration.pb2d_radius, iteration.light_subpath_count, iteration.bpt_sample_count, contribution) == false) {
             evaluation_valid = false;
             return;
           }
@@ -1110,20 +1414,46 @@ struct CPUUPBPImpl {
     if (bp2d_index.size() == 0u) {
       return true;
     }
+    if ((camera_vertex_index >= camera_path.vertices.size()) || (camera_vertex_index >= camera_weights.arrivals.size()) || (prepared_bp2d_beams.size() != bp2d_index.size()) ||
+        (prepared_bp2d_validity.size() != bp2d_index.size())) {
+      return false;
+    }
+    const UPBPPathVertexRecord& camera_vertex = camera_path.vertices[camera_vertex_index];
+    if ((camera_vertex.cls != UPBPVertexClass::Medium) || (camera_vertex.medium.index >= prepared_mediums.size())) {
+      return false;
+    }
+    const Medium& medium = rt.scene().mediums[camera_vertex.medium.index];
+    const SpectralResponse scattering = upbp_medium_scattering_coefficient(medium, iteration.spect, camera_vertex.position);
+    if (scattering.is_zero()) {
+      return true;
+    }
+    SpectralResponse camera_throughput = {};
+    if (upbp_remove_medium_collision_weight(camera_vertex.throughput, scattering, std::exp(camera_vertex.log_medium_event_density), camera_throughput) == false) {
+      return false;
+    }
+    const UPBPPointMergeMISInput::Weights prepared_camera_weights = upbp_point_merge_weights(camera_weights.arrivals[camera_vertex_index]);
     bool evaluation_valid = true;
-    const bool query_valid = bp2d_index.query_point(camera_path.vertices[camera_vertex_index].position,
-      [this, &camera_path, &camera_weights, camera_vertex_index, &value, &evaluation_valid](const UPBPBeamReference& beam) {
+    const bool query_valid = bp2d_index.query_point_intersections(
+      camera_vertex.position, static_cast<float>(iteration.bp2d_radius),
+      [this, &camera_vertex, camera_vertex_index, &evaluation_valid](const UPBPBeamReference& beam, const uint32_t beam_index) {
         if (evaluation_valid == false) {
-          return;
+          return false;
         }
-        if ((beam.path_index >= light_paths.size()) || (camera_vertex_index >= camera_weights.arrivals.size())) {
+        if ((beam.path_index >= light_paths.size()) || (beam_index >= prepared_bp2d_validity.size())) {
           evaluation_valid = false;
-          return;
+          return false;
         }
-        UPBPBeamContribution contribution = {};
-        if (upbp_evaluate_bp2d(rt.scene(), iteration.spect, light_paths[beam.path_index].subpath.path, light_weights[beam.path_index], beam, camera_path, camera_vertex_index,
-              camera_weights.arrivals[camera_vertex_index], iteration.mis, options.kernel, iteration.bp2d_radius, iteration.light_subpath_count, iteration.bpt_sample_count,
-              contribution) == false) {
+        const uint32_t path_length = beam.source_vertex_index + 1u + camera_vertex_index;
+        return (prepared_bp2d_validity[beam_index] != 0u) && (beam.medium_index == camera_vertex.medium.index) &&
+               spectral_query_compatible(camera_vertex.throughput.as_query(), beam.throughput_at_origin.as_query()) && (path_length >= rt.scene().options.min_path_length) &&
+               (path_length <= rt.scene().options.max_path_length);
+      },
+      [this, &medium, &camera_vertex, &prepared_camera_weights, &camera_throughput, &scattering, &value, &evaluation_valid](const UPBPBeamReference& beam,
+        const uint32_t beam_index, const UPBPPointBeamIntersection& intersection) {
+        UPBPBeamContribution contribution;
+        if (upbp_evaluate_prepared_bp2d(medium, prepared_mediums[camera_vertex.medium.index], prepared_bp2d_beams[beam_index], beam, intersection, camera_vertex.intersection.w_i,
+              prepared_camera_weights, camera_throughput, scattering, iteration.mis, options.kernel, iteration.bp2d_radius, iteration.light_subpath_count,
+              iteration.bpt_sample_count, contribution) == false) {
           evaluation_valid = false;
           return;
         }
@@ -1134,32 +1464,46 @@ struct CPUUPBPImpl {
     return query_valid && evaluation_valid;
   }
 
-  bool evaluate_bb1d(const UPBPPathRecord& camera_path, const UPBPRecursivePathWeights& camera_weights, const std::vector<UPBPBeamReference>& camera_beams, SpectralResponse& value,
+  bool evaluate_bb1d(const std::vector<UPBPBeamReference>& camera_beams, const std::vector<UPBPPreparedBeam>& prepared_camera_beams, SpectralResponse& value,
     CameraEvaluationStatistics& statistics) {
     if (bb1d_index.size() == 0u) {
       return true;
     }
-    for (const UPBPBeamReference& camera_beam : camera_beams) {
+    if ((prepared_bb1d_beams.size() != bb1d_index.size()) || (prepared_bb1d_validity.size() != bb1d_index.size()) || (prepared_camera_beams.size() != camera_beams.size())) {
+      return false;
+    }
+    for (uint32_t camera_beam_index = 0u; camera_beam_index < camera_beams.size(); ++camera_beam_index) {
+      const UPBPBeamReference& camera_beam = camera_beams[camera_beam_index];
+      const UPBPPreparedBeam& prepared_camera_beam = prepared_camera_beams[camera_beam_index];
+      if (camera_beam.medium_index >= prepared_mediums.size()) {
+        return false;
+      }
+      const bool prepared_camera_beam_valid = prepared_camera_beam.valid;
       ++statistics.queries;
       bool evaluation_valid = true;
-      const bool query_valid = bb1d_index.query_beam(camera_beam, static_cast<float>(iteration.bb1d_radius),
-        [this, &camera_path, &camera_weights, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam) {
+      const bool query_valid = bb1d_index.query_beam_intersections(
+        camera_beam, static_cast<float>(iteration.bb1d_radius),
+        [this, &camera_beam, prepared_camera_beam_valid, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam, const uint32_t light_beam_index) {
           ++statistics.candidates;
-          constexpr uint64_t publish_interval = 4096u;
+          constexpr uint64_t publish_interval = 65536u;
           if ((statistics.candidates - statistics.published_candidates) >= publish_interval) {
             publish_camera_statistics(statistics);
           }
           if (evaluation_valid == false) {
-            return;
+            return false;
           }
-          if (light_beam.path_index >= light_paths.size()) {
-            evaluation_valid = false;
-            return;
-          }
-          UPBPBeamContribution contribution = {};
-          if (upbp_evaluate_bb1d(rt.scene(), iteration.spect, light_paths[light_beam.path_index].subpath.path, light_weights[light_beam.path_index], light_beam, camera_path,
-                camera_weights, camera_beam, iteration.mis, options.kernel, iteration.bb1d_radius, iteration.light_subpath_count, options.beam_selection_probability,
-                iteration.bpt_sample_count, contribution) == false) {
+          const uint32_t path_length = light_beam.source_vertex_index + camera_beam.source_vertex_index + 2u;
+          const bool eligible = (prepared_bb1d_validity[light_beam_index] != 0u) && prepared_camera_beam_valid && (light_beam.medium_index == camera_beam.medium_index) &&
+                                (path_length >= rt.scene().options.min_path_length) && (path_length <= rt.scene().options.max_path_length);
+          statistics.eligible_candidates += static_cast<uint64_t>(eligible);
+          return eligible;
+        },
+        [this, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam, const uint32_t light_beam_index,
+          const UPBPBeamBeamIntersection& intersection) {
+          ++statistics.intersections;
+          UPBPBeamContribution contribution;
+          if (upbp_evaluate_bb1d(rt.scene().mediums[camera_beam.medium_index], prepared_mediums[camera_beam.medium_index], prepared_bb1d_beams[light_beam_index], light_beam,
+                prepared_camera_beam, camera_beam, intersection, iteration.mis, prepared_bb1d, iteration.bpt_sample_count, contribution) == false) {
             evaluation_valid = false;
             return;
           }
@@ -1202,6 +1546,25 @@ struct CPUUPBPImpl {
         complete_camera_path(statistics);
         continue;
       }
+      uint32_t timing_sample_hash = path_index;
+      timing_sample_hash ^= timing_sample_hash >> 16u;
+      timing_sample_hash *= 0x7feb352du;
+      timing_sample_hash ^= timing_sample_hash >> 15u;
+      constexpr uint32_t camera_timing_sample_mask = camera_timing_sample_rate - 1u;
+      const bool measure_camera_timing = (timing_sample_hash & camera_timing_sample_mask) == 0u;
+      uint64_t camera_phase_start = 0u;
+      auto begin_camera_phase = [&camera_phase_start, measure_camera_timing]() {
+        if (measure_camera_timing) {
+          camera_phase_start = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        }
+      };
+      auto finish_camera_phase = [&statistics, &camera_phase_start, measure_camera_timing](const CameraTimingStage timing_stage) {
+        if (measure_camera_timing) {
+          const uint64_t phase_end = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+          statistics.stage_times[timing_stage] += phase_end - camera_phase_start;
+        }
+      };
+      begin_camera_phase();
       Sampler film_sampler{upbp_sampler_seed(scene.options.random_seed, status.current_iteration, path_index, 0u, 0u, UPBPRandomDomain::FilmSample)};
       const float2 film_uv = film.sample(status.current_iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, pixel, film_sampler.next_2d());
       UPBPCameraSubpathResult& camera = workspace.camera;
@@ -1214,15 +1577,19 @@ struct CPUUPBPImpl {
              std::to_string(camera.subpath.terminal_ray.d.y) + ", " + std::to_string(camera.subpath.terminal_ray.d.z) + ")");
         return;
       }
+      finish_camera_phase(CameraTimingSubpath);
       UPBPRecursivePathWeights& camera_weights = workspace.weights;
+      begin_camera_phase();
       if (upbp_compute_recursive_path_weights(scene, camera.subpath.path, iteration.mis, iteration.light_subpath_count, iteration.bpt_sample_count, camera_weights) == false) {
         fail("UPBP recursive camera-path MIS failed at pixel path " + std::to_string(path_index) + ", vertex " + std::to_string(camera_weights.failure_vertex_index) +
              ", failure " + std::to_string(static_cast<uint32_t>(camera_weights.failure)));
         return;
       }
+      finish_camera_phase(CameraTimingRecursiveMIS);
 
       SpectralResponse value{iteration.spect, 0.0f};
       if (iteration.mis.enabled(UPBPTechnique::BPT) || scene.strategy_enabled(Scene::Strategy::DirectHit)) {
+        begin_camera_phase();
         const uint32_t light_path_index =
           iteration.light_subpath_count == iteration.camera_subpath_count
             ? path_index
@@ -1239,44 +1606,76 @@ struct CPUUPBPImpl {
           return;
         }
         value += bpt.value;
+        finish_camera_phase(CameraTimingBPT);
       }
 
       for (uint32_t camera_vertex_index = 1u; camera_vertex_index < camera.subpath.path.vertices.size(); ++camera_vertex_index) {
         const UPBPPathVertexRecord& vertex = camera.subpath.path.vertices[camera_vertex_index];
-        if ((vertex.cls == UPBPVertexClass::Surface) && iteration.mis.enabled(UPBPTechnique::Surface) &&
-            (evaluate_point_technique(UPBPTechnique::Surface, surface_index, iteration.surface_radius, camera.subpath.path, camera_weights, path_index, camera_vertex_index,
-               value) == false)) {
-          fail("UPBP surface merging failed at pixel path " + std::to_string(path_index));
-          return;
+        if ((vertex.cls == UPBPVertexClass::Surface) && iteration.mis.enabled(UPBPTechnique::Surface)) {
+          begin_camera_phase();
+          if (evaluate_point_technique(UPBPTechnique::Surface, surface_index, iteration.surface_radius, camera.subpath.path, camera_weights, path_index, camera_vertex_index,
+                value) == false) {
+            fail("UPBP surface merging failed at pixel path " + std::to_string(path_index));
+            return;
+          }
+          finish_camera_phase(CameraTimingSurfaceMerge);
         }
-        if ((vertex.cls == UPBPVertexClass::Medium) && iteration.mis.enabled(UPBPTechnique::PP3D) &&
-            (evaluate_point_technique(UPBPTechnique::PP3D, pp3d_index, iteration.pp3d_radius, camera.subpath.path, camera_weights, path_index, camera_vertex_index, value) ==
-              false)) {
-          fail("UPBP PP3D evaluation failed at pixel path " + std::to_string(path_index));
-          return;
+        if ((vertex.cls == UPBPVertexClass::Medium) && iteration.mis.enabled(UPBPTechnique::PP3D)) {
+          begin_camera_phase();
+          if (evaluate_point_technique(UPBPTechnique::PP3D, pp3d_index, iteration.pp3d_radius, camera.subpath.path, camera_weights, path_index, camera_vertex_index, value) ==
+              false) {
+            fail("UPBP PP3D evaluation failed at pixel path " + std::to_string(path_index));
+            return;
+          }
+          finish_camera_phase(CameraTimingPP3D);
         }
-        if ((vertex.cls == UPBPVertexClass::Medium) && iteration.mis.enabled(UPBPTechnique::BP2D) &&
-            (evaluate_bp2d(camera.subpath.path, camera_weights, camera_vertex_index, value) == false)) {
-          fail("UPBP BP2D evaluation failed at pixel path " + std::to_string(path_index));
-          return;
+        if ((vertex.cls == UPBPVertexClass::Medium) && iteration.mis.enabled(UPBPTechnique::BP2D)) {
+          begin_camera_phase();
+          if (evaluate_bp2d(camera.subpath.path, camera_weights, camera_vertex_index, value) == false) {
+            fail("UPBP BP2D evaluation failed at pixel path " + std::to_string(path_index));
+            return;
+          }
+          finish_camera_phase(CameraTimingBP2D);
         }
       }
 
       std::vector<UPBPBeamReference>& camera_beams = workspace.beams;
-      if ((iteration.mis.enabled(UPBPTechnique::PB2D) || iteration.mis.enabled(UPBPTechnique::BB1D)) &&
-          (upbp_collect_medium_beams(camera.subpath.path, path_index, camera_beams) == false)) {
-        fail("UPBP camera-beam collection failed at pixel path " + std::to_string(path_index));
-        return;
+      std::vector<UPBPPreparedBeam>& prepared_camera_beams = workspace.prepared_beams;
+      if (iteration.mis.enabled(UPBPTechnique::PB2D) || iteration.mis.enabled(UPBPTechnique::BB1D)) {
+        begin_camera_phase();
+        if (upbp_collect_medium_beams(camera.subpath.path, path_index, camera_beams) == false) {
+          fail("UPBP camera-beam collection failed at pixel path " + std::to_string(path_index));
+          return;
+        }
+        prepared_camera_beams.resize(camera_beams.size());
+        for (uint32_t beam_index = 0u; beam_index < camera_beams.size(); ++beam_index) {
+          const UPBPBeamReference& beam = camera_beams[beam_index];
+          upbp_prepare_beam(camera.subpath.path, camera_weights, beam, iteration.mis, prepared_camera_beams[beam_index]);
+          if (spectral_query_compatible(beam.throughput_at_origin.as_query(), iteration.spect) == false) {
+            fail("UPBP camera-beam spectrum is inconsistent at pixel path " + std::to_string(path_index) + ", beam " + std::to_string(beam_index));
+            return;
+          }
+        }
+        finish_camera_phase(CameraTimingBeamPreparation);
       }
-      if (iteration.mis.enabled(UPBPTechnique::PB2D) && (evaluate_pb2d(camera.subpath.path, camera_weights, path_index, camera_beams, value) == false)) {
-        fail("UPBP PB2D evaluation failed at pixel path " + std::to_string(path_index));
-        return;
+      if (iteration.mis.enabled(UPBPTechnique::PB2D)) {
+        begin_camera_phase();
+        if (evaluate_pb2d(camera_beams, prepared_camera_beams, value) == false) {
+          fail("UPBP PB2D evaluation failed at pixel path " + std::to_string(path_index));
+          return;
+        }
+        finish_camera_phase(CameraTimingPB2D);
       }
-      if (iteration.mis.enabled(UPBPTechnique::BB1D) && (evaluate_bb1d(camera.subpath.path, camera_weights, camera_beams, value, statistics) == false)) {
-        fail("UPBP BB1D evaluation failed at pixel path " + std::to_string(path_index));
-        return;
+      if (iteration.mis.enabled(UPBPTechnique::BB1D)) {
+        begin_camera_phase();
+        if (evaluate_bb1d(camera_beams, prepared_camera_beams, value, statistics) == false) {
+          fail("UPBP BB1D evaluation failed at pixel path " + std::to_string(path_index));
+          return;
+        }
+        finish_camera_phase(CameraTimingBB1D);
       }
 
+      begin_camera_phase();
       float3 normal = {};
       SpectralResponse albedo{iteration.spect, 0.0f};
       for (uint32_t vertex_index = 1u; vertex_index < camera.subpath.path.vertices.size(); ++vertex_index) {
@@ -1290,6 +1689,7 @@ struct CPUUPBPImpl {
         }
       }
       film.submit(value.to_rgb_estimate(), normal, albedo.to_rgb_estimate(), pixel);
+      finish_camera_phase(CameraTimingFilmSubmission);
       complete_camera_path(statistics);
     }
   }
@@ -1331,6 +1731,7 @@ struct CPUUPBPImpl {
     debug_info[DebugSurfacePoints].value = static_cast<float>(surface_points.size());
     debug_info[DebugMediumPoints].value = static_cast<float>(medium_points.size());
     debug_info[DebugLightBeams].value = static_cast<float>(light_beams.size());
+    debug_info[DebugBB1DLightBeams].value = static_cast<float>(selected_bb1d_beams.size());
     debug_info[DebugLightStorage].value = static_cast<float>(current_light_storage_bytes()) / (1024.0f * 1024.0f);
     refresh_live_diagnostics();
     if (status.current_iteration == 0u) {
@@ -1358,14 +1759,24 @@ struct CPUUPBPImpl {
     if (status.current_iteration == 0u) {
       const uint64_t queries = bb1d_query_count.load(std::memory_order_relaxed);
       const uint64_t candidates = bb1d_candidate_count.load(std::memory_order_relaxed);
+      const uint64_t eligible_candidates = bb1d_eligible_candidate_count.load(std::memory_order_relaxed);
+      const uint64_t intersections = bb1d_intersection_count.load(std::memory_order_relaxed);
       const uint64_t contributions = bb1d_contribution_count.load(std::memory_order_relaxed);
       const double candidates_per_query = queries > 0u ? static_cast<double>(candidates) / static_cast<double>(queries) : 0.0;
       log::info(
         "UPBP first-iteration timing: setup %.2f ms, light paths %.2f ms, storage validation %.2f ms, primitive collection %.2f ms, spatial indices %.2f ms, light splats "
-        "%.2f ms, camera evaluation %.2f ms; BB1D queries %llu, candidates %llu, contributions %llu, %.2f candidates/query",
+        "%.2f ms, camera evaluation %.2f ms; BB1D queries %llu, candidates %llu, eligible %llu, intersections %llu, contributions %llu, %.2f candidates/query",
         iteration_setup_time_ms, light_path_time_ms, storage_validation_time_ms, primitive_collection_time_ms, spatial_index_time_ms, light_splat_time_ms,
-        camera_evaluation_time_ms, static_cast<unsigned long long>(queries), static_cast<unsigned long long>(candidates), static_cast<unsigned long long>(contributions),
-        candidates_per_query);
+        camera_evaluation_time_ms, static_cast<unsigned long long>(queries), static_cast<unsigned long long>(candidates), static_cast<unsigned long long>(eligible_candidates),
+        static_cast<unsigned long long>(intersections), static_cast<unsigned long long>(contributions), candidates_per_query);
+      log::info(
+        "UPBP first-iteration estimated camera CPU totals (ms): subpath %.1f, recursive MIS %.1f, BPT/direct hit %.1f, surface %.1f, PP3D %.1f, BP2D %.1f, beam preparation "
+        "%.1f, PB2D %.1f, BB1D %.1f, film %.1f",
+        static_cast<double>(debug_info[DebugCameraSubpathTime].value), static_cast<double>(debug_info[DebugCameraRecursiveMISTime].value),
+        static_cast<double>(debug_info[DebugCameraBPTTime].value), static_cast<double>(debug_info[DebugCameraSurfaceMergeTime].value),
+        static_cast<double>(debug_info[DebugCameraPP3DTime].value), static_cast<double>(debug_info[DebugCameraBP2DTime].value),
+        static_cast<double>(debug_info[DebugCameraBeamPreparationTime].value), static_cast<double>(debug_info[DebugCameraPB2DTime].value),
+        static_cast<double>(debug_info[DebugCameraBB1DTime].value), static_cast<double>(debug_info[DebugCameraFilmSubmissionTime].value));
     }
     if ((*state == Integrator::State::WaitingForCompletion) || (status.current_iteration + 1u >= scene.options.samples)) {
       *state = Integrator::State::Stopped;

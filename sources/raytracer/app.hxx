@@ -87,6 +87,8 @@ struct RTApplication {
   uint32_t on_medium_added();
   void on_medium_renamed(uint32_t index, const std::string&);
   void on_medium_changed(uint32_t index);
+  void on_medium_interaction_started();
+  void on_medium_interaction_finished(const std::vector<uint32_t>& medium_indices);
   void on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index);
   uint32_t on_make_mesh_material_unique(uint32_t mesh_index, uint32_t material_index);
   void on_emitter_changed(uint32_t index);
@@ -152,6 +154,8 @@ struct RTApplication {
   bool _scene_transform_interaction_active = false;
   bool _material_interaction_active = false;
   bool _material_interaction_cpu_was_running = false;
+  bool _medium_interaction_active = false;
+  bool _medium_interaction_cpu_was_active = false;
   bool _material_render_resource_preparation_active = false;
   bool _restart_cpu_after_material_resource_preparation = false;
   bool _restart_gpu_after_material_resource_preparation = false;

@@ -220,6 +220,7 @@ target_include_directories(raytracer
     PRIVATE "${CMAKE_SOURCE_DIR}/bin")
 
 set_target_properties(raytracer PROPERTIES
+  DEBUG_POSTFIX "_debug"
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
   RUNTIME_OUTPUT_DIRECTORY_RELEASE "${root_folder}/bin"
   RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${root_folder}/bin"

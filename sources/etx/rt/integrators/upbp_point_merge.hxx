@@ -52,16 +52,40 @@ inline bool upbp_medium_pre_collision_throughput(const Scene& scene, const Spect
 }
 
 struct UPBPPointMergeMISInput {
+  struct Weights {
+    double d_shared = 0.0;
+    double d_pde = 0.0;
+    double ray_sample_forward_pdf_inverse = 0.0;
+    double ray_sample_reverse_pdf_inverse = 0.0;
+    double ray_sample_forward_ratio = 0.0;
+    bool previous_delta = false;
+
+    Weights() = default;
+
+    Weights(const UPBPRecursiveVertexWeights& weights)
+      : d_shared(weights.d_shared)
+      , d_pde(weights.d_pde)
+      , ray_sample_forward_pdf_inverse(weights.ray_sample_forward_pdf_inverse)
+      , ray_sample_reverse_pdf_inverse(weights.ray_sample_reverse_pdf_inverse)
+      , ray_sample_forward_ratio(weights.ray_sample_forward_ratio)
+      , previous_delta(weights.previous_delta) {
+    }
+  };
+
   UPBPTechnique selected_technique = UPBPTechnique::Surface;
   UPBPVertexClass vertex_class = UPBPVertexClass::Surface;
-  UPBPRecursiveVertexWeights light = {};
-  UPBPRecursiveVertexWeights camera = {};
+  Weights light = {};
+  Weights camera = {};
   UPBPDensityMISConfiguration configuration = {};
   double scattering_pdf_forward = 0.0;
   double scattering_pdf_reverse = 0.0;
   double sin_theta = 0.0;
   uint64_t bpt_sample_count = 0u;
 };
+
+inline UPBPPointMergeMISInput::Weights upbp_point_merge_weights(const UPBPRecursiveVertexWeights& weights) {
+  return UPBPPointMergeMISInput::Weights{weights};
+}
 
 inline double upbp_point_merge_mis_weight(const UPBPPointMergeMISInput& input) {
   const double forward_ray_factor = input.configuration.photon_beams_long ? input.light.ray_sample_forward_pdf_inverse : input.light.ray_sample_forward_ratio;
@@ -108,16 +132,14 @@ inline double upbp_point_merge_mis_weight(const UPBPPointMergeMISInput& input) {
   return (denominator > 0.0) && std::isfinite(denominator) ? 1.0 / denominator : 0.0;
 }
 
-inline bool upbp_surface_merge_compatible(const Scene& scene, const UPBPPathVertexRecord& light, const UPBPPathVertexRecord& camera) {
+inline bool upbp_surface_merge_compatible(const Scene& scene, const UPBPPathVertexRecord& light, const UPBPPathVertexRecord& camera, const float3& camera_geometric_normal) {
   if ((light.cls != UPBPVertexClass::Surface) || (camera.cls != UPBPVertexClass::Surface) || light.delta || camera.delta || (light.density_connectible == false) ||
       (camera.density_connectible == false)) {
     return false;
   }
   const Triangle& light_triangle = scene.triangles[light.intersection.triangle_index];
-  const Triangle& camera_triangle = scene.triangles[camera.intersection.triangle_index];
-  const float3 light_normal = scene_triangle_world_geometric_normal(scene, light_triangle, light.intersection.instance_index);
-  const float3 camera_normal = scene_triangle_world_geometric_normal(scene, camera_triangle, camera.intersection.instance_index);
-  return dot(light_normal, camera_normal) > 0.0f;
+  const float3 light_geometric_normal = scene_triangle_world_geometric_normal(scene, light_triangle, light.intersection.instance_index);
+  return dot(light_geometric_normal, camera_geometric_normal) > 0.0f;
 }
 
 inline bool upbp_medium_merge_compatible(const UPBPPathVertexRecord& light, const UPBPPathVertexRecord& camera) {
@@ -136,7 +158,7 @@ struct UPBPPointMergeContribution {
 inline bool upbp_evaluate_point_merge(const Scene& scene, const SpectralQuery spect, const UPBPPathRecord& light_path, const uint32_t light_vertex_index,
   const UPBPRecursiveVertexWeights& light_weights, const UPBPPathRecord& camera_path, const uint32_t camera_vertex_index, const UPBPRecursiveVertexWeights& camera_weights,
   const UPBPDensityMISConfiguration& configuration, const UPBPTechnique technique, const UPBPKernel kernel, const double radius, const uint64_t light_subpath_count,
-  const uint64_t bpt_sample_count, Sampler& sampler, UPBPPointMergeContribution& result) {
+  const uint64_t bpt_sample_count, const float3& camera_geometric_normal, Sampler& sampler, UPBPPointMergeContribution& result) {
   result = {};
   result.contribution = SpectralResponse{spect, 0.0f};
   if ((light_vertex_index == 0u) || (camera_vertex_index == 0u) || (light_vertex_index >= light_path.vertices.size()) || (camera_vertex_index >= camera_path.vertices.size()) ||
@@ -146,7 +168,7 @@ inline bool upbp_evaluate_point_merge(const Scene& scene, const SpectralQuery sp
   const UPBPPathVertexRecord& light_vertex = light_path.vertices[light_vertex_index];
   const UPBPPathVertexRecord& camera_vertex = camera_path.vertices[camera_vertex_index];
   const bool surface = technique == UPBPTechnique::Surface;
-  if ((surface && (upbp_surface_merge_compatible(scene, light_vertex, camera_vertex) == false)) ||
+  if ((surface && (upbp_surface_merge_compatible(scene, light_vertex, camera_vertex, camera_geometric_normal) == false)) ||
       ((technique == UPBPTechnique::PP3D) && (upbp_medium_merge_compatible(light_vertex, camera_vertex) == false)) ||
       ((technique != UPBPTechnique::Surface) && (technique != UPBPTechnique::PP3D))) {
     return true;
@@ -176,8 +198,8 @@ inline bool upbp_evaluate_point_merge(const Scene& scene, const SpectralQuery sp
   result.mis_weight = upbp_point_merge_mis_weight({
     technique,
     camera_vertex.cls,
-    light_weights,
-    camera_weights,
+    upbp_point_merge_weights(light_weights),
+    upbp_point_merge_weights(camera_weights),
     configuration,
     result.scattering.pdf_forward,
     result.scattering.pdf_reverse,

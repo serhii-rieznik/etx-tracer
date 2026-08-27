@@ -24,6 +24,9 @@ enum class UPBPKernel : uint32_t {
   Epanechnikov,
 };
 
+constexpr double kUPBPAutomaticSurfaceRadiusScale = 0.0015;
+constexpr double kUPBPAutomaticVolumeRadiusScale = 0.001;
+
 enum class UPBPRandomDomain : uint32_t {
   FilmSample = 0x0d86c4fu,
   CameraPath = 0x17b42d1u,
@@ -80,6 +83,14 @@ inline double upbp_population_radius_scale(const uint64_t camera_subpath_count, 
   return pow(static_cast<double>(camera_subpath_count) / static_cast<double>(light_subpath_count), 1.0 / static_cast<double>(dimension));
 }
 
+inline double upbp_automatic_initial_radius(const double scene_radius, const uint64_t camera_subpath_count, const uint64_t light_subpath_count, const uint32_t dimension,
+  const double relative_radius_scale) {
+  if ((scene_radius <= 0.0) || (relative_radius_scale <= 0.0) || (std::isfinite(scene_radius) == false) || (std::isfinite(relative_radius_scale) == false)) {
+    return 0.0;
+  }
+  return scene_radius * relative_radius_scale * upbp_population_radius_scale(camera_subpath_count, light_subpath_count, dimension);
+}
+
 struct UPBPTechniqueProbability {
   UPBPTechnique technique = UPBPTechnique::BPT;
   double log_density = 0.0;
@@ -105,8 +116,17 @@ enum class UPBPPathFailure : uint8_t {
   CapacityExceeded,
 };
 
+struct UPBPMediumTrackingEventRecord {
+  SpectralResponse weight_before = {};
+  double log_transport_pdf_forward_before = 0.0;
+  double log_transport_pdf_reverse_before = 0.0;
+  float distance_before = 0.0f;
+  float end_distance = 0.0f;
+  float majorant = 0.0f;
+};
+
 struct UPBPSegmentRecord {
-  std::vector<MediumTrackingEvent> events = {};
+  std::vector<UPBPMediumTrackingEventRecord> events = {};
   SpectralResponse weight = {};
   double log_pdf_forward = 0.0;
   double log_pdf_reverse = 0.0;
@@ -163,13 +183,19 @@ struct UPBPSegmentRecord {
       return false;
     }
 
+    events.emplace_back(UPBPMediumTrackingEventRecord{
+      weight,
+      log_transport_pdf_forward,
+      log_transport_pdf_reverse,
+      distance,
+      distance + event.distance,
+      event.majorant,
+    });
     distance += event.distance;
     end_position = event.position;
     log_pdf_forward += std::log(static_cast<double>(event.pdf_forward));
     log_pdf_reverse += std::log(static_cast<double>(event.pdf_reverse));
     ++event_count;
-    events.emplace_back(event);
-
     if (event.type == MediumTrackingEventType::Null) {
       log_transport_pdf_forward += std::log(static_cast<double>(event.pdf_forward));
       log_transport_pdf_reverse += std::log(static_cast<double>(event.pdf_reverse));

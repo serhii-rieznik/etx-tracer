@@ -76,8 +76,7 @@ inline bool upbp_sample_connection_transmittance(const Raytracing& rt, const Sce
   float3 direction = target_position - source.position;
   const float distance_squared = dot(direction, direction);
   if (distance_squared <= kRayEpsilon * kRayEpsilon) {
-    result.failure = UPBPSceneSegmentFailure::InvalidRay;
-    return false;
+    return true;
   }
   const float distance = sqrtf(distance_squared);
   direction /= distance;
@@ -90,15 +89,13 @@ inline bool upbp_sample_connection_transmittance(const Raytracing& rt, const Sce
   direction = target_position - origin;
   const float offset_distance_squared = dot(direction, direction);
   if (offset_distance_squared <= kRayEpsilon * kRayEpsilon) {
-    result.failure = UPBPSceneSegmentFailure::InvalidRay;
-    return false;
+    return true;
   }
   const float offset_distance = sqrtf(offset_distance_squared);
   direction /= offset_distance;
   const float maximum_distance = offset_distance - fmaxf(kRayEpsilon, offset_distance * kRayEpsilon);
   if (maximum_distance <= kRayEpsilon) {
-    result.failure = UPBPSceneSegmentFailure::InvalidIntervalDistance;
-    return false;
+    return true;
   }
 
   const float minimum_distance = source.cls == UPBPVertexClass::Medium ? 0.0f : kRayEpsilon;

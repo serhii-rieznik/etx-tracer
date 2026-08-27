@@ -854,6 +854,10 @@ void UI::queue_material_change(uint32_t material_index) {
     return;
   }
 
+  if (_medium_interaction_active) {
+    finish_medium_interaction();
+  }
+
   if (_material_interaction_active == false) {
     _material_interaction_active = true;
     if (callbacks.material_interaction_started) {
@@ -880,6 +884,43 @@ void UI::finish_material_interaction() {
     }
   }
   _material_interaction_indices.clear();
+}
+
+void UI::queue_medium_change(uint32_t medium_index) {
+  if (medium_index == kInvalidIndex) {
+    return;
+  }
+
+  if (_material_interaction_active) {
+    finish_material_interaction();
+  }
+
+  if (_medium_interaction_active == false) {
+    _medium_interaction_active = true;
+    if (callbacks.medium_interaction_started) {
+      callbacks.medium_interaction_started();
+    }
+  }
+
+  if (std::find(_medium_interaction_indices.begin(), _medium_interaction_indices.end(), medium_index) == _medium_interaction_indices.end()) {
+    _medium_interaction_indices.push_back(medium_index);
+  }
+}
+
+void UI::finish_medium_interaction() {
+  if (_medium_interaction_active == false) {
+    return;
+  }
+
+  _medium_interaction_active = false;
+  if (callbacks.medium_interaction_finished) {
+    callbacks.medium_interaction_finished(_medium_interaction_indices);
+  } else if (callbacks.medium_changed) {
+    for (const uint32_t medium_index : _medium_interaction_indices) {
+      callbacks.medium_changed(medium_index);
+    }
+  }
+  _medium_interaction_indices.clear();
 }
 
 void UI::navigate_history(int32_t step) {
@@ -1656,6 +1697,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ImGuizmo::BeginFrame();
   _node_transform_editor_interaction_rendered_this_frame = false;
   _material_editor_rendered_this_frame = false;
+  _medium_editor_rendered_this_frame = false;
 
   BuildContext ctx = {};
   ctx.wpadding = {ImGui::GetStyle().WindowPadding.x, ImGui::GetStyle().WindowPadding.y};
@@ -1740,6 +1782,9 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   }
   if (_material_interaction_active && ((_material_editor_rendered_this_frame == false) || (ImGui::IsAnyItemActive() == false))) {
     finish_material_interaction();
+  }
+  if (_medium_interaction_active && ((_medium_editor_rendered_this_frame == false) || (ImGui::IsAnyItemActive() == false))) {
+    finish_medium_interaction();
   }
   build_unsaved_changes_modal();
   build_renderer_preparation_modal();
@@ -2777,11 +2822,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   return changed;
 }
 
-bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
-  if (scene_rep.data().spectrum_values.empty()) {
-    return false;
-  }
-
+bool UI::build_medium(Medium& m, SpectralDistribution* absorption, SpectralDistribution* scattering) {
   bool changed = false;
 
   ImGui::Text("Medium Type");
@@ -2801,13 +2842,13 @@ bool UI::build_medium(SceneRepresentation& scene_rep, Medium& m) {
 
   ImGui::Text("Absorption");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (spectrum_picker(scene_rep, "Absorption##medium_absorption", m.absorption_index, true, true)) {
+  if ((absorption != nullptr) && spectrum_picker("Absorption##medium_absorption", *absorption, true, true)) {
     changed = true;
   }
 
   ImGui::Text("Scattering");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (spectrum_picker(scene_rep, "Scattering##medium_scattering", m.scattering_index, true, true)) {
+  if ((scattering != nullptr) && spectrum_picker("Scattering##medium_scattering", *scattering, true, true)) {
     changed = true;
   }
 
@@ -5201,11 +5242,30 @@ void UI::build_medium_resource_properties(SceneRepresentation& scene_rep, uint32
     ImGui::TextColored(kErrorTextColor, "Invalid medium");
     return;
   }
+  _medium_editor_rendered_this_frame = true;
   Medium& medium = scene_rep.data().mediums.get(medium_index);
-  const bool changed = build_medium(scene_rep, medium);
+  Medium edited_medium = medium;
+  SpectralDistribution* absorption = nullptr;
+  SpectralDistribution edited_absorption = {};
+  if (medium.absorption_index < scene_rep.data().spectrum_values.size()) {
+    edited_absorption = scene_rep.data().spectrum_values[medium.absorption_index];
+    absorption = &edited_absorption;
+  }
+  SpectralDistribution* scattering = nullptr;
+  SpectralDistribution edited_scattering = {};
+  if (medium.scattering_index < scene_rep.data().spectrum_values.size()) {
+    edited_scattering = scene_rep.data().spectrum_values[medium.scattering_index];
+    scattering = &edited_scattering;
+  }
+  const bool changed = build_medium(edited_medium, absorption, scattering);
   if (changed) {
-    if (callbacks.medium_changed) {
-      callbacks.medium_changed(medium_index);
+    queue_medium_change(medium_index);
+    medium = edited_medium;
+    if (absorption != nullptr) {
+      scene_rep.data().spectrum_values[medium.absorption_index] = edited_absorption;
+    }
+    if (scattering != nullptr) {
+      scene_rep.data().spectrum_values[medium.scattering_index] = edited_scattering;
     }
   }
 }

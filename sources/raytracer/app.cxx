@@ -332,6 +332,8 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.medium_added = std::bind(&RTApplication::on_medium_added, this);
     ui.callbacks.medium_renamed = std::bind(&RTApplication::on_medium_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
+    ui.callbacks.medium_interaction_started = std::bind(&RTApplication::on_medium_interaction_started, this);
+    ui.callbacks.medium_interaction_finished = std::bind(&RTApplication::on_medium_interaction_finished, this, std::placeholders::_1);
     ui.callbacks.mesh_material_changed = std::bind(&RTApplication::on_mesh_material_changed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.mesh_material_made_unique = std::bind(&RTApplication::on_make_mesh_material_unique, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
@@ -1216,9 +1218,38 @@ void RTApplication::on_medium_renamed(uint32_t index, const std::string& name) {
 }
 
 void RTApplication::on_medium_changed(uint32_t index) {
+  (void)index;
   mark_scene_dirty();
   scene.update_medium_bounds();
   notify_scene_might_have_changed();
+}
+
+void RTApplication::on_medium_interaction_started() {
+  if (_medium_interaction_active) {
+    return;
+  }
+
+  _medium_interaction_active = true;
+  _medium_interaction_cpu_was_active = cpu_renderer.control_state().can_stop;
+  if (_medium_interaction_cpu_was_active) {
+    cpu_renderer.stop();
+  }
+}
+
+void RTApplication::on_medium_interaction_finished(const std::vector<uint32_t>& medium_indices) {
+  if (_medium_interaction_active == false) {
+    return;
+  }
+
+  _medium_interaction_active = false;
+  const bool cpu_was_active = _medium_interaction_cpu_was_active;
+  _medium_interaction_cpu_was_active = false;
+  if (medium_indices.empty() == false) {
+    on_medium_changed(medium_indices.front());
+  }
+  if (cpu_was_active) {
+    cpu_renderer.restart();
+  }
 }
 
 void RTApplication::on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index) {

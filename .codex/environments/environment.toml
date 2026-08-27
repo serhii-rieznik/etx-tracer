@@ -10,4 +10,9 @@ cmake --build build --target raytracer bsdf_validation --parallel'''
 [[actions]]
 name = "Run"
 icon = "run"
-command = "cmake --build build --target raytracer --parallel && ./bin/raytracer"
+command = "cmake --build build --config Release --target raytracer --parallel && ./bin/raytracer"
+
+[[actions]]
+name = "Run Debug"
+icon = "run"
+command = "cmake --build build --config Debug --target raytracer --parallel && ./bin/raytracer_debug"

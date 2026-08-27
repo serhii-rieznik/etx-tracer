@@ -73,20 +73,21 @@ inline double upbp_vertex_cosine(const Scene& scene, const UPBPPathVertexRecord&
   return fabs(static_cast<double>(dot(geometric_normal, direction)));
 }
 
-inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration& configuration, const UPBPPathVertexRecord& vertex, const UPBPRecursiveVertexWeights& weights,
-  const double next_reverse_pdf_inverse, const double next_reverse_ratio, const double sin_theta, const PathSource source) {
+inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration& configuration, const UPBPVertexClass vertex_class, const bool vertex_delta,
+  const bool vertex_density_connectible, const UPBPRecursiveVertexWeights& weights, const double next_reverse_pdf_inverse, const double next_reverse_ratio, const double sin_theta,
+  const PathSource source) {
   const double forward_inverse = source == PathSource::Light ? weights.ray_sample_forward_pdf_inverse : next_reverse_pdf_inverse;
   const double forward_ratio = source == PathSource::Light ? weights.ray_sample_forward_ratio : next_reverse_ratio;
   const double reverse_inverse = source == PathSource::Light ? next_reverse_pdf_inverse : weights.ray_sample_forward_pdf_inverse;
   const double reverse_ratio = source == PathSource::Light ? next_reverse_ratio : weights.ray_sample_forward_ratio;
   const UPBPDensityMISContext context = {
     2u,
-    vertex.cls,
+    vertex_class,
     configuration.photon_beams_long ? forward_inverse : forward_ratio,
     configuration.camera_beams_long ? reverse_inverse : reverse_ratio,
     sin_theta,
-    vertex.delta,
-    vertex.density_connectible,
+    vertex_delta,
+    vertex_density_connectible,
   };
 
   double result = 0.0;
@@ -99,6 +100,45 @@ inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration&
   };
   for (const UPBPTechnique technique : techniques) {
     result += upbp_density_strategy_factor(configuration, context, technique);
+  }
+  return result;
+}
+
+inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration& configuration, const UPBPPathVertexRecord& vertex, const UPBPRecursiveVertexWeights& weights,
+  const double next_reverse_pdf_inverse, const double next_reverse_ratio, const double sin_theta, const PathSource source) {
+  return upbp_recursive_local_pde_factor(configuration, vertex.cls, vertex.delta, vertex.density_connectible, weights, next_reverse_pdf_inverse, next_reverse_ratio, sin_theta,
+    source);
+}
+
+struct UPBPRecursiveLocalPDEAffine {
+  double reverse_pdf_inverse_coefficient = 0.0;
+  double constant = 0.0;
+};
+
+inline UPBPRecursiveLocalPDEAffine upbp_recursive_local_pde_affine(const UPBPDensityMISConfiguration& configuration, const UPBPVertexClass vertex_class, const bool vertex_delta,
+  const bool vertex_density_connectible, const UPBPRecursiveVertexWeights& weights, const double next_reverse_ratio, const double sin_theta, const PathSource source) {
+  UPBPRecursiveLocalPDEAffine result = {};
+  result.constant = upbp_recursive_local_pde_factor(configuration, vertex_class, vertex_delta, vertex_density_connectible, weights, 0.0, next_reverse_ratio, sin_theta, source);
+
+  UPBPDensityMISContext variable_context = {
+    2u,
+    vertex_class,
+    0.0,
+    0.0,
+    sin_theta,
+    vertex_delta,
+    vertex_density_connectible,
+  };
+  if ((source == PathSource::Light) && configuration.camera_beams_long) {
+    variable_context.forward_ray_factor = configuration.photon_beams_long ? weights.ray_sample_forward_pdf_inverse : weights.ray_sample_forward_ratio;
+    variable_context.reverse_ray_factor = 1.0;
+    result.reverse_pdf_inverse_coefficient =
+      upbp_density_strategy_factor(configuration, variable_context, UPBPTechnique::PB2D) + upbp_density_strategy_factor(configuration, variable_context, UPBPTechnique::BB1D);
+  } else if ((source == PathSource::Camera) && configuration.photon_beams_long) {
+    variable_context.forward_ray_factor = 1.0;
+    variable_context.reverse_ray_factor = configuration.camera_beams_long ? weights.ray_sample_forward_pdf_inverse : weights.ray_sample_forward_ratio;
+    result.reverse_pdf_inverse_coefficient =
+      upbp_density_strategy_factor(configuration, variable_context, UPBPTechnique::BP2D) + upbp_density_strategy_factor(configuration, variable_context, UPBPTechnique::BB1D);
   }
   return result;
 }
@@ -203,7 +243,7 @@ inline bool upbp_prepare_recursive_departure(const Scene& scene, const UPBPPathR
   const UPBPPathVertexRecord& vertex = path.vertices[vertex_index];
   const double forward_pdf = vertex.scatter_pdf_forward;
   const double reverse_pdf = vertex.scatter_pdf_reverse;
-  if ((forward_pdf <= 0.0) || (reverse_pdf <= 0.0)) {
+  if ((forward_pdf <= 0.0) || (std::isfinite(forward_pdf) == false) || (reverse_pdf < 0.0) || (std::isfinite(reverse_pdf) == false)) {
     state.failure = UPBPRecursiveWeightFailure::InvalidScatteringDensity;
     state.failure_vertex_index = vertex_index;
     return false;
