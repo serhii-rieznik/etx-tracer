@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Cubic zirconia
+#title:Cubic zirconia crystal
 #source:Wood and Nassau, Applied Optics 21, 2978-2981 (1982); 12 mol percent yttria, 25 C
 #source_url:https://doi.org/10.1364/AO.21.002978
 #model:Sellmeier equation; wavelength in micrometres

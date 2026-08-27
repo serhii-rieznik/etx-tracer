@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Glycerol
+#title:Glycerol liquid
 #source:D. Jakubczyk et al., Scientific Data 10, 894 (2023), corrected 2024
 #source_url:https://doi.org/10.1038/s41597-023-02819-3
 #model:Corrected two-pole Sellmeier fit to measurements from 394 nm through 1071 nm; wavelength in micrometres

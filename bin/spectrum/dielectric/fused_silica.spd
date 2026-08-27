@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Fused silica
+#title:Fused silica glass
 #source:Malitson, Journal of the Optical Society of America 55, 1205-1209 (1965)
 #source_url:https://doi.org/10.1364/JOSA.55.001205
 #model:Sellmeier equation; wavelength in micrometres

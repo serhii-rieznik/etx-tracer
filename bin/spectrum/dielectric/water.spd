@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Water
+#title:Water liquid
 #source:M. Daimon and A. Masumura, Applied Optics 46, 3811-3820 (2007)
 #source_url:https://opg.optica.org/ao/abstract.cfm?uri=ao-46-18-3811
 #model:Four-term Sellmeier equation at 20 C; wavelength in micrometres

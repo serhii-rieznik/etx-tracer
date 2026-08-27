@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Glass
+#title:Optical glass
 #source:SCHOTT N-BK7 optical glass datasheet, data status 2023-12-01
 #source_url:https://media.schott.com/api/public/content/41e799d0bf874807a0bb8e702fbb75b5?v=54856406
 #model:Legacy glass identifier defined as SCHOTT N-BK7; SCHOTT Sellmeier equation; wavelength in micrometres

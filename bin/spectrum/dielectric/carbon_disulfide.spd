@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Carbon disulfide
+#title:Carbon disulfide liquid
 #source:Chemnitz et al., Nature Communications 8, 42 (2017), supplementary information; 20 C
 #source_url:https://doi.org/10.1038/s41467-017-00033-5
 #model:Sellmeier equation; wavelength in micrometres

@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Sapphire
+#title:Sapphire crystal
 #source:I. H. Malitson, Refraction and Dispersion of Synthetic Sapphire, JOSA 52, 1377-1379 (1962)
 #source_url:https://doi.org/10.1364/JOSA.52.001377
 #model:Malitson three-term Sellmeier equation for the ordinary ray at 24 C; wavelength in micrometres

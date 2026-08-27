@@ -1,5 +1,5 @@
 #class:dielectric
-#title:PMMA
+#title:PMMA plastic
 #source:G. Beadie et al., Applied Optics 54, F139-F143 (2015)
 #source_url:https://opg.optica.org/ao/abstract.cfm?uri=ao-54-31-f139
 #model:Global PMMA dispersion fit at 20.1 C; wavelength in micrometres

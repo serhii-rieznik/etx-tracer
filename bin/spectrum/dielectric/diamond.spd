@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Diamond
+#title:Diamond crystal
 #source:Diamond Materials CVD Diamond Booklet; dispersion equation attributed to F. Peter, Z. Phys. 15, 358-368 (1923)
 #source_url:https://www.diamond-materials.com/site/assets/files/1095/cvd_diamond_booklet.pdf
 #model:Peter Sellmeier equation; wavelength in micrometres

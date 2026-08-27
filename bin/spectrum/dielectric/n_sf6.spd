@@ -1,5 +1,5 @@
 #class:dielectric
-#title:N-SF6
+#title:N-SF6 optical glass
 #source:SCHOTT N-SF6 optical glass datasheet, data status 2018-06-01
 #source_url:https://media.schott.com/api/public/content/820eba3413cc4e788433a3751f8edba9?download=true&v=97b3ea2b
 #model:SCHOTT Sellmeier equation; wavelength in micrometres

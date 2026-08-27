@@ -1,5 +1,5 @@
 #class:conductor
-#title:Silicon
+#title:Silicon semiconductor
 #source:Green, Solar Energy Materials and Solar Cells 92, 1305-1310 (2008); 300 K
 #source_url:https://doi.org/10.1016/j.solmat.2008.06.009
 #sampling:linear wavelength interpolation to 1 nm from 390 nm through 830 nm inclusive

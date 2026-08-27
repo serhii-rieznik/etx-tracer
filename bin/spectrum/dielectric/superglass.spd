@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Superglass
+#title:Superglass artificial glass
 #model:Deliberately artificial high-dispersion curve for renderer validation; not a real material
 #sampling:Legacy tabulation from 365 nm through 643.85 nm; endpoint values extend outside that range
 0.365 1.68

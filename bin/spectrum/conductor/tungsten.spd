@@ -1,5 +1,5 @@
 #class:conductor
-#title:Tungsten
+#title:Tungsten metal
 #source:Rakic et al., Applied Optics 37, 5271-5283 (1998), Brendel-Bormann model
 #source_url:https://doi.org/10.1364/AO.37.005271
 #sampling:linear wavelength interpolation to 1 nm from 390 nm through 830 nm inclusive

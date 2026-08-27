@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Calcium fluoride
+#title:Calcium fluoride crystal
 #source:Malitson, Applied Optics 2, 1103-1107 (1963); 24 C
 #source_url:https://doi.org/10.1364/AO.2.001103
 #model:Sellmeier equation; wavelength in micrometres

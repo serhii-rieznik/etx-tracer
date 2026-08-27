@@ -1,5 +1,5 @@
 #class:dielectric
-#title:Air
+#title:Air gas
 #source:P. E. Ciddor, Applied Optics 35, 1566-1573 (1996)
 #source_url:https://opg.optica.org/ao/abstract.cfm?uri=ao-35-9-1566
 #model:Ciddor standard-air dispersion equation; 15 C, 101325 Pa, 0% RH, 450 ppm CO2; vacuum wavelength in micrometres
