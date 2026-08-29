@@ -3,7 +3,13 @@
 #include <etx/engine/options.hxx>
 #include <etx/rt/integrators/upbp_core.hxx>
 
+#include <cmath>
+#include <string>
+
 namespace etx {
+
+constexpr uint32_t kUPBPTechniqueMask = static_cast<uint32_t>(UPBPTechnique::BPT) | static_cast<uint32_t>(UPBPTechnique::Surface) | static_cast<uint32_t>(UPBPTechnique::PP3D) |
+                                        static_cast<uint32_t>(UPBPTechnique::PB2D) | static_cast<uint32_t>(UPBPTechnique::BP2D) | static_cast<uint32_t>(UPBPTechnique::BB1D);
 
 struct UPBPOptions {
   static constexpr uint32_t kMaximumBoundaryCount = 4096u;
@@ -24,7 +30,6 @@ struct UPBPOptions {
   float beam_selection_probability = 1.0f;
   uint32_t maximum_boundary_count = 64u;
   uint32_t maximum_null_events_per_interval = 1024u;
-  uint32_t maximum_light_path_count = 0u;
   uint32_t maximum_bb1d_light_path_count = 4000u;
   uint32_t memory_budget_mb = 2048u;
 
@@ -57,7 +62,6 @@ struct UPBPOptions {
     beam_selection_probability = options.get_float("upbp-beam-selection-probability", beam_selection_probability);
     maximum_boundary_count = options.get_integral("upbp-maximum-boundaries", maximum_boundary_count);
     maximum_null_events_per_interval = options.get_integral("upbp-maximum-null-events", maximum_null_events_per_interval);
-    maximum_light_path_count = options.get_integral("upbp-light-path-count", maximum_light_path_count);
     maximum_bb1d_light_path_count = options.get_integral("upbp-bb1d-light-path-count", maximum_bb1d_light_path_count);
     memory_budget_mb = options.get_integral("upbp-memory-budget-mb", memory_budget_mb);
   }
@@ -81,13 +85,70 @@ struct UPBPOptions {
     options.set_float("upbp-bb1d-radius", initial_bb1d_radius, "Initial BB1D radius", {0.0f, 1000.0f});
     options.set_float("upbp-radius-alpha", radius_alpha, "Radius alpha", {0.01f, 1.0f});
     options.set_float("upbp-beam-selection-probability", beam_selection_probability, "BB1D light-beam selection probability", {0.001f, 1.0f});
-    options.set_integral("upbp-maximum-boundaries", maximum_boundary_count, "Maximum boundaries per segment", 0u, {1u, kMaximumBoundaryCount});
+    options.set_integral("upbp-maximum-boundaries", maximum_boundary_count, "Maximum boundaries per path", 0u, {1u, kMaximumBoundaryCount});
     options.set_integral("upbp-maximum-null-events", maximum_null_events_per_interval, "Maximum null events per medium interval", 0u, {1u, kMaximumNullEventsPerInterval});
-    options.set_integral("upbp-light-path-count", maximum_light_path_count, "Maximum light paths per iteration (0 = camera path count)", 0u, {0u, kMaximumLightPathCount});
     options.set_integral("upbp-bb1d-light-path-count", maximum_bb1d_light_path_count, "Light paths assigned to BB1D per iteration (0 = all retained light paths)", 0u,
       {0u, kMaximumLightPathCount});
-    options.set_integral("upbp-memory-budget-mb", memory_budget_mb, "Light storage target (MiB)", 0u, {kMinimumMemoryBudgetMiB, kMaximumMemoryBudgetMiB});
+    options.set_integral("upbp-memory-budget-mb", memory_budget_mb, "CPU light-storage advisory target (MiB)", 0u, {kMinimumMemoryBudgetMiB, kMaximumMemoryBudgetMiB});
   }
 };
+
+inline bool upbp_options_valid(const UPBPOptions& options, std::string& reason) {
+  if ((options.technique_mask & kUPBPTechniqueMask) == 0u) {
+    reason = "UPBP requires at least one enabled technique";
+    return false;
+  }
+  if ((options.technique_mask & ~kUPBPTechniqueMask) != 0u) {
+    reason = "UPBP technique mask contains unsupported bits";
+    return false;
+  }
+  if ((options.kernel != UPBPKernel::TopHat) && (options.kernel != UPBPKernel::Epanechnikov)) {
+    reason = "UPBP kernel is invalid";
+    return false;
+  }
+  const float radii[] = {
+    options.initial_surface_radius,
+    options.initial_pp3d_radius,
+    options.initial_pb2d_radius,
+    options.initial_bp2d_radius,
+    options.initial_bb1d_radius,
+  };
+  for (const float radius : radii) {
+    if ((radius < 0.0f) || (std::isfinite(radius) == false)) {
+      reason = "UPBP initial radii must be finite and nonnegative";
+      return false;
+    }
+  }
+  if ((options.radius_alpha <= 0.0f) || (options.radius_alpha > 1.0f) || (std::isfinite(options.radius_alpha) == false)) {
+    reason = "UPBP radius alpha must be finite and in (0, 1]";
+    return false;
+  }
+  if ((options.beam_selection_probability <= 0.0f) || (options.beam_selection_probability > 1.0f) || (std::isfinite(options.beam_selection_probability) == false)) {
+    reason = "UPBP beam-selection probability must be finite and in (0, 1]";
+    return false;
+  }
+  if ((options.maximum_boundary_count == 0u) || (options.maximum_boundary_count > UPBPOptions::kMaximumBoundaryCount)) {
+    reason = "UPBP maximum boundary count is outside the supported range";
+    return false;
+  }
+  if ((options.maximum_null_events_per_interval == 0u) || (options.maximum_null_events_per_interval > UPBPOptions::kMaximumNullEventsPerInterval)) {
+    reason = "UPBP maximum null-event count is outside the supported range";
+    return false;
+  }
+  if (options.maximum_bb1d_light_path_count > UPBPOptions::kMaximumLightPathCount) {
+    reason = "UPBP maximum BB1D light-path count is outside the supported range";
+    return false;
+  }
+  if ((options.memory_budget_mb < UPBPOptions::kMinimumMemoryBudgetMiB) || (options.memory_budget_mb > UPBPOptions::kMaximumMemoryBudgetMiB)) {
+    reason = "UPBP CPU light-storage advisory target is outside the supported range";
+    return false;
+  }
+  reason.clear();
+  return true;
+}
+
+inline uint32_t upbp_effective_technique_mask(const UPBPOptions& options, const bool merge_vertices_enabled) {
+  return merge_vertices_enabled ? options.technique_mask : (options.technique_mask & static_cast<uint32_t>(UPBPTechnique::BPT));
+}
 
 }  // namespace etx

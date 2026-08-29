@@ -159,8 +159,19 @@ bool wavefront_direct_light_stage_matches_material(uint material_class) {
     return;
   }
 
-  Sampler bsdf_sampler = wavefront_make_bsdf_sampler(input_value.state.sampler_seed);
-  bsdf_sampler_push_fixed(bsdf_sampler, input_value.state.film_uv.x, input_value.state.film_uv.y, input_value.state.last_emitter_pdf);
+  uint bsdf_seed = input_value.state.sampler_seed;
+#if ETX_UPBP
+  const bool upbp = scene_path_mode_is_upbp();
+  if (upbp) {
+    bsdf_seed = wavefront_direct_light_upbp_evaluation_seed(input_value, kUPBPRandomDomainScatteringEvaluation);
+  }
+#else
+  const bool upbp = false;
+#endif
+  Sampler bsdf_sampler = wavefront_make_bsdf_sampler(bsdf_seed);
+  if (upbp == false) {
+    bsdf_sampler_push_fixed(bsdf_sampler, input_value.state.film_uv.x, input_value.state.film_uv.y, input_value.state.last_emitter_pdf);
+  }
   BSDFData bsdf_data = wavefront_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.current_vertex.medium_index, input_value.current_vertex.w_i);
   BSDFEval bsdf_eval =
     wavefront_direct_light_stage_bsdf_eval(wavefront_make_scene_bsdf_resource_gpu_context(), bsdf_data, input_value.sample_value.direction, input_value.material, bsdf_sampler);

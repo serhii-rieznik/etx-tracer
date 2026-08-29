@@ -13,7 +13,7 @@
 # else
 #  include <interop/bsdf_various_shared.hxx>
 # endif
-#if ETX_ENABLE_THINFILM_STAGE
+# if ETX_ENABLE_THINFILM_STAGE
 #  include <interop/bsdf_dielectric_shared.hxx>
 # endif
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Diffuse
@@ -48,11 +48,11 @@ BSDFEval wavefront_connect_light_stage_various_eval(BSDFResourceContext context,
 # if ETX_ENABLE_THINFILM_STAGE
     case MaterialClass::Thinfilm:
       return bsdf_thinfilm_evaluate(context, data, outgoing_direction, material, sampler);
-#endif
-#if ETX_ENABLE_VELVET_STAGE
+# endif
+# if ETX_ENABLE_VELVET_STAGE
     case MaterialClass::Velvet:
       return bsdf_velvet_evaluate(context, data, outgoing_direction, material, sampler);
-#endif
+# endif
     case MaterialClass::Void:
       return bsdf_void_evaluate(context, data, outgoing_direction, material, sampler);
     case MaterialClass::DiffractionGrating:
@@ -70,14 +70,14 @@ float wavefront_connect_light_stage_various_pdf(BSDFResourceContext context, BSD
       return bsdf_mirror_pdf(context, data, outgoing_direction, material, sampler);
     case MaterialClass::Boundary:
       return bsdf_boundary_pdf(context, data, outgoing_direction, material, sampler);
-#if ETX_ENABLE_THINFILM_STAGE
+# if ETX_ENABLE_THINFILM_STAGE
     case MaterialClass::Thinfilm:
       return bsdf_thinfilm_pdf(context, data, outgoing_direction, material, sampler);
-#endif
-#if ETX_ENABLE_VELVET_STAGE
+# endif
+# if ETX_ENABLE_VELVET_STAGE
     case MaterialClass::Velvet:
       return bsdf_velvet_pdf(context, data, outgoing_direction, material, sampler);
-#endif
+# endif
     case MaterialClass::Void:
       return bsdf_void_pdf(context, data, outgoing_direction, material, sampler);
     case MaterialClass::DiffractionGrating:
@@ -155,7 +155,7 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
 # if ETX_ENABLE_VELVET_STAGE
          || (material_class == MaterialClass::Velvet)
 # endif
-         ;
+    ;
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
   return material_class == MaterialClass::Conductor;
 #else
@@ -198,16 +198,24 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
   spect.flags = input_value.camera_vertex.throughput.flags;
 
   BSDFEval bsdf_eval = (BSDFEval)0;
+  uint camera_reverse_seed = input_value.camera_sampler_seed;
   if (wavefront_path_vertex_is_medium(input_value.camera_vertex)) {
     bsdf_eval = wavefront_connect_light_medium_eval(spect, input_value.camera_vertex, input_value.camera_vertex.w_i, direction_to_light);
   } else {
-    Sampler bsdf_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 29u)));
+    uint bsdf_seed = scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 29u));
+#if ETX_UPBP
+    if (scene_path_mode_is_upbp()) {
+      bsdf_seed = sampler_random_seed(input_value.camera_sampler_seed, 1u);
+    }
+#endif
+    Sampler bsdf_sampler = make_bsdf_sampler(bsdf_seed);
     BSDFData bsdf_data = bsdf_data_make(wavefront_make_connect_path_vertex(input_value.camera_vertex), spect, kInvalidIndex, PathSource::Camera, input_value.camera_vertex.w_i);
     const BSDFResourceContext resource_context = make_scene_bsdf_resource_gpu_context();
     const WavefrontConnectLightStagePrepared prepared = wavefront_connect_light_stage_prepare_material(resource_context, bsdf_data, input_value.camera_material, bsdf_sampler);
     bsdf_eval = wavefront_connect_light_stage_camera_bsdf_eval_prepared(resource_context, bsdf_data, direction_to_light, input_value.camera_material, prepared, bsdf_sampler);
-    wavefront_store_connect_light_camera_task(input_value, bsdf_eval, prepared);
+    camera_reverse_seed = bsdf_sampler.seed;
+    wavefront_store_connect_light_camera_task(input_value, bsdf_eval, prepared, camera_reverse_seed);
     return;
   }
-  wavefront_store_connect_light_camera_task(input_value, bsdf_eval, (WavefrontConnectLightStagePrepared)0);
+  wavefront_store_connect_light_camera_task(input_value, bsdf_eval, (WavefrontConnectLightStagePrepared)0, camera_reverse_seed);
 }

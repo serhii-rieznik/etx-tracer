@@ -19,7 +19,7 @@
   uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
   uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
   SpectralQuery spect = spectral_query_sample();
-  if (scene_path_mode_is_vcm()) {
+  if (scene_path_mode_is_vcm() || scene_path_mode_is_upbp()) {
     spect = wavefront_vcm_iteration_spectral_query();
     if (scene_uses_spectral_mode()) {
       rnd01(seed);
@@ -27,7 +27,16 @@
   } else if (scene_uses_spectral_mode()) {
     spect = spectral_query_spectral_sample(rnd01(seed));
   }
-  float2 uv_sample = float2(rnd01(seed), rnd01(seed));
+  uint film_seed = seed;
+#if ETX_UPBP
+  if (scene_path_mode_is_upbp()) {
+    const GPUUPBPResources upbp_resources = upbp_load_resources(wavefront_load_resources());
+    const uint global_path_index = upbp_resources.iteration.camera_batch_offset + path_index;
+    film_seed = upbp_deterministic_seed(global_path_index, 0u, 0u, kUPBPRandomDomainFilmSample);
+    seed = upbp_deterministic_seed(global_path_index, 0u, 0u, kUPBPRandomDomainCameraPath);
+  }
+#endif
+  float2 uv_sample = float2(rnd01(film_seed), rnd01(film_seed));
   float2 uv = camera_sample_film_uv(output_pixel, camera.film_size, uv_sample);
   float2 lens_rnd = float2(rnd01(seed), rnd01(seed));
   GPUWavefrontPathState state = (GPUWavefrontPathState)0;
@@ -50,6 +59,14 @@
   state.film_uv = uv;
   state.last_vertex_index = wavefront_camera_vertex_slot(path_index, 0u);
   GPUWavefrontResources resources = wavefront_load_resources();
+#if ETX_UPBP
+  if (scene_path_mode_is_upbp()) {
+    GPUUPBPResources upbp_resources = upbp_load_resources(resources);
+    if (upbp_initialize_camera_path(resources, path_index, upbp_resources.iteration.camera_batch_offset + path_index, camera, state) == false) {
+      return;
+    }
+  }
+#endif
   wavefront_store_path_state(resources.camera_state_buffer, path_index, state);
   if (resources.camera_subsurface_state_buffer != kInvalidIndex) {
     GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;

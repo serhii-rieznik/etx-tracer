@@ -6,7 +6,9 @@
 #include <etx/rhi/rhi.hxx>
 #include <interop/gpu_rt_shared.hxx>
 #include <interop/gpu_scene_shared.hxx>
+#include <interop/gpu_upbp_shared.hxx>
 #include <interop/gpu_wavefront_shared.hxx>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -64,6 +66,7 @@ struct GPURaytracingRenderer : public Renderer {
     LightContinueFinalize = 42u,
     SwapQueues = 43u,
     FinalizeSample = 44u,
+    UPBPClear = 45u,
     LightConnectCameraClear = 46u,
     BuildDispatchArgs = 47u,
     VCMGridClear = 48u,
@@ -72,7 +75,16 @@ struct GPURaytracingRenderer : public Renderer {
     VCMMergePlastic = 51u,
     VCMMergeConductor = 52u,
     VCMMergeDielectric = 53u,
-    Count = 54u,
+    UPBPDensityCompact = 54u,
+    UPBPPP3D = 55u,
+    UPBPPB2D = 56u,
+    UPBPBP2D = 57u,
+    UPBPBB1D = 58u,
+    UPBPDirectHit = 59u,
+    UPBPValidate = 60u,
+    UPBPBeamInstances = 61u,
+    UPBPBeamGrid = 62u,
+    Count = 63u,
   };
 
   GPURaytracingRenderer(TaskScheduler&);
@@ -243,10 +255,99 @@ struct GPURaytracingRenderer : public Renderer {
     InitSample = 0u,
     TraceBounce = 1u,
     FinalizeSample = 2u,
+    UPBPEvaluateLightBatch = 3u,
+  };
+
+  struct UPBPBuffer {
+    RHIBindlessHandle handle = {};
+    uint64_t size = 0u;
+    uint32_t descriptor_index = ~0u;
+  };
+
+  struct UPBPDensityBatchResources {
+    UPBPBuffer surface_point_buffer = {};
+    UPBPBuffer surface_point_aabb_buffer = {};
+    UPBPBuffer medium_point_buffer = {};
+    UPBPBuffer medium_point_aabb_buffer = {};
+    UPBPBuffer beam_buffer = {};
+    UPBPBuffer event_buffer = {};
+    uint32_t surface_point_count = 0u;
+    uint32_t medium_point_count = 0u;
+    uint32_t beam_count = 0u;
+    uint32_t event_count = 0u;
+    uint32_t selected_beam_count = 0u;
+  };
+
+  struct UPBPRuntimeResources {
+    GPUUPBPResources resources = {};
+    UPBPBuffer resources_buffer = {};
+    UPBPBuffer vertex_buffer = {};
+    UPBPBuffer segment_buffer = {};
+    UPBPBuffer interval_buffer = {};
+    UPBPBuffer event_buffer = {};
+    UPBPBuffer point_buffer = {};
+    UPBPBuffer beam_buffer = {};
+    std::vector<UPBPDensityBatchResources> density_batches = {};
+    UPBPBuffer density_batch_buffer = {};
+    UPBPBuffer density_surface_point_buffer = {};
+    UPBPBuffer density_surface_point_aabb_buffer = {};
+    UPBPBuffer density_medium_point_buffer = {};
+    UPBPBuffer density_medium_point_aabb_buffer = {};
+    UPBPBuffer density_beam_buffer = {};
+    UPBPBuffer density_surface_point_instance_buffer = {};
+    UPBPBuffer density_medium_point_instance_buffer = {};
+    UPBPBuffer density_bb1d_beam_instance_buffer = {};
+    UPBPBuffer density_bb1d_beam_buffer = {};
+    UPBPBuffer density_beam_reference_buffer = {};
+    UPBPBuffer density_bp2d_grid_buffer = {};
+    UPBPBuffer density_bp2d_grid_cell_offsets_buffer = {};
+    UPBPBuffer density_bp2d_grid_cell_cursors_buffer = {};
+    UPBPBuffer density_bp2d_grid_entry_buffer = {};
+    UPBPBuffer density_bp2d_grid_readback_buffer = {};
+    UPBPBuffer density_beam_unit_aabb_buffer = {};
+    UPBPBuffer density_as_scratch_buffer = {};
+    UPBPBuffer counter_buffer = {};
+    UPBPBuffer counter_readback_buffer = {};
+    UPBPBuffer path_state_buffer = {};
+    UPBPBuffer bpt_light_vertex_buffer = {};
+    UPBPBuffer bpt_light_path_state_buffer = {};
+    RHIBindlessHandle density_surface_point_tlas = {};
+    RHIBindlessHandle density_medium_point_tlas = {};
+    std::array<RHIBindlessHandle, kGPUUPBPSurfacePartitionCount> density_surface_point_blas = {};
+    RHIBindlessHandle density_medium_point_blas = {};
+    RHIBindlessHandle density_beam_unit_blas = {};
+    std::array<RHIBindlessHandle, kGPUUPBPBB1DPartitionCount> density_bb1d_beam_tlas = {};
+    uint32_t resident_light_path_capacity = 0u;
+    uint32_t resident_camera_path_capacity = 0u;
+    uint32_t density_surface_point_count = 0u;
+    uint32_t density_medium_point_count = 0u;
+    uint32_t density_beam_count = 0u;
+    uint32_t maximum_path_length = 0u;
+    uint32_t maximum_boundary_count = 0u;
+    uint32_t technique_mask = 0u;
+    uint32_t light_batch_offset = 0u;
+    uint32_t light_batch_count = 0u;
+    uint32_t camera_batch_offset = 0u;
+    uint32_t camera_batch_count = 0u;
+    uint32_t light_batch_index = 0u;
+    uint32_t light_batch_iteration = 0u;
+    uint32_t camera_batch_index = 0u;
+    uint32_t light_batch_count_total = 0u;
+    uint32_t camera_batch_count_total = 0u;
+    uint32_t global_path_count = 0u;
+    uint32_t sample_index = ~0u;
+    bool density_cache_ready = false;
+    bool camera_phase_started = false;
+    RHIResourceState counter_readback_state = RHIResourceState::Undefined;
+    RHIResourceState density_bp2d_grid_readback_state = RHIResourceState::Undefined;
+    RHIResourceState bpt_light_vertex_state = RHIResourceState::Undefined;
+    RHIResourceState bpt_light_path_state_state = RHIResourceState::Undefined;
   };
 
   void destroy_scene_buffers(RHIContext& ctx);
   void destroy_wavefront_buffers(RHIContext& ctx);
+  void destroy_upbp_buffers(RHIDevice& device);
+  void destroy_upbp_density_cache(RHIDevice& device);
   void destroy_blue_noise_buffer(RHIContext& ctx);
   bool update_blue_noise_buffer(RHIContext& ctx, const SceneRepresentation& scene);
   void destroy_acceleration_structures(RHIContext& ctx);
@@ -258,6 +359,9 @@ struct GPURaytracingRenderer : public Renderer {
   bool upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer);
   bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
   bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t path_capacity, uint32_t active_path_capacity, bool allow_light_history_shrink);
+  bool ensure_upbp_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t global_path_count, uint32_t wavefront_path_capacity, uint32_t camera_batch_index,
+    uint32_t camera_batch_offset, uint32_t camera_batch_count);
+  bool update_upbp_iteration_resources(RHIDevice& device, const SceneRepresentation& scene, uint32_t global_path_count);
   bool ensure_light_vertex_capacity(RHIContext& ctx, uint32_t required_vertex_capacity);
   void request_pipeline_preparation(const SceneRepresentation& scene, const char* reason, bool force_reload);
   void poll_preparation_tasks(RHIContext& ctx, bool wait_for_active = false);
@@ -317,6 +421,7 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _blue_noise_buffer = {};
   RHIBindlessHandle _wavefront_resources_buffer = {};
   GPUWavefrontResources _wavefront_resources = {};
+  UPBPRuntimeResources _upbp = {};
   RHIBindlessHandle _camera_state_buffer = {};
   RHIBindlessHandle _light_state_buffer = {};
   RHIBindlessHandle _camera_hit_buffer = {};
@@ -436,6 +541,8 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _blue_noise_target_samples = 0u;
   uint32_t _wavefront_path_capacity = 0u;
   uint32_t _wavefront_vertex_capacity = 0u;
+  uint32_t _wavefront_allocated_integrator_mode = ~0u;
+  uint32_t _wavefront_allocated_integrator_features = 0u;
 
   RHIChunkedBufferState _images_blob_state = {};
   RHIChunkedBufferState _mediums_blob_state = {};

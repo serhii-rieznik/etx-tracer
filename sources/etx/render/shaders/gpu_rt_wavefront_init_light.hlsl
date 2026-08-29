@@ -9,18 +9,40 @@
     return;
   }
   Camera camera = load_camera(bindless_buffers[NonUniformResourceIndex(constants.camera_buffer_index)]);
-  if (wavefront_render_window_contains(dtid.xy) == false) {
-    return;
+  uint2 output_pixel = (uint2)0;
+  uint output_pixel_index = 0u;
+  uint path_index = 0u;
+  uint2 camera_space_pixel = (uint2)0;
+  uint seed_pixel_index = 0u;
+#if ETX_UPBP
+  GPUWavefrontResources upbp_wavefront_resources = wavefront_load_resources();
+  GPUUPBPResources upbp_resources = upbp_load_resources(upbp_wavefront_resources);
+  const bool upbp_linear_dispatch = scene_path_mode_is_upbp() && (constants.dispatch_item_count > 0u);
+  if (upbp_linear_dispatch) {
+    const uint dispatch_width = max(1u, constants.render_window_width);
+    path_index = dtid.x + dtid.y * dispatch_width;
+    if (path_index >= constants.dispatch_item_count) {
+      return;
+    }
+    seed_pixel_index = upbp_resources.iteration.light_batch_offset + path_index;
+    output_pixel_index = seed_pixel_index;
+    output_pixel = uint2(seed_pixel_index % camera.film_size.x, (seed_pixel_index / camera.film_size.x) % camera.film_size.y);
+    camera_space_pixel = uint2(output_pixel.x, camera.film_size.y - 1u - output_pixel.y);
+  } else
+#endif
+  {
+    if (wavefront_render_window_contains(dtid.xy) == false) {
+      return;
+    }
+    output_pixel = wavefront_output_pixel(dtid.xy);
+    output_pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
+    path_index = wavefront_render_window_local_index(dtid.xy);
+    camera_space_pixel = uint2(output_pixel.x, camera.film_size.y - 1u - output_pixel.y);
+    seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
   }
-
-  uint2 output_pixel = wavefront_output_pixel(dtid.xy);
-  uint output_pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
-  uint path_index = wavefront_render_window_local_index(dtid.xy);
-  uint2 camera_space_pixel = uint2(output_pixel.x, camera.film_size.y - 1u - output_pixel.y);
-  uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
   uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
   SpectralQuery spect = spectral_query_sample();
-  if (scene_path_mode_is_vcm()) {
+  if (scene_path_mode_is_vcm() || scene_path_mode_is_upbp()) {
     spect = wavefront_vcm_iteration_spectral_query();
     if (scene_uses_spectral_mode()) {
       rnd01(seed);
@@ -28,6 +50,11 @@
   } else if (scene_uses_spectral_mode()) {
     spect = spectral_query_spectral_sample(rnd01(seed));
   }
+#if ETX_UPBP
+  if (upbp_linear_dispatch) {
+    seed = upbp_deterministic_seed(upbp_resources.iteration.light_batch_offset + path_index, 0u, 0u, kUPBPRandomDomainLightPath);
+  }
+#endif
   GPUWavefrontResources resources = wavefront_load_resources();
   GPUWavefrontPathState cleared_state = (GPUWavefrontPathState)0;
   wavefront_store_path_state(resources.light_state_buffer, path_index, cleared_state);
@@ -96,6 +123,11 @@
   state.spect = spect;
   state.last_vertex_index = (resources.light_vertex_counter_buffer != kInvalidIndex) ? path_index : wavefront_light_vertex_slot(path_index, 0u);
   wavefront_store_path_state(resources.light_state_buffer, path_index, state);
+#if ETX_UPBP
+  if (scene_path_mode_is_upbp() && (upbp_initialize_light_path(resources, path_index, upbp_resources.iteration.light_batch_offset + path_index, emitter_sample, state) == false)) {
+    return;
+  }
+#endif
   wavefront_write_root_light_vertex(path_index, emitter_sample, spect, output_pixel_index);
   if (resources.path_meta_buffer != kInvalidIndex) {
     GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);

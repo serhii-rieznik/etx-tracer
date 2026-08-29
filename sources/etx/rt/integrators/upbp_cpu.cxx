@@ -6,6 +6,7 @@
 #include <etx/render/shared/scene_camera.hxx>
 #include <etx/rt/integrators/upbp_beam_estimators.hxx>
 #include <etx/rt/integrators/upbp_bpt.hxx>
+#include <etx/rt/integrators/upbp_iteration.hxx>
 #include <etx/rt/integrators/upbp_options.hxx>
 #include <etx/rt/shared/vcm_shared.hxx>
 
@@ -19,23 +20,6 @@
 namespace etx {
 
 namespace {
-
-constexpr uint32_t kUPBPTechniqueMask = static_cast<uint32_t>(UPBPTechnique::BPT) | static_cast<uint32_t>(UPBPTechnique::Surface) | static_cast<uint32_t>(UPBPTechnique::PP3D) |
-                                        static_cast<uint32_t>(UPBPTechnique::PB2D) | static_cast<uint32_t>(UPBPTechnique::BP2D) | static_cast<uint32_t>(UPBPTechnique::BB1D);
-
-struct UPBPIterationParameters {
-  SpectralQuery spect = {};
-  UPBPDensityMISConfiguration mis = {};
-  double surface_radius = 0.0;
-  double pp3d_radius = 0.0;
-  double pb2d_radius = 0.0;
-  double bp2d_radius = 0.0;
-  double bb1d_radius = 0.0;
-  uint64_t camera_subpath_count = 0u;
-  uint64_t light_subpath_count = 0u;
-  uint64_t bb1d_light_subpath_count = 0u;
-  uint64_t bpt_sample_count = 0u;
-};
 
 bool upbp_checked_add(const uint64_t first, const uint64_t second, uint64_t& result) {
   if (first > std::numeric_limits<uint64_t>::max() - second) {
@@ -72,115 +56,6 @@ uint64_t upbp_path_storage_bytes(const UPBPPathRecord& path) {
 uint64_t upbp_recursive_storage_bytes(const UPBPRecursivePathWeights& weights) {
   return static_cast<uint64_t>(weights.arrivals.capacity()) * sizeof(UPBPRecursiveVertexWeights) +
          static_cast<uint64_t>(weights.departures.capacity()) * sizeof(UPBPRecursiveState) + static_cast<uint64_t>(weights.has_departure.capacity() + 7u) / 8u;
-}
-
-bool upbp_options_valid(const UPBPOptions& options, std::string& reason) {
-  if ((options.technique_mask & kUPBPTechniqueMask) == 0u) {
-    reason = "UPBP requires at least one enabled technique";
-    return false;
-  }
-  if ((options.technique_mask & ~kUPBPTechniqueMask) != 0u) {
-    reason = "UPBP technique mask contains unsupported bits";
-    return false;
-  }
-  if ((options.kernel != UPBPKernel::TopHat) && (options.kernel != UPBPKernel::Epanechnikov)) {
-    reason = "UPBP kernel is invalid";
-    return false;
-  }
-  const float radii[] = {
-    options.initial_surface_radius,
-    options.initial_pp3d_radius,
-    options.initial_pb2d_radius,
-    options.initial_bp2d_radius,
-    options.initial_bb1d_radius,
-  };
-  for (const float radius : radii) {
-    if ((radius < 0.0f) || (std::isfinite(radius) == false)) {
-      reason = "UPBP initial radii must be finite and nonnegative";
-      return false;
-    }
-  }
-  if ((options.radius_alpha <= 0.0f) || (options.radius_alpha > 1.0f) || (std::isfinite(options.radius_alpha) == false)) {
-    reason = "UPBP radius alpha must be finite and in (0, 1]";
-    return false;
-  }
-  if ((options.beam_selection_probability <= 0.0f) || (options.beam_selection_probability > 1.0f) || (std::isfinite(options.beam_selection_probability) == false)) {
-    reason = "UPBP beam-selection probability must be finite and in (0, 1]";
-    return false;
-  }
-  if ((options.maximum_boundary_count == 0u) || (options.maximum_boundary_count > UPBPOptions::kMaximumBoundaryCount)) {
-    reason = "UPBP maximum boundary count is outside the supported range";
-    return false;
-  }
-  if ((options.maximum_null_events_per_interval == 0u) || (options.maximum_null_events_per_interval > UPBPOptions::kMaximumNullEventsPerInterval)) {
-    reason = "UPBP maximum null-event count is outside the supported range";
-    return false;
-  }
-  if (options.maximum_light_path_count > UPBPOptions::kMaximumLightPathCount) {
-    reason = "UPBP maximum light-path count is outside the supported range";
-    return false;
-  }
-  if (options.maximum_bb1d_light_path_count > UPBPOptions::kMaximumLightPathCount) {
-    reason = "UPBP maximum BB1D light-path count is outside the supported range";
-    return false;
-  }
-  if ((options.memory_budget_mb < UPBPOptions::kMinimumMemoryBudgetMiB) || (options.memory_budget_mb > UPBPOptions::kMaximumMemoryBudgetMiB)) {
-    reason = "UPBP light-storage target is outside the supported range";
-    return false;
-  }
-  return true;
-}
-
-double upbp_initial_radius(const float configured_radius, const Scene& scene, const uint64_t camera_subpath_count, const uint64_t light_subpath_count, const uint32_t dimension,
-  const double relative_radius_scale) {
-  if (configured_radius > 0.0f) {
-    return configured_radius;
-  }
-  return upbp_automatic_initial_radius(scene.bounding_sphere_radius, camera_subpath_count, light_subpath_count, dimension, relative_radius_scale);
-}
-
-UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& options, const Scene& scene, const Film& film, const uint64_t iteration, const uint64_t light_subpath_count) {
-  UPBPIterationParameters result = {};
-  result.camera_subpath_count = film.current_pixel_count();
-  result.light_subpath_count = light_subpath_count;
-  result.bpt_sample_count = options.enabled(UPBPTechnique::BPT) ? 1u : 0u;
-  VCMIteration spectral_iteration = {};
-  spectral_iteration.iteration = static_cast<uint32_t>(iteration);
-  result.spect = vcm_iteration_spectral_query(scene, spectral_iteration);
-
-  result.surface_radius = upbp_progressive_radius(
-    upbp_initial_radius(options.initial_surface_radius, scene, result.camera_subpath_count, result.light_subpath_count, 2u, kUPBPAutomaticSurfaceRadiusScale), options.radius_alpha,
-    2u, iteration);
-  result.pp3d_radius =
-    upbp_progressive_radius(upbp_initial_radius(options.initial_pp3d_radius, scene, result.camera_subpath_count, result.light_subpath_count, 3u, kUPBPAutomaticVolumeRadiusScale),
-      options.radius_alpha, 3u, iteration);
-  result.pb2d_radius =
-    upbp_progressive_radius(upbp_initial_radius(options.initial_pb2d_radius, scene, result.camera_subpath_count, result.light_subpath_count, 2u, kUPBPAutomaticVolumeRadiusScale),
-      options.radius_alpha, 2u, iteration);
-  result.bp2d_radius =
-    upbp_progressive_radius(upbp_initial_radius(options.initial_bp2d_radius, scene, result.camera_subpath_count, result.light_subpath_count, 2u, kUPBPAutomaticVolumeRadiusScale),
-      options.radius_alpha, 2u, iteration);
-  result.bb1d_radius =
-    upbp_progressive_radius(upbp_initial_radius(options.initial_bb1d_radius, scene, result.camera_subpath_count, result.light_subpath_count, 1u, kUPBPAutomaticVolumeRadiusScale),
-      options.radius_alpha, 1u, iteration);
-
-  result.mis.enabled_techniques = options.technique_mask;
-  if (scene.strategy_enabled(Scene::Strategy::MergeVertices) == false) {
-    result.mis.enabled_techniques &= static_cast<uint32_t>(UPBPTechnique::BPT);
-  }
-  if (result.mis.enabled(UPBPTechnique::BB1D)) {
-    result.bb1d_light_subpath_count =
-      options.maximum_bb1d_light_path_count > 0u ? min(light_subpath_count, static_cast<uint64_t>(options.maximum_bb1d_light_path_count)) : light_subpath_count;
-  }
-  result.mis.technique_factors[0u] = result.bpt_sample_count;
-  result.mis.technique_factors[1u] = upbp_density_mis_factor(UPBPTechnique::Surface, result.light_subpath_count, result.surface_radius, 1.0);
-  result.mis.technique_factors[2u] = upbp_density_mis_factor(UPBPTechnique::PP3D, result.light_subpath_count, result.pp3d_radius, 1.0);
-  result.mis.technique_factors[3u] = upbp_density_mis_factor(UPBPTechnique::PB2D, result.light_subpath_count, result.pb2d_radius, 1.0);
-  result.mis.technique_factors[4u] = upbp_density_mis_factor(UPBPTechnique::BP2D, result.light_subpath_count, result.bp2d_radius, 1.0);
-  result.mis.technique_factors[5u] = upbp_density_mis_factor(UPBPTechnique::BB1D, result.bb1d_light_subpath_count, result.bb1d_radius, options.beam_selection_probability);
-  result.mis.photon_beams_long = false;
-  result.mis.camera_beams_long = true;
-  return result;
 }
 
 Sampler upbp_pair_sampler(const uint32_t render_seed, const uint64_t iteration, const uint32_t camera_path_index, const uint32_t light_path_index,
@@ -681,14 +556,6 @@ struct CPUUPBPImpl {
     }
   }
 
-  void select_light_subpath_count(const uint64_t camera_subpath_count, uint64_t& result) {
-    memory_target_bytes = static_cast<uint64_t>(options.memory_budget_mb) * 1024ull * 1024ull;
-    result = camera_subpath_count;
-    if (options.maximum_light_path_count > 0u) {
-      result = min(result, static_cast<uint64_t>(options.maximum_light_path_count));
-    }
-  }
-
   uint64_t fixed_light_storage_bytes() const {
     return static_cast<uint64_t>(light_paths.capacity()) * sizeof(UPBPLightSubpathResult) + static_cast<uint64_t>(light_weights.capacity()) * sizeof(UPBPRecursivePathWeights) +
            static_cast<uint64_t>(light_splats.capacity()) * sizeof(std::vector<UPBPLightSplat>);
@@ -745,10 +612,8 @@ struct CPUUPBPImpl {
     iteration_time = {};
     reset_iteration_diagnostics();
     status.current_iteration = iteration_index;
-    const uint64_t camera_subpath_count = rt.film().current_pixel_count();
-    uint64_t light_subpath_count = 0u;
-    select_light_subpath_count(camera_subpath_count, light_subpath_count);
-    iteration = upbp_iteration_parameters(options, rt.scene(), rt.film(), iteration_index, light_subpath_count);
+    memory_target_bytes = static_cast<uint64_t>(options.memory_budget_mb) * 1024ull * 1024ull;
+    iteration = upbp_iteration_parameters(options, rt.scene(), rt.film().current_pixel_count(), iteration_index);
     prepared_bb1d = iteration.mis.enabled(UPBPTechnique::BB1D)
                       ? upbp_prepare_bb1d(options.kernel, iteration.bb1d_radius, iteration.bb1d_light_subpath_count, options.beam_selection_probability)
                       : UPBPPreparedBB1D{};

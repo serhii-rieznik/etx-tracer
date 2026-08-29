@@ -164,6 +164,21 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
   }
 
   uint seed = state.sampler_seed;
+#if ETX_UPBP
+  GPUUPBPResources upbp_resources = (GPUUPBPResources)0;
+  GPUUPBPPathState upbp_path_state = (GPUUPBPPathState)0;
+  const bool upbp = scene_path_mode_is_upbp();
+  if (upbp) {
+    upbp_resources = upbp_load_resources(resources);
+    upbp_path_state = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, true, path_index));
+    if (((upbp_path_state.flags & GPUUPBPPathStateFlags::Valid) == 0u) || (upbp_path_state.path_length == 0u)) {
+      return;
+    }
+    seed = upbp_deterministic_seed(upbp_path_state.global_path_index, upbp_path_state.path_length + 1u, 1u, kUPBPRandomDomainEmitterConnection);
+  }
+#else
+  const bool upbp = false;
+#endif
   WavefrontEmitterSample emitter_sample = (WavefrontEmitterSample)0;
   uint light_sampling_mode = load_scene_options_light_sampling();
   bool source_is_surface = wavefront_path_vertex_is_surface(current_vertex);
@@ -174,54 +189,11 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
   } else {
     sampled = wavefront_sample_emitter_to_point(light_sampling_mode, state.spect, current_vertex.position, seed, emitter_sample);
   }
-  state.sampler_seed = seed;
-  wavefront_store_path_state(resources.camera_state_buffer, path_index, state);
-  if (sampled == false) {
-    return;
+  if (upbp == false) {
+    state.sampler_seed = seed;
+    wavefront_store_path_state(resources.camera_state_buffer, path_index, state);
   }
-
-  if (wavefront_path_vertex_is_medium(current_vertex)) {
-    MediumAccess medium_access = (MediumAccess)0;
-    if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
-      return;
-    }
-
-    float sampling_pdf = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
-    float phase_value = gpu_medium_phase_function(medium_access, current_vertex.w_i, emitter_sample.direction);
-    if ((sampling_pdf <= 0.0f) || (phase_value <= 0.0f)) {
-      return;
-    }
-
-    float mis_weight = wavefront_medium_direct_light_weight(meta, current_vertex, emitter_sample, medium_access, phase_value);
-    if (mis_weight <= 0.0f) {
-      return;
-    }
-    SpectralResponse contribution = spectral_response_mul(current_vertex.throughput, spectral_response_mul(emitter_sample.value, phase_value * (mis_weight / sampling_pdf)));
-    if (gpu_valid_spectral_response(contribution) == false) {
-      return;
-    }
-
-    float3 shadow_delta = emitter_sample.origin - current_vertex.position;
-    float shadow_distance = length(shadow_delta);
-    if (shadow_distance <= kRayEpsilon) {
-      return;
-    }
-
-    GPUWavefrontDirectLightTask task = (GPUWavefrontDirectLightTask)0;
-    task.shadow_ray.o = current_vertex.position;
-    task.shadow_ray.d = shadow_delta / shadow_distance;
-    task.shadow_ray.min_t = kRayEpsilon;
-    task.shadow_ray.max_t = shadow_distance;
-    task.shadow_target = emitter_sample.origin;
-    task.contribution = contribution;
-    task.mis_weight = mis_weight;
-    task.pixel_index = current_vertex.pixel_index;
-    task.medium_index = current_vertex.medium_index;
-    task.flags = 1u;
-    task.path_index = path_index;
-    task.sampler_seed = state.sampler_seed;
-    wavefront_store_direct_light_task(resources.direct_light_task_buffer, dispatch_index, task);
-    wavefront_shadow_queue_append(resources, kGPUWavefrontShadowQueueDirectLight, dispatch_index);
+  if (sampled == false) {
     return;
   }
 
@@ -245,4 +217,75 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
     sample_value.flags |= GPUWavefrontDirectLightSampleFlags::Distant;
   }
   wavefront_store_direct_light_sample(resources.direct_light_sample_buffer, dispatch_index, sample_value);
+
+  if (wavefront_path_vertex_is_medium(current_vertex)) {
+    MediumAccess medium_access = (MediumAccess)0;
+    if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
+      return;
+    }
+
+    float sampling_pdf = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
+    float phase_value = gpu_medium_phase_function(medium_access, current_vertex.w_i, emitter_sample.direction);
+    if ((sampling_pdf <= 0.0f) || (phase_value <= 0.0f)) {
+      return;
+    }
+
+    float mis_weight = wavefront_medium_direct_light_weight(meta, current_vertex, emitter_sample, medium_access, phase_value);
+    float upbp_w_light = 0.0f;
+    float upbp_emission_to_direct_ratio = 0.0f;
+    float upbp_reverse_phase_pdf = 0.0f;
+#if ETX_UPBP
+    if (upbp) {
+      const float light_cosine = emitter_sample.is_distant != 0u ? 1.0f : abs(dot(emitter_sample.normal, -emitter_sample.direction));
+      if (upbp_bpt_nee_competitor_terms(emitter_sample.pdf_sample, emitter_sample.pdf_dir, emitter_sample.pdf_dir_out, emitter_sample.is_delta != 0u, phase_value, 1.0f,
+            light_cosine, upbp_w_light, upbp_emission_to_direct_ratio) == false) {
+        return;
+      }
+      upbp_reverse_phase_pdf = gpu_medium_phase_function(medium_access, -emitter_sample.direction, current_vertex.w_i);
+      mis_weight = 1.0f;
+    }
+#endif
+    if (mis_weight <= 0.0f) {
+      return;
+    }
+    SpectralResponse contribution = spectral_response_mul(current_vertex.throughput, spectral_response_mul(emitter_sample.value, phase_value * (mis_weight / sampling_pdf)));
+    if (gpu_valid_spectral_response(contribution) == false) {
+      return;
+    }
+
+    float3 shadow_delta = emitter_sample.origin - current_vertex.position;
+    float shadow_distance = length(shadow_delta);
+    if (shadow_distance <= kRayEpsilon) {
+      return;
+    }
+
+    GPUWavefrontDirectLightTask task = (GPUWavefrontDirectLightTask)0;
+    task.shadow_ray.o = current_vertex.position;
+    task.shadow_ray.d = shadow_delta / shadow_distance;
+    task.shadow_ray.min_t = kRayEpsilon;
+    task.shadow_ray.max_t = shadow_distance;
+    task.shadow_target = emitter_sample.origin;
+    task.contribution = contribution;
+    task.mis_weight = upbp ? upbp_w_light : mis_weight;
+    if (upbp) {
+      task.upbp_scattering_pdf_reverse_bits = asuint(upbp_reverse_phase_pdf);
+      task.upbp_auxiliary1_bits = asuint(upbp_emission_to_direct_ratio);
+    }
+    task.pixel_index = current_vertex.pixel_index;
+    task.medium_index = current_vertex.medium_index;
+    task.flags = GPUWavefrontPointConnectionTaskFlags::Ready | GPUWavefrontPointConnectionTaskFlags::SourceMedium;
+    task.path_index = path_index;
+#if ETX_UPBP
+    if (upbp) {
+      task.sampler_seed = upbp_deterministic_seed(upbp_path_state.global_path_index, upbp_path_state.path_length + 1u, 1u, kUPBPRandomDomainIntersectionTraversal);
+      task.upbp_auxiliary0_bits = upbp_deterministic_seed(upbp_path_state.global_path_index, upbp_path_state.path_length + 1u, 1u, kUPBPRandomDomainConnectionTransmittance);
+    } else
+#endif
+    {
+      task.sampler_seed = state.sampler_seed;
+    }
+    wavefront_store_direct_light_task(resources.direct_light_task_buffer, dispatch_index, task);
+    wavefront_shadow_queue_append(resources, kGPUWavefrontShadowQueueDirectLight, dispatch_index);
+    return;
+  }
 }

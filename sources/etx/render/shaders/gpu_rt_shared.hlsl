@@ -39,6 +39,7 @@ static const uint kScenePathModeLightTracing = 1u;
 static const uint kScenePathModeBDPTFast = 2u;
 static const uint kScenePathModeBDPTFull = 3u;
 static const uint kScenePathModeVCM = 4u;
+static const uint kScenePathModeUPBP = 5u;
 static const uint kSceneLightSamplingUniform = 0u;
 static const uint kSceneLightSamplingFromDistribution = 1u;
 static const uint kSceneLightSamplingRISUniform = 2u;
@@ -335,11 +336,15 @@ bool scene_path_mode_uses_bdpt_fast() {
 
 bool scene_path_mode_is_bdpt_full() {
   uint path_mode = load_scene_options_path_mode();
-  return (path_mode == kScenePathModeBDPTFull) || (path_mode == kScenePathModeVCM);
+  return (path_mode == kScenePathModeBDPTFull) || (path_mode == kScenePathModeVCM) || (path_mode == kScenePathModeUPBP);
 }
 
 bool scene_path_mode_is_vcm() {
   return load_scene_options_path_mode() == kScenePathModeVCM;
+}
+
+bool scene_path_mode_is_upbp() {
+  return load_scene_options_path_mode() == kScenePathModeUPBP;
 }
 
 #include <access/medium_access_gpu.hxx>

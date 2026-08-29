@@ -500,6 +500,11 @@ enum class RHIAccelerationStructureType : uint32_t {
   TopLevel = 1,
 };
 
+enum class RHIAccelerationStructureGeometryType : uint32_t {
+  Triangles = 0,
+  AABBs = 1,
+};
+
 struct RHIAccelerationStructureGeometryTriangles {
   RHIBindlessHandle vertex_buffer = {};
   uint32_t vertex_stride = 0;
@@ -511,8 +516,17 @@ struct RHIAccelerationStructureGeometryTriangles {
   RHIIndexType index_type = RHIIndexType::UInt32;
 };
 
+struct RHIAccelerationStructureGeometryAABBs {
+  RHIBindlessHandle buffer = {};
+  uint64_t buffer_offset = 0u;
+  uint32_t stride = 0u;
+  uint32_t count = 0u;
+};
+
 struct RHIAccelerationStructureGeometry {
+  RHIAccelerationStructureGeometryType type = RHIAccelerationStructureGeometryType::Triangles;
   RHIAccelerationStructureGeometryTriangles triangles = {};
+  RHIAccelerationStructureGeometryAABBs aabbs = {};
   bool is_opaque = true;
 };
 
@@ -540,6 +554,9 @@ struct RHIAccelerationStructureBuildDesc {
   const RHIAccelerationStructureGeometry* geometries = nullptr;
   uint32_t instance_count = 0;
   RHIBindlessHandle instance_buffer = {};
+  uint64_t instance_buffer_offset = 0u;
+  // Optional shared BLAS for GPU-authored instances on backends without device-address references.
+  RHIBindlessHandle uniform_instance_acceleration_structure = {};
   bool allow_update = false;
   bool update = false;
 };

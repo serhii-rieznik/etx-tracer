@@ -46,6 +46,13 @@ struct GPUWavefrontVertexFlags {
   };
 };
 
+struct GPUWavefrontPointConnectionTaskFlags {
+  enum : uint32_t {
+    Ready = 1u << 0u,
+    SourceMedium = 1u << 1u,
+  };
+};
+
 struct GPUWavefrontSubsurfaceFlags {
   enum : uint32_t {
     Active = 1u << 0u,
@@ -223,12 +230,24 @@ struct ETX_ALIGNED GPUWavefrontDirectLightSample {
   float pdf_dir_out ETX_INIT(0.0f);
   uint32_t reserved1 ETX_INIT(0u);
   uint32_t reserved2 ETX_INIT(0u);
+  uint32_t reserved3 ETX_INIT(0u);
+  uint32_t reserved4 ETX_INIT(0u);
+  uint32_t reserved5 ETX_INIT(0u);
+  uint32_t reserved6 ETX_INIT(0u);
+  uint32_t reserved7 ETX_INIT(0u);
+  uint32_t reserved8 ETX_INIT(0u);
+  uint32_t reserved9 ETX_INIT(0u);
+  uint32_t reserved10 ETX_INIT(0u);
+  uint32_t reserved11 ETX_INIT(0u);
+  uint32_t reserved12 ETX_INIT(0u);
+  uint32_t reserved13 ETX_INIT(0u);
+  uint32_t reserved14 ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontDirectLightTask {
   Ray shadow_ray ETX_INIT({});
   float3 shadow_target ETX_INIT({});
-  uint32_t reserved0 ETX_INIT(0u);
+  uint32_t upbp_scattering_pdf_reverse_bits ETX_INIT(0u);
   SpectralResponse contribution ETX_INIT({});
   float mis_weight ETX_INIT(0.0f);
   uint32_t pixel_index ETX_INIT(0u);
@@ -236,14 +255,18 @@ struct ETX_ALIGNED GPUWavefrontDirectLightTask {
   uint32_t flags ETX_INIT(0u);
   uint32_t path_index ETX_INIT(0u);
   uint32_t sampler_seed ETX_INIT(0u);
+  uint32_t upbp_auxiliary0_bits ETX_INIT(0u);
+  uint32_t upbp_auxiliary1_bits ETX_INIT(0u);
+  SpectralResponse inline_medium_extinction ETX_INIT({});
+  uint32_t inline_medium_flags ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontDirectLightResult {
   SpectralResponse transmittance ETX_INIT({});
   uint32_t visible ETX_INIT(0u);
-  uint32_t reserved0 ETX_INIT(0u);
-  uint32_t reserved1 ETX_INIT(0u);
-  uint32_t reserved2 ETX_INIT(0u);
+  uint32_t upbp_log_transport_pdf_forward_bits ETX_INIT(0u);
+  uint32_t upbp_log_transport_pdf_reverse_bits ETX_INIT(0u);
+  uint32_t upbp_tracking_valid ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontConnectLightCandidate {
@@ -267,12 +290,20 @@ struct ETX_ALIGNED GPUWavefrontConnectLightTask {
   SpectralResponse inline_medium_extinction ETX_INIT({});
   uint32_t sampler_seed ETX_INIT(0u);
   uint32_t inline_medium_flags ETX_INIT(0u);
+  uint32_t upbp_camera_vertex_index ETX_INIT(kInvalidIndex);
+  uint32_t upbp_light_vertex_index ETX_INIT(kInvalidIndex);
+  uint32_t upbp_camera_pdf_forward_bits ETX_INIT(0u);
+  uint32_t upbp_camera_pdf_reverse_bits ETX_INIT(0u);
+  uint32_t upbp_light_pdf_forward_bits ETX_INIT(0u);
+  uint32_t upbp_light_pdf_reverse_bits ETX_INIT(0u);
+  uint32_t upbp_intersection_seed ETX_INIT(0u);
+  uint32_t upbp_medium_seed ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontConnectCameraTask {
   Ray shadow_ray ETX_INIT({});
   float3 shadow_target ETX_INIT({});
-  uint32_t reserved0 ETX_INIT(0u);
+  uint32_t upbp_scattering_pdf_reverse_bits ETX_INIT(0u);
   SpectralResponse contribution ETX_INIT({});
   float mis_weight ETX_INIT(0.0f);
   uint32_t pixel_index ETX_INIT(0u);
@@ -280,14 +311,18 @@ struct ETX_ALIGNED GPUWavefrontConnectCameraTask {
   uint32_t flags ETX_INIT(0u);
   uint32_t path_index ETX_INIT(0u);
   uint32_t sampler_seed ETX_INIT(0u);
+  uint32_t upbp_camera_area_density_bits ETX_INIT(0u);
+  uint32_t upbp_auxiliary1_bits ETX_INIT(0u);
+  SpectralResponse inline_medium_extinction ETX_INIT({});
+  uint32_t inline_medium_flags ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontConnectCameraResult {
   SpectralResponse transmittance ETX_INIT({});
   uint32_t visible ETX_INIT(0u);
-  uint32_t reserved0 ETX_INIT(0u);
-  uint32_t reserved1 ETX_INIT(0u);
-  uint32_t reserved2 ETX_INIT(0u);
+  uint32_t upbp_log_transport_pdf_forward_bits ETX_INIT(0u);
+  uint32_t upbp_log_transport_pdf_reverse_bits ETX_INIT(0u);
+  uint32_t upbp_tracking_valid ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontResources {
@@ -328,6 +363,6 @@ struct ETX_ALIGNED GPUWavefrontResources {
   uint32_t fast_light_endpoint_buffer ETX_INIT(kInvalidIndex);
   uint32_t vcm_grid_heads_buffer ETX_INIT(kInvalidIndex);
   uint32_t vcm_grid_next_buffer ETX_INIT(kInvalidIndex);
-  uint32_t reserved0 ETX_INIT(0u);
+  uint32_t upbp_resources_buffer ETX_INIT(kInvalidIndex);
   uint32_t reserved1 ETX_INIT(0u);
 };

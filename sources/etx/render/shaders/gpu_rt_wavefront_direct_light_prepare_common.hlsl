@@ -1,6 +1,11 @@
 #pragma once
 
 #include "gpu_rt_wavefront_storage.hlsl"
+#if ETX_UPBP
+# include "gpu_rt_wavefront_upbp_random.hlsl"
+# include "gpu_rt_wavefront_upbp_nee.hlsl"
+# include "gpu_rt_wavefront_upbp_storage.hlsl"
+#endif
 #include <interop/image_filter_shared.hxx>
 #include <access/bsdf_resource_gpu.hxx>
 #include <access/material_access_gpu.hxx>
@@ -59,8 +64,7 @@ bool wavefront_try_load_material_full(uint material_index, out Material material
 }
 
 BSDFData wavefront_make_surface_bsdf_data(Vertex vertex, SpectralQuery spect, uint medium_index, float3 incoming_direction) {
-  (void)medium_index;
-  return bsdf_data_make(vertex, spect, kInvalidIndex, PathSource::Camera, incoming_direction);
+  return bsdf_data_make(vertex, spect, medium_index, PathSource::Camera, incoming_direction);
 }
 
 Sampler wavefront_make_bsdf_sampler(uint seed) {
@@ -68,6 +72,15 @@ Sampler wavefront_make_bsdf_sampler(uint seed) {
   result.seed = seed;
   return result;
 }
+
+#if ETX_UPBP
+uint wavefront_direct_light_upbp_evaluation_seed(WavefrontDirectLightPrepareInput input_value, uint domain) {
+  GPUUPBPResources upbp_resources = upbp_load_resources(input_value.resources);
+  GPUUPBPPathState path_state = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, true, input_value.path_index));
+  return upbp_deterministic_seed(path_state.global_path_index, path_state.path_length + 1u, 1u, domain);
+}
+
+#endif
 
 bool wavefront_scene_multiple_importance_sampling_enabled() {
   SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
@@ -184,7 +197,15 @@ void wavefront_store_direct_light_prepare_sampler_seed(ETX_IN(WavefrontDirectLig
 
 void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(WavefrontDirectLightPrepareInput, input_value), ETX_IN(BSDFEval, bsdf_eval),
   ETX_INOUT(Sampler, sampler)) {
+#if ETX_UPBP
+  const bool upbp = scene_path_mode_is_upbp();
+  if (upbp == false) {
+    wavefront_store_direct_light_prepare_sampler_seed(input_value, sampler.seed);
+  }
+#else
+  const bool upbp = false;
   wavefront_store_direct_light_prepare_sampler_seed(input_value, sampler.seed);
+#endif
 
   if ((bsdf_eval_valid(bsdf_eval) == false) || (wavefront_valid_spectral_response(bsdf_eval.bsdf) == false)) {
     return;
@@ -195,7 +216,33 @@ void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(Wavef
     return;
   }
 
-  float mis_weight = wavefront_direct_light_weight(input_value, bsdf_eval, sampler);
+  float mis_weight = 1.0f;
+  float scattering_pdf_reverse = 0.0f;
+  float upbp_w_light = 0.0f;
+  float upbp_emission_to_direct_ratio = 0.0f;
+#if ETX_UPBP
+  if (upbp) {
+    BSDFData reverse_data =
+      wavefront_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.current_vertex.medium_index, -input_value.sample_value.direction);
+    reverse_data.path_source = PathSource::Light;
+    const float3 previous_direction = normalize(input_value.previous_vertex.position - input_value.current_vertex.position);
+    scattering_pdf_reverse =
+      wavefront_direct_light_stage_bsdf_pdf(wavefront_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
+    const float3 direction_to_light = normalize(input_value.sample_value.origin - input_value.current_vertex.position);
+    const float camera_cosine = wavefront_path_vertex_is_surface(input_value.current_vertex) ? abs(dot(input_value.current_vertex.geo_normal, direction_to_light)) : 1.0f;
+    const bool distant = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Distant) != 0u;
+    const float light_cosine = distant ? 1.0f : abs(dot(input_value.sample_value.normal, -direction_to_light));
+    const bool delta = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Delta) != 0u;
+    if (upbp_bpt_nee_competitor_terms(input_value.sample_value.pdf_sample, input_value.sample_value.pdf_dir, input_value.sample_value.pdf_dir_out, delta, bsdf_eval.pdf,
+          camera_cosine, light_cosine, upbp_w_light, upbp_emission_to_direct_ratio) == false) {
+      return;
+    }
+  } else {
+    mis_weight = wavefront_direct_light_weight(input_value, bsdf_eval, sampler);
+  }
+#else
+  mis_weight = wavefront_direct_light_weight(input_value, bsdf_eval, sampler);
+#endif
   SpectralResponse contribution = spectral_response_mul(spectral_response_mul(input_value.current_vertex.throughput, bsdf_eval.bsdf),
     spectral_response_mul(input_value.sample_value.value, mis_weight / sampling_pdf));
   if (wavefront_valid_spectral_response(contribution) == false) {
@@ -216,12 +263,25 @@ void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(Wavef
   task.shadow_ray.max_t = shadow_distance;
   task.shadow_target = input_value.sample_value.origin;
   task.contribution = contribution;
-  task.mis_weight = mis_weight;
+  task.mis_weight = upbp ? upbp_w_light : mis_weight;
+  task.upbp_scattering_pdf_reverse_bits = asuint(scattering_pdf_reverse);
   task.pixel_index = input_value.current_vertex.pixel_index;
   task.medium_index = ((bsdf_eval.properties & BSDFSample::MediumChanged) != 0u) ? bsdf_eval.medium_index : input_value.current_vertex.medium_index;
-  task.flags = 1u;
+  task.inline_medium_extinction = input_value.current_vertex.inline_medium_extinction;
+  task.inline_medium_flags = input_value.current_vertex.inline_medium_flags;
+  task.flags = GPUWavefrontPointConnectionTaskFlags::Ready;
+  task.flags |= (input_value.current_vertex.flags & GPUWavefrontVertexFlags::Medium) != 0u ? GPUWavefrontPointConnectionTaskFlags::SourceMedium : 0u;
   task.path_index = input_value.path_index;
-  task.sampler_seed = sampler.seed;
+#if ETX_UPBP
+  if (upbp) {
+    task.sampler_seed = wavefront_direct_light_upbp_evaluation_seed(input_value, kUPBPRandomDomainIntersectionTraversal);
+    task.upbp_auxiliary0_bits = wavefront_direct_light_upbp_evaluation_seed(input_value, kUPBPRandomDomainConnectionTransmittance);
+    task.upbp_auxiliary1_bits = asuint(upbp_emission_to_direct_ratio);
+  } else
+#endif
+  {
+    task.sampler_seed = sampler.seed;
+  }
   wavefront_store_direct_light_task(input_value.resources.direct_light_task_buffer, dispatch_index, task);
   wavefront_shadow_queue_append(input_value.resources, kGPUWavefrontShadowQueueDirectLight, dispatch_index);
 }

@@ -19,6 +19,7 @@ struct WavefrontConnectLightPrepareInput {
   Material camera_material;
   Material light_material;
   uint camera_sampler_seed;
+  uint camera_vertex_index;
   uint light_vertex_index;
   uint previous_light_vertex_index;
 };
@@ -161,6 +162,18 @@ float3 wavefront_connect_light_shadow_origin(GPUWavefrontPathVertex vertex, floa
   return scene_math_shared_shading_pos(p0, p1, p2, n0, n1, n2, geo_normal, barycentrics(vertex.barycentric), outgoing_direction);
 }
 
+#if ETX_UPBP
+uint wavefront_connect_light_upbp_connection_medium(WavefrontConnectLightPrepareInput input_value, float3 direction_to_camera) {
+  if (wavefront_path_vertex_is_medium(input_value.light_vertex)) {
+    return input_value.light_vertex.medium_index;
+  }
+  if (wavefront_path_vertex_is_surface(input_value.light_vertex)) {
+    return dot(input_value.light_vertex.geo_normal, direction_to_camera) < 0.0f ? input_value.light_material.int_medium : input_value.light_material.ext_medium;
+  }
+  return input_value.light_vertex.medium_index;
+}
+#endif
+
 float wavefront_connect_light_weight(WavefrontConnectLightPrepareInput input_value, float z_curr_pdf, float z_prev_pdf, float y_curr_pdf, float y_prev_pdf) {
   if (scene_multiple_importance_sampling_enabled() == false) {
     return 1.0f;
@@ -199,6 +212,66 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
     return false;
   }
 
+#if ETX_UPBP
+  if (scene_path_mode_is_upbp()) {
+    GPUUPBPResources upbp_resources = upbp_load_resources(input_value.resources);
+    const GPUUPBPPathState camera_path = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, true, input_value.path_index));
+    const GPUUPBPPathState light_path = upbp_load_bpt_light_path_state(upbp_resources.bpt_light_path_state_buffer, input_value.path_index);
+    if (((camera_path.flags & GPUUPBPPathStateFlags::Valid) == 0u) || ((light_path.flags & GPUUPBPPathStateFlags::Valid) == 0u) || (camera_path.path_length == 0u) ||
+        (input_value.light_vertex_length > light_path.path_length) || (camera_path.global_path_index != light_path.global_path_index)) {
+      return false;
+    }
+    const uint target_path_length = camera_path.path_length + input_value.light_vertex_length + 1u;
+    if ((target_path_length < load_scene_options_min_path_length()) || (target_path_length > load_scene_options_max_path_length())) {
+      return false;
+    }
+
+    input_value.camera_vertex_index = camera_path.last_vertex_index;
+    if (candidate_indices_initialized) {
+      input_value.light_vertex_index = initialized_light_vertex_index;
+      input_value.previous_light_vertex_index = initialized_previous_light_vertex_index;
+    } else {
+      wavefront_load_connect_light_candidate_indices(input_value.resources.connect_light_task_buffer, input_value.storage_index, input_value.light_vertex_index,
+        input_value.previous_light_vertex_index);
+    }
+    if ((input_value.camera_vertex_index == kInvalidIndex) || (input_value.light_vertex_index == kInvalidIndex) || (input_value.previous_light_vertex_index == kInvalidIndex)) {
+      return false;
+    }
+    const GPUUPBPVertex camera_vertex = upbp_load_vertex(upbp_resources.vertex_buffer, input_value.camera_vertex_index);
+    if ((camera_vertex.previous_vertex_index == kInvalidIndex) || (camera_vertex.path_length != camera_path.path_length)) {
+      return false;
+    }
+    const GPUUPBPVertex camera_previous = upbp_load_vertex(upbp_resources.vertex_buffer, camera_vertex.previous_vertex_index);
+    const GPUUPBPVertex light_vertex = upbp_load_bpt_light_vertex(upbp_resources, input_value.light_vertex_index);
+    const GPUUPBPVertex light_previous = upbp_load_bpt_light_vertex(upbp_resources, input_value.previous_light_vertex_index);
+    if ((light_vertex.path_length != input_value.light_vertex_length) || (light_vertex.previous_vertex_index != input_value.previous_light_vertex_index)) {
+      return false;
+    }
+    const GPUWavefrontPathState camera_state = wavefront_load_path_state(input_value.resources.camera_state_buffer, input_value.path_index);
+    if (wavefront_path_state_valid(camera_state) == false) {
+      return false;
+    }
+    input_value.path_meta.camera_path_length = camera_path.path_length;
+    input_value.path_meta.light_path_length = light_path.path_length;
+    input_value.camera_vertex = upbp_make_wavefront_path_vertex(camera_vertex, true, camera_state.pixel_index);
+    input_value.camera_previous_vertex = upbp_make_wavefront_path_vertex(camera_previous, true, camera_state.pixel_index);
+    input_value.light_vertex = upbp_make_wavefront_path_vertex(light_vertex, false, camera_state.pixel_index);
+    input_value.light_previous_vertex = upbp_make_wavefront_path_vertex(light_previous, false, camera_state.pixel_index);
+    input_value.camera_sampler_seed =
+      upbp_deterministic_seed(camera_path.global_path_index, camera_path.path_length + 1u, input_value.light_vertex_length + 1u, kUPBPRandomDomainScatteringEvaluation);
+
+    if (wavefront_path_vertex_is_surface(input_value.camera_vertex) && (try_load_material_full(input_value.camera_vertex.material_index, input_value.camera_material) == false)) {
+      return false;
+    }
+    if (wavefront_path_vertex_is_surface(input_value.light_vertex) && (try_load_material_full(input_value.light_vertex.material_index, input_value.light_material) == false)) {
+      return false;
+    }
+    return wavefront_path_vertex_valid(input_value.camera_vertex) && wavefront_path_vertex_valid(input_value.camera_previous_vertex) &&
+           wavefront_path_vertex_valid(input_value.light_vertex) && wavefront_path_vertex_valid(input_value.light_previous_vertex) &&
+           wavefront_path_vertex_connectible(input_value.camera_vertex) && wavefront_path_vertex_connectible(input_value.light_vertex);
+  }
+#endif
+
   input_value.path_meta = wavefront_load_path_meta(input_value.resources.path_meta_buffer, input_value.path_index);
   if ((scene_strategy_enabled(kSceneStrategyConnectVertices) == false) || (input_value.path_meta.camera_path_length == 0u) ||
       (input_value.light_vertex_length > input_value.path_meta.light_path_length)) {
@@ -219,6 +292,7 @@ bool wavefront_load_connect_light_prepare_input(uint dispatch_index, uint batch_
 
   input_value.camera_vertex =
     wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length));
+  input_value.camera_vertex_index = wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length);
   input_value.camera_previous_vertex =
     wavefront_load_path_vertex(input_value.resources.camera_vertex_buffer, wavefront_camera_vertex_slot(input_value.path_index, input_value.path_meta.camera_path_length - 1u));
   if (candidate_indices_initialized) {
@@ -278,6 +352,29 @@ void wavefront_initialize_connect_light_prepare_candidate(uint dispatch_index, u
   uint light_vertex_index = kInvalidIndex;
   uint previous_light_vertex_index = kInvalidIndex;
 
+# if ETX_UPBP
+  if (scene_path_mode_is_upbp()) {
+    GPUUPBPResources upbp_resources = upbp_load_resources(resources);
+    const GPUUPBPPathState light_path = upbp_load_bpt_light_path_state(upbp_resources.bpt_light_path_state_buffer, path_index);
+    uint current_index = light_path.last_vertex_index;
+    while (current_index != kInvalidIndex) {
+      const GPUUPBPVertex current = upbp_load_bpt_light_vertex(upbp_resources, current_index);
+      if (current.path_length <= light_vertex_length) {
+        if (current.path_length == light_vertex_length) {
+          light_vertex_index = current_index;
+          previous_light_vertex_index = current.previous_vertex_index;
+        }
+        break;
+      }
+      current_index = current.previous_vertex_index;
+    }
+    wavefront_initialize_connect_light_candidate(resources.connect_light_task_buffer, task_index, light_vertex_index, previous_light_vertex_index);
+    initialized_light_vertex_index = light_vertex_index;
+    initialized_previous_light_vertex_index = previous_light_vertex_index;
+    return;
+  }
+# endif
+
   if (resources.light_vertex_counter_buffer == kInvalidIndex) {
     light_vertex_index = wavefront_light_vertex_slot(path_index, light_vertex_length);
     previous_light_vertex_index = wavefront_light_vertex_slot(path_index, light_vertex_length - 1u);
@@ -302,7 +399,8 @@ void wavefront_initialize_connect_light_prepare_candidate(uint dispatch_index, u
   }
 }
 
-void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput input_value, ETX_IN(BSDFEval, camera_eval), WavefrontConnectLightStagePrepared prepared) {
+void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput input_value, ETX_IN(BSDFEval, camera_eval), WavefrontConnectLightStagePrepared prepared,
+  uint camera_reverse_seed) {
   if (bsdf_eval_valid(camera_eval) == false) {
     return;
   }
@@ -325,7 +423,13 @@ void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput
     z_prev_pdf_dir = wavefront_connect_light_medium_pdf(input_value.camera_vertex, direction_to_camera, camera_prev_direction);
   } else {
     BSDFData camera_reverse_data = bsdf_data_make(wavefront_make_connect_path_vertex(input_value.camera_vertex), spect, kInvalidIndex, PathSource::Camera, direction_to_camera);
-    Sampler camera_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 1u) ^ (constants.path_iteration + 31u)));
+    uint reverse_seed = scene_random_seed(input_value.task_index, (constants.sample_index + 1u) ^ (constants.path_iteration + 31u));
+# if ETX_UPBP
+    if (scene_path_mode_is_upbp()) {
+      reverse_seed = camera_reverse_seed;
+    }
+# endif
+    Sampler camera_reverse_sampler = make_bsdf_sampler(reverse_seed);
     z_prev_pdf_dir = wavefront_connect_light_stage_camera_bsdf_pdf_prepared(make_scene_bsdf_resource_gpu_context(), camera_reverse_data, camera_prev_direction,
       input_value.camera_material, prepared, camera_reverse_sampler);
   }
@@ -385,14 +489,22 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
 
   BSDFEval light_eval = (BSDFEval)0;
   WavefrontConnectLightStagePrepared prepared = (WavefrontConnectLightStagePrepared)0;
+  uint light_reverse_seed = input_value.camera_sampler_seed;
   if (wavefront_path_vertex_is_medium(input_value.light_vertex)) {
     light_eval = wavefront_connect_light_medium_eval(spect, input_value.light_vertex, input_value.light_vertex.w_i, direction_to_camera);
   } else {
-    Sampler light_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 17u)));
+    uint light_seed = scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 17u));
+# if ETX_UPBP
+    if (scene_path_mode_is_upbp()) {
+      light_seed = sampler_random_seed(input_value.camera_sampler_seed, 0u);
+    }
+# endif
+    Sampler light_sampler = make_bsdf_sampler(light_seed);
     BSDFData light_data = bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, kInvalidIndex, PathSource::Light, input_value.light_vertex.w_i);
     const BSDFResourceContext resource_context = make_scene_bsdf_resource_gpu_context();
     prepared = wavefront_connect_light_stage_prepare_material(resource_context, light_data, input_value.light_material, light_sampler);
     light_eval = wavefront_connect_light_stage_light_bsdf_eval_prepared(resource_context, light_data, direction_to_camera, input_value.light_material, prepared, light_sampler);
+    light_reverse_seed = light_sampler.seed;
   }
   if (bsdf_eval_valid(light_eval) == false) {
     return;
@@ -418,7 +530,13 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
     y_prev_pdf_dir = wavefront_connect_light_medium_pdf(input_value.light_vertex, -direction_to_camera, light_prev_direction);
   } else {
     BSDFData light_reverse_data = bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, kInvalidIndex, PathSource::Light, -direction_to_camera);
-    Sampler light_reverse_sampler = make_bsdf_sampler(scene_random_seed(input_value.task_index, (constants.sample_index + 3u) ^ (constants.path_iteration + 43u)));
+    uint reverse_seed = scene_random_seed(input_value.task_index, (constants.sample_index + 3u) ^ (constants.path_iteration + 43u));
+# if ETX_UPBP
+    if (scene_path_mode_is_upbp()) {
+      reverse_seed = light_reverse_seed;
+    }
+# endif
+    Sampler light_reverse_sampler = make_bsdf_sampler(reverse_seed);
     y_prev_pdf_dir = wavefront_connect_light_stage_light_bsdf_pdf_prepared(make_scene_bsdf_resource_gpu_context(), light_reverse_data, light_prev_direction,
       input_value.light_material, prepared, light_reverse_sampler);
   }
@@ -428,7 +546,7 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
     wavefront_path_vertex_is_surface(input_value.camera_vertex), input_value.camera_vertex.normal);
 
   float weight = 1.0f;
-  if (scene_multiple_importance_sampling_enabled()) {
+  if (scene_multiple_importance_sampling_enabled() && (scene_path_mode_is_upbp() == false)) {
     if (scene_path_mode_is_vcm() || scene_path_mode_is_bdpt_full()) {
       float vm_pair =
         scene_path_mode_is_vcm() && (wavefront_path_vertex_is_medium(input_value.camera_vertex) == false) && (wavefront_path_vertex_is_medium(input_value.light_vertex) == false)
@@ -461,6 +579,25 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   task.sampler_seed = sampler_random_seed(candidate.sampler_seed, candidate.light_vertex_index);
   task.inline_medium_extinction = input_value.light_vertex.inline_medium_extinction;
   task.inline_medium_flags = input_value.light_vertex.inline_medium_flags;
+# if ETX_UPBP
+  if (scene_path_mode_is_upbp()) {
+    const GPUUPBPResources upbp_resources = upbp_load_resources(input_value.resources);
+    const GPUUPBPVertex camera_vertex = upbp_load_vertex(upbp_resources.vertex_buffer, input_value.camera_vertex_index);
+    const GPUUPBPVertex light_vertex = upbp_load_bpt_light_vertex(upbp_resources, input_value.light_vertex_index);
+    const bool light_vertex_inline_medium = (input_value.light_vertex.inline_medium_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u;
+    task.medium_index = light_vertex_inline_medium ? kInvalidIndex : wavefront_connect_light_upbp_connection_medium(input_value, direction_to_camera);
+    task.upbp_camera_vertex_index = input_value.camera_vertex_index;
+    task.upbp_light_vertex_index = input_value.light_vertex_index;
+    task.upbp_camera_pdf_forward_bits = asuint(candidate.camera_pdf);
+    task.upbp_camera_pdf_reverse_bits = asuint(candidate.camera_reverse_direction_pdf);
+    task.upbp_light_pdf_forward_bits = asuint(light_eval.pdf);
+    task.upbp_light_pdf_reverse_bits = asuint(y_prev_pdf_dir);
+    task.upbp_intersection_seed =
+      upbp_deterministic_seed(camera_vertex.global_path_index, camera_vertex.path_length + 1u, light_vertex.path_length + 1u, kUPBPRandomDomainIntersectionTraversal);
+    task.upbp_medium_seed =
+      upbp_deterministic_seed(camera_vertex.global_path_index, camera_vertex.path_length + 1u, light_vertex.path_length + 1u, kUPBPRandomDomainConnectionTransmittance);
+  }
+# endif
   wavefront_store_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index, task);
   wavefront_shadow_queue_append(input_value.resources, kGPUWavefrontShadowQueueConnectLight, input_value.storage_index);
 }

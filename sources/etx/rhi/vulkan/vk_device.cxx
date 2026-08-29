@@ -17,13 +17,15 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <new>
+#include <stdexcept>
 #include <thread>
 namespace etx {
 
 namespace {
 
 constexpr const char* kVK_KHR_portability_subset_extension_name = "VK_KHR_portability_subset";
-constexpr uint64_t kVulkanPipelineCacheMaxBytes = 256ull * 1024ull * 1024ull;
 
 std::filesystem::path vulkan_pipeline_cache_directory() {
   std::filesystem::path root(env().cache_folder());
@@ -47,11 +49,19 @@ bool read_binary_file(const std::filesystem::path& path, std::vector<uint8_t>& o
   if (size <= 0) {
     return false;
   }
-  if (static_cast<uint64_t>(size) > kVulkanPipelineCacheMaxBytes) {
+  if (static_cast<uint64_t>(size) > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
     return false;
   }
 
-  out_data.resize(static_cast<size_t>(size));
+  try {
+    out_data.resize(static_cast<size_t>(size));
+  } catch (const std::bad_alloc&) {
+    out_data.clear();
+    return false;
+  } catch (const std::length_error&) {
+    out_data.clear();
+    return false;
+  }
   stream.seekg(0, std::ios::beg);
   stream.read(reinterpret_cast<char*>(out_data.data()), static_cast<std::streamsize>(size));
   return stream.good();
@@ -970,6 +980,9 @@ void VKDevice::Impl::initialize_pipeline_cache() {
     std::filesystem::remove(pipeline_cache_path, ec);
     cache_data.clear();
   }
+  if (cache_data.empty() == false) {
+    log::info("Vulkan: loaded pipeline cache %.2f MiB", static_cast<double>(cache_data.size()) / (1024.0 * 1024.0));
+  }
 
   VkPipelineCacheCreateInfo cache_info = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
   if (cache_data.empty() == false) {
@@ -1002,12 +1015,17 @@ void VKDevice::Impl::save_pipeline_cache() {
   if ((result != VK_SUCCESS) || (cache_size == 0u)) {
     return;
   }
-  if (static_cast<uint64_t>(cache_size) > kVulkanPipelineCacheMaxBytes) {
-    log::warning("Vulkan: skipping oversized pipeline cache write %.2fMB", static_cast<double>(cache_size) / (1024.0 * 1024.0));
+
+  std::vector<uint8_t> cache_data = {};
+  try {
+    cache_data.resize(cache_size);
+  } catch (const std::bad_alloc&) {
+    log::warning("Vulkan: insufficient memory to persist %.2f MiB pipeline cache", static_cast<double>(cache_size) / (1024.0 * 1024.0));
+    return;
+  } catch (const std::length_error&) {
+    log::warning("Vulkan: pipeline cache size is not addressable: %llu bytes", static_cast<unsigned long long>(cache_size));
     return;
   }
-
-  std::vector<uint8_t> cache_data(cache_size);
   result = vkGetPipelineCacheData(device, pipeline_cache, &cache_size, cache_data.data());
   if (result != VK_SUCCESS) {
     return;
@@ -1016,6 +1034,8 @@ void VKDevice::Impl::save_pipeline_cache() {
   cache_data.resize(cache_size);
   if (write_binary_file_atomic(pipeline_cache_path, cache_data) == false) {
     log::warning("Vulkan: failed to write pipeline cache %s", pipeline_cache_path.generic_string().c_str());
+  } else {
+    log::info("Vulkan: persisted pipeline cache %.2f MiB", static_cast<double>(cache_data.size()) / (1024.0 * 1024.0));
   }
 }
 
@@ -1795,15 +1815,21 @@ RHICreateBindlessResult VKDevice::create_acceleration_structure(const RHIAcceler
       const auto& src_geo = desc.geometries[i];
       auto& vk_geo = vk_geometries[i];
       vk_geo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-      vk_geo.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
       vk_geo.flags = src_geo.is_opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
-      vk_geo.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-      vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;  // Simplified, should ideally match src_geo.triangles.vertex_format
-      vk_geo.geometry.triangles.vertexStride = src_geo.triangles.vertex_stride;
-      vk_geo.geometry.triangles.maxVertex = src_geo.triangles.vertex_count;
-      vk_geo.geometry.triangles.indexType = (src_geo.triangles.index_type == RHIIndexType::UInt32) ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
-
-      max_primitive_counts[i] = src_geo.triangles.index_count / 3;
+      if (src_geo.type == RHIAccelerationStructureGeometryType::Triangles) {
+        vk_geo.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        vk_geo.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+        vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;  // Simplified, should ideally match src_geo.triangles.vertex_format
+        vk_geo.geometry.triangles.vertexStride = src_geo.triangles.vertex_stride;
+        vk_geo.geometry.triangles.maxVertex = src_geo.triangles.vertex_count;
+        vk_geo.geometry.triangles.indexType = (src_geo.triangles.index_type == RHIIndexType::UInt32) ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+        max_primitive_counts[i] = src_geo.triangles.index_count / 3;
+      } else {
+        vk_geo.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
+        vk_geo.geometry.aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+        vk_geo.geometry.aabbs.stride = src_geo.aabbs.stride;
+        max_primitive_counts[i] = src_geo.aabbs.count;
+      }
     }
 
     build_info.geometryCount = desc.geometry_count;

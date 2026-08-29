@@ -823,6 +823,25 @@ static MTLPrimitiveAccelerationStructureDescriptor* create_metal_blas_descriptor
   NSMutableArray<MTLAccelerationStructureGeometryDescriptor*>* geometry_descriptors = [NSMutableArray arrayWithCapacity:geometry_count];
   for (uint32_t i = 0; i < geometry_count; ++i) {
     const auto& src_geo = geometries[i];
+    if (src_geo.type == RHIAccelerationStructureGeometryType::AABBs) {
+      const auto bounding_box_it = device->buffers.find(src_geo.aabbs.buffer);
+      if ((bounding_box_it == device->buffers.end()) || (bounding_box_it->second.buffer == nil)) {
+        if (out_error != nullptr) {
+          *out_error = "BLAS bounding-box buffer handle is invalid.";
+        }
+        return nil;
+      }
+
+      MTLAccelerationStructureBoundingBoxGeometryDescriptor* bounding_box_descriptor = [MTLAccelerationStructureBoundingBoxGeometryDescriptor descriptor];
+      bounding_box_descriptor.boundingBoxBuffer = bounding_box_it->second.buffer;
+      bounding_box_descriptor.boundingBoxBufferOffset = static_cast<NSUInteger>(src_geo.aabbs.buffer_offset);
+      bounding_box_descriptor.boundingBoxStride = static_cast<NSUInteger>(src_geo.aabbs.stride);
+      bounding_box_descriptor.boundingBoxCount = static_cast<NSUInteger>(src_geo.aabbs.count);
+      bounding_box_descriptor.opaque = src_geo.is_opaque ? YES : NO;
+      [geometry_descriptors addObject:bounding_box_descriptor];
+      continue;
+    }
+
     const auto vertex_it = device->buffers.find(src_geo.triangles.vertex_buffer);
     if (vertex_it == device->buffers.end() || (vertex_it->second.buffer == nil)) {
       if (out_error != nullptr) {
@@ -3787,7 +3806,8 @@ void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
 
     const NSUInteger source_stride = sizeof(RHIAccelerationStructureInstance);
     const NSUInteger source_size = static_cast<NSUInteger>(desc.instance_count) * source_stride;
-    if (instance_buffer_it->second.buffer.length < source_size) {
+    if ((desc.instance_buffer_offset > instance_buffer_it->second.buffer.length) ||
+        ((instance_buffer_it->second.buffer.length - static_cast<NSUInteger>(desc.instance_buffer_offset)) < source_size)) {
       log::error("Metal RHI: TLAS instance source buffer is too small");
       return;
     }
@@ -3799,26 +3819,42 @@ void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
       return;
     }
 
-    auto* src_instances = static_cast<const RHIAccelerationStructureInstance*>(instance_buffer_it->second.buffer.contents);
+    const auto* source_bytes = static_cast<const uint8_t*>(instance_buffer_it->second.buffer.contents);
+    const auto* src_instances = reinterpret_cast<const RHIAccelerationStructureInstance*>(source_bytes + desc.instance_buffer_offset);
     auto* dst_instances = static_cast<MTLAccelerationStructureUserIDInstanceDescriptor*>(as_it->second.instance_descriptor_buffer.contents);
-    NSMutableArray<id<MTLAccelerationStructure>>* instanced_acceleration_structures = [NSMutableArray arrayWithCapacity:desc.instance_count];
+    id<MTLAccelerationStructure> uniform_acceleration_structure = nil;
+    if (desc.uniform_instance_acceleration_structure.valid()) {
+      const auto uniform_it = owner->device._impl->acceleration_structures.find(desc.uniform_instance_acceleration_structure);
+      if ((uniform_it == owner->device._impl->acceleration_structures.end()) || (uniform_it->second.acceleration_structure == nil)) {
+        log::error("Metal RHI: TLAS build received an invalid uniform BLAS handle");
+        return;
+      }
+      uniform_acceleration_structure = uniform_it->second.acceleration_structure;
+    }
+    const NSUInteger acceleration_structure_count = (uniform_acceleration_structure != nil) ? 1u : desc.instance_count;
+    NSMutableArray<id<MTLAccelerationStructure>>* instanced_acceleration_structures = [NSMutableArray arrayWithCapacity:acceleration_structure_count];
+    if (uniform_acceleration_structure != nil) {
+      [instanced_acceleration_structures addObject:uniform_acceleration_structure];
+    }
 
     for (uint32_t i = 0; i < desc.instance_count; ++i) {
       const auto& src_instance = src_instances[i];
-      RHIBindlessHandle referenced_handle = {.value = src_instance.acceleration_structure_reference};
-      auto referenced_it = owner->device._impl->acceleration_structures.find(referenced_handle);
-      if ((referenced_it == owner->device._impl->acceleration_structures.end()) || (referenced_it->second.acceleration_structure == nil)) {
-        log::error("Metal RHI: TLAS instance %u references an invalid BLAS handle", i);
-        return;
+      if (uniform_acceleration_structure == nil) {
+        RHIBindlessHandle referenced_handle = {.value = src_instance.acceleration_structure_reference};
+        const auto referenced_it = owner->device._impl->acceleration_structures.find(referenced_handle);
+        if ((referenced_it == owner->device._impl->acceleration_structures.end()) || (referenced_it->second.acceleration_structure == nil)) {
+          log::error("Metal RHI: TLAS instance %u references an invalid BLAS handle", i);
+          return;
+        }
+        [instanced_acceleration_structures addObject:referenced_it->second.acceleration_structure];
       }
 
       dst_instances[i].transformationMatrix = to_metal_transform(src_instance.transform);
       dst_instances[i].options = to_metal_instance_options(src_instance.flags);
       dst_instances[i].mask = src_instance.mask;
       dst_instances[i].intersectionFunctionTableOffset = src_instance.instance_shader_binding_table_record_offset;
-      dst_instances[i].accelerationStructureIndex = i;
+      dst_instances[i].accelerationStructureIndex = (uniform_acceleration_structure != nil) ? 0u : i;
       dst_instances[i].userID = src_instance.instance_custom_index;
-      [instanced_acceleration_structures addObject:referenced_it->second.acceleration_structure];
     }
     [as_it->second.instance_descriptor_buffer didModifyRange:NSMakeRange(0u, required_size)];
 

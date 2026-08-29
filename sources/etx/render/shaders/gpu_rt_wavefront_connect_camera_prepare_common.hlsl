@@ -43,6 +43,14 @@ Sampler wavefront_connect_camera_make_bsdf_sampler(uint seed) {
   return result;
 }
 
+#if ETX_UPBP
+uint wavefront_connect_camera_upbp_evaluation_seed(WavefrontConnectCameraPrepareInput input_value, uint domain) {
+  GPUUPBPResources upbp_resources = upbp_load_resources(input_value.resources);
+  GPUUPBPPathState path_state = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, false, input_value.path_index));
+  return upbp_deterministic_seed(path_state.global_path_index, 1u, path_state.path_length + 1u, domain);
+}
+#endif
+
 bool wavefront_connect_camera_scene_mis_enabled() {
   SceneGPUSharedOptions options = scene_gpu_load_options(constants.scene.scene_options);
   return (options.properties_flags & (1u << SceneProperty::MultipleImportanceSampling)) != 0u;
@@ -136,6 +144,14 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
   }
 
   uint seed = input_value.state.sampler_seed;
+#if ETX_UPBP
+  const bool upbp = scene_path_mode_is_upbp();
+  if (upbp) {
+    seed = wavefront_connect_camera_upbp_evaluation_seed(input_value, kUPBPRandomDomainFilmConnection);
+  }
+#else
+  const bool upbp = false;
+#endif
   float2 lens_rnd = float2(0.0f, 0.0f);
   if (camera_lens_sampling_enabled(input_value.camera.lens_radius, input_value.camera.focal_distance)) {
     lens_rnd = float2(rnd01(seed), rnd01(seed));
@@ -147,8 +163,10 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
     return false;
   }
 
-  input_value.state.sampler_seed = seed;
-  wavefront_store_path_state(input_value.resources.light_state_buffer, input_value.path_index, input_value.state);
+  if (upbp == false) {
+    input_value.state.sampler_seed = seed;
+    wavefront_store_path_state(input_value.resources.light_state_buffer, input_value.path_index, input_value.state);
+  }
   return true;
 }
 
@@ -170,8 +188,17 @@ void wavefront_clear_connect_camera_task(uint dispatch_index) {
 }
 
 void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontConnectCameraPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval), inout Sampler sampler) {
+#if ETX_UPBP
+  const bool upbp = scene_path_mode_is_upbp();
+  if (upbp == false) {
+    input_value.state.sampler_seed = sampler.seed;
+    wavefront_store_path_state(input_value.resources.light_state_buffer, input_value.path_index, input_value.state);
+  }
+#else
+  const bool upbp = false;
   input_value.state.sampler_seed = sampler.seed;
   wavefront_store_path_state(input_value.resources.light_state_buffer, input_value.path_index, input_value.state);
+#endif
 
   if ((bsdf_eval_valid(bsdf_eval) == false) || (wavefront_connect_camera_valid_spectral_response(bsdf_eval.bsdf) == false)) {
     return;
@@ -182,9 +209,29 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
     return;
   }
 
-  float mis_weight = wavefront_connect_camera_weight(input_value, sampler);
-  input_value.state.sampler_seed = sampler.seed;
-  wavefront_store_path_state(input_value.resources.light_state_buffer, input_value.path_index, input_value.state);
+  float mis_weight = 1.0f;
+  float scattering_pdf_reverse = 0.0f;
+  float camera_area_density = 0.0f;
+#if ETX_UPBP
+  if (upbp) {
+    BSDFData reverse_data =
+      wavefront_connect_camera_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.hit.medium_index, -input_value.camera_sample.direction);
+    reverse_data.path_source = PathSource::Camera;
+    const float3 previous_direction = normalize(input_value.previous_vertex.position - input_value.current_vertex.position);
+    scattering_pdf_reverse =
+      wavefront_connect_camera_stage_bsdf_pdf(wavefront_connect_camera_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
+    camera_area_density = wavefront_convert_solid_angle_pdf_to_area(input_value.camera_sample.pdf_dir_out, input_value.camera_sample.position, input_value.current_vertex.position,
+      wavefront_path_vertex_is_surface(input_value.current_vertex), input_value.current_vertex.geo_normal);
+  } else {
+    mis_weight = wavefront_connect_camera_weight(input_value, sampler);
+  }
+#else
+  mis_weight = wavefront_connect_camera_weight(input_value, sampler);
+#endif
+  if (upbp == false) {
+    input_value.state.sampler_seed = sampler.seed;
+    wavefront_store_path_state(input_value.resources.light_state_buffer, input_value.path_index, input_value.state);
+  }
   SpectralResponse contribution =
     spectral_response_mul(input_value.current_vertex.throughput, spectral_response_mul(bsdf_eval.bsdf, input_value.camera_sample.weight * mis_weight));
   if (wavefront_connect_camera_valid_spectral_response(contribution) == false) {
@@ -208,12 +255,23 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   task.shadow_ray.max_t = shadow_distance;
   task.shadow_target = clip_pos;
   task.contribution = contribution;
-  task.mis_weight = mis_weight;
+  task.mis_weight = upbp ? bsdf_eval.pdf : mis_weight;
+  task.upbp_scattering_pdf_reverse_bits = asuint(scattering_pdf_reverse);
+  task.upbp_camera_area_density_bits = asuint(camera_area_density);
   task.pixel_index = pixel_index;
   task.medium_index = ((bsdf_eval.properties & BSDFSample::MediumChanged) != 0u) ? bsdf_eval.medium_index : input_value.hit.medium_index;
-  task.flags = 1u;
+  task.flags = GPUWavefrontPointConnectionTaskFlags::Ready;
+  task.flags |= (input_value.current_vertex.flags & GPUWavefrontVertexFlags::Medium) != 0u ? GPUWavefrontPointConnectionTaskFlags::SourceMedium : 0u;
   task.path_index = input_value.path_index;
-  task.sampler_seed = sampler.seed;
+#if ETX_UPBP
+  if (upbp) {
+    task.sampler_seed = wavefront_connect_camera_upbp_evaluation_seed(input_value, kUPBPRandomDomainIntersectionTraversal);
+    task.upbp_auxiliary1_bits = wavefront_connect_camera_upbp_evaluation_seed(input_value, kUPBPRandomDomainConnectionTransmittance);
+  } else
+#endif
+  {
+    task.sampler_seed = sampler.seed;
+  }
   wavefront_store_connect_camera_task(input_value.resources.connect_camera_task_buffer, dispatch_index, task);
   wavefront_shadow_queue_append(input_value.resources, kGPUWavefrontShadowQueueConnectCamera, dispatch_index);
 }

@@ -589,6 +589,9 @@ RHIResult VKContext::wait_idle() {
   }
 
   _impl->release_all_temporary_fences();
+  for (uint32_t frame_index = 0u; frame_index < kRHIMaxFrames; ++frame_index) {
+    _impl->device.process_deferred_destruction(frame_index);
+  }
   return RHIResult::Success;
 }
 
@@ -1398,6 +1401,10 @@ void VKCommandBuffer::buffer_barrier(RHIBindlessHandle buffer, RHIResourceState 
       src_access |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
       src_stage = VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
       break;
+    case RHIResourceState::AccelerationStructure:
+      src_access |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+      src_stage = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+      break;
     default:
       break;
   }
@@ -1422,6 +1429,10 @@ void VKCommandBuffer::buffer_barrier(RHIBindlessHandle buffer, RHIResourceState 
     case RHIResourceState::IndirectArgument:
       dst_access |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
       dst_stage = VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
+      break;
+    case RHIResourceState::AccelerationStructure:
+      dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+      dst_stage = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
       break;
     default:
       break;
@@ -3010,32 +3021,39 @@ void VKCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
       const auto& src_geo = desc.geometries[i];
       auto& vk_geo = geometries[i];
       vk_geo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-      vk_geo.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
       vk_geo.flags = src_geo.is_opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
-      vk_geo.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+      if (src_geo.type == RHIAccelerationStructureGeometryType::Triangles) {
+        vk_geo.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+        vk_geo.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
 
-      switch (src_geo.triangles.vertex_format) {
-        case RHIVertexFormat::Float2:
-          vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32_SFLOAT;
-          break;
-        case RHIVertexFormat::Float3:
-          vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-          break;
-        case RHIVertexFormat::Float4:
-          vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
-          break;
-        default:
-          vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-          break;
+        switch (src_geo.triangles.vertex_format) {
+          case RHIVertexFormat::Float2:
+            vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32_SFLOAT;
+            break;
+          case RHIVertexFormat::Float3:
+            vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            break;
+          case RHIVertexFormat::Float4:
+            vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+            break;
+          default:
+            vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            break;
+        }
+
+        vk_geo.geometry.triangles.vertexData.deviceAddress = device->get_buffer_device_address(src_geo.triangles.vertex_buffer);
+        vk_geo.geometry.triangles.vertexStride = src_geo.triangles.vertex_stride;
+        vk_geo.geometry.triangles.maxVertex = src_geo.triangles.vertex_count;
+        vk_geo.geometry.triangles.indexType = (src_geo.triangles.index_type == RHIIndexType::UInt32) ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+        vk_geo.geometry.triangles.indexData.deviceAddress = device->get_buffer_device_address(src_geo.triangles.index_buffer) + src_geo.triangles.index_buffer_offset;
+        ranges[i].primitiveCount = src_geo.triangles.index_count / 3;
+      } else {
+        vk_geo.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
+        vk_geo.geometry.aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+        vk_geo.geometry.aabbs.data.deviceAddress = device->get_buffer_device_address(src_geo.aabbs.buffer) + src_geo.aabbs.buffer_offset;
+        vk_geo.geometry.aabbs.stride = src_geo.aabbs.stride;
+        ranges[i].primitiveCount = src_geo.aabbs.count;
       }
-
-      vk_geo.geometry.triangles.vertexData.deviceAddress = device->get_buffer_device_address(src_geo.triangles.vertex_buffer);
-      vk_geo.geometry.triangles.vertexStride = src_geo.triangles.vertex_stride;
-      vk_geo.geometry.triangles.maxVertex = src_geo.triangles.vertex_count;
-      vk_geo.geometry.triangles.indexType = (src_geo.triangles.index_type == RHIIndexType::UInt32) ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
-      vk_geo.geometry.triangles.indexData.deviceAddress = device->get_buffer_device_address(src_geo.triangles.index_buffer) + src_geo.triangles.index_buffer_offset;
-
-      ranges[i].primitiveCount = src_geo.triangles.index_count / 3;
       ranges[i].primitiveOffset = 0;
       ranges[i].firstVertex = 0;
       ranges[i].transformOffset = 0;
@@ -3048,7 +3066,7 @@ void VKCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
     vk_geo.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
     vk_geo.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
     vk_geo.geometry.instances.arrayOfPointers = VK_FALSE;
-    vk_geo.geometry.instances.data.deviceAddress = device->get_buffer_device_address(desc.instance_buffer);
+    vk_geo.geometry.instances.data.deviceAddress = device->get_buffer_device_address(desc.instance_buffer) + desc.instance_buffer_offset;
 
     ranges.resize(1);
     ranges[0].primitiveCount = desc.instance_count;

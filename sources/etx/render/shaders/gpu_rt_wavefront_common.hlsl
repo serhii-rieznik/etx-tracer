@@ -530,6 +530,7 @@ void wavefront_store_direct_light_task(uint descriptor_index, uint index, GPUWav
   uint base_offset = index * kGPUWavefrontDirectLightTaskStride;
   wavefront_store_ray(buffer, base_offset + kGPUWavefrontDirectLightTaskShadowRayOffset, task.shadow_ray);
   wavefront_store_float3(buffer, base_offset + kGPUWavefrontDirectLightTaskShadowTargetOffset, task.shadow_target);
+  buffer.Store(base_offset + kGPUWavefrontDirectLightTaskUPBPScatteringPdfReverseBitsOffset, task.upbp_scattering_pdf_reverse_bits);
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontDirectLightTaskContributionOffset, task.contribution);
   buffer.Store(base_offset + kGPUWavefrontDirectLightTaskMisWeightOffset, asuint(task.mis_weight));
   buffer.Store(base_offset + kGPUWavefrontDirectLightTaskPixelIndexOffset, task.pixel_index);
@@ -537,6 +538,10 @@ void wavefront_store_direct_light_task(uint descriptor_index, uint index, GPUWav
   buffer.Store(base_offset + kGPUWavefrontDirectLightTaskFlagsOffset, task.flags);
   buffer.Store(base_offset + kGPUWavefrontDirectLightTaskPathIndexOffset, task.path_index);
   buffer.Store(base_offset + kGPUWavefrontDirectLightTaskSamplerSeedOffset, task.sampler_seed);
+  buffer.Store(base_offset + kGPUWavefrontDirectLightTaskUPBPAuxiliary0BitsOffset, task.upbp_auxiliary0_bits);
+  buffer.Store(base_offset + kGPUWavefrontDirectLightTaskUPBPAuxiliary1BitsOffset, task.upbp_auxiliary1_bits);
+  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontDirectLightTaskInlineMediumExtinctionOffset, task.inline_medium_extinction);
+  buffer.Store(base_offset + kGPUWavefrontDirectLightTaskInlineMediumFlagsOffset, task.inline_medium_flags);
 }
 
 GPUWavefrontDirectLightTask wavefront_load_direct_light_task(uint descriptor_index, uint index) {
@@ -545,6 +550,7 @@ GPUWavefrontDirectLightTask wavefront_load_direct_light_task(uint descriptor_ind
   GPUWavefrontDirectLightTask result = (GPUWavefrontDirectLightTask)0;
   result.shadow_ray = wavefront_load_ray(buffer, base_offset + kGPUWavefrontDirectLightTaskShadowRayOffset);
   result.shadow_target = wavefront_load_float3(buffer, base_offset + kGPUWavefrontDirectLightTaskShadowTargetOffset);
+  result.upbp_scattering_pdf_reverse_bits = buffer.Load(base_offset + kGPUWavefrontDirectLightTaskUPBPScatteringPdfReverseBitsOffset);
   result.contribution = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontDirectLightTaskContributionOffset);
   result.mis_weight = asfloat(buffer.Load(base_offset + kGPUWavefrontDirectLightTaskMisWeightOffset));
   result.pixel_index = buffer.Load(base_offset + kGPUWavefrontDirectLightTaskPixelIndexOffset);
@@ -552,6 +558,10 @@ GPUWavefrontDirectLightTask wavefront_load_direct_light_task(uint descriptor_ind
   result.flags = buffer.Load(base_offset + kGPUWavefrontDirectLightTaskFlagsOffset);
   result.path_index = buffer.Load(base_offset + kGPUWavefrontDirectLightTaskPathIndexOffset);
   result.sampler_seed = buffer.Load(base_offset + kGPUWavefrontDirectLightTaskSamplerSeedOffset);
+  result.upbp_auxiliary0_bits = buffer.Load(base_offset + kGPUWavefrontDirectLightTaskUPBPAuxiliary0BitsOffset);
+  result.upbp_auxiliary1_bits = buffer.Load(base_offset + kGPUWavefrontDirectLightTaskUPBPAuxiliary1BitsOffset);
+  result.inline_medium_extinction = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontDirectLightTaskInlineMediumExtinctionOffset);
+  result.inline_medium_flags = buffer.Load(base_offset + kGPUWavefrontDirectLightTaskInlineMediumFlagsOffset);
   return result;
 }
 
@@ -560,6 +570,9 @@ void wavefront_store_direct_light_result(uint descriptor_index, uint index, GPUW
   uint base_offset = index * kGPUWavefrontDirectLightResultStride;
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontDirectLightResultTransmittanceOffset, result_value.transmittance);
   buffer.Store(base_offset + kGPUWavefrontDirectLightResultVisibleOffset, result_value.visible);
+  buffer.Store(base_offset + kGPUWavefrontDirectLightResultUPBPLogTransportPdfForwardBitsOffset, result_value.upbp_log_transport_pdf_forward_bits);
+  buffer.Store(base_offset + kGPUWavefrontDirectLightResultUPBPLogTransportPdfReverseBitsOffset, result_value.upbp_log_transport_pdf_reverse_bits);
+  buffer.Store(base_offset + kGPUWavefrontDirectLightResultUPBPTrackingValidOffset, result_value.upbp_tracking_valid);
 }
 
 GPUWavefrontDirectLightResult wavefront_load_direct_light_result(uint descriptor_index, uint index) {
@@ -568,6 +581,9 @@ GPUWavefrontDirectLightResult wavefront_load_direct_light_result(uint descriptor
   GPUWavefrontDirectLightResult result_value = (GPUWavefrontDirectLightResult)0;
   result_value.transmittance = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontDirectLightResultTransmittanceOffset);
   result_value.visible = buffer.Load(base_offset + kGPUWavefrontDirectLightResultVisibleOffset);
+  result_value.upbp_log_transport_pdf_forward_bits = buffer.Load(base_offset + kGPUWavefrontDirectLightResultUPBPLogTransportPdfForwardBitsOffset);
+  result_value.upbp_log_transport_pdf_reverse_bits = buffer.Load(base_offset + kGPUWavefrontDirectLightResultUPBPLogTransportPdfReverseBitsOffset);
+  result_value.upbp_tracking_valid = buffer.Load(base_offset + kGPUWavefrontDirectLightResultUPBPTrackingValidOffset);
   return result_value;
 }
 
@@ -627,6 +643,14 @@ void wavefront_store_connect_light_task(uint descriptor_index, uint index, GPUWa
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskInlineMediumExtinctionOffset, task.inline_medium_extinction);
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskSamplerSeedOffset, task.sampler_seed);
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskInlineMediumFlagsOffset, task.inline_medium_flags);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPCameraVertexIndexOffset, task.upbp_camera_vertex_index);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPLightVertexIndexOffset, task.upbp_light_vertex_index);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPCameraPdfForwardBitsOffset, task.upbp_camera_pdf_forward_bits);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPCameraPdfReverseBitsOffset, task.upbp_camera_pdf_reverse_bits);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPLightPdfForwardBitsOffset, task.upbp_light_pdf_forward_bits);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPLightPdfReverseBitsOffset, task.upbp_light_pdf_reverse_bits);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPIntersectionSeedOffset, task.upbp_intersection_seed);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPMediumSeedOffset, task.upbp_medium_seed);
 }
 
 GPUWavefrontConnectLightTask wavefront_load_connect_light_task(uint descriptor_index, uint index) {
@@ -641,6 +665,14 @@ GPUWavefrontConnectLightTask wavefront_load_connect_light_task(uint descriptor_i
   result_value.inline_medium_extinction = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectLightTaskInlineMediumExtinctionOffset);
   result_value.sampler_seed = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskSamplerSeedOffset);
   result_value.inline_medium_flags = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskInlineMediumFlagsOffset);
+  result_value.upbp_camera_vertex_index = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskUPBPCameraVertexIndexOffset);
+  result_value.upbp_light_vertex_index = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskUPBPLightVertexIndexOffset);
+  result_value.upbp_camera_pdf_forward_bits = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskUPBPCameraPdfForwardBitsOffset);
+  result_value.upbp_camera_pdf_reverse_bits = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskUPBPCameraPdfReverseBitsOffset);
+  result_value.upbp_light_pdf_forward_bits = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskUPBPLightPdfForwardBitsOffset);
+  result_value.upbp_light_pdf_reverse_bits = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskUPBPLightPdfReverseBitsOffset);
+  result_value.upbp_intersection_seed = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskUPBPIntersectionSeedOffset);
+  result_value.upbp_medium_seed = buffer.Load(base_offset + kGPUWavefrontConnectLightTaskUPBPMediumSeedOffset);
   return result_value;
 }
 
@@ -649,6 +681,7 @@ void wavefront_store_connect_camera_task(uint descriptor_index, uint index, GPUW
   uint base_offset = index * kGPUWavefrontConnectCameraTaskStride;
   wavefront_store_ray(buffer, base_offset + kGPUWavefrontConnectCameraTaskShadowRayOffset, task.shadow_ray);
   wavefront_store_float3(buffer, base_offset + kGPUWavefrontConnectCameraTaskShadowTargetOffset, task.shadow_target);
+  buffer.Store(base_offset + kGPUWavefrontConnectCameraTaskUPBPScatteringPdfReverseBitsOffset, task.upbp_scattering_pdf_reverse_bits);
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectCameraTaskContributionOffset, task.contribution);
   buffer.Store(base_offset + kGPUWavefrontConnectCameraTaskMisWeightOffset, asuint(task.mis_weight));
   buffer.Store(base_offset + kGPUWavefrontConnectCameraTaskPixelIndexOffset, task.pixel_index);
@@ -656,6 +689,10 @@ void wavefront_store_connect_camera_task(uint descriptor_index, uint index, GPUW
   buffer.Store(base_offset + kGPUWavefrontConnectCameraTaskFlagsOffset, task.flags);
   buffer.Store(base_offset + kGPUWavefrontConnectCameraTaskPathIndexOffset, task.path_index);
   buffer.Store(base_offset + kGPUWavefrontConnectCameraTaskSamplerSeedOffset, task.sampler_seed);
+  buffer.Store(base_offset + kGPUWavefrontConnectCameraTaskUPBPCameraAreaDensityBitsOffset, task.upbp_camera_area_density_bits);
+  buffer.Store(base_offset + kGPUWavefrontConnectCameraTaskUPBPAuxiliary1BitsOffset, task.upbp_auxiliary1_bits);
+  wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectCameraTaskInlineMediumExtinctionOffset, task.inline_medium_extinction);
+  buffer.Store(base_offset + kGPUWavefrontConnectCameraTaskInlineMediumFlagsOffset, task.inline_medium_flags);
 }
 
 GPUWavefrontConnectCameraTask wavefront_load_connect_camera_task(uint descriptor_index, uint index) {
@@ -664,6 +701,7 @@ GPUWavefrontConnectCameraTask wavefront_load_connect_camera_task(uint descriptor
   GPUWavefrontConnectCameraTask result_value = (GPUWavefrontConnectCameraTask)0;
   result_value.shadow_ray = wavefront_load_ray(buffer, base_offset + kGPUWavefrontConnectCameraTaskShadowRayOffset);
   result_value.shadow_target = wavefront_load_float3(buffer, base_offset + kGPUWavefrontConnectCameraTaskShadowTargetOffset);
+  result_value.upbp_scattering_pdf_reverse_bits = buffer.Load(base_offset + kGPUWavefrontConnectCameraTaskUPBPScatteringPdfReverseBitsOffset);
   result_value.contribution = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectCameraTaskContributionOffset);
   result_value.mis_weight = asfloat(buffer.Load(base_offset + kGPUWavefrontConnectCameraTaskMisWeightOffset));
   result_value.pixel_index = buffer.Load(base_offset + kGPUWavefrontConnectCameraTaskPixelIndexOffset);
@@ -671,6 +709,10 @@ GPUWavefrontConnectCameraTask wavefront_load_connect_camera_task(uint descriptor
   result_value.flags = buffer.Load(base_offset + kGPUWavefrontConnectCameraTaskFlagsOffset);
   result_value.path_index = buffer.Load(base_offset + kGPUWavefrontConnectCameraTaskPathIndexOffset);
   result_value.sampler_seed = buffer.Load(base_offset + kGPUWavefrontConnectCameraTaskSamplerSeedOffset);
+  result_value.upbp_camera_area_density_bits = buffer.Load(base_offset + kGPUWavefrontConnectCameraTaskUPBPCameraAreaDensityBitsOffset);
+  result_value.upbp_auxiliary1_bits = buffer.Load(base_offset + kGPUWavefrontConnectCameraTaskUPBPAuxiliary1BitsOffset);
+  result_value.inline_medium_extinction = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectCameraTaskInlineMediumExtinctionOffset);
+  result_value.inline_medium_flags = buffer.Load(base_offset + kGPUWavefrontConnectCameraTaskInlineMediumFlagsOffset);
   return result_value;
 }
 
@@ -679,6 +721,9 @@ void wavefront_store_connect_camera_result(uint descriptor_index, uint index, GP
   uint base_offset = index * kGPUWavefrontConnectCameraResultStride;
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontConnectCameraResultTransmittanceOffset, result_value.transmittance);
   buffer.Store(base_offset + kGPUWavefrontConnectCameraResultVisibleOffset, result_value.visible);
+  buffer.Store(base_offset + kGPUWavefrontConnectCameraResultUPBPLogTransportPdfForwardBitsOffset, result_value.upbp_log_transport_pdf_forward_bits);
+  buffer.Store(base_offset + kGPUWavefrontConnectCameraResultUPBPLogTransportPdfReverseBitsOffset, result_value.upbp_log_transport_pdf_reverse_bits);
+  buffer.Store(base_offset + kGPUWavefrontConnectCameraResultUPBPTrackingValidOffset, result_value.upbp_tracking_valid);
 }
 
 GPUWavefrontConnectCameraResult wavefront_load_connect_camera_result(uint descriptor_index, uint index) {
@@ -687,6 +732,9 @@ GPUWavefrontConnectCameraResult wavefront_load_connect_camera_result(uint descri
   GPUWavefrontConnectCameraResult result_value = (GPUWavefrontConnectCameraResult)0;
   result_value.transmittance = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontConnectCameraResultTransmittanceOffset);
   result_value.visible = buffer.Load(base_offset + kGPUWavefrontConnectCameraResultVisibleOffset);
+  result_value.upbp_log_transport_pdf_forward_bits = buffer.Load(base_offset + kGPUWavefrontConnectCameraResultUPBPLogTransportPdfForwardBitsOffset);
+  result_value.upbp_log_transport_pdf_reverse_bits = buffer.Load(base_offset + kGPUWavefrontConnectCameraResultUPBPLogTransportPdfReverseBitsOffset);
+  result_value.upbp_tracking_valid = buffer.Load(base_offset + kGPUWavefrontConnectCameraResultUPBPTrackingValidOffset);
   return result_value;
 }
 
@@ -727,6 +775,7 @@ GPUWavefrontResources wavefront_load_resources() {
   result.fast_light_endpoint_buffer = buffer.Load(kGPUWavefrontResourcesFastLightEndpointBufferOffset);
   result.vcm_grid_heads_buffer = buffer.Load(kGPUWavefrontResourcesVCMGridHeadsBufferOffset);
   result.vcm_grid_next_buffer = buffer.Load(kGPUWavefrontResourcesVCMGridNextBufferOffset);
+  result.upbp_resources_buffer = buffer.Load(kGPUWavefrontResourcesUPBPResourcesBufferOffset);
   return result;
 }
 
@@ -1304,3 +1353,11 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   wavefront_store_path_state(state_buffer, path_index, state);
   wavefront_queue_append(wavefront_queue_next_descriptor(from_camera), path_index);
 }
+
+#if ETX_UPBP
+# include "gpu_rt_wavefront_upbp_random.hlsl"
+# include "gpu_rt_wavefront_upbp_storage.hlsl"
+# include "gpu_rt_wavefront_upbp_mis.hlsl"
+# include "gpu_rt_wavefront_upbp_path.hlsl"
+# include "gpu_rt_wavefront_upbp_medium.hlsl"
+#endif

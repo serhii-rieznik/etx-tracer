@@ -28,7 +28,15 @@
 #endif
 }
 
-[numthreads(8, 8, 1)] void wavefront_prepare_sample_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(8, 8, 1)] void wavefront_prepare_sample_main(uint3 dtid : SV_DispatchThreadID) {
+  if (constants.dispatch_item_offset != 0u) {
+    if ((dtid.x == 0u) && (dtid.y == 0u)) {
+      wavefront_queue_reset(wavefront_queue_current_descriptor(false));
+      wavefront_queue_reset(wavefront_queue_next_descriptor(false));
+      wavefront_reset_work_queues(wavefront_load_resources());
+    }
+    return;
+  }
   if (constants.camera_buffer_index == kInvalidIndex) {
     return;
   }
@@ -57,7 +65,7 @@
   }
 }
 
-  [numthreads(1, 1, 1)] void wavefront_swap_queues_main(uint3 dtid : SV_DispatchThreadID) {
+[numthreads(1, 1, 1)] void wavefront_swap_queues_main(uint3 dtid : SV_DispatchThreadID) {
   if ((dtid.x != 0u) || (dtid.y != 0u) || (dtid.z != 0u)) {
     return;
   }
@@ -67,7 +75,7 @@
   wavefront_reset_work_queues(wavefront_load_resources());
 }
 
-[numthreads(8, 8, 1)] void wavefront_finalize_sample_main(uint3 dtid : SV_DispatchThreadID) {
+  [numthreads(8, 8, 1)] void wavefront_finalize_sample_main(uint3 dtid : SV_DispatchThreadID) {
   if (constants.camera_buffer_index == kInvalidIndex) {
     return;
   }

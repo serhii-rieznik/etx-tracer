@@ -463,7 +463,7 @@ void draw_ior_tooltip(const char* label, const char* title, SpectralDistribution
 }  // namespace
 
 bool UI::gpu_integrator_supported(Integrator::Type type) {
-  return (type == Integrator::Type::PathTracing) || (type == Integrator::Type::Bidirectional) || (type == Integrator::Type::VCM);
+  return (type == Integrator::Type::PathTracing) || (type == Integrator::Type::Bidirectional) || (type == Integrator::Type::VCM) || (type == Integrator::Type::UPBP);
 }
 
 std::string UI::render_configuration_label(RendererMode renderer, Integrator* integrator) {
@@ -485,7 +485,7 @@ std::string UI::render_configuration_label(RendererMode renderer, Integrator* in
     case Integrator::Type::VCM:
       return "VCM (GPU)";
     case Integrator::Type::UPBP:
-      return "UPBP (GPU unsupported)";
+      return "UPBP (GPU)";
     default:
       return std::string(integrator->name()) + " (GPU)";
   }
