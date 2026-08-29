@@ -550,6 +550,9 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
   }
 
   _active_renderer = next_renderer;
+  if ((_active_renderer == &cpu_renderer) && (_current_scene_file.empty() == false) && scene.valid()) {
+    cpu_renderer.set_output_dimensions(render_context.get_context(), scene.camera().film_size);
+  }
 
   if ((_active_renderer != nullptr) && !_current_scene_file.empty() && scene.valid()) {
     _active_renderer->start();

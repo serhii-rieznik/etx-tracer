@@ -23,7 +23,6 @@ static_assert(sizeof(GPUUPBPDensityPoint) == kGPUUPBPDensityPointStride, "GPUUPB
 static_assert(sizeof(GPUUPBPDensityBeam) == kGPUUPBPDensityBeamStride, "GPUUPBPDensityBeam size changed; update GPU UPBP ABI");
 static_assert(sizeof(GPUUPBPDensityBatch) == kGPUUPBPDensityBatchStride, "GPUUPBPDensityBatch size changed; update GPU UPBP ABI");
 static_assert(sizeof(GPUUPBPBeamReference) == kGPUUPBPBeamReferenceStride, "GPUUPBPBeamReference size changed; update GPU UPBP ABI");
-static_assert(sizeof(GPUUPBPBeamGrid) == kGPUUPBPBeamGridStride, "GPUUPBPBeamGrid size changed; update GPU UPBP ABI");
 static_assert(sizeof(RHIAccelerationStructureInstance) == kGPUUPBPAccelerationStructureInstanceStride,
   "RHI acceleration-structure instance size changed; update GPU UPBP instance serialization");
 static_assert(sizeof(GPUUPBPIteration) == kGPUUPBPIterationStride, "GPUUPBPIteration size changed; update GPU UPBP ABI");
@@ -208,7 +207,7 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, beam_capacity, kGPUUPBPResourcesBea
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, density_beam_acceleration_structure_reference_high, kGPUUPBPResourcesDensityBeamAccelerationStructureReferenceHighOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, light_path_state_capacity, kGPUUPBPResourcesLightPathStateCapacityOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, camera_path_state_capacity, kGPUUPBPResourcesCameraPathStateCapacityOffset);
-ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, bp2d_grid_buffer, kGPUUPBPResourcesBP2DGridBufferOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, reserved0, kGPUUPBPResourcesReserved0Offset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, bb1d_beam_buffer, kGPUUPBPResourcesBB1DBeamBufferOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, beam_acceleration_structure, kGPUUPBPResourcesBeamAccelerationStructureOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, density_output_bb1d_beam_instance_buffer, kGPUUPBPResourcesDensityOutputBB1DBeamInstanceBufferOffset);
@@ -232,6 +231,7 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, beam_reference_buffer, kGPUUPBPReso
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, bpt_light_vertex_buffer, kGPUUPBPResourcesBPTLightVertexBufferOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, bpt_light_path_state_buffer, kGPUUPBPResourcesBPTLightPathStateBufferOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, bb1d_partition_acceleration_structures, kGPUUPBPResourcesBB1DPartitionAccelerationStructuresOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, bp2d_beam_acceleration_structures, kGPUUPBPResourcesBP2DBeamAccelerationStructuresOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityPoint, throughput, kGPUUPBPDensityPointThroughputOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityPoint, position, kGPUUPBPDensityPointPositionOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityPoint, flags, kGPUUPBPDensityPointFlagsOffset);
@@ -259,6 +259,7 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, source_event_log_density, kGPUUPB
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, interval_distance, kGPUUPBPDensityBeamIntervalDistanceOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, flags, kGPUUPBPDensityBeamFlagsOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, event_buffer, kGPUUPBPDensityBeamEventBufferOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, event_index_offset, kGPUUPBPDensityBeamEventIndexOffsetOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBatch, surface_point_buffer, kGPUUPBPDensityBatchSurfacePointBufferOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBatch, surface_point_count, kGPUUPBPDensityBatchSurfacePointCountOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBatch, medium_point_buffer, kGPUUPBPDensityBatchMediumPointBufferOffset);
@@ -267,15 +268,12 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBatch, beam_buffer, kGPUUPBPDensityBatc
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBatch, beam_count, kGPUUPBPDensityBatchBeamCountOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBatch, beam_instance_offset, kGPUUPBPDensityBatchBeamInstanceOffsetOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBatch, selected_beam_count, kGPUUPBPDensityBatchSelectedBeamCountOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBatch, event_index_offset, kGPUUPBPDensityBatchEventIndexOffsetOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamReference, origin, kGPUUPBPBeamReferenceOriginOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamReference, length, kGPUUPBPBeamReferenceLengthOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamReference, direction, kGPUUPBPBeamReferenceDirectionOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamReference, path_length, kGPUUPBPBeamReferencePathLengthOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamReference, medium_index, kGPUUPBPBeamReferenceMediumIndexOffset);
-ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamGrid, minimum_inverse_cell_size, kGPUUPBPBeamGridMinimumInverseCellSizeOffset);
-ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamGrid, maximum_cell_size, kGPUUPBPBeamGridMaximumCellSizeOffset);
-ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamGrid, resolution_cell_count, kGPUUPBPBeamGridResolutionCellCountOffset);
-ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamGrid, buffers_entry_capacity, kGPUUPBPBeamGridBuffersEntryCapacityOffset);
 #undef ETX_ASSERT_GPU_UPBP_OFFSET
 
 static_assert(std::is_standard_layout_v<GPUWavefrontQueueHeader>, "GPUWavefrontQueueHeader must stay standard layout for GPU wavefront ABI");

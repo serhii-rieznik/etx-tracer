@@ -416,7 +416,7 @@ struct VKDevice::Impl {
 
   uint32_t find_memory_type(uint32_t type_filter, VkMemoryPropertyFlags properties);
   RHIResult allocate_memory(VkMemoryRequirements mem_requirements, VkMemoryPropertyFlags properties, VkMemoryAllocateFlags flags, VkDeviceMemory& out_memory);
-  RHIResult create_vulkan_buffer(const RHIBufferDesc& desc, VkBuffer& out_buffer, VkDeviceMemory& out_memory);
+  RHIResult create_vulkan_buffer(const RHIBufferDesc& desc, VkBuffer& out_buffer, VkDeviceMemory& out_memory, uint64_t& out_allocated_size);
   RHIResult create_vulkan_texture(const RHITextureDesc& desc, VkImage& out_image, VkDeviceMemory& out_memory);
   RHIResult create_vulkan_image_view(const RHITextureDesc& desc, VkImage image, VkImageView& out_view);
   RHIResult create_vulkan_sampler(const RHISamplerDesc& desc, VkSampler& out_sampler);
@@ -1148,7 +1148,8 @@ RHIResult VKDevice::Impl::allocate_memory(VkMemoryRequirements requirements, VkM
   return RHIResult::Success;
 }
 
-RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuffer& out_buffer, VkDeviceMemory& out_memory) {
+RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuffer& out_buffer, VkDeviceMemory& out_memory, uint64_t& out_allocated_size) {
+  out_allocated_size = 0u;
   VkBufferUsageFlags vk_usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
   using BufferUsage = std::underlying_type<RHIBufferUsage>::type;
   BufferUsage usage = static_cast<BufferUsage>(desc.usage);
@@ -1232,6 +1233,7 @@ RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuff
     return RHIResult::ValidationError;
   }
 
+  out_allocated_size = mem_requirements.size;
   return RHIResult::Success;
 }
 
@@ -2210,20 +2212,18 @@ RHICreateBindlessResult VKDevice::create_buffer(const RHIBufferDesc& desc) {
 
   VkBuffer vk_handle = VK_NULL_HANDLE;
   VkDeviceMemory vk_memory = VK_NULL_HANDLE;
-  RHIResult create_result = _impl->create_vulkan_buffer(desc, vk_handle, vk_memory);
+  uint64_t allocated_size = 0u;
+  RHIResult create_result = _impl->create_vulkan_buffer(desc, vk_handle, vk_memory, allocated_size);
   if (create_result != RHIResult::Success) {
     return {create_result, {}};
   }
-
-  VkMemoryRequirements mem_req = {};
-  vkGetBufferMemoryRequirements(_impl->device, vk_handle, &mem_req);
 
   uint32_t index = _impl->buffers.allocate_index();
   auto& buffer_data = _impl->buffers.get_data(index);
   buffer_data.buffer = vk_handle;
   buffer_data.memory = vk_memory;
   buffer_data.desc = desc;
-  buffer_data.allocated_size = mem_req.size;
+  buffer_data.allocated_size = allocated_size;
 
   // Register with bindless manager
   RHIBindlessHandle handle = {};
@@ -2234,8 +2234,8 @@ RHICreateBindlessResult VKDevice::create_buffer(const RHIBufferDesc& desc) {
     if (vk_memory != VK_NULL_HANDLE) {
       vkFreeMemory(_impl->device, vk_memory, nullptr);
       vk_memory = VK_NULL_HANDLE;
-      if (mem_req.size > 0u) {
-        _impl->gpu_allocated_bytes -= mem_req.size;
+      if (allocated_size > 0u) {
+        _impl->gpu_allocated_bytes -= allocated_size;
       }
     }
     if (vk_handle != VK_NULL_HANDLE) {
@@ -2252,14 +2252,14 @@ RHICreateBindlessResult VKDevice::create_buffer(const RHIBufferDesc& desc) {
 
   const bool acceleration_structure = (usage & static_cast<BufferUsage>(RHIBufferUsage::AccelerationStructureStorage)) != 0u;
   if (acceleration_structure) {
-    _impl->gpu_acceleration_structure_allocated_bytes += mem_req.size;
+    _impl->gpu_acceleration_structure_allocated_bytes += allocated_size;
     ++_impl->gpu_acceleration_structure_allocation_count;
   } else {
-    _impl->gpu_buffer_allocated_bytes += mem_req.size;
+    _impl->gpu_buffer_allocated_bytes += allocated_size;
     ++_impl->gpu_buffer_allocation_count;
   }
   if (desc.host_visible) {
-    _impl->gpu_host_visible_allocated_bytes += mem_req.size;
+    _impl->gpu_host_visible_allocated_bytes += allocated_size;
   }
 
   return {RHIResult::Success, handle};
@@ -2795,6 +2795,7 @@ RHIResult VKDevice::update_buffer(RHIBindlessHandle buffer_handle, const void* d
 
   VkBuffer staging_handle = VK_NULL_HANDLE;
   VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+  uint64_t staging_allocated_size = 0u;
 
   if (use_persistent_staging) {
     staging_handle = _impl->staging_buffer.buffer;
@@ -2810,7 +2811,7 @@ RHIResult VKDevice::update_buffer(RHIBindlessHandle buffer_handle, const void* d
     staging_desc.usage = RHIBufferUsage::TransferSrc;
     staging_desc.host_visible = true;
 
-    RHIResult create_result = _impl->create_vulkan_buffer(staging_desc, staging_handle, staging_memory);
+    RHIResult create_result = _impl->create_vulkan_buffer(staging_desc, staging_handle, staging_memory, staging_allocated_size);
     if (create_result != RHIResult::Success) {
       log::error("Failed to create transient staging buffer");
       return create_result;
@@ -2818,6 +2819,7 @@ RHIResult VKDevice::update_buffer(RHIBindlessHandle buffer_handle, const void* d
 
     void* mapped_ptr = nullptr;
     if (etx_vk_call(vkMapMemory(_impl->device, staging_memory, 0, VK_WHOLE_SIZE, 0, &mapped_ptr)) != VK_SUCCESS) {
+      _impl->gpu_allocated_bytes -= staging_allocated_size;
       vkFreeMemory(_impl->device, staging_memory, nullptr);
       vkDestroyBuffer(_impl->device, staging_handle, nullptr);
       return RHIResult::ValidationError;
@@ -2835,6 +2837,7 @@ RHIResult VKDevice::update_buffer(RHIBindlessHandle buffer_handle, const void* d
   });
 
   if (!use_persistent_staging) {
+    _impl->gpu_allocated_bytes -= staging_allocated_size;
     vkFreeMemory(_impl->device, staging_memory, nullptr);
     vkDestroyBuffer(_impl->device, staging_handle, nullptr);
   }
@@ -2963,6 +2966,7 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
 
   VkBuffer staging_handle = VK_NULL_HANDLE;
   VkDeviceMemory staging_memory = VK_NULL_HANDLE;
+  uint64_t staging_allocated_size = 0u;
 
   if (use_persistent_staging) {
     staging_handle = _impl->staging_buffer.buffer;
@@ -2978,7 +2982,7 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
     staging_desc.usage = RHIBufferUsage::TransferSrc;
     staging_desc.host_visible = true;
 
-    RHIResult create_result = _impl->create_vulkan_buffer(staging_desc, staging_handle, staging_memory);
+    RHIResult create_result = _impl->create_vulkan_buffer(staging_desc, staging_handle, staging_memory, staging_allocated_size);
     if (create_result != RHIResult::Success) {
       log::error("Failed to create transient staging buffer for texture");
       return create_result;
@@ -2986,6 +2990,7 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
 
     void* mapped_ptr = nullptr;
     if (etx_vk_call(vkMapMemory(_impl->device, staging_memory, 0, VK_WHOLE_SIZE, 0, &mapped_ptr)) != VK_SUCCESS) {
+      _impl->gpu_allocated_bytes -= staging_allocated_size;
       vkFreeMemory(_impl->device, staging_memory, nullptr);
       vkDestroyBuffer(_impl->device, staging_handle, nullptr);
       return RHIResult::ValidationError;
@@ -3034,6 +3039,7 @@ RHIResult VKDevice::update_texture(RHIBindlessHandle texture_handle, const void*
   });
 
   if (!use_persistent_staging) {
+    _impl->gpu_allocated_bytes -= staging_allocated_size;
     vkFreeMemory(_impl->device, staging_memory, nullptr);
     vkDestroyBuffer(_impl->device, staging_handle, nullptr);
   }

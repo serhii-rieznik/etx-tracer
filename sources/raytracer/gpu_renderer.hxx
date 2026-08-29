@@ -83,8 +83,7 @@ struct GPURaytracingRenderer : public Renderer {
     UPBPDirectHit = 59u,
     UPBPValidate = 60u,
     UPBPBeamInstances = 61u,
-    UPBPBeamGrid = 62u,
-    Count = 63u,
+    Count = 62u,
   };
 
   GPURaytracingRenderer(TaskScheduler&);
@@ -294,16 +293,13 @@ struct GPURaytracingRenderer : public Renderer {
     UPBPBuffer density_medium_point_buffer = {};
     UPBPBuffer density_medium_point_aabb_buffer = {};
     UPBPBuffer density_beam_buffer = {};
+    UPBPBuffer density_event_buffer = {};
     UPBPBuffer density_surface_point_instance_buffer = {};
     UPBPBuffer density_medium_point_instance_buffer = {};
+    UPBPBuffer density_bp2d_beam_instance_buffer = {};
     UPBPBuffer density_bb1d_beam_instance_buffer = {};
     UPBPBuffer density_bb1d_beam_buffer = {};
     UPBPBuffer density_beam_reference_buffer = {};
-    UPBPBuffer density_bp2d_grid_buffer = {};
-    UPBPBuffer density_bp2d_grid_cell_offsets_buffer = {};
-    UPBPBuffer density_bp2d_grid_cell_cursors_buffer = {};
-    UPBPBuffer density_bp2d_grid_entry_buffer = {};
-    UPBPBuffer density_bp2d_grid_readback_buffer = {};
     UPBPBuffer density_beam_unit_aabb_buffer = {};
     UPBPBuffer density_as_scratch_buffer = {};
     UPBPBuffer counter_buffer = {};
@@ -316,12 +312,21 @@ struct GPURaytracingRenderer : public Renderer {
     std::array<RHIBindlessHandle, kGPUUPBPSurfacePartitionCount> density_surface_point_blas = {};
     RHIBindlessHandle density_medium_point_blas = {};
     RHIBindlessHandle density_beam_unit_blas = {};
+    std::vector<RHIBindlessHandle> density_bp2d_beam_tlas = {};
     std::array<RHIBindlessHandle, kGPUUPBPBB1DPartitionCount> density_bb1d_beam_tlas = {};
+    uint32_t density_surface_point_tlas_capacity = 0u;
+    uint32_t density_medium_point_tlas_capacity = 0u;
+    std::array<uint32_t, kGPUUPBPSurfacePartitionCount> density_surface_point_blas_capacities = {};
+    uint32_t density_medium_point_blas_capacity = 0u;
+    std::vector<uint32_t> density_bp2d_beam_tlas_capacities = {};
+    std::array<uint32_t, kGPUUPBPBB1DPartitionCount> density_bb1d_beam_tlas_capacities = {};
     uint32_t resident_light_path_capacity = 0u;
     uint32_t resident_camera_path_capacity = 0u;
     uint32_t density_surface_point_count = 0u;
     uint32_t density_medium_point_count = 0u;
     uint32_t density_beam_count = 0u;
+    uint32_t density_bb1d_beam_count = 0u;
+    uint32_t density_batch_count = 0u;
     uint32_t maximum_path_length = 0u;
     uint32_t maximum_boundary_count = 0u;
     uint32_t technique_mask = 0u;
@@ -339,7 +344,6 @@ struct GPURaytracingRenderer : public Renderer {
     bool density_cache_ready = false;
     bool camera_phase_started = false;
     RHIResourceState counter_readback_state = RHIResourceState::Undefined;
-    RHIResourceState density_bp2d_grid_readback_state = RHIResourceState::Undefined;
     RHIResourceState bpt_light_vertex_state = RHIResourceState::Undefined;
     RHIResourceState bpt_light_path_state_state = RHIResourceState::Undefined;
   };
@@ -348,6 +352,7 @@ struct GPURaytracingRenderer : public Renderer {
   void destroy_wavefront_buffers(RHIContext& ctx);
   void destroy_upbp_buffers(RHIDevice& device);
   void destroy_upbp_density_cache(RHIDevice& device);
+  void reset_upbp_density_cache();
   void destroy_blue_noise_buffer(RHIContext& ctx);
   bool update_blue_noise_buffer(RHIContext& ctx, const SceneRepresentation& scene);
   void destroy_acceleration_structures(RHIContext& ctx);

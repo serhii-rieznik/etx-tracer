@@ -26,6 +26,9 @@ void CPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (scene_update_scope != SceneUpdateScope::None) {
     _integrator_thread.request_scene_check(scene_update_scope);
   }
+  if (_output_dimensions != _raytracing.film().base_dimensions()) {
+    _integrator_thread.commit_scene_changes();
+  }
 
   const bool preview_iteration_completed = _preview_active ? _integrator_thread.update_integrator() : false;
   if (_preview_active == false) {
@@ -302,11 +305,11 @@ bool CPURaytracingRenderer::update_image(RHIContext& ctx, RHICommandBuffer cmd, 
     return false;
   }
 
-  const uint64_t output_pixel_count = static_cast<uint64_t>(_output_dimensions.x) * static_cast<uint64_t>(_output_dimensions.y);
-  if (output_pixel_count != _raytracing.film().total_pixel_count()) {
+  if (_output_dimensions != _raytracing.film().base_dimensions()) {
     log::error("CPU renderer output dimensions do not match the film dimensions");
     return false;
   }
+  const uint64_t output_pixel_count = static_cast<uint64_t>(_output_dimensions.x) * static_cast<uint64_t>(_output_dimensions.y);
 
   std::vector<float4> black_image;
 

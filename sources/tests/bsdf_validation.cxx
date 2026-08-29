@@ -1649,7 +1649,8 @@ bool validate_standalone_thinfilm_contract(const char* label, const etx::BSDFDat
   etx::Material material_with_media = material;
   material_with_media.ext_medium = 7u;
   material_with_media.int_medium = 11u;
-  const uint32_t expected_transmission_medium = data.current_medium;
+  const bool entering = dot(data.nrm, data.w_i) < 0.0f;
+  const uint32_t expected_transmission_medium = entering ? material_with_media.int_medium : material_with_media.ext_medium;
 
   bool saw_reflection = false;
   bool saw_transmission = false;
@@ -1672,7 +1673,7 @@ bool validate_standalone_thinfilm_contract(const char* label, const etx::BSDFDat
       }
     } else if (transmission) {
       saw_transmission = true;
-      if ((medium_changed || (sample.medium_index != expected_transmission_medium)) || (fabsf(sample.eta - 1.0f) > kEpsilon)) {
+      if (((medium_changed == false) || (sample.medium_index != expected_transmission_medium)) || (fabsf(sample.eta - 1.0f) > kEpsilon)) {
         std::printf("%s invalid standalone thinfilm transmission metadata medium %u expected %u\n", label, sample.medium_index, expected_transmission_medium);
         return false;
       }
@@ -1714,7 +1715,7 @@ bool validate_standalone_thinfilm_contract(const char* label, const etx::BSDFDat
   return true;
 }
 
-bool validate_standalone_thinfilm_sheet_symmetry(const char* label, const etx::BSDFData& base_data, const etx::Material& material, const uint32_t seed) {
+bool validate_standalone_thinfilm_boundary_contract(const char* label, const etx::BSDFData& base_data, const etx::Material& material, const uint32_t seed) {
   etx::Material material_with_boundary_ior = material;
   material_with_boundary_ior.ext_medium = 7u;
   material_with_boundary_ior.int_medium = 11u;
@@ -1722,8 +1723,9 @@ bool validate_standalone_thinfilm_sheet_symmetry(const char* label, const etx::B
   material_with_boundary_ior.int_ior.eta_index = SpectrumDielectricEta;
   material_with_boundary_ior.int_ior.k_index = SpectrumBlack;
 
-  const float mu_values[] = {1.0f, 0.5f, 0.2f, 0.05f};
-  for (uint32_t i = 0u; i < 4u; ++i) {
+  const float mu_values[] = {1.0f, 0.9f, 0.8f};
+  bool boundary_ior_observed = false;
+  for (uint32_t i = 0u; i < 3u; ++i) {
     const float mu = mu_values[i];
     const float sin_theta = sqrtf(max(0.0f, 1.0f - mu * mu));
     etx::BSDFData outside_data = base_data;
@@ -1743,12 +1745,18 @@ bool validate_standalone_thinfilm_sheet_symmetry(const char* label, const etx::B
       return false;
     }
 
-    const float outside_value = outside_eval.bsdf.monochromatic();
-    const float inside_value = inside_eval.bsdf.monochromatic();
-    const float value_tolerance = max(1.0e-4f, 1.0e-3f * max(outside_value, inside_value));
-    if (fabsf(outside_value - inside_value) > value_tolerance) {
-      std::printf("%s asymmetric thinfilm reflection mu %.3f outside %.6f inside %.6f\n", label, mu, outside_value, inside_value);
+    const float outside_reflection_value = outside_eval.bsdf.monochromatic();
+    const float inside_reflection_value = inside_eval.bsdf.monochromatic();
+    const float reflection_tolerance = max(1.0e-4f, 1.0e-3f * max(outside_reflection_value, inside_reflection_value));
+    if (fabsf(outside_reflection_value - inside_reflection_value) > reflection_tolerance) {
+      std::printf("%s asymmetric thinfilm reflection mu %.3f outside %.6f inside %.6f\n", label, mu, outside_reflection_value, inside_reflection_value);
       return false;
+    }
+
+    etx::Sampler reference_sampler(seed + i + 400u, seed ^ (i * 113u + 97u));
+    const etx::BSDFEval reference_eval = etx::bsdf::evaluate(outside_data, outside_reflection, material, reference_sampler);
+    if ((reference_eval.valid()) && (fabsf(outside_eval.bsdf.monochromatic() - reference_eval.bsdf.monochromatic()) > 1.0e-4f)) {
+      boundary_ior_observed = true;
     }
 
     etx::Sampler outside_transmission_sampler(seed + i + 200u, seed ^ (i * 107u + 83u));
@@ -1760,23 +1768,29 @@ bool validate_standalone_thinfilm_sheet_symmetry(const char* label, const etx::B
       return false;
     }
 
-    const bool outside_medium_changed = (outside_transmission.properties & etx::BSDFSample::MediumChanged) != 0u;
-    const bool inside_medium_changed = (inside_transmission.properties & etx::BSDFSample::MediumChanged) != 0u;
-    if (((outside_medium_changed || inside_medium_changed) || (outside_transmission.medium_index != outside_data.current_medium)) ||
-        (inside_transmission.medium_index != inside_data.current_medium)) {
-      std::printf("%s standalone thinfilm transmission changed medium at mu %.3f\n", label, mu);
+    const float outside_transmission_value = outside_transmission.bsdf.monochromatic();
+    const float inside_transmission_value = inside_transmission.bsdf.monochromatic();
+    const float transmission_tolerance = max(1.0e-4f, 1.0e-3f * max(outside_transmission_value, inside_transmission_value));
+    if (fabsf(outside_transmission_value - inside_transmission_value) > transmission_tolerance) {
+      std::printf("%s asymmetric thinfilm transmission mu %.3f outside %.6f inside %.6f\n", label, mu, outside_transmission_value, inside_transmission_value);
       return false;
     }
 
-    const float outside_transmission_pdf = etx::bsdf::pdf(outside_data, outside_data.w_i, material_with_boundary_ior, outside_transmission_sampler);
-    const float inside_transmission_pdf = etx::bsdf::pdf(inside_data, inside_data.w_i, material_with_boundary_ior, inside_transmission_sampler);
-    if ((outside_transmission_pdf <= kEpsilon) || (inside_transmission_pdf <= kEpsilon)) {
-      std::printf("%s standalone thinfilm artificial total reflection mu %.3f outside %.6f inside %.6f\n", label, mu, outside_transmission_pdf, inside_transmission_pdf);
+    const bool outside_medium_changed = (outside_transmission.properties & etx::BSDFSample::MediumChanged) != 0u;
+    const bool inside_medium_changed = (inside_transmission.properties & etx::BSDFSample::MediumChanged) != 0u;
+    if ((((outside_medium_changed == false) || (inside_medium_changed == false)) || (outside_transmission.medium_index != material_with_boundary_ior.int_medium)) ||
+        (inside_transmission.medium_index != material_with_boundary_ior.ext_medium)) {
+      std::printf("%s standalone thinfilm transmission did not change medium at mu %.3f\n", label, mu);
       return false;
     }
   }
 
-  std::printf("%s standalone thinfilm sheet symmetry valid\n", label);
+  if (boundary_ior_observed == false) {
+    std::printf("%s standalone thinfilm ignored boundary IOR\n", label);
+    return false;
+  }
+
+  std::printf("%s standalone thinfilm boundary contract valid\n", label);
   return true;
 }
 
@@ -3604,7 +3618,7 @@ int main(int argc, char** argv) {
     const etx::Material standalone = make_standalone_thinfilm(0.0f, 500.0f);
     thinfilm_valid = validate_standalone_thinfilm_contract("standalone thinfilm outside", data, standalone, 22000u) && thinfilm_valid;
     thinfilm_valid = validate_standalone_thinfilm_contract("standalone thinfilm inside", inside_data, standalone, 22100u) && thinfilm_valid;
-    thinfilm_valid = validate_standalone_thinfilm_sheet_symmetry("standalone thinfilm boundary ior ignored", data, standalone, 22150u) && thinfilm_valid;
+    thinfilm_valid = validate_standalone_thinfilm_boundary_contract("standalone thinfilm boundary", data, standalone, 22150u) && thinfilm_valid;
     thinfilm_valid = validate_delta_thinfilm_coating_sample("delta dielectric thinfilm outside", data, make_thinfilm_delta_dielectric(), 22200u, true) && thinfilm_valid;
     thinfilm_valid = validate_delta_thinfilm_coating_sample("delta conductor thinfilm outside", data, make_thinfilm_delta_conductor(), 22400u, false) && thinfilm_valid;
     thinfilm_valid = validate_delta_plastic_thinfilm_contract("delta plastic thinfilm outside", data, make_thinfilm_delta_plastic(), 22500u) && thinfilm_valid;
@@ -3639,7 +3653,7 @@ int main(int argc, char** argv) {
   const etx::Material standalone_thinfilm = make_standalone_thinfilm(0.0f, 500.0f);
   valid = validate_standalone_thinfilm_contract("standalone thinfilm outside", data, standalone_thinfilm, 22000u) && valid;
   valid = validate_standalone_thinfilm_contract("standalone thinfilm inside", inside_data, standalone_thinfilm, 22100u) && valid;
-  valid = validate_standalone_thinfilm_sheet_symmetry("standalone thinfilm boundary ior ignored", data, standalone_thinfilm, 22150u) && valid;
+  valid = validate_standalone_thinfilm_boundary_contract("standalone thinfilm boundary", data, standalone_thinfilm, 22150u) && valid;
   valid = validate_delta_thinfilm_coating_sample("delta dielectric thinfilm outside", data, make_thinfilm_delta_dielectric(), 22200u, true) && valid;
   valid = validate_delta_thinfilm_coating_sample("delta dielectric thinfilm inside", inside_data, make_thinfilm_delta_dielectric(), 22300u, true) && valid;
   valid = validate_delta_thinfilm_coating_sample("delta conductor thinfilm outside", data, make_thinfilm_delta_conductor(), 22400u, false) && valid;

@@ -143,7 +143,6 @@ GPUUPBPResources upbp_load_resources(GPUWavefrontResources wavefront_resources) 
   result.density_beam_acceleration_structure_reference_high = buffer.Load(kGPUUPBPResourcesDensityBeamAccelerationStructureReferenceHighOffset);
   result.light_path_state_capacity = buffer.Load(kGPUUPBPResourcesLightPathStateCapacityOffset);
   result.camera_path_state_capacity = buffer.Load(kGPUUPBPResourcesCameraPathStateCapacityOffset);
-  result.bp2d_grid_buffer = buffer.Load(kGPUUPBPResourcesBP2DGridBufferOffset);
   result.bb1d_beam_buffer = buffer.Load(kGPUUPBPResourcesBB1DBeamBufferOffset);
   result.beam_acceleration_structure = buffer.Load(kGPUUPBPResourcesBeamAccelerationStructureOffset);
   result.density_output_bb1d_beam_instance_buffer = buffer.Load(kGPUUPBPResourcesDensityOutputBB1DBeamInstanceBufferOffset);
@@ -166,24 +165,23 @@ GPUUPBPResources upbp_load_resources(GPUWavefrontResources wavefront_resources) 
   result.beam_reference_buffer = buffer.Load(kGPUUPBPResourcesBeamReferenceBufferOffset);
   result.bpt_light_vertex_buffer = buffer.Load(kGPUUPBPResourcesBPTLightVertexBufferOffset);
   result.bpt_light_path_state_buffer = buffer.Load(kGPUUPBPResourcesBPTLightPathStateBufferOffset);
-  [unroll] for (uint partition_index = 1u; partition_index < kGPUUPBPBB1DPartitionCount; ++partition_index) {
-    result.bb1d_partition_acceleration_structures[partition_index - 1u] =
-      buffer.Load(kGPUUPBPResourcesBB1DPartitionAccelerationStructuresOffset + (partition_index - 1u) * sizeof(uint));
-  }
   return result;
 }
 
-GPUUPBPBeamGrid upbp_load_bp2d_grid(GPUUPBPResources resources) {
-  GPUUPBPBeamGrid result = (GPUUPBPBeamGrid)0;
-  if (resources.bp2d_grid_buffer == kInvalidIndex) {
-    return result;
+uint upbp_load_bb1d_partition_acceleration_structure(GPUWavefrontResources wavefront_resources, uint partition_index) {
+  if ((wavefront_resources.upbp_resources_buffer == kInvalidIndex) || (partition_index >= kGPUUPBPBB1DPartitionCount)) {
+    return kInvalidIndex;
   }
-  ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(resources.bp2d_grid_buffer);
-  result.minimum_inverse_cell_size = asfloat(buffer.Load4(kGPUUPBPBeamGridMinimumInverseCellSizeOffset));
-  result.maximum_cell_size = asfloat(buffer.Load4(kGPUUPBPBeamGridMaximumCellSizeOffset));
-  result.resolution_cell_count = buffer.Load4(kGPUUPBPBeamGridResolutionCellCountOffset);
-  result.buffers_entry_capacity = buffer.Load4(kGPUUPBPBeamGridBuffersEntryCapacityOffset);
-  return result;
+  ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(wavefront_resources.upbp_resources_buffer);
+  return partition_index == 0u ? buffer.Load(kGPUUPBPResourcesBeamAccelerationStructureOffset)
+                               : buffer.Load(kGPUUPBPResourcesBB1DPartitionAccelerationStructuresOffset + (partition_index - 1u) * sizeof(uint));
+}
+
+uint upbp_load_bp2d_partition_acceleration_structure(GPUWavefrontResources wavefront_resources, uint partition_index) {
+  if ((wavefront_resources.upbp_resources_buffer == kInvalidIndex) || (partition_index >= kGPUUPBPBP2DPartitionCount)) {
+    return kInvalidIndex;
+  }
+  return WAVEFRONT_RO_BUFFER(wavefront_resources.upbp_resources_buffer).Load(kGPUUPBPResourcesBP2DBeamAccelerationStructuresOffset + partition_index * sizeof(uint));
 }
 
 GPUUPBPVertex upbp_load_vertex(uint descriptor_index, uint index) {
@@ -595,6 +593,7 @@ GPUUPBPDensityBeam upbp_load_density_beam(uint descriptor_index, uint index) {
   result.interval_distance = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamIntervalDistanceOffset));
   result.flags = buffer.Load(base_offset + kGPUUPBPDensityBeamFlagsOffset);
   result.event_buffer = buffer.Load(base_offset + kGPUUPBPDensityBeamEventBufferOffset);
+  result.event_index_offset = buffer.Load(base_offset + kGPUUPBPDensityBeamEventIndexOffsetOffset);
   return result;
 }
 
@@ -615,6 +614,7 @@ void upbp_store_density_beam(uint descriptor_index, uint index, GPUUPBPDensityBe
   buffer.Store(base_offset + kGPUUPBPDensityBeamIntervalDistanceOffset, asuint(value.interval_distance));
   buffer.Store(base_offset + kGPUUPBPDensityBeamFlagsOffset, value.flags);
   buffer.Store(base_offset + kGPUUPBPDensityBeamEventBufferOffset, value.event_buffer);
+  buffer.Store(base_offset + kGPUUPBPDensityBeamEventIndexOffsetOffset, value.event_index_offset);
 }
 
 GPUUPBPDensityBatch upbp_load_density_batch(uint descriptor_index, uint index) {
@@ -629,6 +629,7 @@ GPUUPBPDensityBatch upbp_load_density_batch(uint descriptor_index, uint index) {
   result.beam_count = buffer.Load(base_offset + kGPUUPBPDensityBatchBeamCountOffset);
   result.beam_instance_offset = buffer.Load(base_offset + kGPUUPBPDensityBatchBeamInstanceOffsetOffset);
   result.selected_beam_count = buffer.Load(base_offset + kGPUUPBPDensityBatchSelectedBeamCountOffset);
+  result.event_index_offset = buffer.Load(base_offset + kGPUUPBPDensityBatchEventIndexOffsetOffset);
   return result;
 }
 

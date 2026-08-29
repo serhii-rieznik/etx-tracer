@@ -2,8 +2,11 @@
 
 #include "gpu_wavefront_shared.hxx"
 
-ETX_STATIC_CONST uint32_t kGPUUPBPBB1DPartitionCount = 8u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBB1DPartitionCount = 64u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBP2DPartitionCount = 32u;
 ETX_STATIC_CONST uint32_t kGPUUPBPSurfacePartitionCount = 8u;
+ETX_STATIC_ASSERT((kGPUUPBPBB1DPartitionCount > 0u) && (kGPUUPBPBB1DPartitionCount <= 64u), "GPU UPBP BB1D partitions must fit one shader thread group");
+ETX_STATIC_ASSERT((kGPUUPBPBP2DPartitionCount > 0u) && (kGPUUPBPBP2DPartitionCount <= 64u), "GPU UPBP BP2D partitions must fit one shader thread group");
 
 struct GPUUPBPTechnique {
   enum : uint32_t {
@@ -150,6 +153,7 @@ struct GPUUPBPPathFailure {
     SubsurfaceTracking = 12u,
     SubsurfaceExitMaterialMismatch = 13u,
     InvalidSubsurfaceExitDistance = 14u,
+    NonFiniteDensityContribution = 15u,
   };
 };
 
@@ -162,7 +166,6 @@ struct GPUUPBPOverflowFlags {
     Point = 1u << 4u,
     Beam = 1u << 5u,
     BeamInstance = 1u << 6u,
-    BeamGrid = 1u << 7u,
   };
 };
 
@@ -420,7 +423,8 @@ struct ETX_ALIGNED GPUUPBPDensityBeam {
   float interval_distance ETX_INIT(0.0f);
   uint32_t flags ETX_INIT(0u);
   uint32_t event_buffer ETX_INIT(kInvalidIndex);
-  uint32_t reserved0[2u] ETX_INIT({});
+  uint32_t event_index_offset ETX_INIT(0u);
+  uint32_t reserved0 ETX_INIT(0u);
 };
 
 struct GPUUPBPDensityBatch {
@@ -432,6 +436,8 @@ struct GPUUPBPDensityBatch {
   uint32_t beam_count ETX_INIT(0u);
   uint32_t beam_instance_offset ETX_INIT(0u);
   uint32_t selected_beam_count ETX_INIT(0u);
+  uint32_t event_index_offset ETX_INIT(0u);
+  uint32_t reserved0 ETX_INIT(0u);
 };
 
 struct GPUUPBPBeamReference {
@@ -440,13 +446,6 @@ struct GPUUPBPBeamReference {
   float3 direction ETX_INIT({});
   uint32_t path_length ETX_INIT(0u);
   uint32_t medium_index ETX_INIT(kInvalidIndex);
-};
-
-struct GPUUPBPBeamGrid {
-  float4 minimum_inverse_cell_size ETX_INIT({});
-  float4 maximum_cell_size ETX_INIT({});
-  uint4 resolution_cell_count ETX_INIT({});
-  uint4 buffers_entry_capacity ETX_INIT({});
 };
 
 struct ETX_ALIGNED GPUUPBPIteration {
@@ -501,7 +500,7 @@ struct ETX_ALIGNED GPUUPBPResources {
   uint32_t density_beam_acceleration_structure_reference_high ETX_INIT(0u);
   uint32_t light_path_state_capacity ETX_INIT(0u);
   uint32_t camera_path_state_capacity ETX_INIT(0u);
-  uint32_t bp2d_grid_buffer ETX_INIT(kInvalidIndex);
+  uint32_t reserved0 ETX_INIT(0u);
   uint32_t bb1d_beam_buffer ETX_INIT(kInvalidIndex);
   uint32_t beam_acceleration_structure ETX_INIT(kInvalidIndex);
   uint32_t density_output_bb1d_beam_instance_buffer ETX_INIT(kInvalidIndex);
@@ -525,4 +524,5 @@ struct ETX_ALIGNED GPUUPBPResources {
   uint32_t bpt_light_vertex_buffer ETX_INIT(kInvalidIndex);
   uint32_t bpt_light_path_state_buffer ETX_INIT(kInvalidIndex);
   uint32_t bb1d_partition_acceleration_structures[kGPUUPBPBB1DPartitionCount - 1u] ETX_INIT({});
+  uint32_t bp2d_beam_acceleration_structures[kGPUUPBPBP2DPartitionCount] ETX_INIT({});
 };

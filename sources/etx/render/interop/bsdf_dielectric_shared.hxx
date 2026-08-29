@@ -124,18 +124,8 @@ ETX_SHARED_INLINE BSDFThinfilmInterface bsdf_thinfilm_interface(ETX_IN(BSDFResou
   }
 
   const bool entering = local_frame_entering_material(result.frame);
-  const RefractiveIndexSample material_ext_ior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, data.spectrum_sample);
-  const RefractiveIndexSample material_int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
-  const bool standalone_sheet = material.cls == MaterialClass::Thinfilm;
-  RefractiveIndexSample phase_ext_ior = material_ext_ior;
-  RefractiveIndexSample phase_int_ior = material_ext_ior;
-  if (standalone_sheet == false) {
-    phase_int_ior = material_int_ior;
-    if (entering == false) {
-      phase_ext_ior = material_int_ior;
-      phase_int_ior = material_ext_ior;
-    }
-  }
+  const RefractiveIndexSample phase_ext_ior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, data.spectrum_sample);
+  const RefractiveIndexSample phase_int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
   const ThinfilmEval thinfilm = bsdf_resource_evaluate_thinfilm(context, data.spectrum_sample, material.thinfilm, data.tex, sampler);
   const SpectralResponse fresnel = bsdf_fresnel_calculate(data.spectrum_sample, local_w_i.z, phase_ext_ior, phase_int_ior, thinfilm);
   const SpectralResponse one_minus_fresnel = spectral_response_sub(spectral_response_make(data.spectrum_sample, 1.0f), fresnel);
@@ -143,8 +133,8 @@ ETX_SHARED_INLINE BSDFThinfilmInterface bsdf_thinfilm_interface(ETX_IN(BSDFResou
   result.transmission = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex), one_minus_fresnel);
   result.reflection_probability = min(1.0f, max(0.0f, spectral_response_monochromatic(fresnel)));
   result.transmission_probability = max(0.0f, 1.0f - result.reflection_probability);
-  result.transmission_medium = standalone_sheet ? data.current_medium : (entering ? material.int_medium : material.ext_medium);
-  result.medium_changed = standalone_sheet == false;
+  result.transmission_medium = entering ? material.int_medium : material.ext_medium;
+  result.medium_changed = true;
   return result;
 }
 
