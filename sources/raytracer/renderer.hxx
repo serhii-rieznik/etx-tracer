@@ -83,6 +83,43 @@ enum class RendererPathPhase : uint32_t {
   Camera,
 };
 
+enum class RendererUPBPPhase : uint32_t {
+  None,
+  LightPaths,
+  LightCompaction,
+  DensityIndex,
+  CameraPaths,
+  CameraEvaluation,
+  Finalize,
+};
+
+struct RendererUPBPStatus {
+  RendererUPBPPhase phase = RendererUPBPPhase::None;
+  uint32_t current_light_batch = 0u;
+  uint32_t total_light_batches = 0u;
+  uint32_t current_camera_batch = 0u;
+  uint32_t total_camera_batches = 0u;
+  uint32_t active_path_count = 0u;
+  uint32_t resident_path_count = 0u;
+  uint32_t global_path_count = 0u;
+  uint32_t density_batch_count = 0u;
+  uint64_t surface_point_count = 0u;
+  uint64_t medium_point_count = 0u;
+  uint64_t tracking_event_count = 0u;
+  uint64_t tracking_event_bytes = 0u;
+  uint64_t bp2d_beam_count = 0u;
+  uint64_t bb1d_beam_count = 0u;
+  uint32_t bp2d_partition_count = 0u;
+  uint32_t bb1d_partition_count = 0u;
+  uint64_t gpu_memory_used_bytes = 0u;
+  uint64_t gpu_memory_budget_bytes = 0u;
+  bool density_cache_ready = false;
+
+  bool active() const {
+    return phase != RendererUPBPPhase::None;
+  }
+};
+
 struct RendererStatus {
   RendererMode mode = RendererMode::CPURaytracing;
   RendererStatusState state = RendererStatusState::Unavailable;
@@ -96,6 +133,7 @@ struct RendererStatus {
   double remaining_seconds = 0.0;
   bool elapsed_available = false;
   bool remaining_available = false;
+  RendererUPBPStatus upbp = {};
 };
 
 enum class RendererMemoryLocation : uint32_t {

@@ -2131,6 +2131,72 @@ RendererStatus GPURaytracingRenderer::status() const {
   result.progress_kind = RendererProgressKind::Samples;
   result.completed_units = _sample_index;
   result.total_units = _last_target_samples;
+  const bool upbp_running = (static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::UPBP) &&
+                            ((result.state == RendererStatusState::Running) || (result.state == RendererStatusState::Finishing)) && _upbp.vertex_buffer.handle.valid();
+  if (upbp_running) {
+    RendererUPBPStatus& upbp = result.upbp;
+    if (_wavefront_render_step == WavefrontRenderStep::FinalizeSample) {
+      upbp.phase = RendererUPBPPhase::Finalize;
+    } else if (_upbp.camera_phase_started) {
+      upbp.phase = (_wavefront_render_step == WavefrontRenderStep::UPBPEvaluateLightBatch) ? RendererUPBPPhase::CameraEvaluation : RendererUPBPPhase::CameraPaths;
+    } else if (_wavefront_render_step == WavefrontRenderStep::UPBPEvaluateLightBatch) {
+      const bool final_density_batch = (_upbp.density_cache_ready == false) && ((_upbp.light_batch_iteration + 1u) >= _upbp.light_batch_count_total);
+      upbp.phase = final_density_batch ? RendererUPBPPhase::DensityIndex : RendererUPBPPhase::LightCompaction;
+    } else {
+      upbp.phase = RendererUPBPPhase::LightPaths;
+    }
+
+    upbp.total_light_batches = _upbp.light_batch_count_total;
+    upbp.current_light_batch = upbp.total_light_batches > 0u ? std::min(_upbp.light_batch_iteration + 1u, upbp.total_light_batches) : 0u;
+    upbp.total_camera_batches = _upbp.camera_batch_count_total;
+    upbp.current_camera_batch = upbp.total_camera_batches > 0u ? std::min(_upbp.camera_batch_index + 1u, upbp.total_camera_batches) : 0u;
+    upbp.active_path_count = _upbp.camera_phase_started ? _upbp.camera_batch_count : _upbp.light_batch_count;
+    upbp.resident_path_count = std::max(_upbp.resident_light_path_capacity, _upbp.resident_camera_path_capacity);
+    upbp.global_path_count = _upbp.global_path_count;
+    upbp.density_batch_count = _upbp.density_batch_count;
+    upbp.density_cache_ready = _upbp.density_cache_ready;
+    const uint32_t density_batch_count = std::min<uint32_t>(_upbp.density_batch_count, static_cast<uint32_t>(_upbp.density_batches.size()));
+    for (uint32_t batch_index = 0u; batch_index < density_batch_count; ++batch_index) {
+      const UPBPDensityBatchResources& batch = _upbp.density_batches[batch_index];
+      upbp.tracking_event_count += batch.event_count;
+      upbp.tracking_event_bytes += static_cast<uint64_t>(batch.event_count) * kGPUUPBPTrackingEventStride;
+    }
+
+    if (_upbp.density_cache_ready) {
+      upbp.surface_point_count = _upbp.density_surface_point_count;
+      upbp.medium_point_count = _upbp.density_medium_point_count;
+      upbp.bp2d_beam_count = _upbp.density_beam_count;
+      upbp.bb1d_beam_count = _upbp.density_bb1d_beam_count;
+    } else {
+      for (uint32_t batch_index = 0u; batch_index < density_batch_count; ++batch_index) {
+        const UPBPDensityBatchResources& batch = _upbp.density_batches[batch_index];
+        upbp.surface_point_count += batch.surface_point_count;
+        upbp.medium_point_count += batch.medium_point_count;
+        upbp.bp2d_beam_count += batch.beam_count;
+        upbp.bb1d_beam_count += batch.selected_beam_count;
+      }
+    }
+    upbp.bp2d_partition_count = static_cast<uint32_t>(_upbp.density_bp2d_beam_tlas.size());
+    for (const RHIBindlessHandle partition : _upbp.density_bb1d_beam_tlas) {
+      upbp.bb1d_partition_count += partition.valid() ? 1u : 0u;
+    }
+    upbp.gpu_memory_used_bytes = _last_memory_stats.gpu_device_local_allocated_bytes;
+    upbp.gpu_memory_budget_bytes = _last_memory_stats.gpu_device_local_budget_bytes;
+
+    if ((upbp.phase == RendererUPBPPhase::CameraPaths) || (upbp.phase == RendererUPBPPhase::CameraEvaluation)) {
+      result.path_phase = RendererPathPhase::Camera;
+      result.completed_path_count = std::min<uint64_t>(_upbp.camera_batch_offset, _upbp.global_path_count);
+      result.total_path_count = _upbp.global_path_count;
+    } else if (upbp.phase != RendererUPBPPhase::Finalize) {
+      result.path_phase = RendererPathPhase::Light;
+      const uint64_t completed_batch_count = _upbp.light_batch_iteration;
+      result.completed_path_count = std::min<uint64_t>(completed_batch_count * _upbp.resident_light_path_capacity, _upbp.global_path_count);
+      if (_wavefront_render_step == WavefrontRenderStep::UPBPEvaluateLightBatch) {
+        result.completed_path_count = std::min<uint64_t>(result.completed_path_count + _upbp.light_batch_count, _upbp.global_path_count);
+      }
+      result.total_path_count = (_upbp.light_batch_count_total > 1u) ? _upbp.global_path_count : _upbp.light_batch_count;
+    }
+  }
   result.elapsed_seconds = _last_render_elapsed_seconds;
   if (_render_timing_active) {
     const auto now = std::chrono::steady_clock::now();
@@ -3408,7 +3474,6 @@ void GPURaytracingRenderer::destroy_upbp_density_cache(RHIDevice& device) {
   destroy(_upbp.density_medium_point_buffer);
   destroy(_upbp.density_medium_point_aabb_buffer);
   destroy(_upbp.density_beam_buffer);
-  destroy(_upbp.density_event_buffer);
   destroy(_upbp.density_surface_point_instance_buffer);
   destroy(_upbp.density_medium_point_instance_buffer);
   destroy(_upbp.density_bp2d_beam_instance_buffer);
@@ -3708,7 +3773,7 @@ bool GPURaytracingRenderer::update_upbp_iteration_resources(RHIDevice& device, c
   for (uint32_t index = 0u; index < 6u; ++index) {
     iteration.technique_factors[index] = static_cast<float>(parameters.mis.technique_factors[index]);
   }
-  if (_upbp.light_batch_iteration == 0u) {
+  if ((_upbp.light_batch_iteration == 0u) || _upbp.camera_phase_started) {
     iteration.flags |= GPUUPBPIterationFlags::EvaluateCameraIndependentTerms;
   }
   if (_upbp.density_cache_ready == false) {
@@ -4343,6 +4408,18 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (_scene_valid == false)
     return;
 
+  auto& device = ctx.device();
+  const auto release_wavefront_storage = [&](const char* failure_message) {
+    destroy_wavefront_buffers(ctx);
+    const RHIResult release_result = ctx.wait_idle();
+    if (release_result != RHIResult::Success) {
+      set_runtime_failure(failure_message);
+      return false;
+    }
+    _last_memory_stats = device.get_memory_statistics();
+    return true;
+  };
+
   poll_preparation_tasks(ctx);
   if (_publish_preparation) {
     const uint32_t pipeline_publish_batch_size = (ctx.device().backend() == RHIBackend::Vulkan) ? std::max(1u, scheduler.max_thread_count()) : kNonVulkanPipelinePublishBatchSize;
@@ -4368,6 +4445,14 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const bool material_configuration_supported = gpu_material_compile_mask_supported(new_material_compile_mask);
   const bool should_request_prepare =
     integrator_selection.supported && material_configuration_supported && (pipeline_configuration_changed || missing_pipelines || failed_preparation_can_retry);
+  const bool allocated_integrator_will_change =
+    integrator_selection.supported && material_configuration_supported && _wavefront_resources_buffer.valid() &&
+    ((_wavefront_allocated_integrator_mode != new_integrator_mode) || (_wavefront_allocated_integrator_features != new_integrator_features));
+  if (allocated_integrator_will_change) {
+    if (release_wavefront_storage("GPU RT failed to release resources before preparing the integrator change") == false) {
+      return;
+    }
+  }
   if (should_request_prepare) {
     const auto pipeline_refresh_begin = std::chrono::steady_clock::now();
     request_pipeline_preparation(scene, pipeline_configuration_changed ? "scene pipeline change" : "missing pipelines", false);
@@ -4391,19 +4476,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     return;
   }
 
-  auto& device = ctx.device();
   _last_memory_stats = device.get_memory_statistics();
   const bool render_preview_this_frame = _preview_active;
-  const auto release_wavefront_storage = [&](const char* failure_message) {
-    destroy_wavefront_buffers(ctx);
-    const RHIResult release_result = ctx.wait_idle();
-    if (release_result != RHIResult::Success) {
-      set_runtime_failure(failure_message);
-      return false;
-    }
-    _last_memory_stats = device.get_memory_statistics();
-    return true;
-  };
 
   const SceneUpdateScope scene_update_scope = consume_scene_update_request();
   const bool scene_check_requested = scene_update_scope != SceneUpdateScope::None;
@@ -4441,6 +4515,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const auto& camera = scene.camera();
   const uint64_t new_camera_hash = xxh64(&camera, sizeof(camera));
   const bool camera_changed = (new_camera_hash != _current_camera_hash);
+  const bool upbp_mode = static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::UPBP;
   const bool restart_accumulation =
     scene_changed || integrator_mode_changed || integrator_features_changed || material_compile_mask_changed || spectral_mode_changed || camera_changed;
   if (restart_accumulation) {
@@ -4518,6 +4593,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   }
 
   if (scene_check_requested && scene_data_update_success) {
+    if (scene_changed && upbp_mode && _upbp.vertex_buffer.handle.valid()) {
+      reset_upbp_density_cache();
+      _upbp.sample_index = ~0u;
+    }
     _current_scene_hashes = new_hashes;
   }
   _current_camera_hash = new_camera_hash;
@@ -4581,7 +4660,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const bool use_complete_light_history = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::ConnectVertices) ||
                                           gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::MergeVertices);
   const bool vcm_mode = static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::VCM;
-  const bool upbp_mode = static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::UPBP;
   const bool allocated_integrator_changed =
     _wavefront_resources_buffer.valid() && ((_wavefront_allocated_integrator_mode != _integrator_mode) || (_wavefront_allocated_integrator_features != _integrator_features));
   if (allocated_integrator_changed) {
@@ -4693,8 +4771,18 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const uint32_t active_path_offset = use_wavefront_tiling ? wavefront_tile_path_offset(active_base_origin, active_base_dim, tile_max_pixels, _wavefront_tile_index) : 0u;
   const uint2 render_dim = render_preview_this_frame ? preview_dim : active_window.size;
   const uint32_t wavefront_path_capacity = render_dim.x * render_dim.y;
+  const uint32_t upbp_global_path_count = render_preview_this_frame ? wavefront_path_capacity : base_render_pixel_count;
   if (render_preview_this_frame) {
-    wavefront_buffer_path_capacity = std::max(wavefront_path_capacity, _wavefront_path_capacity);
+    if (upbp_mode) {
+      const bool preview_storage_layout_changed =
+        _wavefront_resources_buffer.valid() && ((_wavefront_path_capacity != wavefront_path_capacity) || (_upbp.global_path_count != upbp_global_path_count));
+      if (preview_storage_layout_changed && (release_wavefront_storage("GPU UPBP failed to release full-resolution storage for transform preview") == false)) {
+        return;
+      }
+      wavefront_buffer_path_capacity = wavefront_path_capacity;
+    } else {
+      wavefront_buffer_path_capacity = std::max(wavefront_path_capacity, _wavefront_path_capacity);
+    }
   }
   if (_output_dimensions.x != full_dim.x || _output_dimensions.y != full_dim.y) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_recreate_output_texture");
@@ -4819,7 +4907,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     return;
   }
   if (upbp_mode) {
-    if (ensure_upbp_buffers(ctx, scene, base_render_pixel_count, wavefront_buffer_path_capacity, _wavefront_tile_index, active_path_offset, wavefront_path_capacity) == false) {
+    if (ensure_upbp_buffers(ctx, scene, upbp_global_path_count, wavefront_buffer_path_capacity, _wavefront_tile_index, active_path_offset, wavefront_path_capacity) == false) {
       set_runtime_failure("GPU UPBP failed to allocate its resident path batch");
       return;
     }
@@ -5269,7 +5357,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       _upbp.bpt_light_path_state_state = path_state_buffer_reused ? _upbp.bpt_light_path_state_state : RHIResourceState::Undefined;
       _upbp.resources.bpt_light_vertex_buffer = _upbp.bpt_light_vertex_buffer.descriptor_index;
       _upbp.resources.bpt_light_path_state_buffer = _upbp.bpt_light_path_state_buffer.descriptor_index;
-      if (update_upbp_iteration_resources(device, scene, base_render_pixel_count) == false) {
+      if (update_upbp_iteration_resources(device, scene, upbp_global_path_count) == false) {
         set_runtime_failure("GPU UPBP failed to bind compact matching light history");
         return false;
       }
@@ -5907,10 +5995,14 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         const uint32_t light_event_count = std::min(upbp_counters[GPUUPBPCounterIndex::LightEvent], _upbp.resources.light_event_capacity);
         const uint32_t camera_vertex_count = std::min(upbp_counters[GPUUPBPCounterIndex::CameraVertex], _upbp.resources.camera_vertex_capacity);
         const uint32_t camera_interval_count = std::min(upbp_counters[GPUUPBPCounterIndex::CameraInterval], _upbp.resources.camera_interval_capacity);
-        uint32_t camera_surface_query_count = camera_vertex_count;
+        uint32_t camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Count] = {};
+        for (uint32_t& query_count : camera_surface_query_counts) {
+          query_count = camera_vertex_count;
+        }
         uint32_t camera_medium_vertex_query_count = camera_vertex_count;
         uint32_t camera_medium_interval_query_count = camera_interval_count;
-        bool camera_vertex_queries_compacted = false;
+        bool camera_surface_queries_compacted = false;
+        bool camera_medium_vertex_queries_compacted = false;
         bool camera_interval_queries_compacted = false;
         if (capture_kernel_timings && (evaluating_upbp_camera_phase == false)) {
           log::info("GPU UPBP light batch %u/%u: paths=%u vertices=%u segments=%u intervals=%u maximum-path-length=%u path-state=%.2f MiB vertex-history=%.2f MiB",
@@ -5922,7 +6014,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         }
         const bool bp2d_enabled = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::UPBPBP2D);
         const bool bb1d_enabled = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::UPBPBB1D);
-        const bool beam_density_enabled = bp2d_enabled || bb1d_enabled;
         if (_upbp.density_cache_ready == false) {
           const RHIBufferUsage storage_usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst | RHIBufferUsage::TransferSrc;
           const RHIBufferUsage aabb_usage = storage_usage | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::ShaderDeviceAddress;
@@ -5964,7 +6055,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           _upbp.resources.density_output_beam_buffer = density_batch.beam_buffer.descriptor_index;
           _upbp.resources.density_output_beam_capacity = beam_count;
           _upbp.resources.density_output_event_buffer = density_batch.event_buffer.descriptor_index;
-          if (update_upbp_iteration_resources(device, scene, base_render_pixel_count) == false) {
+          if (update_upbp_iteration_resources(device, scene, upbp_global_path_count) == false) {
             set_runtime_failure("GPU UPBP failed to bind compact density outputs");
             return;
           }
@@ -6032,7 +6123,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           uint64_t medium_point_count_total = 0u;
           uint64_t bp2d_beam_instance_count = 0u;
           uint64_t bb1d_beam_instance_count = 0u;
-          uint64_t event_count_total = 0u;
+          uint64_t tracking_event_count_total = 0u;
           const auto append_density_instance = [&device](RHIBindlessHandle blas, uint32_t custom_index, uint8_t mask, std::vector<RHIAccelerationStructureInstance>& instances) {
             if (blas.valid() == false) {
               return true;
@@ -6053,34 +6144,34 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           for (uint32_t batch_index = 0u; batch_index < _upbp.density_batch_count; ++batch_index) {
             const UPBPDensityBatchResources& batch = _upbp.density_batches[batch_index];
             GPUUPBPDensityBatch& descriptor = batch_descriptors[batch_index];
-            descriptor.surface_point_buffer = batch.surface_point_buffer.descriptor_index;
+            descriptor.surface_point_buffer = kInvalidDescriptorIndex;
             descriptor.surface_point_count = batch.surface_point_count;
-            descriptor.medium_point_buffer = batch.medium_point_buffer.descriptor_index;
+            descriptor.medium_point_buffer = kInvalidDescriptorIndex;
             descriptor.medium_point_count = batch.medium_point_count;
             descriptor.beam_buffer = batch.beam_buffer.descriptor_index;
             descriptor.beam_count = batch.beam_count;
             descriptor.beam_instance_offset = static_cast<uint32_t>(bp2d_beam_instance_count);
             descriptor.selected_beam_count = batch.selected_beam_count;
-            descriptor.event_index_offset = static_cast<uint32_t>(event_count_total);
             surface_point_count_total += batch.surface_point_count;
             medium_point_count_total += batch.medium_point_count;
             bp2d_beam_instance_count += bp2d_enabled ? batch.beam_count : 0u;
             bb1d_beam_instance_count += bb1d_enabled ? batch.selected_beam_count : 0u;
-            event_count_total += beam_density_enabled ? batch.event_count : 0u;
+            tracking_event_count_total += batch.event_count;
             const uint64_t beam_reference_count = bp2d_enabled ? bp2d_beam_instance_count : bb1d_beam_instance_count;
             if ((bp2d_beam_instance_count > (1ull << 24u)) || (bb1d_beam_instance_count > (1ull << 24u)) || (beam_reference_count > (1ull << 24u))) {
               set_runtime_failure("GPU UPBP compact beam acceleration structure exceeds the 24-bit instance-index range");
               return;
             }
           }
-          if ((surface_point_count_total > std::numeric_limits<uint32_t>::max()) || (medium_point_count_total > std::numeric_limits<uint32_t>::max()) ||
-              (event_count_total > std::numeric_limits<uint32_t>::max())) {
-            set_runtime_failure("GPU UPBP compact point or tracking-event storage exceeds the 32-bit index range");
+          if ((surface_point_count_total > std::numeric_limits<uint32_t>::max()) || (medium_point_count_total > std::numeric_limits<uint32_t>::max())) {
+            set_runtime_failure("GPU UPBP compact point storage exceeds the 32-bit index range");
             return;
           }
           _upbp.density_surface_point_count = static_cast<uint32_t>(surface_point_count_total);
           _upbp.density_medium_point_count = static_cast<uint32_t>(medium_point_count_total);
           _upbp.density_beam_count = static_cast<uint32_t>(bp2d_beam_instance_count);
+          log::info("GPU UPBP density cache retained %llu tracking events in %u batch-local buffers (%.2f MiB)", static_cast<unsigned long long>(tracking_event_count_total),
+            _upbp.density_batch_count, static_cast<double>(tracking_event_count_total * kGPUUPBPTrackingEventStride) / (1024.0 * 1024.0));
 
           const RHIBufferUsage compact_point_usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst;
           const RHIBufferUsage compact_aabb_usage = compact_point_usage | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::ShaderDeviceAddress;
@@ -6107,12 +6198,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             set_runtime_failure("GPU UPBP failed to allocate consolidated beam storage");
             return;
           }
-          if ((event_count_total > 0u) &&
-              (ensure_storage_buffer_capacity(device, event_count_total * kGPUUPBPTrackingEventStride, compact_point_usage, _upbp.density_event_buffer.handle,
-                 _upbp.density_event_buffer.size, _upbp.density_event_buffer.descriptor_index, "upbp_density_events_compact") == false)) {
-            set_runtime_failure("GPU UPBP failed to allocate consolidated tracking-event storage");
-            return;
-          }
           record_and_submit([&](RHICommandBuffer cmd) {
             if (_upbp.density_surface_point_buffer.handle.valid()) {
               ctx.cmd_buffer_barrier(cmd, _upbp.density_surface_point_buffer.handle, RHIResourceState::Undefined, RHIResourceState::TransferDst);
@@ -6122,12 +6207,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               ctx.cmd_buffer_barrier(cmd, _upbp.density_medium_point_buffer.handle, RHIResourceState::Undefined, RHIResourceState::TransferDst);
               ctx.cmd_buffer_barrier(cmd, _upbp.density_medium_point_aabb_buffer.handle, RHIResourceState::Undefined, RHIResourceState::TransferDst);
             }
-            if (_upbp.density_event_buffer.handle.valid()) {
-              ctx.cmd_buffer_barrier(cmd, _upbp.density_event_buffer.handle, RHIResourceState::Undefined, RHIResourceState::TransferDst);
-            }
             uint64_t surface_offset = 0u;
             uint64_t medium_offset = 0u;
-            uint64_t event_offset = 0u;
             for (uint32_t batch_index = 0u; batch_index < _upbp.density_batch_count; ++batch_index) {
               const UPBPDensityBatchResources& batch = _upbp.density_batches[batch_index];
               if (batch.surface_point_count > 0u) {
@@ -6150,12 +6231,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                 ctx.cmd_copy_buffer(cmd, batch.medium_point_aabb_buffer.handle, _upbp.density_medium_point_aabb_buffer.handle, aabb_bytes, 0u, medium_offset * kGPUUPBPAABBStride);
                 medium_offset += batch.medium_point_count;
               }
-              if (_upbp.density_event_buffer.handle.valid() && (batch.event_count > 0u)) {
-                const uint64_t event_bytes = static_cast<uint64_t>(batch.event_count) * kGPUUPBPTrackingEventStride;
-                ctx.cmd_buffer_barrier(cmd, batch.event_buffer.handle, RHIResourceState::General, RHIResourceState::TransferSrc);
-                ctx.cmd_copy_buffer(cmd, batch.event_buffer.handle, _upbp.density_event_buffer.handle, event_bytes, 0u, event_offset * kGPUUPBPTrackingEventStride);
-                event_offset += batch.event_count;
-              }
             }
             if (_upbp.density_surface_point_buffer.handle.valid()) {
               ctx.cmd_buffer_barrier(cmd, _upbp.density_surface_point_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::General);
@@ -6165,35 +6240,33 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               ctx.cmd_buffer_barrier(cmd, _upbp.density_medium_point_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::General);
               ctx.cmd_buffer_barrier(cmd, _upbp.density_medium_point_aabb_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::AccelerationStructure);
             }
-            if (_upbp.density_event_buffer.handle.valid()) {
-              ctx.cmd_buffer_barrier(cmd, _upbp.density_event_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::General);
-            }
           });
           const RHIResult point_copy_result = wait_and_destroy_submitted_commands("UPBP consolidated density storage");
           if (point_copy_result != RHIResult::Success) {
             set_runtime_failure("GPU UPBP failed to consolidate point storage (" + std::to_string(static_cast<uint32_t>(point_copy_result)) + ")");
             return;
           }
-          bool density_batches_released = false;
-          const auto release_density_batch_buffers = [&]() {
+          const auto release_density_batch_point_storage = [&]() {
             uint64_t released_bytes = 0u;
             for (UPBPDensityBatchResources& batch : _upbp.density_batches) {
-              UPBPBuffer* buffers[] = {&batch.surface_point_buffer, &batch.surface_point_aabb_buffer, &batch.medium_point_buffer, &batch.medium_point_aabb_buffer,
-                &batch.beam_buffer, &batch.event_buffer};
+              UPBPBuffer* buffers[] = {&batch.surface_point_buffer, &batch.surface_point_aabb_buffer, &batch.medium_point_buffer, &batch.medium_point_aabb_buffer};
               for (UPBPBuffer* buffer : buffers) {
                 released_bytes += buffer->size;
                 destroy_linear_scene_buffer(device, buffer->handle, buffer->size, buffer->descriptor_index);
               }
             }
-            density_batches_released = true;
             const RHIResult idle_result = ctx.wait_idle();
             if (idle_result != RHIResult::Success) {
-              log::error("GPU UPBP failed to reclaim obsolete density batch storage (%u)", static_cast<uint32_t>(idle_result));
+              log::error("GPU UPBP failed to reclaim copied density point storage (%u)", static_cast<uint32_t>(idle_result));
               return false;
             }
-            log::info("GPU UPBP released %.2f MiB of obsolete density batch storage for BP2D indexing", static_cast<double>(released_bytes) / (1024.0 * 1024.0));
+            log::info("GPU UPBP released %.2f MiB of copied density point storage before point indexing", static_cast<double>(released_bytes) / (1024.0 * 1024.0));
             return true;
           };
+          if (release_density_batch_point_storage() == false) {
+            set_runtime_failure("GPU UPBP failed to reclaim copied density point storage");
+            return;
+          }
 
           const auto ensure_compact_point_blas_capacity = [&device](const UPBPBuffer& aabb_buffer, uint32_t offset, uint32_t count, RHIBindlessHandle& result, uint32_t& capacity) {
             if (count == 0u) {
@@ -6320,14 +6393,14 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             _upbp.resources.density_output_beam_instance_capacity = static_cast<uint32_t>(bp2d_beam_instance_count);
             _upbp.resources.density_output_beam_buffer = _upbp.density_beam_buffer.handle.valid() ? _upbp.density_beam_buffer.descriptor_index : kInvalidDescriptorIndex;
             _upbp.resources.density_output_beam_capacity = _upbp.density_beam_count;
-            _upbp.resources.density_output_event_buffer = _upbp.density_event_buffer.handle.valid() ? _upbp.density_event_buffer.descriptor_index : kInvalidDescriptorIndex;
+            _upbp.resources.density_output_event_buffer = kInvalidDescriptorIndex;
             _upbp.resources.density_output_bb1d_beam_instance_buffer =
               bb1d_beam_instance_count > 0u ? _upbp.density_bb1d_beam_instance_buffer.descriptor_index : kInvalidDescriptorIndex;
             _upbp.resources.density_output_bb1d_beam_instance_capacity = static_cast<uint32_t>(bb1d_beam_instance_count);
             _upbp.resources.bb1d_beam_buffer = bb1d_beam_instance_count > 0u ? _upbp.density_bb1d_beam_buffer.descriptor_index : kInvalidDescriptorIndex;
             _upbp.resources.density_beam_acceleration_structure_reference_low = static_cast<uint32_t>(unit_beam_address);
             _upbp.resources.density_beam_acceleration_structure_reference_high = static_cast<uint32_t>(unit_beam_address >> 32u);
-            if (update_upbp_iteration_resources(device, scene, base_render_pixel_count) == false) {
+            if (update_upbp_iteration_resources(device, scene, upbp_global_path_count) == false) {
               set_runtime_failure("GPU UPBP failed to bind GPU-authored compact beam instances");
               return;
             }
@@ -6388,15 +6461,21 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             }
           }
 
-          if (bp2d_enabled && (bp2d_beam_instance_count > 0u)) {
-            const RHIMemoryStats memory_stats = device.get_memory_statistics();
-            const uint64_t bp2d_instance_bytes = bp2d_beam_instance_count * kGPUUPBPAccelerationStructureInstanceStride;
-            if ((gpu_resident_working_set_budget_bytes(memory_stats) < bp2d_instance_bytes) && (density_batches_released == false)) {
-              if (release_density_batch_buffers() == false) {
-                set_runtime_failure("GPU UPBP failed to reclaim obsolete density batch storage");
-                return;
-              }
+          uint64_t released_beam_bytes = 0u;
+          for (UPBPDensityBatchResources& batch : _upbp.density_batches) {
+            released_beam_bytes += batch.beam_buffer.size;
+            destroy_linear_scene_buffer(device, batch.beam_buffer.handle, batch.beam_buffer.size, batch.beam_buffer.descriptor_index);
+          }
+          if (released_beam_bytes > 0u) {
+            const RHIResult beam_release_result = ctx.wait_idle();
+            if (beam_release_result != RHIResult::Success) {
+              set_runtime_failure("GPU UPBP failed to reclaim compacted density beam storage");
+              return;
             }
+            log::info("GPU UPBP released %.2f MiB of compacted density beam storage before beam indexing", static_cast<double>(released_beam_bytes) / (1024.0 * 1024.0));
+          }
+
+          if (bp2d_enabled && (bp2d_beam_instance_count > 0u)) {
             const uint32_t instance_count = static_cast<uint32_t>(bp2d_beam_instance_count);
             const uint32_t partition_count_total = divide_round_up(instance_count, kUPBPBP2DMaximumPartitionInstances);
             log::info("GPU UPBP BP2D acceleration structure: %u beams, radius %.9g, %u partitions, at most %u instances per partition", instance_count,
@@ -6662,7 +6741,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             _upbp.resources.bb1d_partition_acceleration_structures[partition_index - 1u] =
               (partition_count > 0u) && partition_tlas.valid() ? get_bindless_descriptor_index(partition_tlas) : kInvalidDescriptorIndex;
           }
-          if (update_upbp_iteration_resources(device, scene, base_render_pixel_count) == false) {
+          if (update_upbp_iteration_resources(device, scene, upbp_global_path_count) == false) {
             set_runtime_failure("GPU UPBP failed to bind its compact density cache");
             return;
           }
@@ -6697,44 +6776,53 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             set_runtime_failure("GPU UPBP failed to read compact camera density query counts (" + std::to_string(static_cast<uint32_t>(compact_counter_result)) + ")");
             return;
           }
-          camera_vertex_queries_compacted = (upbp_counters[GPUUPBPCounterIndex::CameraSurfaceQuery] <= _upbp.resources.point_capacity) &&
-                                            (upbp_counters[GPUUPBPCounterIndex::CameraMediumVertexQuery] <= _upbp.resources.point_capacity);
-          if (camera_vertex_queries_compacted) {
-            camera_surface_query_count = upbp_counters[GPUUPBPCounterIndex::CameraSurfaceQuery];
+          camera_surface_queries_compacted = true;
+          for (uint32_t family = 0u; family < GPUUPBPSurfaceQueryFamily::Count; ++family) {
+            const uint32_t query_count = upbp_counters[GPUUPBPCounterIndex::CameraSurfaceVariousQuery + family];
+            camera_surface_queries_compacted = camera_surface_queries_compacted && (query_count <= _upbp.resources.point_capacity);
+            camera_surface_query_counts[family] = query_count;
+          }
+          if (camera_surface_queries_compacted == false) {
+            for (uint32_t& query_count : camera_surface_query_counts) {
+              query_count = camera_vertex_count;
+            }
+          }
+          camera_medium_vertex_queries_compacted = upbp_counters[GPUUPBPCounterIndex::CameraMediumVertexQuery] <= _upbp.resources.beam_capacity;
+          if (camera_medium_vertex_queries_compacted) {
             camera_medium_vertex_query_count = upbp_counters[GPUUPBPCounterIndex::CameraMediumVertexQuery];
           }
-          const uint64_t interval_query_capacity = static_cast<uint64_t>(_upbp.resources.beam_capacity) * (kGPUUPBPBeamStride / sizeof(uint32_t));
+          const uint64_t interval_query_capacity = static_cast<uint64_t>(_upbp.resources.beam_capacity) * ((kGPUUPBPBeamStride / sizeof(uint32_t)) - 1u);
           camera_interval_queries_compacted = upbp_counters[GPUUPBPCounterIndex::CameraMediumIntervalQuery] <= interval_query_capacity;
           if (camera_interval_queries_compacted) {
             camera_medium_interval_query_count = upbp_counters[GPUUPBPCounterIndex::CameraMediumIntervalQuery];
           }
           if (capture_kernel_timings) {
-            log::info("GPU UPBP compact camera density queries: surface=%u/%u medium-vertices=%u/%u medium-intervals=%u/%u", camera_surface_query_count, camera_vertex_count,
+            log::info("GPU UPBP compact camera density queries: surface=%u/%u/%u/%u of %u medium-vertices=%u/%u medium-intervals=%u/%u",
+              camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Various], camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Plastic],
+              camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Conductor], camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Dielectric], camera_vertex_count,
               camera_medium_vertex_query_count, camera_vertex_count, camera_medium_interval_query_count, camera_interval_count);
           }
         }
-        if (_upbp.density_cache_ready && (_upbp.density_surface_point_count > 0u) && _upbp.density_surface_point_tlas.valid() && (camera_surface_query_count > 0u) &&
+        if (_upbp.density_cache_ready && (_upbp.density_surface_point_count > 0u) && _upbp.density_surface_point_tlas.valid() &&
             gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::UPBPSurface)) {
-          const uint32_t query_mode = camera_vertex_queries_compacted ? GPUUPBPDensityQueryMode::Compacted : GPUUPBPDensityQueryMode::Raw;
-          for (uint32_t item_offset = 0u; item_offset < camera_surface_query_count; item_offset += kUPBPDensityQueryDispatchChunkSize) {
-            const uint32_t chunk_count = std::min(kUPBPDensityQueryDispatchChunkSize, camera_surface_query_count - item_offset);
-            record_and_submit([&](RHICommandBuffer cmd) {
-              barrier_wavefront_buffers(cmd);
-              if (has_various_continue) {
-                dispatch_stage_query_groups(cmd, PipelineStage::VCMMergeDiffuse, item_offset, chunk_count, query_mode);
-              }
-              if (has_plastic) {
-                dispatch_stage_query_groups(cmd, PipelineStage::VCMMergePlastic, item_offset, chunk_count, query_mode);
-              }
-              if (has_connectible_conductor) {
-                dispatch_stage_query_groups(cmd, PipelineStage::VCMMergeConductor, item_offset, chunk_count, query_mode);
-              }
-              if (has_connectible_dielectric || has_thinfilm) {
-                dispatch_stage_query_groups(cmd, PipelineStage::VCMMergeDielectric, item_offset, chunk_count, query_mode);
-              }
-              barrier_wavefront_buffers(cmd);
-            });
-          }
+          const uint32_t query_mode = camera_surface_queries_compacted ? GPUUPBPDensityQueryMode::Compacted : GPUUPBPDensityQueryMode::Raw;
+          const auto submit_surface_queries = [&](PipelineStage stage, uint32_t query_count, bool enabled) {
+            if ((enabled == false) || (query_count == 0u)) {
+              return;
+            }
+            for (uint32_t item_offset = 0u; item_offset < query_count; item_offset += kUPBPDensityQueryDispatchChunkSize) {
+              const uint32_t chunk_count = std::min(kUPBPDensityQueryDispatchChunkSize, query_count - item_offset);
+              record_and_submit([&](RHICommandBuffer cmd) {
+                barrier_wavefront_buffers(cmd);
+                dispatch_stage_query_groups(cmd, stage, item_offset, chunk_count, query_mode);
+                barrier_wavefront_buffers(cmd);
+              });
+            }
+          };
+          submit_surface_queries(PipelineStage::VCMMergeDiffuse, camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Various], has_various_continue);
+          submit_surface_queries(PipelineStage::VCMMergePlastic, camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Plastic], has_plastic);
+          submit_surface_queries(PipelineStage::VCMMergeConductor, camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Conductor], has_connectible_conductor);
+          submit_surface_queries(PipelineStage::VCMMergeDielectric, camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Dielectric], has_connectible_dielectric || has_thinfilm);
         }
         if (_upbp.density_cache_ready && (camera_vertex_count > 0u)) {
           submit_upbp_density_stage_chunked(PipelineStage::UPBPDirectHit, camera_vertex_count, GPUUPBPDensityQueryMode::Raw);
@@ -6756,7 +6844,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             set_runtime_failure("GPU UPBP density evaluation before BP2D failed (" + std::to_string(static_cast<uint32_t>(preceding_density_result)) + ")");
             return;
           }
-          const uint32_t query_mode = camera_vertex_queries_compacted ? GPUUPBPDensityQueryMode::Compacted : GPUUPBPDensityQueryMode::Raw;
+          const uint32_t query_mode = camera_medium_vertex_queries_compacted ? GPUUPBPDensityQueryMode::Compacted : GPUUPBPDensityQueryMode::Raw;
           const uint32_t partition_count = static_cast<uint32_t>(_upbp.density_bp2d_beam_tlas.size());
           for (uint32_t partition_offset = 0u; partition_offset < partition_count; partition_offset += kGPUUPBPBP2DPartitionCount) {
             for (uint32_t local_partition_index = 0u; local_partition_index < kGPUUPBPBP2DPartitionCount; ++local_partition_index) {
@@ -6820,7 +6908,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           _upbp.light_batch_index = upbp_light_batch_index_for_iteration(_upbp.light_batch_iteration, _upbp.camera_batch_index);
           _upbp.light_batch_offset = _upbp.light_batch_index * _upbp.resident_light_path_capacity;
           _upbp.light_batch_count = std::min(_upbp.resident_light_path_capacity, _upbp.global_path_count - _upbp.light_batch_offset);
-          if (update_upbp_iteration_resources(device, scene, base_render_pixel_count) == false) {
+          if (update_upbp_iteration_resources(device, scene, upbp_global_path_count) == false) {
             set_runtime_failure("GPU UPBP failed to advance its deterministic light-path batch");
             return;
           }
@@ -6844,6 +6932,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           _wavefront_render_step = WavefrontRenderStep::TraceBounce;
         } else if (evaluating_upbp_camera_phase == false) {
           _upbp.camera_phase_started = true;
+          if (update_upbp_iteration_resources(device, scene, upbp_global_path_count) == false) {
+            set_runtime_failure("GPU UPBP failed to enable camera-independent terms for camera evaluation");
+            return;
+          }
           if (initialize_deferred_camera_phase() == false) {
             return;
           }
@@ -7497,10 +7589,10 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   _blas = std::move(new_blas);
   _blas_buffers = std::move(new_blas_buffers);
   _tlas_instance_staging = std::move(rhi_instances);
+  _tlas_instance_count = static_cast<uint32_t>(_tlas_instance_staging.size());
   _tlas = new_tlas;
   _tlas_instance_buffer = inst_res.handle;
   _as_scratch_buffer = scratch_res.handle;
-  _tlas_instance_count = static_cast<uint32_t>(rhi_instances.size());
   _gpu_scene.vertex_positions = get_bindless_descriptor_index(_vertex_positions_buffer);
 
   ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_scene_after_as_build");

@@ -8,6 +8,7 @@
 #define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC 4
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
+# define ETX_UPBP_SURFACE_QUERY_FAMILY GPUUPBPSurfaceQueryFamily::Various
 # if ETX_ENABLE_VELVET_STAGE
 #  include <interop/bsdf_velvet_shared.hxx>
 # else
@@ -16,10 +17,12 @@
 # define ETX_UPBP_SURFACE_EVAL upbp_surface_various_eval
 # define ETX_UPBP_SURFACE_PDF  upbp_surface_various_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_PLASTIC)
+# define ETX_UPBP_SURFACE_QUERY_FAMILY GPUUPBPSurfaceQueryFamily::Plastic
 # include <interop/bsdf_plastic_shared.hxx>
 # define ETX_UPBP_SURFACE_EVAL bsdf_plastic_evaluate
 # define ETX_UPBP_SURFACE_PDF  bsdf_plastic_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
+# define ETX_UPBP_SURFACE_QUERY_FAMILY GPUUPBPSurfaceQueryFamily::Conductor
 # if ETX_ENABLE_OPENPBR_STAGE
 #  include <interop/bsdf_openpbr_shared.hxx>
 # else
@@ -28,6 +31,7 @@
 # define ETX_UPBP_SURFACE_EVAL upbp_surface_conductor_eval
 # define ETX_UPBP_SURFACE_PDF  upbp_surface_conductor_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
+# define ETX_UPBP_SURFACE_QUERY_FAMILY GPUUPBPSurfaceQueryFamily::Dielectric
 # include <interop/bsdf_energy_compensated_shared.hxx>
 # define ETX_UPBP_SURFACE_EVAL upbp_surface_dielectric_eval
 # define ETX_UPBP_SURFACE_PDF  upbp_surface_dielectric_pdf

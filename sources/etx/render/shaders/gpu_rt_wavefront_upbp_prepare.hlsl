@@ -30,8 +30,8 @@
       return;
     }
   } else if (constants.dispatch_item_offset == GPUUPBPClearMode::CameraQueries) {
-    if ((dtid.x != GPUUPBPCounterIndex::CameraSurfaceQuery) && (dtid.x != GPUUPBPCounterIndex::CameraMediumVertexQuery) &&
-        (dtid.x != GPUUPBPCounterIndex::CameraMediumIntervalQuery)) {
+    const bool surface_query_counter = (dtid.x >= GPUUPBPCounterIndex::CameraSurfaceVariousQuery) && (dtid.x <= GPUUPBPCounterIndex::CameraSurfaceDielectricQuery);
+    if ((surface_query_counter == false) && (dtid.x != GPUUPBPCounterIndex::CameraMediumVertexQuery) && (dtid.x != GPUUPBPCounterIndex::CameraMediumIntervalQuery)) {
       return;
     }
   }

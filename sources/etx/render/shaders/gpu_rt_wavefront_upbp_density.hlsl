@@ -835,9 +835,11 @@ void upbp_evaluate_surface_point_merge_group(uint dispatch_index, uint group_thr
     upbp_surface_query_valid = 0u;
     uint vertex_index = dispatch_index;
     if (constants.work_queue_index == GPUUPBPDensityQueryMode::Compacted) {
-      const uint query_count = WAVEFRONT_RO_BUFFER(resources.counter_buffer).Load(GPUUPBPCounterIndex::CameraSurfaceQuery * sizeof(uint));
-      vertex_index = ((dispatch_index < query_count) && (resources.point_buffer != kInvalidIndex)) ? WAVEFRONT_RO_BUFFER(resources.point_buffer).Load(dispatch_index * sizeof(uint))
-                                                                                                   : kInvalidIndex;
+      const uint query_family = ETX_UPBP_SURFACE_QUERY_FAMILY;
+      const uint query_count = WAVEFRONT_RO_BUFFER(resources.counter_buffer).Load((GPUUPBPCounterIndex::CameraSurfaceVariousQuery + query_family) * sizeof(uint));
+      vertex_index = ((dispatch_index < query_count) && (resources.point_buffer != kInvalidIndex))
+                       ? WAVEFRONT_RO_BUFFER(resources.point_buffer).Load((query_family * resources.point_capacity + dispatch_index) * sizeof(uint))
+                       : kInvalidIndex;
     }
     if ((resources.counter_buffer != kInvalidIndex) && (resources.point_acceleration_structure != kInvalidIndex) &&
         (resources.density_output_surface_point_buffer != kInvalidIndex) && (vertex_index < resources.camera_vertex_capacity)) {
@@ -1419,6 +1421,33 @@ void upbp_store_density_aabb(uint descriptor_index, uint index, float3 minimum, 
   buffer.Store(byte_offset + 24u, record_index);
 }
 
+uint upbp_surface_query_family_from_material(uint material_index) {
+  if ((material_index == kInvalidIndex) || (constants.scene.materials == kInvalidIndex)) {
+    return kInvalidIndex;
+  }
+  const uint material_class = WAVEFRONT_RO_BUFFER(constants.scene.materials).Load(material_index * kMaterialStride + kMaterialClassOffset);
+  switch (material_class) {
+    case MaterialClass::Plastic:
+      return GPUUPBPSurfaceQueryFamily::Plastic;
+    case MaterialClass::Conductor:
+    case MaterialClass::OpenPBR:
+      return GPUUPBPSurfaceQueryFamily::Conductor;
+    case MaterialClass::Dielectric:
+    case MaterialClass::Thinfilm:
+      return GPUUPBPSurfaceQueryFamily::Dielectric;
+    case MaterialClass::Diffuse:
+    case MaterialClass::Translucent:
+    case MaterialClass::Mirror:
+    case MaterialClass::Boundary:
+    case MaterialClass::Velvet:
+    case MaterialClass::Void:
+    case MaterialClass::DiffractionGrating:
+      return GPUUPBPSurfaceQueryFamily::Various;
+    default:
+      return kInvalidIndex;
+  }
+}
+
 [numthreads(64, 1, 1)] void wavefront_upbp_density_compact_main(uint3 dtid : SV_DispatchThreadID) {
   GPUUPBPResources resources = upbp_load_resources(wavefront_load_resources());
   if ((resources.counter_buffer == kInvalidIndex) || (dtid.x >= constants.dispatch_item_count)) {
@@ -1441,7 +1470,7 @@ void upbp_store_density_aabb(uint descriptor_index, uint index, float3 minimum, 
   }
   if (constants.work_queue_index == GPUUPBPDensityCompactMode::CameraVertices) {
     const uint vertex_count = min(WAVEFRONT_RO_BUFFER(resources.counter_buffer).Load(GPUUPBPCounterIndex::CameraVertex * sizeof(uint)), resources.camera_vertex_capacity);
-    if ((input_index >= vertex_count) || (resources.point_buffer == kInvalidIndex)) {
+    if (input_index >= vertex_count) {
       return;
     }
     const GPUUPBPVertex vertex = upbp_load_vertex(resources.vertex_buffer, input_index);
@@ -1449,20 +1478,23 @@ void upbp_store_density_aabb(uint descriptor_index, uint index, float3 minimum, 
       return;
     }
     RWByteAddressBuffer counters = WAVEFRONT_RW_BUFFER(resources.counter_buffer);
-    RWByteAddressBuffer query_indices = WAVEFRONT_RW_BUFFER(resources.point_buffer);
-    if (((resources.iteration.technique_mask & GPUUPBPTechnique::Surface) != 0u) && upbp_vertex_is_surface(vertex) && upbp_vertex_is_density_connectible(vertex) &&
-        (vertex.material_index != kInvalidIndex)) {
-      uint query_index = 0u;
-      counters.InterlockedAdd(GPUUPBPCounterIndex::CameraSurfaceQuery * sizeof(uint), 1u, query_index);
-      if (query_index < resources.point_capacity) {
-        query_indices.Store(query_index * sizeof(uint), input_index);
+    if (((resources.iteration.technique_mask & GPUUPBPTechnique::Surface) != 0u) && (resources.point_buffer != kInvalidIndex) && upbp_vertex_is_surface(vertex) &&
+        upbp_vertex_is_density_connectible(vertex)) {
+      const uint query_family = upbp_surface_query_family_from_material(vertex.material_index);
+      if (query_family < GPUUPBPSurfaceQueryFamily::Count) {
+        uint query_index = 0u;
+        counters.InterlockedAdd((GPUUPBPCounterIndex::CameraSurfaceVariousQuery + query_family) * sizeof(uint), 1u, query_index);
+        if (query_index < resources.point_capacity) {
+          WAVEFRONT_RW_BUFFER(resources.point_buffer).Store((query_family * resources.point_capacity + query_index) * sizeof(uint), input_index);
+        }
       }
     }
-    if (((resources.iteration.technique_mask & GPUUPBPTechnique::BP2D) != 0u) && upbp_vertex_is_medium(vertex) && (vertex.medium_index != kInvalidIndex)) {
+    if (((resources.iteration.technique_mask & GPUUPBPTechnique::BP2D) != 0u) && (resources.beam_buffer != kInvalidIndex) && upbp_vertex_is_medium(vertex) &&
+        (vertex.medium_index != kInvalidIndex)) {
       uint query_index = 0u;
       counters.InterlockedAdd(GPUUPBPCounterIndex::CameraMediumVertexQuery * sizeof(uint), 1u, query_index);
-      if (query_index < resources.point_capacity) {
-        query_indices.Store((resources.point_capacity + query_index) * sizeof(uint), input_index);
+      if (query_index < resources.beam_capacity) {
+        WAVEFRONT_RW_BUFFER(resources.beam_buffer).Store(query_index * sizeof(uint), input_index);
       }
     }
     return;
@@ -1479,9 +1511,9 @@ void upbp_store_density_aabb(uint descriptor_index, uint index, float3 minimum, 
     }
     uint query_index = 0u;
     WAVEFRONT_RW_BUFFER(resources.counter_buffer).InterlockedAdd(GPUUPBPCounterIndex::CameraMediumIntervalQuery * sizeof(uint), 1u, query_index);
-    const uint query_capacity = resources.beam_capacity * (kGPUUPBPBeamStride / sizeof(uint));
+    const uint query_capacity = resources.beam_capacity * ((kGPUUPBPBeamStride / sizeof(uint)) - 1u);
     if (query_index < query_capacity) {
-      WAVEFRONT_RW_BUFFER(resources.beam_buffer).Store(query_index * sizeof(uint), input_index);
+      WAVEFRONT_RW_BUFFER(resources.beam_buffer).Store((resources.beam_capacity + query_index) * sizeof(uint), input_index);
     }
     return;
   }
@@ -1584,13 +1616,11 @@ void upbp_store_beam_instance(GPUUPBPResources resources, uint instance_buffer_i
     return;
   }
   if ((density_beam.interval.flags & GPUUPBPIntervalFlags::RecomputeTracking) == 0u) {
-    if (resources.density_output_event_buffer == kInvalidIndex) {
+    if (density_beam.event_buffer == kInvalidIndex) {
       uint ignored = 0u;
       WAVEFRONT_RW_BUFFER(resources.counter_buffer).InterlockedOr(GPUUPBPCounterIndex::OverflowFlags * sizeof(uint), GPUUPBPOverflowFlags::BeamInstance, ignored);
       return;
     }
-    density_beam.event_buffer = resources.density_output_event_buffer;
-    density_beam.event_index_offset = batch.event_index_offset;
   } else {
     density_beam.event_buffer = kInvalidIndex;
     density_beam.event_index_offset = 0u;
@@ -1673,8 +1703,9 @@ void upbp_store_beam_instance(GPUUPBPResources resources, uint instance_buffer_i
   uint interval_index = constants.dispatch_item_offset + dtid.x;
   if (constants.work_queue_index == GPUUPBPDensityQueryMode::Compacted) {
     const uint query_count = WAVEFRONT_RO_BUFFER(resources.counter_buffer).Load(GPUUPBPCounterIndex::CameraMediumIntervalQuery * sizeof(uint));
-    interval_index =
-      ((interval_index < query_count) && (resources.beam_buffer != kInvalidIndex)) ? WAVEFRONT_RO_BUFFER(resources.beam_buffer).Load(interval_index * sizeof(uint)) : kInvalidIndex;
+    interval_index = ((interval_index < query_count) && (resources.beam_buffer != kInvalidIndex))
+                       ? WAVEFRONT_RO_BUFFER(resources.beam_buffer).Load((resources.beam_capacity + interval_index) * sizeof(uint))
+                       : kInvalidIndex;
   }
   const uint interval_count = min(WAVEFRONT_RO_BUFFER(resources.counter_buffer).Load(GPUUPBPCounterIndex::CameraInterval * 4u), resources.camera_interval_capacity);
   if (interval_index >= interval_count) {
@@ -1720,9 +1751,8 @@ groupshared GPUWavefrontCompactSpectralResponse upbp_bp2d_lane_contributions[kGP
   uint vertex_index = query_index;
   if (constants.work_queue_index == GPUUPBPDensityQueryMode::Compacted) {
     const uint query_count = WAVEFRONT_RO_BUFFER(resources.counter_buffer).Load(GPUUPBPCounterIndex::CameraMediumVertexQuery * sizeof(uint));
-    vertex_index = ((query_index < query_count) && (resources.point_buffer != kInvalidIndex))
-                     ? WAVEFRONT_RO_BUFFER(resources.point_buffer).Load((resources.point_capacity + query_index) * sizeof(uint))
-                     : kInvalidIndex;
+    vertex_index =
+      ((query_index < query_count) && (resources.beam_buffer != kInvalidIndex)) ? WAVEFRONT_RO_BUFFER(resources.beam_buffer).Load(query_index * sizeof(uint)) : kInvalidIndex;
   }
   if (group_thread_index == 0u) {
     upbp_bp2d_query_valid = 0u;
@@ -1795,8 +1825,9 @@ groupshared GPUWavefrontCompactSpectralResponse upbp_bb1d_lane_contributions[64u
   uint interval_index = query_index;
   if (constants.work_queue_index == GPUUPBPDensityQueryMode::Compacted) {
     const uint query_count = WAVEFRONT_RO_BUFFER(resources.counter_buffer).Load(GPUUPBPCounterIndex::CameraMediumIntervalQuery * sizeof(uint));
-    interval_index =
-      ((query_index < query_count) && (resources.beam_buffer != kInvalidIndex)) ? WAVEFRONT_RO_BUFFER(resources.beam_buffer).Load(query_index * sizeof(uint)) : kInvalidIndex;
+    interval_index = ((query_index < query_count) && (resources.beam_buffer != kInvalidIndex))
+                       ? WAVEFRONT_RO_BUFFER(resources.beam_buffer).Load((resources.beam_capacity + query_index) * sizeof(uint))
+                       : kInvalidIndex;
   }
   if (group_thread_index == 0u) {
     upbp_bb1d_query_valid = 0u;

@@ -129,10 +129,23 @@ struct GPUUPBPCounterIndex {
     DensityMediumPoint = 26u,
     DensityBeam = 27u,
     DensitySelectedBeam = 28u,
-    CameraSurfaceQuery = 29u,
-    CameraMediumVertexQuery = 30u,
-    CameraMediumIntervalQuery = 31u,
-    Count = 32u,
+    CameraSurfaceVariousQuery = 29u,
+    CameraSurfacePlasticQuery = 30u,
+    CameraSurfaceConductorQuery = 31u,
+    CameraSurfaceDielectricQuery = 32u,
+    CameraMediumVertexQuery = 33u,
+    CameraMediumIntervalQuery = 34u,
+    Count = 35u,
+  };
+};
+
+struct GPUUPBPSurfaceQueryFamily {
+  enum : uint32_t {
+    Various = 0u,
+    Plastic = 1u,
+    Conductor = 2u,
+    Dielectric = 3u,
+    Count = 4u,
   };
 };
 

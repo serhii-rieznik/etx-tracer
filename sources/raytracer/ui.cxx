@@ -215,6 +215,56 @@ const char* renderer_path_phase_short_name(RendererPathPhase phase) {
   return phase == RendererPathPhase::Light ? "Light" : "Camera";
 }
 
+const char* renderer_upbp_phase_name(RendererUPBPPhase phase) {
+  switch (phase) {
+    case RendererUPBPPhase::LightPaths:
+      return "Light paths";
+    case RendererUPBPPhase::LightCompaction:
+      return "Light compaction";
+    case RendererUPBPPhase::DensityIndex:
+      return "Density index build";
+    case RendererUPBPPhase::CameraPaths:
+      return "Camera paths";
+    case RendererUPBPPhase::CameraEvaluation:
+      return "Camera density evaluation";
+    case RendererUPBPPhase::Finalize:
+      return "Finalizing sample";
+    default:
+      return "Inactive";
+  }
+}
+
+const char* renderer_upbp_phase_short_name(RendererUPBPPhase phase) {
+  switch (phase) {
+    case RendererUPBPPhase::LightPaths:
+      return "Light";
+    case RendererUPBPPhase::LightCompaction:
+      return "Compact";
+    case RendererUPBPPhase::DensityIndex:
+      return "Index";
+    case RendererUPBPPhase::CameraPaths:
+      return "Camera";
+    case RendererUPBPPhase::CameraEvaluation:
+      return "Evaluate";
+    case RendererUPBPPhase::Finalize:
+      return "Finalize";
+    default:
+      return "Idle";
+  }
+}
+
+std::string compact_count_string(uint64_t value) {
+  char buffer[32] = {};
+  if (value >= 1000000ull) {
+    snprintf(buffer, sizeof(buffer), "%.2fM", static_cast<double>(value) / 1000000.0);
+  } else if (value >= 1000ull) {
+    snprintf(buffer, sizeof(buffer), "%.1fK", static_cast<double>(value) / 1000.0);
+  } else {
+    snprintf(buffer, sizeof(buffer), "%llu", static_cast<unsigned long long>(value));
+  }
+  return std::string(buffer);
+}
+
 std::string compact_duration_string(double seconds) {
   if (seconds < 0.0) {
     return "-";
@@ -3516,7 +3566,23 @@ void UI::build_status_bar(const BuildContext& ctx) {
     double path_progress = 0.0;
     if (path_progress_visible) {
       path_progress = std::min(1.0, static_cast<double>(status.completed_path_count) / static_cast<double>(status.total_path_count));
-      core_status += format_string("  |  %s %.1f%%", renderer_path_phase_short_name(status.path_phase), 100.0 * path_progress);
+      if (status.upbp.active() == false) {
+        core_status += format_string("  |  %s %.1f%%", renderer_path_phase_short_name(status.path_phase), 100.0 * path_progress);
+      }
+    }
+    if (status.upbp.active()) {
+      const bool light_phase =
+        (status.upbp.phase == RendererUPBPPhase::LightPaths) || (status.upbp.phase == RendererUPBPPhase::LightCompaction) || (status.upbp.phase == RendererUPBPPhase::DensityIndex);
+      const uint32_t current_batch = light_phase ? status.upbp.current_light_batch : status.upbp.current_camera_batch;
+      const uint32_t total_batches = light_phase ? status.upbp.total_light_batches : status.upbp.total_camera_batches;
+      core_status += format_string("  |  UPBP %s", renderer_upbp_phase_short_name(status.upbp.phase));
+      if (total_batches > 0u) {
+        core_status += format_string(" %u/%u", current_batch, total_batches);
+      }
+      core_status += "  |  Resident " + compact_count_string(status.upbp.resident_path_count) + "/" + compact_count_string(status.upbp.global_path_count);
+      if (status.upbp.gpu_memory_budget_bytes > 0u) {
+        core_status += "  |  VRAM " + memory_size_string(status.upbp.gpu_memory_used_bytes) + "/" + memory_size_string(status.upbp.gpu_memory_budget_bytes);
+      }
     }
 
     std::string timing_status = {};
@@ -3547,6 +3613,25 @@ void UI::build_status_bar(const BuildContext& ctx) {
     if (path_progress_visible) {
       detailed_status = format_string("%s: %llu / %llu (%.1f%%)", renderer_path_phase_name(status.path_phase), static_cast<unsigned long long>(status.completed_path_count),
         static_cast<unsigned long long>(status.total_path_count), 100.0 * path_progress);
+    }
+    if (status.upbp.active()) {
+      if (detailed_status.empty() == false) {
+        detailed_status += "\n";
+      }
+      detailed_status += format_string(
+        "UPBP phase: %s\nLight batches: %u / %u\nCamera batches: %u / %u\nActive paths: %u\nResident paths: %u / %u\nDensity cache: %s (%u batches)\n"
+        "Surface points: %llu\nMedium points: %llu\nTracking events: %llu (%s)\nBP2D beams: %llu (%u partitions)\nBB1D beams: %llu (%u partitions)",
+        renderer_upbp_phase_name(status.upbp.phase), status.upbp.current_light_batch, status.upbp.total_light_batches, status.upbp.current_camera_batch,
+        status.upbp.total_camera_batches, status.upbp.active_path_count, status.upbp.resident_path_count, status.upbp.global_path_count,
+        status.upbp.density_cache_ready ? "ready" : "building", status.upbp.density_batch_count, static_cast<unsigned long long>(status.upbp.surface_point_count),
+        static_cast<unsigned long long>(status.upbp.medium_point_count), static_cast<unsigned long long>(status.upbp.tracking_event_count),
+        memory_size_string(status.upbp.tracking_event_bytes).c_str(), static_cast<unsigned long long>(status.upbp.bp2d_beam_count), status.upbp.bp2d_partition_count,
+        static_cast<unsigned long long>(status.upbp.bb1d_beam_count), status.upbp.bb1d_partition_count);
+      if (status.upbp.gpu_memory_budget_bytes > 0u) {
+        const double memory_percentage = 100.0 * static_cast<double>(status.upbp.gpu_memory_used_bytes) / static_cast<double>(status.upbp.gpu_memory_budget_bytes);
+        detailed_status += "\nGPU device memory: " + memory_size_string(status.upbp.gpu_memory_used_bytes) + " / " + memory_size_string(status.upbp.gpu_memory_budget_bytes) +
+                           format_string(" (%.1f%%)", memory_percentage);
+      }
     }
     if (status.elapsed_available) {
       if (detailed_status.empty() == false) {

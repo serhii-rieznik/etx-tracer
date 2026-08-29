@@ -293,7 +293,6 @@ struct GPURaytracingRenderer : public Renderer {
     UPBPBuffer density_medium_point_buffer = {};
     UPBPBuffer density_medium_point_aabb_buffer = {};
     UPBPBuffer density_beam_buffer = {};
-    UPBPBuffer density_event_buffer = {};
     UPBPBuffer density_surface_point_instance_buffer = {};
     UPBPBuffer density_medium_point_instance_buffer = {};
     UPBPBuffer density_bp2d_beam_instance_buffer = {};
