@@ -174,8 +174,9 @@ bool wavefront_trace_closest_surface_or_boundary_with_origin_retry(RayDesc ray, 
   out uint boundary_medium_index);
 
 bool wavefront_upbp_trace_connection_to_point(float3 origin, float3 target, SpectralQuery spect, uint medium_index, SpectralResponse inline_extinction, uint inline_flags,
-  bool source_is_medium, inout uint intersection_seed, inout uint medium_seed, out bool visible, out GPUUPBPConnectionInterval connection) {
+  bool source_is_medium, inout uint intersection_seed, inout uint medium_seed, out bool visible, out GPUUPBPConnectionInterval connection, out uint failure) {
   visible = false;
+  failure = GPUUPBPConnectionTrackingFailure::None;
   connection = (GPUUPBPConnectionInterval)0;
   connection.weight = spectral_response_make(spect, 1.0f);
 
@@ -212,8 +213,31 @@ bool wavefront_upbp_trace_connection_to_point(float3 origin, float3 target, Spec
     const bool found_hit = retry_from_source ? wavefront_trace_closest_surface_or_boundary_with_origin_retry(ray, intersection_seed, trace_result, boundary_hit, boundary_medium)
                                              : wavefront_trace_closest_surface_or_boundary(ray, intersection_seed, trace_result, boundary_hit, boundary_medium);
     const float interval_distance = found_hit ? trace_result.hit_t : ray.TMax;
-    if ((interval_distance <= 0.0f) || (isfinite(interval_distance) == false)) {
+    if (isfinite(interval_distance) == false) {
+      failure = GPUUPBPConnectionTrackingFailure::InvalidIntervalDistance;
       return false;
+    }
+    if (interval_distance <= 0.0f) {
+      if (found_hit == false) {
+        failure = GPUUPBPConnectionTrackingFailure::InvalidIntervalDistance;
+        return false;
+      }
+      if (boundary_hit == false) {
+        return true;
+      }
+      boundary_count += 1u;
+      GPUUPBPResources upbp_resources = upbp_load_resources(wavefront_load_resources());
+      if (boundary_count > upbp_resources.iteration.maximum_boundary_count) {
+        failure = GPUUPBPConnectionTrackingFailure::BoundaryLimit;
+        return false;
+      }
+      const float boundary_side = dot(trace_result.surface_point.geo_normal, direction) >= 0.0f ? 1.0f : -1.0f;
+      current_origin = offset_ray(trace_result.surface_point.vertex.pos, trace_result.surface_point.geo_normal * boundary_side);
+      current_medium_index = boundary_medium;
+      current_inline_extinction = spectral_response_make(spect, 0.0f);
+      current_inline_flags = 0u;
+      retry_from_source = false;
+      continue;
     }
 
     GPUUPBPConnectionInterval interval = (GPUUPBPConnectionInterval)0;
@@ -231,6 +255,7 @@ bool wavefront_upbp_trace_connection_to_point(float3 origin, float3 target, Spec
         medium_seed, interval, terminal_type);
     }
     if (tracking_valid == false) {
+      failure = GPUUPBPConnectionTrackingFailure::MediumTracking;
       return false;
     }
     connection.weight = spectral_response_mul(connection.weight, interval.weight);
@@ -240,6 +265,7 @@ bool wavefront_upbp_trace_connection_to_point(float3 origin, float3 target, Spec
       return true;
     }
     if (terminal_type != kUPBPMediumEscape) {
+      failure = GPUUPBPConnectionTrackingFailure::InvalidTerminal;
       return false;
     }
     if (found_hit == false) {
@@ -252,6 +278,7 @@ bool wavefront_upbp_trace_connection_to_point(float3 origin, float3 target, Spec
 
     boundary_count += 1u;
     if (boundary_count > upbp_resources.iteration.maximum_boundary_count) {
+      failure = GPUUPBPConnectionTrackingFailure::BoundaryLimit;
       return false;
     }
     const float boundary_side = dot(trace_result.surface_point.geo_normal, direction) >= 0.0f ? 1.0f : -1.0f;

@@ -35,6 +35,10 @@ inline UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& opti
   result.light_subpath_count = path_count;
   result.bpt_sample_count = options.enabled(UPBPTechnique::BPT) ? 1u : 0u;
   result.spect = spect;
+  result.mis.enabled_techniques = upbp_effective_technique_mask(options, merge_vertices_enabled);
+  if (result.mis.enabled(UPBPTechnique::BB1D)) {
+    result.bb1d_light_subpath_count = options.maximum_bb1d_light_path_count > 0u ? min(path_count, static_cast<uint64_t>(options.maximum_bb1d_light_path_count)) : path_count;
+  }
 
   result.surface_radius = upbp_progressive_radius(
     upbp_initial_radius(options.initial_surface_radius, bounding_sphere_radius, result.camera_subpath_count, result.light_subpath_count, 2u, kUPBPAutomaticSurfaceRadiusScale),
@@ -48,14 +52,13 @@ inline UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& opti
   result.bp2d_radius = upbp_progressive_radius(
     upbp_initial_radius(options.initial_bp2d_radius, bounding_sphere_radius, result.camera_subpath_count, result.light_subpath_count, 2u, kUPBPAutomaticVolumeRadiusScale),
     options.radius_alpha, 2u, iteration);
-  result.bb1d_radius = upbp_progressive_radius(
+  const double bb1d_sample_fraction =
+    result.light_subpath_count > 0u ? static_cast<double>(result.bb1d_light_subpath_count) * options.beam_selection_probability / static_cast<double>(result.light_subpath_count)
+                                    : 0.0;
+  result.bb1d_radius = upbp_progressive_radius_for_sample_fraction(
     upbp_initial_radius(options.initial_bb1d_radius, bounding_sphere_radius, result.camera_subpath_count, result.light_subpath_count, 1u, kUPBPAutomaticVolumeRadiusScale),
-    options.radius_alpha, 1u, iteration);
+    options.radius_alpha, 1u, iteration, bb1d_sample_fraction);
 
-  result.mis.enabled_techniques = upbp_effective_technique_mask(options, merge_vertices_enabled);
-  if (result.mis.enabled(UPBPTechnique::BB1D)) {
-    result.bb1d_light_subpath_count = options.maximum_bb1d_light_path_count > 0u ? min(path_count, static_cast<uint64_t>(options.maximum_bb1d_light_path_count)) : path_count;
-  }
   result.mis.technique_factors[0u] = result.bpt_sample_count;
   result.mis.technique_factors[1u] = upbp_density_mis_factor(UPBPTechnique::Surface, result.light_subpath_count, result.surface_radius, 1.0);
   result.mis.technique_factors[2u] = upbp_density_mis_factor(UPBPTechnique::PP3D, result.light_subpath_count, result.pp3d_radius, 1.0);

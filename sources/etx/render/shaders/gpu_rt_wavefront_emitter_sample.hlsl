@@ -81,7 +81,7 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
     vertex = scene_instance_transform_vertex(scene_instance, vertex);
     const float3 geo_normal = scene_instance_transform_geometric_normal(scene_instance, tri.geo_n);
     sample_value.origin = vertex.pos;
-    sample_value.normal = vertex.nrm;
+    sample_value.normal = geo_normal;
     sample_value.image_uv = vertex.tex;
     sample_value.pdf_area = (emitter_instance.triangle_area > 0.0f) ? (1.0f / emitter_instance.triangle_area) : 0.0f;
     float3 dp = sample_value.origin - from_point;
@@ -104,18 +104,19 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
       return true;
     }
 
-    sample_value.value = evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, vertex.tex, spect);
     if (dot(geo_normal, dp) >= 0.0f) {
-      sample_value.value = spectral_response_zero(spect);
       return true;
     }
 
-    float cos_t = abs(dot(dp, geo_normal)) / sqrt(distance_squared);
-    float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
-    float cos_tx = pow(cos_t, exponent);
-    if (cos_tx > kEpsilon) {
-      sample_value.pdf_dir = sample_value.pdf_area * distance_squared / cos_tx;
-      sample_value.pdf_dir_out = sample_value.pdf_area * cos_tx * kInvPi;
+    const float cosine = max(0.0f, dot(geo_normal, -sample_value.direction));
+    if (cosine > kEpsilon) {
+      const float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
+      const float direction_pdf = scene_math_shared_collimated_direction_pdf(cosine, exponent);
+      sample_value.pdf_dir = sample_value.pdf_area * distance_squared / cosine;
+      sample_value.pdf_dir_out = sample_value.pdf_area * direction_pdf;
+      const float emission_scale = scene_math_shared_collimated_emission_scale(cosine, exponent);
+      sample_value.value =
+        spectral_response_mul(evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, vertex.tex, spect), emission_scale);
     }
     return true;
   }
@@ -213,22 +214,26 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
     TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
     sample_value.barycentric = random_barycentric(float2(rnd01(seed), rnd01(seed)));
     Vertex vertex = wavefront_interpolate_vertex(tri, sample_value.barycentric);
-    vertex = scene_instance_transform_vertex(load_scene_instance(emitter_instance.instance_index), vertex);
+    const GPUSceneInstanceData scene_instance = load_scene_instance(emitter_instance.instance_index);
+    vertex = scene_instance_transform_vertex(scene_instance, vertex);
+    const float3 geo_normal = scene_instance_transform_geometric_normal(scene_instance, tri.geo_n);
     Material material = (Material)0;
     if (try_load_material_full(tri.material_index, material) == false) {
       return false;
     }
 
-    float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
+    const float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
     sample_value.origin = vertex.pos;
-    sample_value.normal = vertex.nrm;
-    sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), sample_value.normal, vertex.tan, vertex.btn, exponent);
+    sample_value.normal = geo_normal;
+    sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), geo_normal, exponent);
     sample_value.image_uv = vertex.tex;
     sample_value.pdf_area = (emitter_instance.triangle_area > 0.0f) ? (1.0f / emitter_instance.triangle_area) : 0.0f;
-    float cos_t = max(0.0f, dot(sample_value.normal, sample_value.direction));
-    sample_value.pdf_dir = pow(cos_t, exponent) * kInvPi;
+    const float cosine = max(0.0f, dot(geo_normal, sample_value.direction));
+    sample_value.pdf_dir = scene_math_shared_collimated_direction_pdf(cosine, exponent);
     sample_value.pdf_dir_out = sample_value.pdf_area * sample_value.pdf_dir;
-    sample_value.value = evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, vertex.tex, spect);
+    const float emission_scale = scene_math_shared_collimated_emission_scale(cosine, exponent);
+    sample_value.value =
+      spectral_response_mul(evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, vertex.tex, spect), emission_scale);
     sample_value.is_delta = 0u;
     sample_value.is_distant = 0u;
     return sample_value.pdf_dir > 0.0f;

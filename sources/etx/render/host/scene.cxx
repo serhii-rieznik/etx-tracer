@@ -227,8 +227,9 @@ SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const Spectr
     collimation = material.emission_collimation;
   }
 
-  float cos_t = max(0.0f, dot(emitter_normal, direction));
-  pdf_dir = powf(cos_t, collimation_to_exponent(collimation)) * kInvPi;
+  const float cos_t = max(0.0f, dot(emitter_normal, direction));
+  const float exponent = scene_math_shared_collimation_to_exponent(collimation);
+  pdf_dir = scene_math_shared_collimated_direction_pdf(cos_t, exponent);
 
   if (pdf_dir <= 0.0f) {
     return {spect, 0.0f};
@@ -240,7 +241,8 @@ SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const Spectr
   pdf_dir_out = pdf_dir * pdf_area;
   ETX_ASSERT(pdf_dir_out > 0.0f);
 
-  return apply_image(spect, em.emission, uv);
+  const float emission_scale = scene_math_shared_collimated_emission_scale(cos_t, exponent);
+  return apply_image(spect, em.emission, uv) * emission_scale;
 }
 
 SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir) {
@@ -331,16 +333,17 @@ SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuer
       float3 dp = query.source_position - query.target_position;
       float distance_squared = dot(dp, dp);
       if (distance_squared > 0.0f) {
-        float cos_t = fabsf(dot(dp, geo_normal)) / sqrtf(distance_squared);
-        float exponent = collimation_to_exponent(material.emission_collimation);
-        float cos_tx = query.directly_visible ? cos_t : powf(cos_t, exponent);
-        if (cos_tx > kEpsilon) {
-          pdf_dir = pdf_area * distance_squared / cos_tx;
-          pdf_dir_out = pdf_area * cos_tx * kInvPi;
+        const float cos_t = dot(dp, geo_normal) / sqrtf(distance_squared);
+        if (cos_t > kEpsilon) {
+          const float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
+          pdf_dir = pdf_area * distance_squared / cos_t;
+          pdf_dir_out = pdf_area * scene_math_shared_collimated_direction_pdf(cos_t, exponent);
+          const float emission_scale = scene_math_shared_collimated_emission_scale(cos_t, exponent);
+          return apply_image(spect, em.emission, query.uv) * emission_scale;
         }
       }
 
-      return apply_image(spect, em.emission, query.uv);
+      return {spect, 0.0f};
     }
 
     default: {
@@ -473,7 +476,7 @@ EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spec
         vertex = scene_instance_transform_vertex(scene.instances[em_inst.instance_index], vertex);
       }
       result.origin = vertex.pos;
-      result.normal = vertex.nrm;
+      result.normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
       result.direction = normalize(result.origin - from_point);
       result.instance_index = em_inst.instance_index;
 
@@ -554,8 +557,8 @@ EmitterSample sample_emission_from_emitter(const Emitter& em_inst, const Spectra
         vertex = scene_instance_transform_vertex(scene.instances[em_inst.instance_index], vertex);
       }
       result.origin = vertex.pos;
-      result.normal = vertex.nrm;
-      result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, vertex.tan, vertex.btn, collimation_to_exponent(material.emission_collimation));
+      result.normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
+      result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, scene_math_shared_collimation_to_exponent(material.emission_collimation));
       result.value = emitter_evaluate_out_local(em_inst, spect, vertex.tex, result.normal, result.direction, result.pdf_area, result.pdf_dir, result.pdf_dir_out);
       break;
     }

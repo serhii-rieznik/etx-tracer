@@ -188,7 +188,8 @@ bool upbp_mark_failed_path(GPUUPBPResources resources, bool from_camera, uint pa
   return false;
 }
 
-void upbp_mark_failed_connection(GPUUPBPResources resources, uint global_path_index, uint technique_code, uint camera_vertex_count, uint light_vertex_count) {
+void upbp_mark_failed_connection(GPUUPBPResources resources, uint global_path_index, uint technique_code, uint camera_vertex_count, uint light_vertex_count,
+  uint tracking_failure) {
   if (resources.counter_buffer == kInvalidIndex) {
     return;
   }
@@ -202,6 +203,7 @@ void upbp_mark_failed_connection(GPUUPBPResources resources, uint global_path_in
     counters.Store(GPUUPBPCounterIndex::FirstFailureDetail0 * 4u, technique_code);
     counters.Store(GPUUPBPCounterIndex::FirstFailureDetail1 * 4u, camera_vertex_count);
     counters.Store(GPUUPBPCounterIndex::FirstFailureDetail2 * 4u, light_vertex_count);
+    counters.Store(GPUUPBPCounterIndex::FirstFailureDetail3 * 4u, tracking_failure);
   }
 }
 

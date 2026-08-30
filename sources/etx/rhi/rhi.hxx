@@ -46,11 +46,18 @@ struct RHIMemoryStats {
   uint64_t gpu_device_local_budget_bytes = 0;
 };
 
+enum class RHIRayTraversalClass : uint32_t {
+  None = 0u,
+  Compute = 1u,
+  FixedFunction = 2u,
+};
+
 struct RHICapabilities {
   bool supports_swapchain = false;
   bool supports_bindless = false;
   bool supports_timestamps = false;
   bool supports_ray_tracing = false;
+  RHIRayTraversalClass ray_traversal_class = RHIRayTraversalClass::None;
 };
 
 struct RHIChunkedBufferRange {

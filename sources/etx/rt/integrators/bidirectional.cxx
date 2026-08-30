@@ -258,8 +258,8 @@ struct CPUBidirectionalImpl : public Task {
 
       const uint2 film_size = film.base_dimensions();
       const uint32_t pixel_index = pixel.x + pixel.y * film_size.x;
-      auto camera_smp = Sampler(scene.sampler_seed(pixel_index, status.current_iteration));
-      auto light_smp = Sampler(scene.sampler_seed(pixel_index, status.current_iteration));
+      auto camera_smp = Sampler(scene.sampler_seed(pixel_index, status.current_iteration, kSamplerRandomDomainCameraPathRoot));
+      auto light_smp = Sampler(scene.sampler_seed(pixel_index, status.current_iteration, kSamplerRandomDomainLightPathRoot));
 
       SpectralQuery spect = SpectralQuery::sample();
       if (mode != Mode::PathTracing) {
@@ -450,11 +450,11 @@ struct CPUBidirectionalImpl : public Task {
     float2 rnd_bsdf = smp.next_2d();
     float2 rnd_em_sample = smp.next_2d();
     float2 rnd_support = smp.next_2d();
-    if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
-      const uint32_t sample_index = payload.iteration ^ rt.scene().options.random_seed;
-      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 0u);
-      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 2u);
-      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 4u);
+    if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < kSamplerBlueNoiseSampleCount)) {
+      const uint2 sample_pixel = sampler_blue_noise_pixel(payload.pixel, rt.scene().options.random_seed);
+      rnd_bsdf = sample_blue_noise_at_translated_pixel(sample_pixel, rt.scene().options.samples, payload.iteration, 0u);
+      rnd_em_sample = sample_blue_noise_at_translated_pixel(sample_pixel, rt.scene().options.samples, payload.iteration, 2u);
+      rnd_support = sample_blue_noise_at_translated_pixel(sample_pixel, rt.scene().options.samples, payload.iteration, 4u);
     }
 
     float3 w_o = sample_phase_function(ray.d, medium_instance.anisotropy, rnd_bsdf);
@@ -497,11 +497,11 @@ struct CPUBidirectionalImpl : public Task {
     float2 rnd_bsdf = smp.next_2d();
     float2 rnd_em_sample = smp.next_2d();
     float2 rnd_support = smp.next_2d();
-    if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < 256u)) {
-      const uint32_t sample_index = payload.iteration ^ rt.scene().options.random_seed;
-      rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 0u);
-      rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 2u);
-      rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 4u);
+    if (enable_blue_noise && (payload.mode == PathSource::Camera) && first_interaction && (payload.iteration < kSamplerBlueNoiseSampleCount)) {
+      const uint2 sample_pixel = sampler_blue_noise_pixel(payload.pixel, rt.scene().options.random_seed);
+      rnd_bsdf = sample_blue_noise_at_translated_pixel(sample_pixel, rt.scene().options.samples, payload.iteration, 0u);
+      rnd_em_sample = sample_blue_noise_at_translated_pixel(sample_pixel, rt.scene().options.samples, payload.iteration, 2u);
+      rnd_support = sample_blue_noise_at_translated_pixel(sample_pixel, rt.scene().options.samples, payload.iteration, 4u);
     }
 
     if (scene.materials[a_intersection.material_index].cls == MaterialClass::Boundary) {

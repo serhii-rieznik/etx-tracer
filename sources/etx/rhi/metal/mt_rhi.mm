@@ -501,6 +501,20 @@ static bool device_reports_raytracing(id<MTLDevice> device) {
   return false;
 }
 
+static RHIRayTraversalClass device_ray_traversal_class(id<MTLDevice> device) {
+  if (device_reports_raytracing(device) == false) {
+    return RHIRayTraversalClass::None;
+  }
+
+  if (@available(macOS 14.0, *)) {
+    if ([device supportsFamily:MTLGPUFamilyApple9]) {
+      return RHIRayTraversalClass::FixedFunction;
+    }
+  }
+
+  return RHIRayTraversalClass::Compute;
+}
+
 bool texture_prefers_private_storage(const RHITextureDesc& desc) {
   if (desc.host_visible == false) {
     return true;
@@ -1992,6 +2006,7 @@ RHICapabilities MTContext::capabilities() const {
     .supports_bindless = true,
     .supports_timestamps = supports_timestamps(),
     .supports_ray_tracing = _impl->supports_ray_tracing,
+    .ray_traversal_class = device_ray_traversal_class(_impl->metal_device),
   };
 }
 

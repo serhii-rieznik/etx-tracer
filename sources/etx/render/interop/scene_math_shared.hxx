@@ -10,6 +10,19 @@ ETX_SHARED_INLINE float scene_math_shared_collimation_to_exponent(float normaliz
   return 1.0f / max(kEpsilon, denom);
 }
 
+ETX_SHARED_INLINE float scene_math_shared_collimated_emission_scale(float cosine, float exponent) {
+  const float clamped_cosine = saturate(cosine);
+  const float safe_exponent = max(1.0f, exponent);
+  const float angular_term = (safe_exponent == 1.0f) ? 1.0f : pow(clamped_cosine, safe_exponent - 1.0f);
+  return 0.5f * (safe_exponent + 1.0f) * angular_term;
+}
+
+ETX_SHARED_INLINE float scene_math_shared_collimated_direction_pdf(float cosine, float exponent) {
+  const float clamped_cosine = saturate(cosine);
+  const float safe_exponent = max(1.0f, exponent);
+  return 0.5f * (safe_exponent + 1.0f) * kInvPi * pow(clamped_cosine, safe_exponent);
+}
+
 ETX_SHARED_INLINE float3 scene_math_shared_shading_pos_project(ETX_IN(float3, position), ETX_IN(float3, origin), ETX_IN(float3, normal)) {
   return position - dot(position - origin, normal) * normal;
 }

@@ -737,11 +737,13 @@ uint32_t VKContext::get_sampler_index(RHISamplerType type) const {
 }
 
 RHICapabilities VKContext::capabilities() const {
+  const bool supports_ray_tracing = _impl->device.supports_ray_tracing();
   return {
     .supports_swapchain = _impl->init_info.headless == false,
     .supports_bindless = _impl->device.supports_bindless(),
     .supports_timestamps = _impl->device.supports_timestamps(),
-    .supports_ray_tracing = _impl->device.supports_ray_tracing(),
+    .supports_ray_tracing = supports_ray_tracing,
+    .ray_traversal_class = supports_ray_tracing ? RHIRayTraversalClass::FixedFunction : RHIRayTraversalClass::None,
   };
 }
 

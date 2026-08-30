@@ -748,6 +748,18 @@ ETX_SHARED_INLINE double upbp_progressive_radius(const double initial_radius, co
   return initial_radius * std::pow(static_cast<double>(iteration) + 1.0, exponent);
 }
 
+ETX_SHARED_INLINE double upbp_progressive_radius_for_sample_fraction(const double initial_radius, const double alpha, const uint32_t dimension, const uint64_t iteration,
+  const double sample_fraction) {
+  if ((initial_radius <= 0.0) || (alpha <= 0.0) || (alpha > 1.0) || (dimension == 0u) || (sample_fraction <= 0.0) || (sample_fraction > 1.0) ||
+      (std::isfinite(initial_radius) == false) || (std::isfinite(alpha) == false) || (std::isfinite(sample_fraction) == false)) {
+    return 0.0;
+  }
+
+  const double exponent = (alpha - 1.0) / static_cast<double>(dimension);
+  const double effective_iteration = static_cast<double>(iteration) * sample_fraction;
+  return initial_radius * std::pow(effective_iteration + 1.0, exponent);
+}
+
 ETX_SHARED_INLINE double upbp_density_mis_factor(const UPBPTechnique technique, const uint64_t light_subpath_count, const double radius, const double beam_selection_probability) {
   if ((light_subpath_count == 0u) || (radius <= 0.0) || (beam_selection_probability <= 0.0) || (beam_selection_probability > 1.0)) {
     return 0.0;

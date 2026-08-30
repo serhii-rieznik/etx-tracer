@@ -59,7 +59,7 @@ ETX_SHARED_INLINE bool sampler_use_blue_noise_for_interaction(ETX_IN(SamplerPoli
 }
 
 ETX_SHARED_INLINE bool sampler_stream_supports_blue_noise(ETX_IN(SamplerPolicy, policy), uint32_t stream) {
-  if ((stream != kSamplerStreamBSDF) && (stream != kSamplerStreamConnection) && (stream != kSamplerStreamSupport)) {
+  if ((stream != kSamplerStreamBSDF) && (stream != kSamplerStreamConnection) && (stream != kSamplerStreamSupport) && (stream != kSamplerStreamOther)) {
     return false;
   }
 

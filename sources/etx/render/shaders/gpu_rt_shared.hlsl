@@ -74,10 +74,18 @@ uint load_scene_options_random_seed() {
 }
 
 uint scene_random_seed(uint value_0, uint value_1) {
-  return sampler_random_seed(value_0, value_1 ^ load_scene_options_random_seed());
+  return sampler_scene_seed(value_0, value_1, load_scene_options_random_seed());
 }
 
-float sample_blue_noise_value(uint2 pixel, uint sample_index, uint dimension) {
+uint scene_random_domain_seed(uint value_0, uint value_1, uint domain) {
+  return sampler_scene_domain_seed(value_0, value_1, load_scene_options_random_seed(), domain);
+}
+
+uint2 sample_blue_noise_translated_pixel(uint2 pixel) {
+  return sampler_blue_noise_pixel(pixel, load_scene_options_random_seed());
+}
+
+float sample_blue_noise_value_at_translated_pixel(uint2 sample_pixel, uint sample_index, uint dimension) {
   if (constants.blue_noise_buffer_index == kInvalidIndex) {
     return 0.5f;
   }
@@ -86,8 +94,8 @@ float sample_blue_noise_value(uint2 pixel, uint sample_index, uint dimension) {
   static const uint pixel_table_size = kSamplerBlueNoiseTileSize * kSamplerBlueNoiseTileSize * kSamplerBlueNoiseDimensionCount;
   static const uint scrambling_table_offset = pixel_table_size;
   static const uint sobol_table_offset = 2u * pixel_table_size;
-  uint pixel_table_index = blue_noise_pixel_table_index(pixel, dimension);
-  uint wrapped_sample = (sample_index ^ load_scene_options_random_seed()) & (kSamplerBlueNoiseSampleCount - 1u);
+  uint pixel_table_index = blue_noise_pixel_table_index(sample_pixel, dimension);
+  uint wrapped_sample = sample_index & (kSamplerBlueNoiseSampleCount - 1u);
   uint wrapped_dimension = dimension & (kSamplerBlueNoiseDimensionCount - 1u);
   uint ranked_sample = wrapped_sample ^ load_u8(blue_noise_table, pixel_table_index);
   uint sobol_value = load_u8(blue_noise_table, sobol_table_offset + ranked_sample * kSamplerBlueNoiseDimensionCount + wrapped_dimension);
@@ -107,7 +115,9 @@ bool sample_use_blue_noise_primary(uint current_sample, uint stream) {
 float2 sample_primary_hybrid_2d(uint2 pixel, uint current_sample, uint stream, inout uint seed) {
   if (sample_use_blue_noise_primary(current_sample, stream)) {
     uint dimension_base = sampler_stream_dimension_base(stream);
-    return float2(sample_blue_noise_value(pixel, current_sample, dimension_base + 0u), sample_blue_noise_value(pixel, current_sample, dimension_base + 1u));
+    uint2 sample_pixel = sample_blue_noise_translated_pixel(pixel);
+    return float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, current_sample, dimension_base + 0u),
+      sample_blue_noise_value_at_translated_pixel(sample_pixel, current_sample, dimension_base + 1u));
   }
 
   return float2(rnd01(seed), rnd01(seed));

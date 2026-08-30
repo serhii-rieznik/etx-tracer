@@ -1000,12 +1000,18 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   uint output_pixel_index = dtid.x + dtid.y * camera.film_size.x;
   uint2 camera_space_pixel = uint2(dtid.x, camera.film_size.y - 1u - dtid.y);
   uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
-  uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
+  uint seed = scene_random_domain_seed(seed_pixel_index, constants.sample_index, kSamplerRandomDomainCameraPathRoot);
   SpectralQuery spect = spectral_query_sample();
   if (scene_uses_spectral_mode()) {
     spect = spectral_query_spectral_sample(rnd01(seed));
   }
   float2 film_sample_rnd = float2(rnd01(seed), rnd01(seed));
+  if (sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamOther)) {
+    uint film_dimension = sampler_stream_dimension_base(kSamplerStreamOther);
+    uint2 sample_pixel = sample_blue_noise_translated_pixel(camera_space_pixel);
+    film_sample_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, film_dimension + 0u),
+      sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, film_dimension + 1u));
+  }
   float2 uv = camera_sample_film_uv(dtid.xy, camera.film_size, film_sample_rnd);
   float2 lens_rnd = camera_lens_sampling_enabled(camera.lens_radius, camera.focal_distance) ? sample_primary_hybrid_2d(dtid.xy, constants.sample_index, kSamplerStreamSupport, seed)
                                                                                             : float2(0.0f, 0.0f);
@@ -1041,7 +1047,7 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   }
 
   uint path_index = dtid.x + dtid.y * camera.film_size.x;
-  uint seed = scene_random_seed(path_index, constants.sample_index ^ 0x9e3779b9u);
+  uint seed = scene_random_domain_seed(path_index, constants.sample_index, kSamplerRandomDomainLightPathRoot);
   SpectralQuery spect = spectral_query_sample();
   if (scene_uses_spectral_mode()) {
     spect = spectral_query_spectral_sample(rnd01(seed));

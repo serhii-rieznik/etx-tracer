@@ -140,20 +140,27 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     support_rnd = float2(rnd01(bsdf_sampler.seed), rnd01(bsdf_sampler.seed));
   }
   if ((use_upbp_path_sampler == false) && from_camera && (state.path_length == 1u)) {
-    if (sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamBSDF)) {
+    const bool use_blue_noise_bsdf = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamBSDF);
+    const bool use_blue_noise_connection = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamConnection);
+    const bool use_blue_noise_support = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamSupport);
+    uint2 sample_pixel = state.pixel;
+    if (use_blue_noise_bsdf || use_blue_noise_connection || use_blue_noise_support) {
+      sample_pixel = sample_blue_noise_translated_pixel(state.pixel);
+    }
+    if (use_blue_noise_bsdf) {
       uint bsdf_dimension = sampler_stream_dimension_base(kSamplerStreamBSDF);
-      bsdf_rnd = float2(sample_blue_noise_value(state.pixel, constants.sample_index, bsdf_dimension + 0u),
-        sample_blue_noise_value(state.pixel, constants.sample_index, bsdf_dimension + 1u));
+      bsdf_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, bsdf_dimension + 0u),
+        sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, bsdf_dimension + 1u));
     }
-    if (sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamConnection)) {
+    if (use_blue_noise_connection) {
       uint connection_dimension = sampler_stream_dimension_base(kSamplerStreamConnection);
-      connection_rnd = float2(sample_blue_noise_value(state.pixel, constants.sample_index, connection_dimension + 0u),
-        sample_blue_noise_value(state.pixel, constants.sample_index, connection_dimension + 1u));
+      connection_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, connection_dimension + 0u),
+        sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, connection_dimension + 1u));
     }
-    if (sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamSupport)) {
+    if (use_blue_noise_support) {
       uint support_dimension = sampler_stream_dimension_base(kSamplerStreamSupport);
-      support_rnd = float2(sample_blue_noise_value(state.pixel, constants.sample_index, support_dimension + 0u),
-        sample_blue_noise_value(state.pixel, constants.sample_index, support_dimension + 1u));
+      support_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, support_dimension + 0u),
+        sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, support_dimension + 1u));
     }
   }
   state.film_uv = connection_rnd;

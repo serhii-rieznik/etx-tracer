@@ -6,6 +6,7 @@
 #include <etx/rt/integrators/upbp_point_merge.hxx>
 #include <etx/rt/integrators/upbp_beam_estimators.hxx>
 #include <etx/rt/integrators/upbp_bpt_cross_mis.hxx>
+#include <etx/rt/integrators/upbp_iteration.hxx>
 #include <etx/rt/integrators/upbp_options.hxx>
 #include <etx/rt/integrators/upbp_scene_path.hxx>
 #include <etx/rt/integrators/upbp_spatial.hxx>
@@ -69,6 +70,14 @@ bool validate_progressive_radii() {
   valid = close_value(etx::upbp_progressive_radius(0.25, 0.75, 3u, 63u), 0.25 * pow(64.0, -1.0 / 12.0), 1.0e-14, "progressive 3D radius") && valid;
   valid = close_value(etx::upbp_progressive_radius(0.25, 1.0, 3u, 999u), 0.25, 0.0, "fixed radius") && valid;
   valid = close_value(etx::upbp_progressive_radius(0.25, 1.1, 2u, 0u), 0.0, 0.0, "invalid radius alpha") && valid;
+  valid = close_value(etx::upbp_progressive_radius_for_sample_fraction(0.25, 0.75, 1u, 255u, 0.25), 0.25 * pow(64.75, -0.25), 1.0e-14, "sample-limited BB1D radius") && valid;
+  valid = close_value(etx::upbp_progressive_radius_for_sample_fraction(0.25, 0.75, 1u, 255u, 0.0), 0.0, 0.0, "invalid BB1D sample fraction") && valid;
+  etx::UPBPOptions options = {};
+  options.technique_mask = static_cast<uint32_t>(etx::UPBPTechnique::BB1D);
+  options.initial_bb1d_radius = 0.25f;
+  options.maximum_bb1d_light_path_count = 4000u;
+  const etx::UPBPIterationParameters parameters = etx::upbp_iteration_parameters(options, 1.0f, {}, true, 16000u, 255u);
+  valid = close_value(parameters.bb1d_radius, 0.25 * pow(64.75, -0.25), 1.0e-14, "capped BB1D iteration radius") && valid;
 
   constexpr uint64_t light_path_count = 4096u;
   constexpr double radius = 0.1;

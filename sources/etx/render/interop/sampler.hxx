@@ -8,6 +8,10 @@
 
 ETX_STATIC_CONST float kSamplerMaximumContinuationProbability = 0.95f;
 
+ETX_STATIC_CONST uint32_t kSamplerRandomDomainCameraPathRoot = 0x43414d45u;
+ETX_STATIC_CONST uint32_t kSamplerRandomDomainLightPathRoot = 0x4c494748u;
+ETX_STATIC_CONST uint32_t kSamplerRandomDomainBlueNoisePhase = 0x424e5048u;
+
 ETX_SHARED_INLINE uint32_t sampler_random_seed(uint32_t val0, uint32_t val1) {
   uint32_t v0 = val0;
   uint32_t v1 = val1;
@@ -18,6 +22,26 @@ ETX_SHARED_INLINE uint32_t sampler_random_seed(uint32_t val0, uint32_t val1) {
     v1 += ((v0 << 4u) + 0xad90777du) ^ (v0 + s0) ^ ((v0 >> 5u) + 0x7e95761eu);
   }
   return v0;
+}
+
+ETX_SHARED_INLINE uint32_t sampler_scene_seed(uint32_t value_0, uint32_t value_1, uint32_t render_seed) {
+  const uint32_t base_seed = sampler_random_seed(value_0, value_1);
+  return render_seed == 0u ? base_seed : sampler_random_seed(base_seed, render_seed);
+}
+
+ETX_SHARED_INLINE uint32_t sampler_scene_domain_seed(uint32_t value_0, uint32_t value_1, uint32_t render_seed, uint32_t domain) {
+  return sampler_random_seed(sampler_scene_seed(value_0, value_1, render_seed), domain);
+}
+
+ETX_SHARED_INLINE uint2 sampler_blue_noise_pixel(uint2 pixel, uint32_t render_seed) {
+  if (render_seed == 0u) {
+    return pixel;
+  }
+
+  const uint32_t phase = sampler_random_seed(kSamplerRandomDomainBlueNoisePhase, render_seed);
+  pixel.x += phase & 0x7fu;
+  pixel.y += (phase >> 16u) & 0x7fu;
+  return pixel;
 }
 
 ETX_SHARED_INLINE uint32_t sampler_reverse_bits_32(uint32_t value) {

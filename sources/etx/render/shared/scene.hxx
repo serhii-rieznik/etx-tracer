@@ -136,7 +136,7 @@ struct ETX_ALIGNED Scene {
     return options.properties[Properties::MultipleImportanceSampling];
   }
   bool blue_noise() const {
-    return true;
+    return options.properties[Properties::BlueNoise];
   }
   LightSampling light_sampling_method() const {
     return options.light_sampling;
@@ -154,7 +154,11 @@ struct ETX_ALIGNED Scene {
   }
 
   ETX_SHARED_INLINE uint32_t sampler_seed(uint32_t value_0, uint32_t value_1) const {
-    return sampler_random_seed(value_0, value_1 ^ options.random_seed);
+    return sampler_scene_seed(value_0, value_1, options.random_seed);
+  }
+
+  ETX_SHARED_INLINE uint32_t sampler_seed(uint32_t value_0, uint32_t value_1, uint32_t domain) const {
+    return sampler_scene_domain_seed(value_0, value_1, options.random_seed, domain);
   }
 };
 
@@ -162,12 +166,6 @@ struct ETX_ALIGNED Scene {
 #include <etx/render/access/image_evaluate_cpu.hxx>
 #include <etx/render/access/material_access_cpu.hxx>
 #include <etx/render/access/medium_access_cpu.hxx>
-
-ETX_SHARED_INLINE float collimation_to_exponent(float normalized) {
-  float t = saturate(normalized);
-  float denom = sqr(sqr(1.0f - t));
-  return 1.0f / fmaxf(kEpsilon, denom);
-}
 
 ETX_SHARED_INLINE float3 lerp_pos(const Scene& scene, const Triangle& t, const float3& bc) {
   return scene.vertices.pos[t.i[0]] * bc.x +  //

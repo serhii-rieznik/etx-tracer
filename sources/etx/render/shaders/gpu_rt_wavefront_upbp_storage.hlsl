@@ -111,6 +111,19 @@ GPUUPBPIteration upbp_load_iteration(ByteAddressBuffer buffer, uint byte_offset)
   return result;
 }
 
+GPUUPBPBeamGridResources upbp_load_beam_grid_resources(ByteAddressBuffer buffer, uint byte_offset) {
+  GPUUPBPBeamGridResources result = (GPUUPBPBeamGridResources)0;
+  result.metadata_buffer = buffer.Load(byte_offset + kGPUUPBPBeamGridResourcesMetadataBufferOffset);
+  result.cell_offsets_buffer = buffer.Load(byte_offset + kGPUUPBPBeamGridResourcesCellOffsetsBufferOffset);
+  result.reserved0 = buffer.Load(byte_offset + kGPUUPBPBeamGridResourcesReserved0Offset);
+  result.beam_indices_buffer = buffer.Load(byte_offset + kGPUUPBPBeamGridResourcesBeamIndicesBufferOffset);
+  result.beam_count = buffer.Load(byte_offset + kGPUUPBPBeamGridResourcesBeamCountOffset);
+  result.beam_index_count = buffer.Load(byte_offset + kGPUUPBPBeamGridResourcesBeamIndexCountOffset);
+  result.reserved1 = buffer.Load(byte_offset + kGPUUPBPBeamGridResourcesReserved1Offset);
+  result.reserved2 = buffer.Load(byte_offset + kGPUUPBPBeamGridResourcesReserved2Offset);
+  return result;
+}
+
 GPUUPBPResources upbp_load_resources(GPUWavefrontResources wavefront_resources) {
   GPUUPBPResources result = (GPUUPBPResources)0;
   if (wavefront_resources.upbp_resources_buffer == kInvalidIndex) {
@@ -165,6 +178,9 @@ GPUUPBPResources upbp_load_resources(GPUWavefrontResources wavefront_resources) 
   result.beam_reference_buffer = buffer.Load(kGPUUPBPResourcesBeamReferenceBufferOffset);
   result.bpt_light_vertex_buffer = buffer.Load(kGPUUPBPResourcesBPTLightVertexBufferOffset);
   result.bpt_light_path_state_buffer = buffer.Load(kGPUUPBPResourcesBPTLightPathStateBufferOffset);
+  result.bp2d_beam_grid = upbp_load_beam_grid_resources(buffer, kGPUUPBPResourcesBP2DBeamGridOffset);
+  result.bb1d_beam_grid = upbp_load_beam_grid_resources(buffer, kGPUUPBPResourcesBB1DBeamGridOffset);
+  result.beam_index_mode = buffer.Load(kGPUUPBPResourcesBeamIndexModeOffset);
   return result;
 }
 

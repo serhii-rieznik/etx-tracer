@@ -17,7 +17,7 @@
   uint path_index = wavefront_render_window_local_index(dtid.xy);
   uint2 camera_space_pixel = uint2(output_pixel.x, camera.film_size.y - 1u - output_pixel.y);
   uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
-  uint seed = scene_random_seed(seed_pixel_index, constants.sample_index);
+  uint seed = scene_random_domain_seed(seed_pixel_index, constants.sample_index, kSamplerRandomDomainCameraPathRoot);
   SpectralQuery spect = spectral_query_sample();
   if (scene_path_mode_is_vcm() || scene_path_mode_is_upbp()) {
     spect = wavefront_vcm_iteration_spectral_query();
@@ -37,6 +37,15 @@
   }
 #endif
   float2 uv_sample = float2(rnd01(film_seed), rnd01(film_seed));
+  if (scene_path_mode_is_upbp() == false) {
+    seed = film_seed;
+  }
+  if ((scene_path_mode_is_upbp() == false) && sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamOther)) {
+    uint film_dimension = sampler_stream_dimension_base(kSamplerStreamOther);
+    uint2 sample_pixel = sample_blue_noise_translated_pixel(camera_space_pixel);
+    uv_sample = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, film_dimension + 0u),
+      sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, film_dimension + 1u));
+  }
   float2 uv = camera_sample_film_uv(output_pixel, camera.film_size, uv_sample);
   float2 lens_rnd = float2(rnd01(seed), rnd01(seed));
   GPUWavefrontPathState state = (GPUWavefrontPathState)0;

@@ -83,7 +83,8 @@ struct GPURaytracingRenderer : public Renderer {
     UPBPDirectHit = 59u,
     UPBPValidate = 60u,
     UPBPBeamInstances = 61u,
-    Count = 62u,
+    UPBPBeamGridBuild = 62u,
+    Count = 63u,
   };
 
   GPURaytracingRenderer(TaskScheduler&);
@@ -277,6 +278,16 @@ struct GPURaytracingRenderer : public Renderer {
     uint32_t selected_beam_count = 0u;
   };
 
+  struct UPBPBeamGridResources {
+    UPBPBuffer metadata_buffer = {};
+    UPBPBuffer cell_offsets_buffer = {};
+    UPBPBuffer beam_indices_buffer = {};
+    uint32_t beam_index_count = 0u;
+    RHIResourceState metadata_state = RHIResourceState::Undefined;
+    RHIResourceState cell_offsets_state = RHIResourceState::Undefined;
+    RHIResourceState beam_indices_state = RHIResourceState::Undefined;
+  };
+
   struct UPBPRuntimeResources {
     GPUUPBPResources resources = {};
     UPBPBuffer resources_buffer = {};
@@ -299,6 +310,12 @@ struct GPURaytracingRenderer : public Renderer {
     UPBPBuffer density_bb1d_beam_instance_buffer = {};
     UPBPBuffer density_bb1d_beam_buffer = {};
     UPBPBuffer density_beam_reference_buffer = {};
+    UPBPBuffer density_beam_grid_metadata_readback_buffer = {};
+    UPBPBuffer density_beam_grid_scratch_buffer = {};
+    UPBPBeamGridResources density_bp2d_beam_grid = {};
+    UPBPBeamGridResources density_bb1d_beam_grid = {};
+    RHIResourceState density_beam_grid_metadata_readback_state = RHIResourceState::Undefined;
+    RHIResourceState density_beam_grid_scratch_state = RHIResourceState::Undefined;
     UPBPBuffer density_beam_unit_aabb_buffer = {};
     UPBPBuffer density_as_scratch_buffer = {};
     UPBPBuffer counter_buffer = {};
@@ -350,8 +367,9 @@ struct GPURaytracingRenderer : public Renderer {
   void destroy_scene_buffers(RHIContext& ctx);
   void destroy_wavefront_buffers(RHIContext& ctx);
   void destroy_upbp_buffers(RHIDevice& device);
-  void destroy_upbp_density_cache(RHIDevice& device);
+  void destroy_upbp_density_cache(RHIDevice& device, bool release_beam_grid_storage);
   void reset_upbp_density_cache();
+  void bind_upbp_density_cache_resources();
   void destroy_blue_noise_buffer(RHIContext& ctx);
   bool update_blue_noise_buffer(RHIContext& ctx, const SceneRepresentation& scene);
   void destroy_acceleration_structures(RHIContext& ctx);
@@ -594,6 +612,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _integrator_features = 0u;
   uint32_t _material_compile_mask = 0u;
   uint32_t _spectral_mode = 0u;
+  bool _use_compute_upbp_beam_grid = false;
   bool _scene_options_upload_pending = false;
   uint2 _render_window_origin = {};
   uint2 _render_window_size = {};

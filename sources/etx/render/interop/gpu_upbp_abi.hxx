@@ -20,8 +20,10 @@ ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointStride = 144u;
 ETX_STATIC_CONST uint32_t kGPUUPBPDensityBeamStride = 256u;
 ETX_STATIC_CONST uint32_t kGPUUPBPDensityBatchStride = 40u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBeamReferenceStride = 36u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataStride = 64u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesStride = 32u;
 ETX_STATIC_CONST uint32_t kGPUUPBPIterationStride = 112u;
-ETX_STATIC_CONST uint32_t kGPUUPBPResourcesStride = 688u;
+ETX_STATIC_CONST uint32_t kGPUUPBPResourcesStride = 768u;
 
 ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsDSharedOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsDBPTOffset = 4u;
@@ -239,6 +241,29 @@ ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBPTLightVertexBufferOffset = 296u;
 ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBPTLightPathStateBufferOffset = 300u;
 ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBB1DPartitionAccelerationStructuresOffset = 304u;
 ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBP2DBeamAccelerationStructuresOffset = 556u;
+ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBP2DBeamGridOffset = 688u;
+ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBB1DBeamGridOffset = 720u;
+ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBeamIndexModeOffset = 752u;
+
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesMetadataBufferOffset = 0u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesCellOffsetsBufferOffset = 4u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesReserved0Offset = 8u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesBeamIndicesBufferOffset = 12u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesBeamCountOffset = 16u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesBeamIndexCountOffset = 20u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesReserved1Offset = 24u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesReserved2Offset = 28u;
+
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataMinimumOffset = 0u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataResolutionXOffset = 12u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataMaximumOffset = 16u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataResolutionYOffset = 28u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataInverseCellSizeOffset = 32u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataResolutionZOffset = 44u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataCellCountOffset = 48u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataBeamCountOffset = 52u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataEntryCountOffset = 56u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridMetadataReserved0Offset = 60u;
 
 ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointThroughputOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointPositionOffset = 16u;

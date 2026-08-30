@@ -1,6 +1,7 @@
 #pragma once
 
 #include <etx/render/interop/interop.hxx>
+#include <etx/render/interop/sampler_policy.hxx>
 #include <etx/render/shared/scene.hxx>
 
 namespace etx {
@@ -147,13 +148,13 @@ ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, c
 
 }  // namespace subsurface
 
-float2 sample_blue_noise(const uint2& pixel, const uint32_t total_samples, const uint32_t current_sample, uint32_t dimension);
+float2 sample_blue_noise_at_translated_pixel(const uint2& sample_pixel, const uint32_t total_samples, const uint32_t current_sample, const uint32_t dimension);
 
 ETX_SHARED_INLINE PTRayPayload make_ray_payload(const Scene& scene, const Camera& camera, const Film& film, const uint2& px, const uint32_t pixel_index, const uint32_t iteration,
   const bool spectral, const bool use_blue_noise) {
   PTRayPayload payload = {};
   payload.iteration = iteration;
-  payload.smp.init(pixel_index, payload.iteration ^ scene.options.random_seed);
+  payload.smp.seed = scene.sampler_seed(pixel_index, payload.iteration, kSamplerRandomDomainCameraPathRoot);
   if (spectral) {
     payload.spect = SpectralQuery::spectral_sample(payload.smp.next());
   } else {
@@ -302,11 +303,11 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   float2 rnd_em_sample = payload.smp.next_2d();
   float2 rnd_support = payload.smp.next_2d();
 
-  if (payload.use_blue_noise && (payload.path_length == 1u)) {
-    const uint32_t sample_index = payload.iteration ^ rt.scene().options.random_seed;
-    rnd_bsdf = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 0u);
-    rnd_em_sample = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 2u);
-    rnd_support = sample_blue_noise(payload.pixel, rt.scene().options.samples, sample_index, 4u);
+  if (payload.use_blue_noise && (payload.path_length == 1u) && (payload.iteration < kSamplerBlueNoiseSampleCount)) {
+    const uint2 sample_pixel = sampler_blue_noise_pixel(payload.pixel, rt.scene().options.random_seed);
+    rnd_bsdf = sample_blue_noise_at_translated_pixel(sample_pixel, rt.scene().options.samples, payload.iteration, 0u);
+    rnd_em_sample = sample_blue_noise_at_translated_pixel(sample_pixel, rt.scene().options.samples, payload.iteration, 2u);
+    rnd_support = sample_blue_noise_at_translated_pixel(sample_pixel, rt.scene().options.samples, payload.iteration, 4u);
   }
 
   payload.smp.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);

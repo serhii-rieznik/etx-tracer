@@ -170,6 +170,16 @@ struct GPUUPBPPathFailure {
   };
 };
 
+struct GPUUPBPConnectionTrackingFailure {
+  enum : uint32_t {
+    None = 0u,
+    InvalidIntervalDistance = 1u,
+    MediumTracking = 2u,
+    InvalidTerminal = 3u,
+    BoundaryLimit = 4u,
+  };
+};
+
 struct GPUUPBPOverflowFlags {
   enum : uint32_t {
     Vertex = 1u << 0u,
@@ -215,6 +225,45 @@ struct GPUUPBPDensityQueryMode {
   enum : uint32_t {
     Raw = 0u,
     Compacted = 1u,
+  };
+};
+
+struct GPUUPBPBeamGridBuildMode {
+  enum : uint32_t {
+    Describe = 0u,
+    Count = 1u,
+    CellTotals = 2u,
+    Prefix = 3u,
+    ShardOffsets = 4u,
+    Scatter = 5u,
+    Validate = 6u,
+  };
+};
+
+struct GPUUPBPBeamGridType {
+  enum : uint32_t {
+    BP2D = 0u,
+    BB1D = 1u,
+  };
+};
+
+struct GPUUPBPBeamGridBuildFailure {
+  enum : uint32_t {
+    None = 0u,
+    InvalidInput = 1u,
+    EntryCountOverflow = 2u,
+    OutputCapacity = 4u,
+    InvalidIndex = 8u,
+    DuplicateIndex = 16u,
+    InvalidOrder = 32u,
+    CountScatterMismatch = 64u,
+  };
+};
+
+struct GPUUPBPBeamIndexMode {
+  enum : uint32_t {
+    AccelerationStructure = 0u,
+    ComputeGrid = 1u,
   };
 };
 
@@ -461,6 +510,30 @@ struct GPUUPBPBeamReference {
   uint32_t medium_index ETX_INIT(kInvalidIndex);
 };
 
+struct ETX_ALIGNED GPUUPBPBeamGridMetadata {
+  float3 minimum ETX_INIT({});
+  uint32_t resolution_x ETX_INIT(0u);
+  float3 maximum ETX_INIT({});
+  uint32_t resolution_y ETX_INIT(0u);
+  float3 inverse_cell_size ETX_INIT({});
+  uint32_t resolution_z ETX_INIT(0u);
+  uint32_t cell_count ETX_INIT(0u);
+  uint32_t beam_count ETX_INIT(0u);
+  uint32_t entry_count ETX_INIT(0u);
+  uint32_t reserved0 ETX_INIT(0u);
+};
+
+struct ETX_ALIGNED GPUUPBPBeamGridResources {
+  uint32_t metadata_buffer ETX_INIT(kInvalidIndex);
+  uint32_t cell_offsets_buffer ETX_INIT(kInvalidIndex);
+  uint32_t reserved0 ETX_INIT(0u);
+  uint32_t beam_indices_buffer ETX_INIT(kInvalidIndex);
+  uint32_t beam_count ETX_INIT(0u);
+  uint32_t beam_index_count ETX_INIT(0u);
+  uint32_t reserved1 ETX_INIT(0u);
+  uint32_t reserved2 ETX_INIT(0u);
+};
+
 struct ETX_ALIGNED GPUUPBPIteration {
   uint32_t technique_mask ETX_INIT(0u);
   uint32_t kernel ETX_INIT(0u);
@@ -538,4 +611,8 @@ struct ETX_ALIGNED GPUUPBPResources {
   uint32_t bpt_light_path_state_buffer ETX_INIT(kInvalidIndex);
   uint32_t bb1d_partition_acceleration_structures[kGPUUPBPBB1DPartitionCount - 1u] ETX_INIT({});
   uint32_t bp2d_beam_acceleration_structures[kGPUUPBPBP2DPartitionCount] ETX_INIT({});
+  GPUUPBPBeamGridResources bp2d_beam_grid ETX_INIT({});
+  GPUUPBPBeamGridResources bb1d_beam_grid ETX_INIT({});
+  uint32_t beam_index_mode ETX_INIT(GPUUPBPBeamIndexMode::AccelerationStructure);
+  uint32_t reserved1[3u] ETX_INIT({});
 };

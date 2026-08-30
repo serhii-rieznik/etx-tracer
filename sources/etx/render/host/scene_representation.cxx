@@ -2142,7 +2142,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
       } else if (json_get_bool(i, "multiple_importance_sampling", bool_value)) {
         _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = bool_value;
       } else if (json_get_bool(i, "blue_noise", bool_value)) {
-        (void)bool_value;
+        _private->data.options.properties[Scene::Properties::BlueNoise] = bool_value;
       } else if ((key == "scene_hierarchy") && obj.is_object()) {
         hierarchy_json = obj;
       } else if (json_get_string(i, "light_sampling", str_value)) {
@@ -2178,7 +2178,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
           } else if (strat_key == "multiple_importance_sampling") {
             _private->data.options.properties[Scene::Properties::MultipleImportanceSampling] = strat_value;
           } else if (strat_key == "blue_noise") {
-            (void)strat_value;
+            _private->data.options.properties[Scene::Properties::BlueNoise] = strat_value;
           }
         }
         _private->data.options.strategy_flags = strategy_flags;
@@ -2604,6 +2604,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   }
   js["spectral"] = impl->data.options.properties[Scene::Properties::Spectral];
   js["multiple_importance_sampling"] = impl->data.options.properties[Scene::Properties::MultipleImportanceSampling];
+  js["blue_noise"] = impl->data.options.properties[Scene::Properties::BlueNoise];
   js["scene_hierarchy"] = serialize_scene_hierarchy(impl->data.hierarchy);
 
   switch (impl->data.options.light_sampling) {
@@ -3202,7 +3203,6 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   }
   data.options.min_path_length = std::min(data.options.min_path_length, data.options.max_path_length);
   data.options.properties[Scene::Properties::Spectral] = spectral_scene;
-  data.options.properties[Scene::Properties::BlueNoise] = true;
 
   if (options & SceneRepresentation::SetupCamera) {
     if (data.cameras.empty()) {

@@ -29,12 +29,19 @@
 }
 
   [numthreads(8, 8, 1)] void wavefront_prepare_sample_main(uint3 dtid : SV_DispatchThreadID) {
-  if (constants.dispatch_item_offset != 0u) {
-    if ((dtid.x == 0u) && (dtid.y == 0u)) {
-      wavefront_queue_reset(wavefront_queue_current_descriptor(false));
-      wavefront_queue_reset(wavefront_queue_next_descriptor(false));
-      wavefront_reset_work_queues(wavefront_load_resources());
+  if ((dtid.x == 0u) && (dtid.y == 0u)) {
+    wavefront_queue_reset(wavefront_queue_current_descriptor(true));
+    wavefront_queue_reset(wavefront_queue_next_descriptor(true));
+    wavefront_queue_reset(wavefront_queue_current_descriptor(false));
+    wavefront_queue_reset(wavefront_queue_next_descriptor(false));
+    GPUWavefrontResources resources = wavefront_load_resources();
+    wavefront_reset_work_queues(resources);
+    if (resources.light_vertex_counter_buffer != kInvalidIndex) {
+      RWByteAddressBuffer counter_buffer = bindless_rw_buffers[NonUniformResourceIndex(resources.light_vertex_counter_buffer)];
+      counter_buffer.Store(0u, resources.path_capacity);
     }
+  }
+  if (constants.dispatch_item_offset != 0u) {
     return;
   }
   if (constants.camera_buffer_index == kInvalidIndex) {
@@ -50,18 +57,6 @@
   uint pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
   if (constants.sample_index == 0u) {
     wavefront_film_store(pixel_index, float4(0.0f, 0.0f, 0.0f, 0.0f));
-  }
-  if ((dtid.x == 0u) && (dtid.y == 0u)) {
-    wavefront_queue_reset(wavefront_queue_current_descriptor(true));
-    wavefront_queue_reset(wavefront_queue_next_descriptor(true));
-    wavefront_queue_reset(wavefront_queue_current_descriptor(false));
-    wavefront_queue_reset(wavefront_queue_next_descriptor(false));
-    GPUWavefrontResources resources = wavefront_load_resources();
-    wavefront_reset_work_queues(resources);
-    if (resources.light_vertex_counter_buffer != kInvalidIndex) {
-      RWByteAddressBuffer counter_buffer = bindless_rw_buffers[NonUniformResourceIndex(resources.light_vertex_counter_buffer)];
-      counter_buffer.Store(0u, resources.path_capacity);
-    }
   }
 }
 

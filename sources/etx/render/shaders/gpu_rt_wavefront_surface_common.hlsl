@@ -273,6 +273,7 @@ uint wavefront_path_state_persistent_flags(GPUWavefrontPathState state) {
 
 SpectralResponse wavefront_evaluate_local_direct_hit_radiance(uint emitter_index, SpectralQuery spect, float3 source_position, float3 target_position, float2 uv,
   bool directly_visible, out float pdf_area, out float pdf_dir, out float pdf_dir_out) {
+  (void)directly_visible;
   pdf_area = 0.0f;
   pdf_dir = 0.0f;
   pdf_dir_out = 0.0f;
@@ -306,16 +307,17 @@ SpectralResponse wavefront_evaluate_local_direct_hit_radiance(uint emitter_index
   float3 dp = source_position - target_position;
   float distance_squared = dot(dp, dp);
   if (distance_squared > 0.0f) {
-    float cos_t = abs(dot(dp, geo_normal)) / sqrt(distance_squared);
-    float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
-    float cos_tx = directly_visible ? cos_t : pow(cos_t, exponent);
-    if (cos_tx > kEpsilon) {
-      pdf_dir = pdf_area * distance_squared / cos_tx;
-      pdf_dir_out = pdf_area * cos_tx * kInvPi;
+    const float cosine = max(0.0f, dot(dp, geo_normal)) / sqrt(distance_squared);
+    if (cosine > kEpsilon) {
+      const float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
+      pdf_dir = pdf_area * distance_squared / cosine;
+      pdf_dir_out = pdf_area * scene_math_shared_collimated_direction_pdf(cosine, exponent);
+      const float emission_scale = scene_math_shared_collimated_emission_scale(cosine, exponent);
+      return spectral_response_mul(evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, uv, spect), emission_scale);
     }
   }
 
-  return evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, uv, spect);
+  return spectral_response_zero(spect);
 }
 
 SpectralResponse wavefront_compute_local_direct_hit_contribution(SpectralQuery spect, uint camera_path_length, GPUWavefrontPathVertex current_vertex,
@@ -620,10 +622,29 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
       connection_random = float2(rnd01(state.sampler_seed), rnd01(state.sampler_seed));
       support_random = float2(rnd01(state.sampler_seed), rnd01(state.sampler_seed));
     }
-    if ((upbp_path == false) && from_camera && (state.path_length == 1u) && (constants.sample_index < 256u)) {
-      sample_random = float2(sample_blue_noise_value(state.pixel, constants.sample_index, 0u), sample_blue_noise_value(state.pixel, constants.sample_index, 1u));
-      connection_random = float2(sample_blue_noise_value(state.pixel, constants.sample_index, 2u), sample_blue_noise_value(state.pixel, constants.sample_index, 3u));
-      support_random = float2(sample_blue_noise_value(state.pixel, constants.sample_index, 4u), sample_blue_noise_value(state.pixel, constants.sample_index, 5u));
+    if ((upbp_path == false) && from_camera && (state.path_length == 1u)) {
+      const bool use_blue_noise_bsdf = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamBSDF);
+      const bool use_blue_noise_connection = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamConnection);
+      const bool use_blue_noise_support = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamSupport);
+      uint2 sample_pixel = state.pixel;
+      if (use_blue_noise_bsdf || use_blue_noise_connection || use_blue_noise_support) {
+        sample_pixel = sample_blue_noise_translated_pixel(state.pixel);
+      }
+      if (use_blue_noise_bsdf) {
+        const uint bsdf_dimension = sampler_stream_dimension_base(kSamplerStreamBSDF);
+        sample_random = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, bsdf_dimension + 0u),
+          sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, bsdf_dimension + 1u));
+      }
+      if (use_blue_noise_connection) {
+        const uint connection_dimension = sampler_stream_dimension_base(kSamplerStreamConnection);
+        connection_random = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, connection_dimension + 0u),
+          sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, connection_dimension + 1u));
+      }
+      if (use_blue_noise_support) {
+        const uint support_dimension = sampler_stream_dimension_base(kSamplerStreamSupport);
+        support_random = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, support_dimension + 0u),
+          sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, support_dimension + 1u));
+      }
     }
     state.film_uv = connection_random;
     state.last_emitter_pdf = support_random.y;

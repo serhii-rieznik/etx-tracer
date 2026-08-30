@@ -33,13 +33,14 @@
     uint medium_seed = task.upbp_auxiliary0_bits;
     bool visible = false;
     GPUUPBPConnectionInterval connection = (GPUUPBPConnectionInterval)0;
+    uint tracking_failure = GPUUPBPConnectionTrackingFailure::None;
     const bool source_is_medium = (task.flags & GPUWavefrontPointConnectionTaskFlags::SourceMedium) != 0u;
     const bool tracking_valid = wavefront_upbp_trace_connection_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
-      task.inline_medium_flags, source_is_medium, seed, medium_seed, visible, connection);
+      task.inline_medium_flags, source_is_medium, seed, medium_seed, visible, connection, tracking_failure);
     if (tracking_valid == false) {
       const GPUUPBPResources upbp_resources = upbp_load_resources(resources);
       const GPUUPBPPathState path_state = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, true, task.path_index));
-      upbp_mark_failed_connection(upbp_resources, path_state.global_path_index, 1u, path_state.path_length + 1u, 1u);
+      upbp_mark_failed_connection(upbp_resources, path_state.global_path_index, 1u, path_state.path_length + 1u, 1u, tracking_failure);
     }
     result_value.transmittance = connection.weight;
     result_value.visible = tracking_valid && visible ? 1u : 0u;
@@ -91,11 +92,12 @@
     GPUUPBPConnectionInterval connection = (GPUUPBPConnectionInterval)0;
     uint intersection_seed = task.upbp_intersection_seed;
     uint medium_seed = task.upbp_medium_seed;
+    uint tracking_failure = GPUUPBPConnectionTrackingFailure::None;
     const bool source_is_medium = upbp_vertex_is_medium(light_vertex);
     const bool tracking_valid = wavefront_upbp_trace_connection_to_point(task.shadow_origin, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
-      task.inline_medium_flags, source_is_medium, intersection_seed, medium_seed, visible, connection);
+      task.inline_medium_flags, source_is_medium, intersection_seed, medium_seed, visible, connection, tracking_failure);
     if (tracking_valid == false) {
-      upbp_mark_failed_connection(upbp_resources, camera_vertex.global_path_index, 3u, camera_vertex.path_length + 1u, light_vertex.path_length + 1u);
+      upbp_mark_failed_connection(upbp_resources, camera_vertex.global_path_index, 3u, camera_vertex.path_length + 1u, light_vertex.path_length + 1u, tracking_failure);
     }
     if (tracking_valid && visible) {
       const float mis_weight = upbp_bpt_connection_cross_technique_weight(upbp_resources.iteration, light_vertex, camera_vertex, asfloat(task.upbp_light_pdf_forward_bits),
@@ -154,13 +156,14 @@
     uint medium_seed = task.upbp_auxiliary1_bits;
     bool visible = false;
     GPUUPBPConnectionInterval connection = (GPUUPBPConnectionInterval)0;
+    uint tracking_failure = GPUUPBPConnectionTrackingFailure::None;
     const bool source_is_medium = (task.flags & GPUWavefrontPointConnectionTaskFlags::SourceMedium) != 0u;
     const bool tracking_valid = wavefront_upbp_trace_connection_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
-      task.inline_medium_flags, source_is_medium, seed, medium_seed, visible, connection);
+      task.inline_medium_flags, source_is_medium, seed, medium_seed, visible, connection, tracking_failure);
     if (tracking_valid == false) {
       const GPUUPBPResources upbp_resources = upbp_load_resources(resources);
       const GPUUPBPPathState path_state = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, false, task.path_index));
-      upbp_mark_failed_connection(upbp_resources, path_state.global_path_index, 2u, 1u, path_state.path_length + 1u);
+      upbp_mark_failed_connection(upbp_resources, path_state.global_path_index, 2u, 1u, path_state.path_length + 1u, tracking_failure);
     }
     result_value.transmittance = connection.weight;
     result_value.visible = tracking_valid && visible ? 1u : 0u;
