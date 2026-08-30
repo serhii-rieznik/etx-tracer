@@ -1,5 +1,7 @@
 #include "integrator.hxx"
 
+#include <atomic>
+
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/host/scene_representation.hxx>
 #include <etx/render/shared/camera.hxx>
