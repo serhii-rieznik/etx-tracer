@@ -75,6 +75,8 @@ struct SceneHierarchy {
   void clear();
 
   uint32_t add_node(const char* name, uint32_t parent_index, const AffineTransform& local_transform);
+  uint32_t duplicate_subtree(uint32_t node_index);
+  bool remove_subtree(uint32_t node_index, std::vector<uint32_t>& old_to_new);
   bool set_parent(uint32_t node_index, uint32_t parent_index);
   bool reparent_preserve_world(uint32_t node_index, uint32_t parent_index);
   bool set_local_transform(uint32_t node_index, const AffineTransform& local_transform);

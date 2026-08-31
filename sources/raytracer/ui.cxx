@@ -361,6 +361,52 @@ void draw_item_tooltip(const char* text, ImGuiHoveredFlags flags) {
   ImGui::EndTooltip();
 }
 
+void draw_disabled_wrapped_text(const char* text) {
+  if ((text == nullptr) || (text[0] == '\0')) {
+    return;
+  }
+
+  ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+  ImGui::PushTextWrapPos(0.0f);
+  ImGui::TextUnformatted(text);
+  ImGui::PopTextWrapPos();
+  ImGui::PopStyleColor();
+}
+
+bool selectable_with_ellipsis(const char* text, bool selected) {
+  const char* display_text = text != nullptr ? text : "";
+  const float available_width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+  const float row_height = ImGui::GetTextLineHeight();
+  const ImVec2 text_size = ImGui::CalcTextSize(display_text);
+  const ImVec2 cursor_position = ImGui::GetCursorScreenPos();
+  const bool activated = ImGui::Selectable("##resource_item", selected, ImGuiSelectableFlags_None, ImVec2(available_width, row_height));
+  const ImVec2 item_max = ImGui::GetItemRectMax();
+  const float right_padding = ImGui::GetStyle().FramePadding.x;
+  const ImVec2 text_min(cursor_position.x, cursor_position.y + 0.5f * std::max(0.0f, row_height - text_size.y));
+  const ImVec2 text_max(std::max(text_min.x + 1.0f, item_max.x - right_padding), item_max.y);
+  ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), text_min, text_max, text_max.x, display_text, display_text + std::strlen(display_text), &text_size);
+  if (text_size.x > (text_max.x - text_min.x)) {
+    draw_item_tooltip(display_text, ImGuiHoveredFlags_DelayNormal);
+  }
+  return activated;
+}
+
+void draw_text_with_ellipsis(const char* text) {
+  const char* display_text = text != nullptr ? text : "";
+  const float available_width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+  const ImVec2 text_size = ImGui::CalcTextSize(display_text);
+  if (text_size.x <= available_width) {
+    ImGui::TextUnformatted(display_text);
+    return;
+  }
+
+  const ImVec2 text_min = ImGui::GetCursorScreenPos();
+  const ImVec2 text_max(text_min.x + available_width, text_min.y + text_size.y);
+  ImGui::Dummy(ImVec2(available_width, text_size.y));
+  ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), text_min, text_max, text_max.x, display_text, display_text + std::strlen(display_text), &text_size);
+  draw_item_tooltip(display_text, ImGuiHoveredFlags_DelayNormal);
+}
+
 void draw_memory_summary_table(const char* id, std::vector<MemorySummaryRow> rows) {
   constexpr ImGuiTableFlags flags =
     ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Sortable | ImGuiTableFlags_Resizable;
@@ -649,6 +695,191 @@ void UI::update_name_buffer(SelectionKind kind, int32_t index, const char* curre
   if ((_name_edit_selection.kind != kind) || (_name_edit_selection.index != index)) {
     _name_edit_selection = {kind, index};
     std::snprintf(_name_edit_buffer, sizeof(_name_edit_buffer), "%s", (current_name != nullptr) ? current_name : "");
+    std::snprintf(_name_edit_original_buffer, sizeof(_name_edit_original_buffer), "%s", _name_edit_buffer);
+    _name_edit_pending = false;
+  }
+}
+
+void UI::commit_name_edit(bool preserve_selection) {
+  if (_name_edit_pending == false) {
+    return;
+  }
+  _name_edit_pending = false;
+
+  std::string renamed;
+  uint32_t resource_index = kInvalidIndex;
+  bool rename_attempted = false;
+  bool resource_rename = false;
+  switch (_name_edit_selection.kind) {
+    case SelectionKind::Node:
+      if ((_name_edit_selection.index >= 0) && callbacks.node_renamed) {
+        rename_attempted = true;
+        renamed = callbacks.node_renamed(static_cast<uint32_t>(_name_edit_selection.index), _name_edit_buffer);
+      }
+      break;
+    case SelectionKind::Material:
+      if ((_name_edit_selection.index >= 0) && (static_cast<uint64_t>(_name_edit_selection.index) < _material_mapping.size()) && callbacks.material_renamed) {
+        resource_index = _material_mapping.at(_name_edit_selection.index);
+        rename_attempted = true;
+        resource_rename = true;
+        renamed = callbacks.material_renamed(resource_index, std::string(_name_edit_buffer));
+      }
+      break;
+    case SelectionKind::Medium:
+      if ((_name_edit_selection.index >= 0) && (static_cast<uint64_t>(_name_edit_selection.index) < _medium_mapping.size()) && callbacks.medium_renamed) {
+        resource_index = _medium_mapping.at(_name_edit_selection.index);
+        rename_attempted = true;
+        resource_rename = true;
+        renamed = callbacks.medium_renamed(resource_index, std::string(_name_edit_buffer));
+      }
+      break;
+    case SelectionKind::Emitter:
+      if ((_name_edit_selection.index >= 0) && callbacks.emitter_renamed) {
+        resource_index = static_cast<uint32_t>(_name_edit_selection.index);
+        rename_attempted = true;
+        resource_rename = true;
+        renamed = callbacks.emitter_renamed(resource_index, std::string(_name_edit_buffer));
+      }
+      break;
+    case SelectionKind::Camera:
+      if ((_name_edit_selection.index >= 0) && callbacks.camera_renamed) {
+        resource_index = static_cast<uint32_t>(_name_edit_selection.index);
+        rename_attempted = true;
+        resource_rename = true;
+        renamed = callbacks.camera_renamed(resource_index, std::string(_name_edit_buffer));
+      }
+      break;
+    default:
+      break;
+  }
+
+  if (rename_attempted == false) {
+    return;
+  }
+  if (renamed.empty()) {
+    std::snprintf(_name_edit_buffer, sizeof(_name_edit_buffer), "%s", _name_edit_original_buffer);
+    if (resource_rename) {
+      _resource_edit_status = SceneResourceEditStatus::ResourceUpdateFailed;
+      _resource_edit_status_kind = _name_edit_selection.kind;
+    }
+    return;
+  }
+
+  const bool name_changed = renamed != _name_edit_original_buffer;
+  std::snprintf(_name_edit_buffer, sizeof(_name_edit_buffer), "%s", renamed.c_str());
+  std::snprintf(_name_edit_original_buffer, sizeof(_name_edit_original_buffer), "%s", renamed.c_str());
+  if (name_changed) {
+    _scene_dirty = true;
+  }
+  if (resource_rename) {
+    _resource_edit_status = SceneResourceEditStatus::Success;
+    _resource_edit_status_kind = _name_edit_selection.kind;
+    if (preserve_selection && (_pending_selection.has == false) && (resource_index != kInvalidIndex)) {
+      _pending_selection = {_name_edit_selection.kind, resource_index, true};
+    }
+  }
+}
+
+void UI::select_scene_edit_node(const SceneEditResult& result) {
+  _scene_edit_status = result.status;
+  if (result.succeeded() == false) {
+    return;
+  }
+  if (result.node_index == kInvalidIndex) {
+    _scene_edit_status = SceneEditStatus::HierarchyUpdateFailed;
+    return;
+  }
+
+  set_selection(SelectionKind::Node, static_cast<int32_t>(result.node_index));
+  _scene_tree_reveal_node = result.node_index;
+}
+
+void UI::apply_node_remapping(const std::vector<uint32_t>& old_to_new) {
+  if ((_selection.kind == SelectionKind::Node) && (_selection.index >= 0)) {
+    const uint32_t old_index = static_cast<uint32_t>(_selection.index);
+    const uint32_t new_index = old_index < old_to_new.size() ? old_to_new[old_index] : kInvalidIndex;
+    _selection = new_index == kInvalidIndex ? SelectionState{} : SelectionState{SelectionKind::Node, static_cast<int32_t>(new_index)};
+  }
+
+  if (_scene_tree_reveal_node != kInvalidIndex) {
+    _scene_tree_reveal_node = _scene_tree_reveal_node < old_to_new.size() ? old_to_new[_scene_tree_reveal_node] : kInvalidIndex;
+  }
+
+  _name_edit_selection = {};
+  _name_edit_buffer[0] = 0;
+  _name_edit_original_buffer[0] = 0;
+  _name_edit_pending = false;
+  _node_transform_editor = {};
+  _node_geometry_edit_result_node = -1;
+  _node_geometry_edit_result = NodeGeometryEditResult::Success;
+  _pending_node_deletion = kInvalidIndex;
+  clear_selection_history();
+}
+
+void UI::request_node_deletion(uint32_t node_index) {
+  _pending_node_deletion = node_index;
+  _node_deletion_modal_requested = true;
+  _scene_edit_status = SceneEditStatus::Success;
+}
+
+void UI::select_resource_edit_result(SelectionKind kind, const SceneResourceEditResult& result) {
+  _resource_edit_status = result.status;
+  _resource_edit_status_kind = kind;
+  if (result.succeeded() == false) {
+    return;
+  }
+  if (result.resource_index == kInvalidIndex) {
+    _resource_edit_status = SceneResourceEditStatus::ResourceUpdateFailed;
+    return;
+  }
+  _pending_selection = {kind, result.resource_index, true};
+}
+
+void UI::apply_resource_remapping(SelectionKind kind, const std::vector<uint32_t>& old_to_new) {
+  if (_selection.kind != kind) {
+    return;
+  }
+
+  uint32_t old_index = kInvalidIndex;
+  switch (kind) {
+    case SelectionKind::Material:
+      if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _material_mapping.size())) {
+        old_index = _material_mapping.at(_selection.index);
+      }
+      break;
+    case SelectionKind::Medium:
+      if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _medium_mapping.size())) {
+        old_index = _medium_mapping.at(_selection.index);
+      }
+      break;
+    case SelectionKind::Emitter:
+    case SelectionKind::Camera:
+      if (_selection.index >= 0) {
+        old_index = static_cast<uint32_t>(_selection.index);
+      }
+      break;
+    default:
+      break;
+  }
+
+  const uint32_t new_index = old_index < old_to_new.size() ? old_to_new[old_index] : kInvalidIndex;
+  reset_selection();
+  if (new_index != kInvalidIndex) {
+    _pending_selection = {kind, new_index, true};
+  }
+}
+
+void UI::request_resource_deletion(SelectionKind kind, uint32_t resource_index) {
+  _pending_resource_deletion_kind = kind;
+  _pending_resource_deletion = resource_index;
+  _resource_deletion_modal_requested = true;
+  _resource_edit_status = SceneResourceEditStatus::Success;
+  _resource_edit_status_kind = kind;
+}
+
+void UI::build_resource_edit_feedback(SelectionKind kind) const {
+  if ((_resource_edit_status_kind == kind) && (_resource_edit_status != SceneResourceEditStatus::Success)) {
+    ImGui::TextColored(kErrorTextColor, "%s", scene_resource_edit_status_message(_resource_edit_status));
   }
 }
 
@@ -687,12 +918,19 @@ void UI::validate_selections(SceneRepresentation& scene_rep) {
         set_selection(SelectionKind::None, -1, false);
       }
       break;
+    case SelectionKind::Camera:
+      if ((_selection.index < 0) || (static_cast<uint32_t>(_selection.index) >= scene_rep.data().cameras.size())) {
+        set_selection(SelectionKind::None, -1, false);
+      }
+      break;
     default:
       break;
   }
 }
 
 void UI::set_selection(SelectionKind kind, int32_t index, bool track_history) {
+  _inspector_tab_requested = (index >= 0) && ((kind == SelectionKind::Node) || (kind == SelectionKind::Material) || (kind == SelectionKind::Medium) ||
+                                               (kind == SelectionKind::Emitter) || (kind == SelectionKind::Camera));
   SelectionState next{kind, index};
   if ((_selection.kind == next.kind) && (_selection.index == next.index)) {
     if ((kind == SelectionKind::Material) && (_updating_material_multi_selection == false)) {
@@ -705,7 +943,29 @@ void UI::set_selection(SelectionKind kind, int32_t index, bool track_history) {
     return;
   }
 
+  uint32_t pending_target_resource = kInvalidIndex;
+  std::vector<uint32_t> pending_material_selection_indices;
+  if ((_name_edit_pending) && (_name_edit_selection.kind == kind)) {
+    if ((kind == SelectionKind::Material) && (index >= 0) && (static_cast<uint64_t>(index) < _material_mapping.size())) {
+      pending_target_resource = _material_mapping.at(index);
+      pending_material_selection_indices.reserve(_selected_material_positions.size());
+      for (const int32_t selected_position : _selected_material_positions) {
+        if ((selected_position >= 0) && (static_cast<uint64_t>(selected_position) < _material_mapping.size())) {
+          pending_material_selection_indices.push_back(_material_mapping.at(selected_position));
+        }
+      }
+      if (std::find(pending_material_selection_indices.begin(), pending_material_selection_indices.end(), pending_target_resource) == pending_material_selection_indices.end()) {
+        pending_material_selection_indices.push_back(pending_target_resource);
+      }
+    } else if ((kind == SelectionKind::Medium) && (index >= 0) && (static_cast<uint64_t>(index) < _medium_mapping.size())) {
+      pending_target_resource = _medium_mapping.at(index);
+    }
+  }
+  commit_name_edit(false);
+
   _selection = next;
+  _resource_edit_status = SceneResourceEditStatus::Success;
+  _resource_edit_status_kind = SelectionKind::None;
 
   if (kind == SelectionKind::Material) {
     if (_updating_material_multi_selection == false) {
@@ -718,6 +978,12 @@ void UI::set_selection(SelectionKind kind, int32_t index, bool track_history) {
   } else {
     _selected_material_positions.clear();
     _material_selection_anchor = -1;
+  }
+  if ((_pending_selection.has == false) && (pending_target_resource != kInvalidIndex)) {
+    _pending_selection = {kind, pending_target_resource, true};
+  }
+  if (pending_material_selection_indices.empty() == false) {
+    _pending_material_selection_indices = std::move(pending_material_selection_indices);
   }
 
   if (track_history == false) {
@@ -844,27 +1110,39 @@ void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vecto
     return true;
   };
 
-  apply_field(before.reflectance, after.reflectance, [](Material& material, const SpectralImage& value) {
-    material.reflectance = value;
-  });
-  apply_field(before.scattering, after.scattering, [](Material& material, const SpectralImage& value) {
-    material.scattering = value;
-  });
-  apply_field(before.emission, after.emission, [](Material& material, const SpectralImage& value) {
-    material.emission = value;
-  });
-  apply_field(before.subsurface, after.subsurface, [](Material& material, const SpectralImage& value) {
-    material.subsurface = value;
-  });
-  apply_field(before.roughness, after.roughness, [](Material& material, const SampledImage& value) {
-    material.roughness = value;
-  });
-  apply_field(before.metalness, after.metalness, [](Material& material, const SampledImage& value) {
-    material.metalness = value;
-  });
-  apply_field(before.transmission, after.transmission, [](Material& material, const SampledImage& value) {
-    material.transmission = value;
-  });
+  const auto apply_spectral_image = [&](const SpectralImage& before_value, const SpectralImage& after_value, auto member) {
+    apply_field(before_value.image_index, after_value.image_index, [member](Material& material, const uint32_t value) {
+      (material.*member).image_index = value;
+    });
+  };
+  apply_spectral_image(before.reflectance, after.reflectance, &Material::reflectance);
+  apply_spectral_image(before.scattering, after.scattering, &Material::scattering);
+  apply_spectral_image(before.emission, after.emission, &Material::emission);
+  apply_spectral_image(before.subsurface, after.subsurface, &Material::subsurface);
+
+  const auto apply_sampled_image = [&](const SampledImage& before_value, const SampledImage& after_value, auto member) {
+    apply_field(before_value.value.x, after_value.value.x, [member](Material& material, const float value) {
+      (material.*member).value.x = value;
+    });
+    apply_field(before_value.value.y, after_value.value.y, [member](Material& material, const float value) {
+      (material.*member).value.y = value;
+    });
+    apply_field(before_value.value.z, after_value.value.z, [member](Material& material, const float value) {
+      (material.*member).value.z = value;
+    });
+    apply_field(before_value.value.w, after_value.value.w, [member](Material& material, const float value) {
+      (material.*member).value.w = value;
+    });
+    apply_field(before_value.image_index, after_value.image_index, [member](Material& material, const uint32_t value) {
+      (material.*member).image_index = value;
+    });
+    apply_field(before_value.channel, after_value.channel, [member](Material& material, const uint32_t value) {
+      (material.*member).channel = value;
+    });
+  };
+  apply_sampled_image(before.roughness, after.roughness, &Material::roughness);
+  apply_sampled_image(before.metalness, after.metalness, &Material::metalness);
+  apply_sampled_image(before.transmission, after.transmission, &Material::transmission);
   apply_field(before.thinfilm.ior.cls, after.thinfilm.ior.cls, [](Material& material, const uint32_t value) {
     material.thinfilm.ior.cls = value;
   });
@@ -933,20 +1211,45 @@ void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vecto
   });
 }
 
-void UI::queue_material_change(uint32_t material_index) {
-  if (material_index == kInvalidIndex) {
+void UI::begin_material_interaction() {
+  if (_material_interaction_active) {
     return;
   }
 
   if (_medium_interaction_active) {
     finish_medium_interaction();
   }
+  if (_emitter_interaction_active) {
+    finish_emitter_interaction();
+  }
 
-  if (_material_interaction_active == false) {
-    _material_interaction_active = true;
-    if (callbacks.material_interaction_started) {
-      callbacks.material_interaction_started();
-    }
+  _material_interaction_active = true;
+  if (callbacks.material_interaction_started) {
+    callbacks.material_interaction_started();
+  }
+}
+
+void UI::arm_material_interaction() {
+  const ImGuiContext* context = ImGui::GetCurrentContext();
+  const bool pointer_active = (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) || (ImGui::IsMouseDown(ImGuiMouseButton_Left)) || (ImGui::IsMouseReleased(ImGuiMouseButton_Left));
+  const ImGuiWindow* window = ImGui::GetCurrentWindow();
+  const ImVec2 cursor_position = ImGui::GetCursorScreenPos();
+  const ImVec2 editor_min(std::max(cursor_position.x, window->InnerClipRect.Min.x), std::max(cursor_position.y, window->InnerClipRect.Min.y));
+  const ImGuiID preceding_item_id = context != nullptr ? context->LastItemData.ID : 0u;
+  const bool pointer_in_editor = pointer_active && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                                 ImGui::IsMouseHoveringRect(editor_min, window->InnerClipRect.Max);
+  const bool editor_item_active = (context != nullptr) && (context->ActiveId != 0u) && (context->ActiveIdWindow == window) && (context->ActiveIdSource != ImGuiInputSource_Mouse) &&
+                                  (context->ActiveId != preceding_item_id);
+  const bool editor_item_activated = (context != nullptr) && (context->NavActivateId != 0u) && (context->NavWindow == window) && (context->NavActivateId != preceding_item_id);
+  if ((pointer_in_editor == false) && (editor_item_active == false) && (editor_item_activated == false)) {
+    return;
+  }
+  begin_material_interaction();
+}
+
+void UI::queue_material_change(uint32_t material_index) {
+  if (material_index == kInvalidIndex) {
+    return;
   }
 
   if (std::find(_material_interaction_indices.begin(), _material_interaction_indices.end(), material_index) == _material_interaction_indices.end()) {
@@ -970,20 +1273,27 @@ void UI::finish_material_interaction() {
   _material_interaction_indices.clear();
 }
 
-void UI::queue_medium_change(uint32_t medium_index) {
-  if (medium_index == kInvalidIndex) {
+void UI::begin_medium_interaction() {
+  if (_medium_interaction_active) {
     return;
   }
 
   if (_material_interaction_active) {
     finish_material_interaction();
   }
+  if (_emitter_interaction_active) {
+    finish_emitter_interaction();
+  }
 
-  if (_medium_interaction_active == false) {
-    _medium_interaction_active = true;
-    if (callbacks.medium_interaction_started) {
-      callbacks.medium_interaction_started();
-    }
+  _medium_interaction_active = true;
+  if (callbacks.medium_interaction_started) {
+    callbacks.medium_interaction_started();
+  }
+}
+
+void UI::queue_medium_change(uint32_t medium_index) {
+  if (medium_index == kInvalidIndex) {
+    return;
   }
 
   if (std::find(_medium_interaction_indices.begin(), _medium_interaction_indices.end(), medium_index) == _medium_interaction_indices.end()) {
@@ -1005,6 +1315,52 @@ void UI::finish_medium_interaction() {
     }
   }
   _medium_interaction_indices.clear();
+}
+
+void UI::begin_emitter_interaction() {
+  if (_emitter_interaction_active) {
+    return;
+  }
+
+  if (_material_interaction_active) {
+    finish_material_interaction();
+  }
+  if (_medium_interaction_active) {
+    finish_medium_interaction();
+  }
+
+  _emitter_interaction_active = true;
+  if (callbacks.emitter_interaction_started) {
+    callbacks.emitter_interaction_started();
+  }
+}
+
+void UI::arm_emitter_interaction() {
+  const bool pointer_active = (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) || (ImGui::IsMouseDown(ImGuiMouseButton_Left)) || (ImGui::IsMouseReleased(ImGuiMouseButton_Left));
+  if ((pointer_active == false) && (ImGui::IsAnyItemActive() == false)) {
+    return;
+  }
+  begin_emitter_interaction();
+}
+
+void UI::queue_emitter_change(uint32_t emitter_index) {
+  if (emitter_index != kInvalidIndex) {
+    _emitter_interaction_index = emitter_index;
+  }
+}
+
+void UI::finish_emitter_interaction() {
+  if (_emitter_interaction_active == false) {
+    return;
+  }
+
+  _emitter_interaction_active = false;
+  if (callbacks.emitter_interaction_finished) {
+    callbacks.emitter_interaction_finished(_emitter_interaction_index);
+  } else if ((_emitter_interaction_index != kInvalidIndex) && callbacks.emitter_changed) {
+    callbacks.emitter_changed(_emitter_interaction_index);
+  }
+  _emitter_interaction_index = kInvalidIndex;
 }
 
 void UI::navigate_history(int32_t step) {
@@ -1549,14 +1905,15 @@ bool UI::image_picker(SceneRepresentation& scene_rep, const char* label, uint32_
     ImGui::Separator();
     for (uint32_t i = 0u; i < scene_rep.data().images_vector.size(); ++i) {
       const Image& image = scene_rep.data().images_vector[i];
-      if (image.isize.z > 1u) {
+      const std::string path = scene_rep.data().images.path(i);
+      if ((image.isize.z > 1u) || path.empty() || path.starts_with("##")) {
         continue;
       }
 
       const std::string entry_label = image_label(i);
       const bool is_selected = image_index == i;
       if (ImGui::Selectable(entry_label.c_str(), is_selected)) {
-        image_index = i;
+        image_index = scene_rep.data().add_image(path.c_str(), image_options, {}, {1.0f, 1.0f});
         changed = true;
       }
       if (is_selected) {
@@ -1782,6 +2139,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   _node_transform_editor_interaction_rendered_this_frame = false;
   _material_editor_rendered_this_frame = false;
   _medium_editor_rendered_this_frame = false;
+  _emitter_editor_rendered_this_frame = false;
 
   BuildContext ctx = {};
   ctx.wpadding = {ImGui::GetStyle().WindowPadding.x, ImGui::GetStyle().WindowPadding.y};
@@ -1844,7 +2202,33 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   };
 
   apply_pending_selection(_material_mapping, SelectionKind::Material);
+  if (_pending_material_selection_indices.empty() == false) {
+    std::vector<int32_t> material_positions;
+    material_positions.reserve(_pending_material_selection_indices.size());
+    for (const uint32_t material_index : _pending_material_selection_indices) {
+      const auto position = _material_mapping.reverse.find(material_index);
+      if (position != _material_mapping.reverse.end()) {
+        material_positions.push_back(static_cast<int32_t>(position->second));
+      }
+    }
+    if (material_positions.empty() == false) {
+      _selected_material_positions = std::move(material_positions);
+      if ((_selection.kind != SelectionKind::Material) || (material_list_position_selected(_selection.index) == false)) {
+        _selection = {SelectionKind::Material, _selected_material_positions.back()};
+      }
+      _material_selection_anchor = _selection.index;
+    }
+    _pending_material_selection_indices.clear();
+  }
   apply_pending_selection(_medium_mapping, SelectionKind::Medium);
+  auto apply_direct_pending_selection = [&](SelectionKind kind, uint64_t resource_count) {
+    if ((_pending_selection.has == false) || (_pending_selection.kind != kind) || (_pending_selection.index >= resource_count)) {
+      return;
+    }
+    set_selection(kind, static_cast<int32_t>(_pending_selection.index), false);
+  };
+  apply_direct_pending_selection(SelectionKind::Emitter, scene_rep.data().emitter_profiles.size());
+  apply_direct_pending_selection(SelectionKind::Camera, scene_rep.data().cameras.size());
   _pending_selection = {};
 
   validate_selections(scene_rep);
@@ -1870,6 +2254,9 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   if (_medium_interaction_active && ((_medium_editor_rendered_this_frame == false) || (ImGui::IsAnyItemActive() == false))) {
     finish_medium_interaction();
   }
+  if (_emitter_interaction_active && ((_emitter_editor_rendered_this_frame == false) || (ImGui::IsAnyItemActive() == false))) {
+    finish_emitter_interaction();
+  }
   build_unsaved_changes_modal();
   build_renderer_preparation_modal();
 }
@@ -1883,7 +2270,6 @@ void UI::build_unsaved_changes_modal() {
   }
 
   bool continue_action = false;
-  bool discard_changes = false;
   if (ImGui::BeginPopupModal(popup_id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::TextUnformatted("The scene contains unsaved changes.");
     ImGui::TextDisabled("Save before continuing to keep your edits.");
@@ -1899,7 +2285,6 @@ void UI::build_unsaved_changes_modal() {
     push_semantic_button_colors(terminate_button_colors(_theme));
     if (ImGui::Button("Don't Save", ImVec2(120.0f, 0.0f))) {
       continue_action = true;
-      discard_changes = true;
       _unsaved_save_failed = false;
       ImGui::CloseCurrentPopup();
     }
@@ -1921,11 +2306,9 @@ void UI::build_unsaved_changes_modal() {
     const MenuCommand command = _pending_menu_command;
     const std::string value = _pending_menu_value;
     _pending_menu_value.clear();
-    _scene_dirty = false;
-    if (discard_changes && callbacks.scene_discarded) {
-      callbacks.scene_discarded();
-    }
-    if (command != MenuCommand::Quit) {
+    if (command == MenuCommand::Quit) {
+      _scene_dirty = false;
+    } else {
       _skip_unsaved_check_once = true;
     }
     execute_menu_command(command, 0u, value);
@@ -2069,6 +2452,8 @@ bool UI::handle_event(const sapp_event* e) {
 }
 
 void UI::execute_menu_command(MenuCommand command, uint32_t argument, const std::string& value) {
+  commit_name_edit(true);
+
   const auto requires_unsaved_confirmation = [&](MenuCommand pending_command) {
     const bool destructive_command = (pending_command == MenuCommand::Quit) || (pending_command == MenuCommand::OpenScene) || (pending_command == MenuCommand::OpenRecentScene) ||
                                      (pending_command == MenuCommand::ReloadScene) || (pending_command == MenuCommand::ReloadGeometry);
@@ -2250,6 +2635,7 @@ void UI::load_image() const {
 
 bool UI::build_material(SceneRepresentation& scene_rep, Material& material, const FrameData& data) {
   _material_editor_rendered_this_frame = true;
+  arm_material_interaction();
   auto material_values_mixed = [&](auto getter) -> bool {
     if ((_editing_material_indices == nullptr) || (_editing_material_indices->size() <= 1u)) {
       return false;
@@ -2888,7 +3274,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       }),
         [&]() {
           ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          return image_picker(scene_rep, "Emission Texture##emission_texture", material.emission.image_index, Image::RepeatU | Image::RepeatV);
+          return image_picker(scene_rep, "Emission Texture##emission_texture", material.emission.image_index, Image::BuildSamplingTable | Image::RepeatU | Image::RepeatV);
         });
     },
     _auto_open_emission_section);
@@ -3031,12 +3417,16 @@ void UI::clear_selection_history() {
 void UI::reset_selection() {
   _selection = {};
   _pending_selection = {};
+  _inspector_tab_requested = false;
   _name_edit_selection = {};
   _name_edit_buffer[0] = 0;
+  _name_edit_original_buffer[0] = 0;
+  _name_edit_pending = false;
   clear_selection_history();
   _spectrum_editors.clear();
   _material_anisotropy.clear();
   _selected_material_positions.clear();
+  _pending_material_selection_indices.clear();
   _material_selection_anchor = -1;
 }
 
@@ -3045,6 +3435,15 @@ void UI::reset_scene_state() {
   _node_transform_editor = {};
   _node_geometry_edit_result_node = -1;
   _node_geometry_edit_result = NodeGeometryEditResult::Success;
+  _scene_edit_status = SceneEditStatus::Success;
+  _resource_edit_status = SceneResourceEditStatus::Success;
+  _resource_edit_status_kind = SelectionKind::None;
+  _scene_tree_reveal_node = kInvalidIndex;
+  _pending_node_deletion = kInvalidIndex;
+  _node_deletion_modal_requested = false;
+  _pending_resource_deletion_kind = SelectionKind::None;
+  _pending_resource_deletion = kInvalidIndex;
+  _resource_deletion_modal_requested = false;
   _node_transform_editor_interaction_active = false;
   _node_transform_editor_interaction_rendered_this_frame = false;
   _node_transform_editor_interaction_node_index = -1;
@@ -3053,6 +3452,12 @@ void UI::reset_scene_state() {
   _material_interaction_indices.clear();
   _editing_material_indices = nullptr;
   _material_batch_changed_fields = 0u;
+  _medium_interaction_active = false;
+  _medium_editor_rendered_this_frame = false;
+  _medium_interaction_indices.clear();
+  _emitter_interaction_active = false;
+  _emitter_editor_rendered_this_frame = false;
+  _emitter_interaction_index = kInvalidIndex;
   _auto_open_emission_section = false;
   _scene_tree_open_subtree_ends.clear();
   _viewport_geometry = {};
@@ -3570,7 +3975,7 @@ void UI::build_status_bar(const BuildContext& ctx) {
         core_status += format_string("  |  %s %.1f%%", renderer_path_phase_short_name(status.path_phase), 100.0 * path_progress);
       }
     }
-    if (status.upbp.active()) {
+    if (status.upbp.active() && (status.state != RendererStatusState::Failed)) {
       const bool light_phase =
         (status.upbp.phase == RendererUPBPPhase::LightPaths) || (status.upbp.phase == RendererUPBPPhase::LightCompaction) || (status.upbp.phase == RendererUPBPPhase::DensityIndex);
       const uint32_t current_batch = light_phase ? status.upbp.current_light_batch : status.upbp.current_camera_batch;
@@ -3582,6 +3987,12 @@ void UI::build_status_bar(const BuildContext& ctx) {
       core_status += "  |  Resident " + compact_count_string(status.upbp.resident_path_count) + "/" + compact_count_string(status.upbp.global_path_count);
       if (status.upbp.gpu_memory_budget_bytes > 0u) {
         core_status += "  |  VRAM " + memory_size_string(status.upbp.gpu_memory_used_bytes) + "/" + memory_size_string(status.upbp.gpu_memory_budget_bytes);
+      }
+    }
+    if (status.state == RendererStatusState::Failed) {
+      const std::string& failure_message = status.message.empty() ? _current_renderer_preparation.message : status.message;
+      if (failure_message.empty() == false) {
+        core_status += "  |  " + failure_message;
       }
     }
 
@@ -3645,11 +4056,12 @@ void UI::build_status_bar(const BuildContext& ctx) {
       }
       detailed_status += "Remaining: " + duration_string(status.remaining_seconds);
     }
-    if (((status.state == RendererStatusState::Preparing) || (status.state == RendererStatusState::Failed)) && (_current_renderer_preparation.message.empty() == false)) {
+    const std::string& renderer_message = status.message.empty() ? _current_renderer_preparation.message : status.message;
+    if (((status.state == RendererStatusState::Preparing) || (status.state == RendererStatusState::Failed)) && (renderer_message.empty() == false)) {
       if (detailed_status.empty() == false) {
         detailed_status += "\n";
       }
-      detailed_status += _current_renderer_preparation.message;
+      detailed_status += renderer_message;
     }
     if (_current_fps > 0.0f) {
       if (detailed_status.empty() == false) {
@@ -3823,7 +4235,18 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
         const std::string& path = data.recent_files[data.recent_files.size() - recent_index - 1u];
         const std::string display_name = std::filesystem::path(path).filename().string();
         ImGui::PushID(static_cast<int>(recent_index));
-        if (ImGui::Button(display_name.c_str(), ImVec2(content_width, 0.0f))) {
+        const bool open_recent_scene = ImGui::Button("##recent_scene", ImVec2(content_width, ImGui::GetFrameHeight()));
+        const ImVec2 button_min = ImGui::GetItemRectMin();
+        const ImVec2 button_max = ImGui::GetItemRectMax();
+        const ImVec2 text_size = ImGui::CalcTextSize(display_name.c_str());
+        const ImVec2 frame_padding = ImGui::GetStyle().FramePadding;
+        const float available_text_width = std::max(1.0f, button_max.x - button_min.x - 2.0f * frame_padding.x);
+        const float text_x = button_min.x + frame_padding.x + 0.5f * std::max(0.0f, available_text_width - text_size.x);
+        const float text_y = button_min.y + 0.5f * std::max(0.0f, button_max.y - button_min.y - text_size.y);
+        const ImVec2 text_min(text_x, text_y);
+        const ImVec2 text_max(button_max.x - frame_padding.x, button_max.y - frame_padding.y);
+        ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(), text_min, text_max, text_max.x, display_name.c_str(), display_name.c_str() + display_name.size(), &text_size);
+        if (open_recent_scene) {
           execute_menu_command(MenuCommand::OpenRecentScene, 0u, path);
         }
         draw_item_tooltip(path.c_str(), ImGuiHoveredFlags_DelayNormal);
@@ -3907,7 +4330,8 @@ void UI::build_scene_explorer(SceneRepresentation& scene_rep, const BuildContext
 
 void UI::build_inspector(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   if (ImGui::BeginTabBar("##inspector_tabs")) {
-    if (ImGui::BeginTabItem("Inspector")) {
+    const ImGuiTabItemFlags inspector_flags = _inspector_tab_requested ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+    if (ImGui::BeginTabItem("Inspector", nullptr, inspector_flags)) {
       build_properties_window(scene_rep, ctx, data);
       ImGui::EndTabItem();
     }
@@ -3916,6 +4340,7 @@ void UI::build_inspector(SceneRepresentation& scene_rep, const BuildContext& ctx
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
+    _inspector_tab_requested = false;
   }
 }
 
@@ -3935,10 +4360,14 @@ void UI::build_diagnostics(SceneRepresentation& scene_rep, const BuildContext& c
 }
 
 void UI::build_debug_info_content() {
-  const bool has_integrator_debug_info =
-    (_current_integrator != nullptr) && (_current_integrator->status().debug_info_count > 0u) && (_current_integrator->status().debug_info != nullptr);
+  const bool has_integrator_debug_info = (_current_renderer_mode == RendererMode::CPURaytracing) && (_current_integrator != nullptr) &&
+                                         (_current_integrator->status().debug_info_count > 0u) && (_current_integrator->status().debug_info != nullptr);
   const bool show_gpu_kernel_timings = (_current_renderer_mode == RendererMode::GPURaytracing) && _gpu_kernel_timing_stats.enabled;
   if ((has_integrator_debug_info == false) && (show_gpu_kernel_timings == false)) {
+    if (_current_renderer_mode == RendererMode::GPURaytracing) {
+      ImGui::TextDisabled("Enable Profile kernels under GPU Diagnostics to collect timing statistics.");
+      return;
+    }
     ImGui::TextDisabled("Enable GPU kernel profiling or run an integrator that exposes debug metrics.");
     return;
   }
@@ -4263,269 +4692,682 @@ void UI::build_memory_diagnostics_content(SceneRepresentation& scene_rep, const 
 
 void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx) {
   ctx.with_window(UIObjects, "Scene Objects", [&]() {
+    SelectionKind resource_kind = SelectionKind::None;
+    uint32_t resource_index = kInvalidIndex;
+    bool resource_editable = false;
+    bool delete_callback_available = false;
+    bool derived_area_light_selected = false;
+    const std::function<SceneResourceEditResult(uint32_t)>* duplicate_callback = nullptr;
+
+    switch (_selection.kind) {
+      case SelectionKind::Material:
+        if ((selected_material_count() == 1u) && (_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _material_mapping.size())) {
+          resource_kind = SelectionKind::Material;
+          resource_index = _material_mapping.at(_selection.index);
+          resource_editable = true;
+          duplicate_callback = &callbacks.material_duplicated;
+          delete_callback_available = static_cast<bool>(callbacks.material_deleted);
+        }
+        break;
+      case SelectionKind::Medium:
+        if ((_selection.index >= 0) && (static_cast<uint64_t>(_selection.index) < _medium_mapping.size())) {
+          resource_kind = SelectionKind::Medium;
+          resource_index = _medium_mapping.at(_selection.index);
+          resource_editable = true;
+          duplicate_callback = &callbacks.medium_duplicated;
+          delete_callback_available = static_cast<bool>(callbacks.medium_deleted);
+        }
+        break;
+      case SelectionKind::Emitter:
+        if ((_selection.index >= 0) && (static_cast<uint32_t>(_selection.index) < scene_rep.data().emitter_profiles.size())) {
+          resource_kind = SelectionKind::Emitter;
+          resource_index = static_cast<uint32_t>(_selection.index);
+          derived_area_light_selected = scene_rep.data().emitter_profiles[resource_index].cls == EmitterProfile::Class::Area;
+          resource_editable = derived_area_light_selected == false;
+          duplicate_callback = &callbacks.emitter_duplicated;
+          delete_callback_available = static_cast<bool>(callbacks.emitter_deleted);
+        }
+        break;
+      case SelectionKind::Camera:
+        if ((_selection.index >= 0) && (static_cast<uint32_t>(_selection.index) < scene_rep.data().cameras.size())) {
+          resource_kind = SelectionKind::Camera;
+          resource_index = static_cast<uint32_t>(_selection.index);
+          resource_editable = true;
+          duplicate_callback = &callbacks.camera_duplicated;
+          delete_callback_available = static_cast<bool>(callbacks.camera_deleted);
+        }
+        break;
+      default:
+        break;
+    }
+
+    const bool add_available = static_cast<bool>(callbacks.material_added) || static_cast<bool>(callbacks.medium_added) || static_cast<bool>(callbacks.emitter_added) ||
+                               static_cast<bool>(callbacks.camera_added);
+    const bool duplicate_available = resource_editable && (duplicate_callback != nullptr) && static_cast<bool>(*duplicate_callback);
+    const bool delete_available = resource_editable && delete_callback_available;
+    const float available_width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+    const float item_spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float horizontal_padding = 2.0f * ImGui::GetStyle().FramePadding.x;
+    const float add_width = ImGui::CalcTextSize("Add...").x + horizontal_padding;
+    const float delete_width = ImGui::CalcTextSize("Delete").x + horizontal_padding;
+    const float duplicate_width = ImGui::CalcTextSize("Duplicate").x + horizontal_padding;
+    const float required_width = add_width + duplicate_width + delete_width + 2.0f * item_spacing;
+    const bool stack_toolbar = available_width < required_width;
+    const ImVec2 add_button_size(stack_toolbar ? available_width : add_width, 0.0f);
+    const ImVec2 duplicate_button_size(stack_toolbar ? available_width : duplicate_width, 0.0f);
+    const ImVec2 delete_button_size(stack_toolbar ? available_width : delete_width, 0.0f);
+
+    if (add_available == false) {
+      ImGui::BeginDisabled();
+    }
+    const bool open_add_menu = ImGui::Button("Add...##resource_add", add_button_size) && add_available;
+    if (add_available == false) {
+      ImGui::EndDisabled();
+    }
+    draw_item_tooltip("Choose a resource type to add.", ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+    if (open_add_menu) {
+      ImGui::OpenPopup("##add_resource_popup");
+    }
+
+    if (stack_toolbar == false) {
+      ImGui::SameLine();
+    }
+    if (duplicate_available == false) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Duplicate##resource_duplicate", duplicate_button_size) && duplicate_available) {
+      commit_name_edit(true);
+      select_resource_edit_result(resource_kind, (*duplicate_callback)(resource_index));
+    }
+    if (duplicate_available == false) {
+      ImGui::EndDisabled();
+    }
+    const char* action_tooltip = derived_area_light_selected ? "Area lights are managed by their emissive materials." : "Select one resource to enable this action.";
+    draw_item_tooltip(duplicate_available ? "Duplicate the selected resource." : action_tooltip, ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+
+    if (stack_toolbar == false) {
+      ImGui::SameLine();
+    }
+    if (delete_available == false) {
+      ImGui::BeginDisabled();
+    }
+    push_semantic_button_colors(terminate_button_colors(_theme));
+    if (ImGui::Button("Delete##resource_delete", delete_button_size) && delete_available) {
+      request_resource_deletion(resource_kind, resource_index);
+    }
+    ImGui::PopStyleColor(3);
+    if (delete_available == false) {
+      ImGui::EndDisabled();
+    }
+    draw_item_tooltip(delete_available ? "Delete the selected resource." : action_tooltip, ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+
+    if (ImGui::BeginPopup("##add_resource_popup")) {
+      const bool material_add_available = static_cast<bool>(callbacks.material_added);
+      if (ImGui::MenuItem("Material", nullptr, false, material_add_available) && material_add_available) {
+        select_resource_edit_result(SelectionKind::Material, callbacks.material_added());
+      }
+      const bool medium_add_available = static_cast<bool>(callbacks.medium_added);
+      if (ImGui::MenuItem("Medium", nullptr, false, medium_add_available) && medium_add_available) {
+        select_resource_edit_result(SelectionKind::Medium, callbacks.medium_added());
+      }
+      const bool light_add_available = static_cast<bool>(callbacks.emitter_added);
+      if (ImGui::BeginMenu("Light", light_add_available)) {
+        constexpr const char* light_names[] = {"Environment", "Directional", "Atmosphere"};
+        for (uint32_t light_type = 0u; light_type < IM_ARRAYSIZE(light_names); ++light_type) {
+          if (ImGui::MenuItem(light_names[light_type])) {
+            select_resource_edit_result(SelectionKind::Emitter, callbacks.emitter_added(light_type));
+          }
+        }
+        ImGui::EndMenu();
+      }
+      const bool camera_add_available = static_cast<bool>(callbacks.camera_added);
+      if (ImGui::MenuItem("Camera", nullptr, false, camera_add_available) && camera_add_available) {
+        select_resource_edit_result(SelectionKind::Camera, callbacks.camera_added());
+      }
+      ImGui::EndPopup();
+    }
+
+    build_resource_edit_feedback(_resource_edit_status_kind);
+    ImGui::Spacing();
+
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextWithHint("##resource_filter", "Search resources", _resource_filter, sizeof(_resource_filter));
     ImGui::Spacing();
-    if (ImGui::BeginTabBar("##resource_categories")) {
-      const std::string materials_label = format_string("Materials (%zu)###resource_materials", static_cast<size_t>(_material_mapping.size()));
-      if (ImGui::BeginTabItem(materials_label.c_str())) {
-        if (ImGui::Button("Add Material", ImVec2(-FLT_MIN, 0.0f)) && callbacks.material_added) {
-          const uint32_t material_index = callbacks.material_added();
-          _material_mapping.build(scene_rep.material_mapping());
-          _material_mapping_hash = hash_mapping(scene_rep.material_mapping());
-          reset_selection();
-          const auto material_position = _material_mapping.reverse.find(material_index);
-          if (material_position != _material_mapping.reverse.end()) {
-            set_single_material_selection(static_cast<int32_t>(material_position->second), true);
-          }
+    const bool filter_active = _resource_filter[0] != '\0';
+    constexpr ImGuiTreeNodeFlags category_flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+    if (ImGui::BeginChild("##resource_tree", ImVec2(-FLT_MIN, -FLT_MIN), ImGuiChildFlags_Borders)) {
+      const auto begin_category = [&](const char* id, const char* label, size_t resource_count) {
+        if (filter_active) {
+          ImGui::SetNextItemOpen(true, ImGuiCond_Always);
         }
-        ImGui::Spacing();
-        if (ImGui::BeginListBox("##materials_list", ImVec2(-FLT_MIN, -FLT_MIN))) {
-          uint32_t visible_count = 0u;
-          for (uint64_t i = 0u; i < _material_mapping.size(); ++i) {
-            const int32_t list_index = static_cast<int32_t>(i);
-            const auto& entry = _material_mapping.entry(list_index);
-            if (contains_case_insensitive(entry.name, _resource_filter) == false) {
-              continue;
-            }
-            ++visible_count;
-            ImGui::PushID(list_index);
-            const bool material_selected = (_selection.kind == SelectionKind::Material) && material_list_position_selected(list_index);
-            if (ImGui::Selectable(entry.name, material_selected)) {
-              const ImGuiIO& io = ImGui::GetIO();
-              if (io.KeyShift) {
-                set_material_selection_range(list_index);
-              } else if ((io.KeyCtrl) || (io.KeySuper)) {
-                toggle_material_selection(list_index);
-              } else {
-                set_single_material_selection(list_index, true);
-              }
-            }
-            ImGui::PopID();
+        return ImGui::TreeNodeEx(id, category_flags, "%s (%zu)", label, resource_count);
+      };
+
+      if (begin_category("##resource_materials", "Materials", static_cast<size_t>(_material_mapping.size()))) {
+        uint32_t visible_count = 0u;
+        for (uint64_t i = 0u; i < _material_mapping.size(); ++i) {
+          const int32_t list_index = static_cast<int32_t>(i);
+          const auto& entry = _material_mapping.entry(list_index);
+          if (contains_case_insensitive(entry.name, _resource_filter) == false) {
+            continue;
           }
-          if (visible_count == 0u) {
-            ImGui::TextDisabled("No matching materials");
+          ++visible_count;
+          ImGui::PushID(list_index);
+          const bool entry_selected = (_selection.kind == SelectionKind::Material) && material_list_position_selected(list_index);
+          if (selectable_with_ellipsis(entry.name, entry_selected)) {
+            const ImGuiIO& io = ImGui::GetIO();
+            if (io.KeyShift) {
+              set_material_selection_range(list_index);
+            } else if ((io.KeyCtrl) || (io.KeySuper)) {
+              toggle_material_selection(list_index);
+            } else {
+              set_single_material_selection(list_index, true);
+            }
           }
-          ImGui::EndListBox();
+          ImGui::PopID();
         }
-        ImGui::EndTabItem();
+        if (visible_count == 0u) {
+          ImGui::TextDisabled("No matching materials");
+        }
+        ImGui::TreePop();
       }
 
-      const std::string mediums_label = format_string("Mediums (%zu)###resource_mediums", static_cast<size_t>(_medium_mapping.size()));
-      if (ImGui::BeginTabItem(mediums_label.c_str())) {
-        if (ImGui::Button("Add Medium", ImVec2(-FLT_MIN, 0.0f)) && callbacks.medium_added) {
-          const uint32_t medium_index = callbacks.medium_added();
-          _medium_mapping.build(scene_rep.medium_mapping());
-          _medium_mapping_hash = hash_mapping(scene_rep.medium_mapping());
-          reset_selection();
-          const auto medium_position = _medium_mapping.reverse.find(medium_index);
-          if (medium_position != _medium_mapping.reverse.end()) {
-            set_selection(SelectionKind::Medium, static_cast<int32_t>(medium_position->second), true);
+      if (begin_category("##resource_mediums", "Mediums", static_cast<size_t>(_medium_mapping.size()))) {
+        uint32_t visible_count = 0u;
+        for (uint64_t i = 0u; i < _medium_mapping.size(); ++i) {
+          const int32_t list_index = static_cast<int32_t>(i);
+          const auto& entry = _medium_mapping.entry(list_index);
+          if (contains_case_insensitive(entry.name, _resource_filter) == false) {
+            continue;
           }
+          ++visible_count;
+          ImGui::PushID(static_cast<int>(i + 1024u));
+          const bool entry_selected = (_selection.kind == SelectionKind::Medium) && (_selection.index == list_index);
+          if (selectable_with_ellipsis(entry.name, entry_selected)) {
+            set_selection(SelectionKind::Medium, list_index);
+          }
+          ImGui::PopID();
         }
-        ImGui::Spacing();
-        if (ImGui::BeginListBox("##mediums_list", ImVec2(-FLT_MIN, -FLT_MIN))) {
-          uint32_t visible_count = 0u;
-          for (uint64_t i = 0u; i < _medium_mapping.size(); ++i) {
-            const int32_t list_index = static_cast<int32_t>(i);
-            const auto& entry = _medium_mapping.entry(list_index);
-            if (contains_case_insensitive(entry.name, _resource_filter) == false) {
-              continue;
-            }
-            ++visible_count;
-            ImGui::PushID(static_cast<int>(i + 1024u));
-            const bool medium_selected = (_selection.kind == SelectionKind::Medium) && (_selection.index == list_index);
-            if (ImGui::Selectable(entry.name, medium_selected)) {
-              set_selection(SelectionKind::Medium, list_index);
-            }
-            ImGui::PopID();
-          }
-          if (visible_count == 0u) {
-            ImGui::TextDisabled("No matching mediums");
-          }
-          ImGui::EndListBox();
+        if (visible_count == 0u) {
+          ImGui::TextDisabled("No matching mediums");
         }
-        ImGui::EndTabItem();
+        ImGui::TreePop();
       }
 
-      const std::string emitters_label = format_string("Lights (%zu)###resource_lights", scene_rep.data().emitter_profiles.size());
-      if (ImGui::BeginTabItem(emitters_label.c_str())) {
-        if (ImGui::Button("Add Light", ImVec2(-FLT_MIN, 0.0f))) {
-          ImGui::OpenPopup("##add_light_popup");
-        }
-        if (ImGui::BeginPopup("##add_light_popup")) {
-          constexpr const char* light_names[] = {"Environment", "Directional", "Atmosphere"};
-          for (uint32_t light_type = 0u; light_type < IM_ARRAYSIZE(light_names); ++light_type) {
-            if (ImGui::Selectable(light_names[light_type])) {
-              if (callbacks.emitter_added) {
-                callbacks.emitter_added(light_type);
-              }
-              ImGui::CloseCurrentPopup();
-            }
+      if (begin_category("##resource_lights", "Lights", scene_rep.data().emitter_profiles.size())) {
+        uint32_t visible_count = 0u;
+        const std::vector<std::string>& emitter_names = scene_rep.emitter_names();
+        for (uint32_t emitter_index = 0u; emitter_index < scene_rep.data().emitter_profiles.size(); ++emitter_index) {
+          const auto& emitter = scene_rep.data().emitter_profiles[emitter_index];
+          std::string label = emitter_index < emitter_names.size() ? emitter_names[emitter_index] : std::string();
+          if (label.empty()) {
+            label = format_string("Light %u", emitter_index + 1u);
           }
-          ImGui::EndPopup();
-        }
-        ImGui::Spacing();
-        if (ImGui::BeginListBox("##emitters_list", ImVec2(-FLT_MIN, -FLT_MIN))) {
-          uint32_t visible_count = 0u;
-          for (uint32_t emitter_index = 0u; emitter_index < scene_rep.data().emitter_profiles.size(); ++emitter_index) {
-            const auto& emitter = scene_rep.data().emitter_profiles[emitter_index];
-            std::string label;
-            switch (emitter.cls) {
-              case EmitterProfile::Class::Area:
-                label = format_string("Area light %u", emitter_index + 1u);
-                break;
-              case EmitterProfile::Class::Directional:
-                label = ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u) ? format_string("Sun %u", emitter_index + 1u)
-                                                                                  : format_string("Directional light %u", emitter_index + 1u);
-                break;
-              case EmitterProfile::Class::Environment:
-                label =
-                  ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u) ? format_string("Sky %u", emitter_index + 1u) : format_string("Environment %u", emitter_index + 1u);
-                break;
-              default:
-                label = format_string("Light %u", emitter_index + 1u);
-                break;
-            }
-            if (contains_case_insensitive(label.c_str(), _resource_filter) == false) {
-              continue;
-            }
-            ++visible_count;
-            ImGui::PushID(static_cast<int>(emitter_index + 4096u));
-            const bool emitter_selected = (_selection.kind == SelectionKind::Emitter) && (_selection.index == static_cast<int32_t>(emitter_index));
-            if (ImGui::Selectable(label.c_str(), emitter_selected)) {
-              set_selection(SelectionKind::Emitter, static_cast<int32_t>(emitter_index));
-            }
-            ImGui::PopID();
+          if (emitter.cls == EmitterProfile::Class::Area) {
+            label += " (derived)";
           }
-          if (visible_count == 0u) {
-            ImGui::TextDisabled("No matching lights");
+          if (contains_case_insensitive(label.c_str(), _resource_filter) == false) {
+            continue;
           }
-          ImGui::EndListBox();
+          ++visible_count;
+          ImGui::PushID(static_cast<int>(emitter_index + 4096u));
+          const bool entry_selected = (_selection.kind == SelectionKind::Emitter) && (_selection.index == static_cast<int32_t>(emitter_index));
+          if (selectable_with_ellipsis(label.c_str(), entry_selected)) {
+            set_selection(SelectionKind::Emitter, static_cast<int32_t>(emitter_index));
+          }
+          ImGui::PopID();
         }
-        ImGui::EndTabItem();
+        if (visible_count == 0u) {
+          ImGui::TextDisabled("No matching lights");
+        }
+        ImGui::TreePop();
       }
-      ImGui::EndTabBar();
+
+      if (begin_category("##resource_cameras", "Cameras", scene_rep.data().cameras.size())) {
+        uint32_t visible_count = 0u;
+        for (uint32_t camera_index = 0u; camera_index < scene_rep.data().cameras.size(); ++camera_index) {
+          const auto& camera = scene_rep.data().cameras[camera_index];
+          const std::string label = camera.id.empty() ? format_string("Camera %u", camera_index + 1u) : camera.id;
+          if (contains_case_insensitive(label.c_str(), _resource_filter) == false) {
+            continue;
+          }
+          ++visible_count;
+          ImGui::PushID(static_cast<int>(camera_index + 8192u));
+          const bool entry_selected = (_selection.kind == SelectionKind::Camera) && (_selection.index == static_cast<int32_t>(camera_index));
+          if (selectable_with_ellipsis(label.c_str(), entry_selected)) {
+            set_selection(SelectionKind::Camera, static_cast<int32_t>(camera_index));
+          }
+          ImGui::PopID();
+        }
+        if (visible_count == 0u) {
+          ImGui::TextDisabled("No matching cameras");
+        }
+        ImGui::TreePop();
+      }
     }
+    ImGui::EndChild();
+    build_resource_deletion_modal(scene_rep);
   });
 }
 
 void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildContext& ctx) {
   ctx.with_window(UIObjects, "Scene Tree", [&]() {
     SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
-    if (hierarchy.nodes.empty() || hierarchy.evaluation_order.empty()) {
-      ImGui::TextDisabled("No scene nodes");
-      return;
+    uint32_t duplicate_request = kInvalidIndex;
+    uint32_t reparent_source = kInvalidIndex;
+    uint32_t reparent_target = kInvalidIndex;
+    constexpr const char* node_payload_type = "ETX_SCENE_NODE";
+
+    if (ImGui::Button("Add Object", ImVec2(-FLT_MIN, 0.0f))) {
+      ImGui::OpenPopup("##add_scene_object");
     }
+    if (ImGui::BeginPopup("##add_scene_object")) {
+      const bool empty_node_available = static_cast<bool>(callbacks.empty_node_added);
+      if (ImGui::MenuItem("Empty Node", nullptr, false, empty_node_available) && callbacks.empty_node_added) {
+        select_scene_edit_node(callbacks.empty_node_added());
+      }
+
+      const bool primitive_available = static_cast<bool>(callbacks.primitive_added);
+      if (ImGui::BeginMenu("Geometry", primitive_available)) {
+        auto primitive_menu_item = [&](ScenePrimitive primitive) {
+          if (ImGui::MenuItem(scene_primitive_name(primitive), nullptr, false, primitive_available) && callbacks.primitive_added) {
+            select_scene_edit_node(callbacks.primitive_added(primitive));
+          }
+        };
+        if (ImGui::BeginMenu("Standard")) {
+          primitive_menu_item(ScenePrimitive::Sphere);
+          primitive_menu_item(ScenePrimitive::Box);
+          primitive_menu_item(ScenePrimitive::Plane);
+          primitive_menu_item(ScenePrimitive::Disk);
+          primitive_menu_item(ScenePrimitive::Cylinder);
+          primitive_menu_item(ScenePrimitive::Cone);
+          primitive_menu_item(ScenePrimitive::Capsule);
+          primitive_menu_item(ScenePrimitive::Torus);
+          primitive_menu_item(ScenePrimitive::Ring);
+          primitive_menu_item(ScenePrimitive::Tube);
+          ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Platonic")) {
+          primitive_menu_item(ScenePrimitive::Tetrahedron);
+          primitive_menu_item(ScenePrimitive::Cube);
+          primitive_menu_item(ScenePrimitive::Octahedron);
+          primitive_menu_item(ScenePrimitive::Dodecahedron);
+          primitive_menu_item(ScenePrimitive::Icosahedron);
+          ImGui::EndMenu();
+        }
+        ImGui::EndMenu();
+      }
+      ImGui::EndPopup();
+    }
+    if (_scene_edit_status != SceneEditStatus::Success) {
+      ImGui::TextColored(kErrorTextColor, "%s", scene_edit_status_message(_scene_edit_status));
+    }
+
+    auto invalid_drop_target = [&](uint32_t source_index, uint32_t target_index) {
+      if ((source_index >= hierarchy.nodes.size()) || (target_index >= hierarchy.nodes.size())) {
+        return true;
+      }
+      uint32_t ancestor_index = target_index;
+      for (uint32_t depth = 0u; (ancestor_index != kInvalidIndex) && (depth < hierarchy.nodes.size()); ++depth) {
+        if (ancestor_index == source_index) {
+          return true;
+        }
+        ancestor_index = hierarchy.nodes[ancestor_index].parent_index;
+      }
+      return false;
+    };
 
     ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 0.75f * ImGui::GetFontSize());
     if (ImGui::BeginChild("##scene_tree", ImVec2(-FLT_MIN, -FLT_MIN), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
-      const ImGuiTreeNodeFlags scene_flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
-      const bool scene_open = ImGui::TreeNodeEx("##scene_root", scene_flags, "Scene (%zu)", hierarchy.nodes.size());
-      if (scene_open) {
-        _scene_tree_open_subtree_ends.clear();
-        auto& open_subtree_ends = _scene_tree_open_subtree_ends;
-        uint32_t order_position = 0u;
-        while (order_position < hierarchy.evaluation_order.size()) {
-          while (open_subtree_ends.empty() == false && open_subtree_ends.back() <= order_position) {
-            ImGui::TreePop();
-            open_subtree_ends.pop_back();
+      if (hierarchy.nodes.empty() || hierarchy.evaluation_order.empty()) {
+        ImGui::TextDisabled("No scene nodes");
+      } else {
+        if (_scene_tree_reveal_node != kInvalidIndex) {
+          ImGui::SetNextItemOpen(true);
+        }
+        const ImGuiTreeNodeFlags scene_flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+        const bool scene_open = ImGui::TreeNodeEx("##scene_root", scene_flags, "Scene (%zu)", hierarchy.nodes.size());
+        const ImVec2 scene_item_min = ImGui::GetItemRectMin();
+        const ImVec2 scene_item_max = ImGui::GetItemRectMax();
+        if (ImGui::BeginDragDropTarget()) {
+          const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(node_payload_type, ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+          if ((payload != nullptr) && (payload->Data != nullptr) && (payload->DataSize == sizeof(uint32_t))) {
+            uint32_t source_index = kInvalidIndex;
+            std::memcpy(&source_index, payload->Data, sizeof(source_index));
+            const bool valid_source = source_index < hierarchy.nodes.size();
+            const bool already_root = valid_source && (hierarchy.nodes[source_index].parent_index == kInvalidIndex);
+            const ImU32 highlight_color = ImGui::GetColorU32((valid_source && (already_root == false)) ? ImGuiCol_DragDropTarget : ImGuiCol_TextDisabled);
+            ImGui::GetWindowDrawList()->AddRect(scene_item_min, scene_item_max, highlight_color, 0.0f, 0, 2.0f);
+            if (already_root) {
+              ImGui::BeginTooltip();
+              ImGui::TextUnformatted("This node is already at the scene root.");
+              ImGui::EndTooltip();
+            } else if (valid_source && payload->IsDelivery()) {
+              reparent_source = source_index;
+              reparent_target = kInvalidIndex;
+            }
           }
+          ImGui::EndDragDropTarget();
+        }
 
-          const uint32_t node_index = hierarchy.evaluation_order[order_position];
-          if (node_index >= hierarchy.nodes.size()) {
-            ++order_position;
-            continue;
-          }
-          const SceneNode& node = hierarchy.nodes[node_index];
+        if (scene_open) {
+          _scene_tree_open_subtree_ends.clear();
+          auto& open_subtree_ends = _scene_tree_open_subtree_ends;
+          const uint32_t reveal_position = (_scene_tree_reveal_node < hierarchy.order_position.size()) ? hierarchy.order_position[_scene_tree_reveal_node] : kInvalidIndex;
+          uint32_t order_position = 0u;
+          while (order_position < hierarchy.evaluation_order.size()) {
+            while (open_subtree_ends.empty() == false && open_subtree_ends.back() <= order_position) {
+              ImGui::TreePop();
+              open_subtree_ends.pop_back();
+            }
 
-          uint32_t attached_camera_index = kInvalidIndex;
-          bool contains_active_camera = false;
-          bool has_camera_attachment = false;
-          bool has_emitter_attachment = false;
-          const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
-          if ((attachment_end >= node.attachment_offset) && (attachment_end <= hierarchy.attachments.size())) {
-            for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
-              const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
-              if (attachment.type == SceneAttachment::Type::Emitter) {
-                has_emitter_attachment = true;
+            const uint32_t node_index = hierarchy.evaluation_order[order_position];
+            if (node_index >= hierarchy.nodes.size()) {
+              ++order_position;
+              continue;
+            }
+            const SceneNode& node = hierarchy.nodes[node_index];
+
+            uint32_t attached_camera_index = kInvalidIndex;
+            bool contains_active_camera = false;
+            bool has_camera_attachment = false;
+            bool has_emitter_attachment = false;
+            const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+            if ((attachment_end >= node.attachment_offset) && (attachment_end <= hierarchy.attachments.size())) {
+              for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+                const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+                if (attachment.type == SceneAttachment::Type::Emitter) {
+                  has_emitter_attachment = true;
+                }
+                if (attachment.type == SceneAttachment::Type::Camera) {
+                  has_camera_attachment = true;
+                }
+                if ((attachment.type != SceneAttachment::Type::Camera) || (attachment.resource_index >= scene_rep.data().cameras.size())) {
+                  continue;
+                }
+                if (attached_camera_index == kInvalidIndex) {
+                  attached_camera_index = attachment.resource_index;
+                }
+                contains_active_camera = contains_active_camera || scene_rep.data().cameras[attachment.resource_index].active;
               }
-              if (attachment.type == SceneAttachment::Type::Camera) {
-                has_camera_attachment = true;
+            }
+
+            const uint32_t subtree_end = (node_index < hierarchy.subtree_end_position.size())
+                                           ? std::min<uint32_t>(hierarchy.subtree_end_position[node_index], static_cast<uint32_t>(hierarchy.evaluation_order.size()))
+                                           : (order_position + 1u);
+            const bool leaf = subtree_end <= (order_position + 1u);
+            ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
+            if (node.parent_index == kInvalidIndex) {
+              flags |= ImGuiTreeNodeFlags_DefaultOpen;
+            }
+            if ((_selection.kind == SelectionKind::Node) && (_selection.index == static_cast<int32_t>(node_index))) {
+              flags |= ImGuiTreeNodeFlags_Selected;
+            }
+            if (leaf) {
+              flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+            }
+            if ((reveal_position != kInvalidIndex) && (reveal_position >= order_position) && (reveal_position < subtree_end) && (node_index != _scene_tree_reveal_node)) {
+              ImGui::SetNextItemOpen(true);
+            }
+
+            const bool enabled = (node_index < hierarchy.effective_enabled.size()) && (hierarchy.effective_enabled[node_index] != 0u);
+            if (enabled == false) {
+              ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            } else if (contains_active_camera) {
+              ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
+            }
+            const char* node_name = (node_index < hierarchy.node_names.size() && hierarchy.node_names[node_index].empty() == false) ? hierarchy.node_names[node_index].c_str()
+                                                                                                                                    : format_string("Node %u", node_index);
+            std::string node_label;
+            if (has_camera_attachment && has_emitter_attachment) {
+              node_label = "Camera + Light · ";
+            } else if (has_camera_attachment) {
+              node_label = "Camera · ";
+            } else if (has_emitter_attachment) {
+              node_label = "Light · ";
+            }
+            node_label += node_name;
+            const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<uintptr_t>(node_index) + 1u), flags, "%s", node_label.c_str());
+            const ImVec2 node_item_min = ImGui::GetItemRectMin();
+            const ImVec2 node_item_max = ImGui::GetItemRectMax();
+            if (ImGui::IsItemClicked()) {
+              set_selection(SelectionKind::Node, static_cast<int32_t>(node_index));
+            }
+            if (_scene_tree_reveal_node == node_index) {
+              ImGui::SetScrollHereY(0.5f);
+              _scene_tree_reveal_node = kInvalidIndex;
+            }
+            if (enabled && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0) && (attached_camera_index != kInvalidIndex) && callbacks.camera_activated) {
+              callbacks.camera_activated(attached_camera_index);
+            }
+            if (ImGui::BeginDragDropSource()) {
+              ImGui::SetDragDropPayload(node_payload_type, &node_index, sizeof(node_index));
+              ImGui::Text("Move %s", node_name);
+              ImGui::EndDragDropSource();
+            }
+            if (ImGui::BeginDragDropTarget()) {
+              const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(node_payload_type, ImGuiDragDropFlags_AcceptBeforeDelivery | ImGuiDragDropFlags_AcceptNoDrawDefaultRect);
+              if ((payload != nullptr) && (payload->Data != nullptr) && (payload->DataSize == sizeof(uint32_t))) {
+                uint32_t source_index = kInvalidIndex;
+                std::memcpy(&source_index, payload->Data, sizeof(source_index));
+                const bool invalid_target = invalid_drop_target(source_index, node_index);
+                const bool already_parented = (source_index < hierarchy.nodes.size()) && (hierarchy.nodes[source_index].parent_index == node_index);
+                const ImU32 highlight_color = ImGui::GetColorU32(
+                  invalid_target ? kErrorTextColor : (already_parented ? ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled) : ImGui::GetStyleColorVec4(ImGuiCol_DragDropTarget)));
+                ImGui::GetWindowDrawList()->AddRect(node_item_min, node_item_max, highlight_color, 0.0f, 0, 2.0f);
+                if (invalid_target) {
+                  ImGui::BeginTooltip();
+                  ImGui::TextUnformatted("A node cannot be parented to itself or its descendant.");
+                  ImGui::EndTooltip();
+                } else if (already_parented) {
+                  ImGui::BeginTooltip();
+                  ImGui::TextUnformatted("This is already the node's parent.");
+                  ImGui::EndTooltip();
+                } else if (payload->IsDelivery()) {
+                  reparent_source = source_index;
+                  reparent_target = node_index;
+                }
               }
-              if ((attachment.type != SceneAttachment::Type::Camera) || (attachment.resource_index >= scene_rep.data().cameras.size())) {
-                continue;
+              ImGui::EndDragDropTarget();
+            }
+
+            ImGui::PushID(static_cast<int>(node_index));
+            if (ImGui::BeginPopupContextItem("##node_context", ImGuiPopupFlags_MouseButtonRight)) {
+              set_selection(SelectionKind::Node, static_cast<int32_t>(node_index));
+              const bool duplicate_available = static_cast<bool>(callbacks.node_duplicated);
+              if (ImGui::MenuItem("Duplicate", nullptr, false, duplicate_available)) {
+                duplicate_request = node_index;
               }
-              if (attached_camera_index == kInvalidIndex) {
-                attached_camera_index = attachment.resource_index;
+              const bool delete_available = static_cast<bool>(callbacks.node_deleted);
+              if (ImGui::MenuItem("Delete...", nullptr, false, delete_available)) {
+                request_node_deletion(node_index);
               }
-              contains_active_camera = contains_active_camera || scene_rep.data().cameras[attachment.resource_index].active;
+              ImGui::EndPopup();
+            }
+            ImGui::PopID();
+            if ((enabled == false) || contains_active_camera) {
+              ImGui::PopStyleColor();
+            }
+
+            if ((leaf == false) && open) {
+              open_subtree_ends.push_back(subtree_end);
+              ++order_position;
+            } else if (leaf == false) {
+              order_position = std::max(order_position + 1u, subtree_end);
+            } else {
+              ++order_position;
             }
           }
 
-          const uint32_t subtree_end = (node_index < hierarchy.subtree_end_position.size())
-                                         ? std::min<uint32_t>(hierarchy.subtree_end_position[node_index], static_cast<uint32_t>(hierarchy.evaluation_order.size()))
-                                         : (order_position + 1u);
-          const bool leaf = subtree_end <= (order_position + 1u);
-          ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
-          if (node.parent_index == kInvalidIndex) {
-            flags |= ImGuiTreeNodeFlags_DefaultOpen;
+          while (open_subtree_ends.empty() == false) {
+            ImGui::TreePop();
+            open_subtree_ends.pop_back();
           }
-          if ((_selection.kind == SelectionKind::Node) && (_selection.index == static_cast<int32_t>(node_index))) {
-            flags |= ImGuiTreeNodeFlags_Selected;
-          }
-          if (leaf) {
-            flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-          }
-
-          const bool enabled = (node_index < hierarchy.effective_enabled.size()) && (hierarchy.effective_enabled[node_index] != 0u);
-          if (enabled == false) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-          } else if (contains_active_camera) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
-          }
-          const char* node_name = (node_index < hierarchy.node_names.size() && hierarchy.node_names[node_index].empty() == false) ? hierarchy.node_names[node_index].c_str()
-                                                                                                                                  : format_string("Node %u", node_index);
-          std::string node_label;
-          if (has_camera_attachment && has_emitter_attachment) {
-            node_label = "Camera + Light · ";
-          } else if (has_camera_attachment) {
-            node_label = "Camera · ";
-          } else if (has_emitter_attachment) {
-            node_label = "Light · ";
-          }
-          node_label += node_name;
-          const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<uintptr_t>(node_index) + 1u), flags, "%s", node_label.c_str());
-          if (ImGui::IsItemClicked()) {
-            set_selection(SelectionKind::Node, static_cast<int32_t>(node_index));
-          }
-          if (enabled && ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0) && (attached_camera_index != kInvalidIndex) && callbacks.camera_activated) {
-            callbacks.camera_activated(attached_camera_index);
-          }
-          if ((enabled == false) || contains_active_camera) {
-            ImGui::PopStyleColor();
-          }
-
-          if (leaf == false && open) {
-            open_subtree_ends.push_back(subtree_end);
-            ++order_position;
-          } else if (leaf == false) {
-            order_position = std::max(order_position + 1u, subtree_end);
-          } else {
-            ++order_position;
-          }
-        }
-
-        while (open_subtree_ends.empty() == false) {
           ImGui::TreePop();
-          open_subtree_ends.pop_back();
         }
-        ImGui::TreePop();
       }
     }
     ImGui::EndChild();
     ImGui::PopStyleVar();
+
+    if ((duplicate_request != kInvalidIndex) && callbacks.node_duplicated) {
+      commit_name_edit(true);
+      select_scene_edit_node(callbacks.node_duplicated(duplicate_request));
+    }
+    if ((reparent_source != kInvalidIndex) && callbacks.node_reparented) {
+      select_scene_edit_node(callbacks.node_reparented(reparent_source, reparent_target));
+    }
+    build_node_deletion_modal(scene_rep);
   });
+}
+
+void UI::build_node_deletion_modal(SceneRepresentation& scene_rep) {
+  constexpr const char* popup_id = "Delete Node?##delete_scene_node";
+  if (_node_deletion_modal_requested) {
+    ImGui::OpenPopup(popup_id);
+    _node_deletion_modal_requested = false;
+  }
+
+  if (ImGui::BeginPopupModal(popup_id, nullptr, ImGuiWindowFlags_AlwaysAutoResize) == false) {
+    return;
+  }
+
+  const SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
+  const bool node_available = _pending_node_deletion < hierarchy.nodes.size();
+  const char* node_name = "this node";
+  if (node_available && (_pending_node_deletion < hierarchy.node_names.size()) && (hierarchy.node_names[_pending_node_deletion].empty() == false)) {
+    node_name = hierarchy.node_names[_pending_node_deletion].c_str();
+  }
+  ImGui::Text("Delete %s and its children?", node_name);
+  draw_disabled_wrapped_text("This removes every attachment in the subtree.");
+
+  const bool delete_available = node_available && static_cast<bool>(callbacks.node_deleted);
+  if (delete_available == false) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::Button("Delete", ImVec2(120.0f, 0.0f)) && delete_available) {
+    const SceneEditResult result = callbacks.node_deleted(_pending_node_deletion);
+    _scene_edit_status = result.status;
+    if (result.succeeded()) {
+      if (_node_transform_editor_interaction_active) {
+        finish_node_transform_editor_interaction();
+      }
+      apply_node_remapping(result.node_remapping);
+      _pending_node_deletion = kInvalidIndex;
+      ImGui::CloseCurrentPopup();
+    }
+  }
+  if (delete_available == false) {
+    ImGui::EndDisabled();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+    _pending_node_deletion = kInvalidIndex;
+    ImGui::CloseCurrentPopup();
+  }
+  if (_scene_edit_status != SceneEditStatus::Success) {
+    ImGui::TextColored(kErrorTextColor, "%s", scene_edit_status_message(_scene_edit_status));
+  }
+  ImGui::EndPopup();
+}
+
+void UI::build_resource_deletion_modal(SceneRepresentation& scene_rep) {
+  constexpr const char* popup_id = "Delete Resource?##delete_scene_resource";
+  if (_resource_deletion_modal_requested) {
+    ImGui::OpenPopup(popup_id);
+    _resource_deletion_modal_requested = false;
+  }
+
+  if (ImGui::BeginPopupModal(popup_id, nullptr, ImGuiWindowFlags_AlwaysAutoResize) == false) {
+    return;
+  }
+
+  bool resource_available = false;
+  bool delete_callback_available = false;
+  std::string resource_name = "this resource";
+  switch (_pending_resource_deletion_kind) {
+    case SelectionKind::Material:
+      resource_available = _pending_resource_deletion < scene_rep.data().materials.size();
+      delete_callback_available = static_cast<bool>(callbacks.material_deleted);
+      if (const char* name = _material_mapping.name_for(_pending_resource_deletion); name != nullptr) {
+        resource_name = name;
+      }
+      break;
+    case SelectionKind::Medium:
+      resource_available = _pending_resource_deletion < scene_rep.data().mediums_vector.size();
+      delete_callback_available = static_cast<bool>(callbacks.medium_deleted);
+      if (const char* name = _medium_mapping.name_for(_pending_resource_deletion); name != nullptr) {
+        resource_name = name;
+      }
+      break;
+    case SelectionKind::Emitter:
+      resource_available = (_pending_resource_deletion < scene_rep.data().emitter_profiles.size()) &&
+                           (scene_rep.data().emitter_profiles[_pending_resource_deletion].cls != EmitterProfile::Class::Area);
+      delete_callback_available = static_cast<bool>(callbacks.emitter_deleted);
+      if (_pending_resource_deletion < scene_rep.emitter_names().size()) {
+        resource_name = scene_rep.emitter_names()[_pending_resource_deletion];
+      }
+      break;
+    case SelectionKind::Camera:
+      resource_available = _pending_resource_deletion < scene_rep.data().cameras.size();
+      delete_callback_available = static_cast<bool>(callbacks.camera_deleted);
+      if (resource_available && (scene_rep.data().cameras[_pending_resource_deletion].id.empty() == false)) {
+        resource_name = scene_rep.data().cameras[_pending_resource_deletion].id;
+      }
+      break;
+    default:
+      break;
+  }
+
+  ImGui::Text("Delete %s?", resource_name.c_str());
+  draw_disabled_wrapped_text("Resources that are referenced or active cannot be deleted.");
+
+  const bool delete_available = resource_available && delete_callback_available;
+  if (delete_available == false) {
+    ImGui::BeginDisabled();
+  }
+  push_semantic_button_colors(terminate_button_colors(_theme));
+  if (ImGui::Button("Delete", ImVec2(120.0f, 0.0f)) && delete_available) {
+    SceneResourceEditResult result = {.status = SceneResourceEditStatus::ResourceUpdateFailed};
+    switch (_pending_resource_deletion_kind) {
+      case SelectionKind::Material:
+        result = callbacks.material_deleted(_pending_resource_deletion);
+        break;
+      case SelectionKind::Medium:
+        result = callbacks.medium_deleted(_pending_resource_deletion);
+        break;
+      case SelectionKind::Emitter:
+        result = callbacks.emitter_deleted(_pending_resource_deletion);
+        break;
+      case SelectionKind::Camera:
+        result = callbacks.camera_deleted(_pending_resource_deletion);
+        break;
+      default:
+        break;
+    }
+    _resource_edit_status = result.status;
+    _resource_edit_status_kind = _pending_resource_deletion_kind;
+    if (result.succeeded()) {
+      apply_resource_remapping(_pending_resource_deletion_kind, result.resource_remapping);
+      _pending_resource_deletion_kind = SelectionKind::None;
+      _pending_resource_deletion = kInvalidIndex;
+      ImGui::CloseCurrentPopup();
+    }
+  }
+  ImGui::PopStyleColor(3);
+  if (delete_available == false) {
+    ImGui::EndDisabled();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(120.0f, 0.0f))) {
+    _pending_resource_deletion_kind = SelectionKind::None;
+    _pending_resource_deletion = kInvalidIndex;
+    ImGui::CloseCurrentPopup();
+  }
+  if (_resource_edit_status != SceneResourceEditStatus::Success) {
+    ImGui::TextColored(kErrorTextColor, "%s", scene_resource_edit_status_message(_resource_edit_status));
+  }
+  ImGui::EndPopup();
 }
 
 void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
@@ -4556,6 +5398,11 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
     case SelectionKind::Emitter: {
       if ((_selection.index >= 0) && (static_cast<uint32_t>(_selection.index) < scene_rep.data().emitter_profiles.size())) {
         uint32_t emitter_index = static_cast<uint32_t>(_selection.index);
+        const std::vector<std::string>& emitter_names = scene_rep.emitter_names();
+        if ((emitter_index < emitter_names.size()) && (emitter_names[emitter_index].empty() == false)) {
+          properties_title = emitter_names[emitter_index];
+          break;
+        }
         const auto& emitter = scene_rep.data().emitter_profiles[emitter_index];
         const char* emitter_type = nullptr;
         switch (emitter.cls) {
@@ -4578,6 +5425,12 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
       }
       break;
     }
+    case SelectionKind::Camera:
+      if ((_selection.index >= 0) && (static_cast<uint32_t>(_selection.index) < scene_rep.data().cameras.size())) {
+        const auto& camera = scene_rep.data().cameras[static_cast<uint32_t>(_selection.index)];
+        properties_title = camera.id.empty() ? "Camera" : camera.id;
+      }
+      break;
     case SelectionKind::Rendering:
       properties_title = "Rendering";
       break;
@@ -4603,7 +5456,11 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
     ImGui::SameLine();
     history_button("Forward##selection_history", can_navigate_forward(), 1, "Advance to the next selection.");
     ImGui::Spacing();
+    const float heading_width = std::max(1.0f, ImGui::GetContentRegionAvail().x - 2.0f * ImGui::GetStyle().SeparatorTextPadding.x);
     ImGui::SeparatorText(properties_title.c_str());
+    if (ImGui::CalcTextSize(properties_title.c_str()).x > heading_width) {
+      draw_item_tooltip(properties_title.c_str(), ImGuiHoveredFlags_DelayNormal);
+    }
     switch (_selection.kind) {
       case SelectionKind::Node: {
         build_node_selection_properties(scene_rep, ctx, data);
@@ -4621,18 +5478,23 @@ void UI::build_properties_window(SceneRepresentation& scene_rep, const BuildCont
         build_emitter_selection_properties(scene_rep, ctx, data);
         break;
       }
+      case SelectionKind::Camera: {
+        build_camera_resource_properties(scene_rep, ctx, data);
+        break;
+      }
       case SelectionKind::Rendering: {
-        ImGui::TextDisabled("Rendering controls are available in the Render tab.");
+        draw_disabled_wrapped_text("Rendering controls are available in the Render tab.");
         break;
       }
       default:
-        ImGui::TextDisabled("Select a scene node or resource to inspect it.");
+        draw_disabled_wrapped_text("Select a scene node or resource to inspect it.");
         break;
     }
   });
 }
 
 void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
+  (void)ctx;
   SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
   if ((_selection.index < 0) || (static_cast<uint64_t>(_selection.index) >= hierarchy.nodes.size())) {
     ImGui::Text("Invalid node selection");
@@ -4646,135 +5508,43 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
   if (_node_transform_editor_interaction_active) {
     _node_transform_editor_interaction_rendered_this_frame = true;
   }
-  SceneNode& node = hierarchy.nodes[node_index];
-  const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
-  const bool attachment_range_valid = (attachment_end >= node.attachment_offset) && (attachment_end <= hierarchy.attachments.size());
   if (_node_geometry_edit_result_node != static_cast<int32_t>(node_index)) {
     _node_geometry_edit_result_node = static_cast<int32_t>(node_index);
     _node_geometry_edit_result = NodeGeometryEditResult::Success;
   }
-  auto subtree_contains_active_camera = [&]() {
-    if ((node_index >= hierarchy.order_position.size()) || (node_index >= hierarchy.subtree_end_position.size())) {
-      return false;
-    }
-    const uint32_t subtree_begin = hierarchy.order_position[node_index];
-    const uint32_t subtree_end = std::min<uint32_t>(hierarchy.subtree_end_position[node_index], static_cast<uint32_t>(hierarchy.evaluation_order.size()));
-    if (subtree_begin >= subtree_end) {
-      return false;
-    }
-    for (uint32_t order_position = subtree_begin; order_position < subtree_end; ++order_position) {
-      const uint32_t descendant_index = hierarchy.evaluation_order[order_position];
-      if (descendant_index >= hierarchy.nodes.size()) {
-        continue;
-      }
-      const SceneNode& descendant = hierarchy.nodes[descendant_index];
-      const uint32_t attachment_end = descendant.attachment_offset + descendant.attachment_count;
-      if ((attachment_end < descendant.attachment_offset) || (attachment_end > hierarchy.attachments.size())) {
-        continue;
-      }
-      for (uint32_t attachment_index = descendant.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
-        const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
-        if ((attachment.type == SceneAttachment::Type::Camera) && (attachment.resource_index < scene_rep.data().cameras.size()) &&
-            scene_rep.data().cameras[attachment.resource_index].active) {
-          return true;
-        }
-      }
-    }
-    return false;
-  };
-  auto resolve_node_change = [&](bool transforms_only) {
-    if (scene_rep.data().resolve_hierarchy() == false) {
-      return false;
-    }
-    scene_rep.update_active_camera();
-    if (transforms_only && callbacks.scene_transforms_changed) {
-      callbacks.scene_transforms_changed();
-    } else {
-      scene_rep.update_medium_bounds();
-      if (callbacks.scene_settings_changed) {
-        callbacks.scene_settings_changed();
-      }
-    }
-    return true;
-  };
   const char* selected_node_name = (node_index < hierarchy.node_names.size()) ? hierarchy.node_names[node_index].c_str() : "";
   update_name_buffer(SelectionKind::Node, _selection.index, selected_node_name);
   ImGui::TextUnformatted("Name");
   full_width_item();
-  const bool name_edit_active = ImGui::InputText("##node_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
-  if (ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter))) {
-    if (hierarchy.node_names.size() < hierarchy.nodes.size()) {
-      hierarchy.node_names.resize(hierarchy.nodes.size());
-    }
-    hierarchy.node_names[node_index] = _name_edit_buffer;
-    if (callbacks.scene_modified) {
-      callbacks.scene_modified();
-    }
-  }
-
-  bool enabled = (node.flags & SceneNode::Enabled) != 0u;
-  const bool protects_active_camera = enabled && subtree_contains_active_camera();
-  if (protects_active_camera) {
+  const bool rename_available = static_cast<bool>(callbacks.node_renamed);
+  if (rename_available == false) {
     ImGui::BeginDisabled();
   }
-  if (ImGui::Checkbox("Enabled", &enabled)) {
-    if (hierarchy.set_enabled(node_index, enabled)) {
-      if (resolve_node_change(true) == false) {
-        hierarchy.set_enabled(node_index, enabled == false);
-        if (scene_rep.data().resolve_hierarchy() == false) {
-          log::error("Failed to restore scene hierarchy after rejecting an invalid node visibility edit");
-        }
-      }
-    }
+  const bool name_edited = ImGui::InputText("##node_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
+  if (name_edited) {
+    _name_edit_pending = true;
   }
-  if (protects_active_camera) {
+  const bool rename_committed = ImGui::IsItemDeactivatedAfterEdit();
+  if (rename_committed) {
+    commit_name_edit(true);
+  }
+  if (rename_available == false) {
     ImGui::EndDisabled();
-    draw_item_tooltip("Activate another camera before disabling this node.", ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
   }
 
-  const char* parent_name = "None";
-  if ((node.parent_index != kInvalidIndex) && (node.parent_index < hierarchy.node_names.size())) {
-    parent_name = hierarchy.node_names[node.parent_index].c_str();
+  bool enabled = (hierarchy.nodes[node_index].flags & SceneNode::Enabled) != 0u;
+  const bool enabled_edit_available = static_cast<bool>(callbacks.node_enabled_changed);
+  if (enabled_edit_available == false) {
+    ImGui::BeginDisabled();
   }
-  ImGui::TextUnformatted("Parent");
-  full_width_item();
-  const bool parent_combo_open = ImGui::BeginCombo("##node_parent", parent_name);
-  draw_item_tooltip("Reparenting preserves the world transform.", ImGuiHoveredFlags_DelayNormal);
-  if (parent_combo_open) {
-    bool parent_changed = false;
-    if (ImGui::Selectable("None", node.parent_index == kInvalidIndex)) {
-      if ((node.parent_index != kInvalidIndex) && hierarchy.reparent_preserve_world(node_index, kInvalidIndex)) {
-        parent_changed = resolve_node_change(false);
-      }
-    }
-    const bool traversal_valid = (node_index < hierarchy.order_position.size()) && (node_index < hierarchy.subtree_end_position.size());
-    const uint32_t subtree_begin = traversal_valid ? hierarchy.order_position[node_index] : kInvalidIndex;
-    const uint32_t subtree_end = traversal_valid ? hierarchy.subtree_end_position[node_index] : kInvalidIndex;
-    for (uint32_t candidate_index = 0u; (candidate_index < hierarchy.nodes.size()) && (parent_changed == false); ++candidate_index) {
-      ImGui::PushID(static_cast<int>(candidate_index));
-      const uint32_t candidate_position = candidate_index < hierarchy.order_position.size() ? hierarchy.order_position[candidate_index] : kInvalidIndex;
-      const bool creates_cycle = (candidate_index == node_index) ||
-                                 (traversal_valid && (candidate_position != kInvalidIndex) && (candidate_position >= subtree_begin) && (candidate_position < subtree_end));
-      AffineTransform inverse_parent = {};
-      double parent_determinant = 0.0;
-      const bool singular_parent =
-        (candidate_index >= hierarchy.world_transforms.size()) || (invert_affine(hierarchy.world_transforms[candidate_index], inverse_parent, parent_determinant) == false);
-      const bool invalid_parent = creates_cycle || singular_parent;
-      if (invalid_parent) {
-        ImGui::BeginDisabled();
-      }
-      const char* candidate_name = candidate_index < hierarchy.node_names.size() ? hierarchy.node_names[candidate_index].c_str() : "Unnamed node";
-      if (ImGui::Selectable(candidate_name, node.parent_index == candidate_index) && (invalid_parent == false)) {
-        if ((node.parent_index != candidate_index) && hierarchy.reparent_preserve_world(node_index, candidate_index)) {
-          parent_changed = resolve_node_change(false);
-        }
-      }
-      if (invalid_parent) {
-        ImGui::EndDisabled();
-      }
-      ImGui::PopID();
-    }
-    ImGui::EndCombo();
+  if (ImGui::Checkbox("Enabled", &enabled) && enabled_edit_available) {
+    _scene_edit_status = callbacks.node_enabled_changed(node_index, enabled).status;
+  }
+  if (enabled_edit_available == false) {
+    ImGui::EndDisabled();
+  }
+  if (_scene_edit_status != SceneEditStatus::Success) {
+    ImGui::TextColored(kErrorTextColor, "%s", scene_edit_status_message(_scene_edit_status));
   }
 
   ImGui::Spacing();
@@ -4816,14 +5586,15 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
     ImGui::EndDisabled();
   }
   auto refresh_transform_editor = [&]() {
+    const SceneNode& current_node = hierarchy.nodes[node_index];
     _node_transform_editor.node_index = static_cast<int32_t>(node_index);
-    _node_transform_editor.source_transform = node.local_transform;
+    _node_transform_editor.source_transform = current_node.local_transform;
     _node_transform_editor.trs = {};
-    _node_transform_editor.decomposable = affine_to_trs(node.local_transform, _node_transform_editor.trs);
+    _node_transform_editor.decomposable = affine_to_trs(current_node.local_transform, _node_transform_editor.trs);
     _node_transform_editor.rotation_degrees = _node_transform_editor.trs.rotation_radians * (180.0f / kPi);
   };
   if ((_node_transform_editor.node_index != static_cast<int32_t>(node_index)) ||
-      (std::memcmp(&_node_transform_editor.source_transform, &node.local_transform, sizeof(AffineTransform)) != 0)) {
+      (std::memcmp(&_node_transform_editor.source_transform, &hierarchy.nodes[node_index].local_transform, sizeof(AffineTransform)) != 0)) {
     refresh_transform_editor();
   }
 
@@ -4834,6 +5605,10 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
     transform_interaction_started = transform_interaction_started || ImGui::IsItemActivated();
     transform_interaction_finished = transform_interaction_finished || ImGui::IsItemDeactivated();
   };
+  const bool transform_edit_available = static_cast<bool>(callbacks.node_transform_changed);
+  if (transform_edit_available == false) {
+    ImGui::BeginDisabled();
+  }
   ImGui::TextUnformatted("Position");
   full_width_item();
   transform_changed = ImGui::DragFloat3("##node_position", &_node_transform_editor.trs.translation.x, 0.01f, 0.0f, 0.0f, "%.3f") || transform_changed;
@@ -4858,6 +5633,9 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
       transform_changed = true;
     }
   }
+  if (transform_edit_available == false) {
+    ImGui::EndDisabled();
+  }
   if (transform_interaction_started && (_node_transform_editor_interaction_active == false)) {
     _node_transform_editor_interaction_active = true;
     _node_transform_editor_interaction_rendered_this_frame = true;
@@ -4866,16 +5644,18 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
       callbacks.scene_transform_interaction_started();
     }
   }
-  if (transform_changed) {
-    AffineTransform transform = _node_transform_editor.decomposable ? affine_from_trs(_node_transform_editor.trs) : _node_transform_editor.source_transform;
+  if (transform_changed && transform_edit_available) {
+    const AffineTransform transform = _node_transform_editor.decomposable ? affine_from_trs(_node_transform_editor.trs) : _node_transform_editor.source_transform;
+    AffineTransform edited_transform = transform;
     if (_node_transform_editor.decomposable == false) {
-      transform.rows[0].w = _node_transform_editor.trs.translation.x;
-      transform.rows[1].w = _node_transform_editor.trs.translation.y;
-      transform.rows[2].w = _node_transform_editor.trs.translation.z;
+      edited_transform.rows[0].w = _node_transform_editor.trs.translation.x;
+      edited_transform.rows[1].w = _node_transform_editor.trs.translation.y;
+      edited_transform.rows[2].w = _node_transform_editor.trs.translation.z;
     }
-    if (hierarchy.set_local_transform(node_index, transform)) {
-      _node_transform_editor.source_transform = transform;
-      resolve_node_change(true);
+    const SceneEditResult result = callbacks.node_transform_changed(node_index, edited_transform);
+    _scene_edit_status = result.status;
+    if (result.succeeded()) {
+      _node_transform_editor.source_transform = hierarchy.nodes[node_index].local_transform;
     } else {
       refresh_transform_editor();
     }
@@ -4904,14 +5684,9 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
       return;
     }
 
-    _node_geometry_edit_result = scene_rep.edit_node_geometry(node_index, operation);
+    _node_geometry_edit_result = callbacks.node_geometry_edited(node_index, operation);
     if (_node_geometry_edit_result == NodeGeometryEditResult::Success) {
-      scene_rep.update_medium_bounds();
-      scene_rep.update_active_camera();
       refresh_transform_editor();
-      if (callbacks.scene_settings_changed) {
-        callbacks.scene_settings_changed();
-      }
     } else {
       log::error("Node geometry edit failed: %s", node_geometry_edit_result_message(_node_geometry_edit_result));
     }
@@ -4925,26 +5700,155 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
 
   AffineTransform inverse_transform = {};
   double determinant = 0.0;
-  if (invert_affine(node.local_transform, inverse_transform, determinant) == false) {
+  if (invert_affine(hierarchy.nodes[node_index].local_transform, inverse_transform, determinant) == false) {
     ImGui::TextColored(kErrorTextColor, "Singular transform; attachments disabled.");
   }
 
+  build_node_attachments(scene_rep, node_index, data);
+}
+
+void UI::build_node_attachments(SceneRepresentation& scene_rep, uint32_t node_index, const FrameData& data) {
+  SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
+  if (node_index >= hierarchy.nodes.size()) {
+    return;
+  }
+
+  const SceneNode& node = hierarchy.nodes[node_index];
+  const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+  const bool attachment_range_valid = (attachment_end >= node.attachment_offset) && (attachment_end <= hierarchy.attachments.size());
   ImGui::Spacing();
   ImGui::SeparatorText("Attachments");
-  if (node.attachment_count == 0u) {
-    ImGui::TextDisabled("None");
-  }
-  static constexpr const char* kAttachmentNames[] = {"Mesh", "Camera", "Emitter", "Medium"};
   if (attachment_range_valid == false) {
     ImGui::TextColored(kErrorTextColor, "Invalid attachment range");
     return;
   }
+
+  auto emitter_label = [&](uint32_t emitter_index) {
+    if (emitter_index >= scene_rep.data().emitter_profiles.size()) {
+      return std::string("Invalid emitter");
+    }
+    const std::vector<std::string>& emitter_names = scene_rep.emitter_names();
+    if ((emitter_index < emitter_names.size()) && (emitter_names[emitter_index].empty() == false)) {
+      return emitter_names[emitter_index];
+    }
+    const EmitterProfile& emitter = scene_rep.data().emitter_profiles[emitter_index];
+    switch (emitter.cls) {
+      case EmitterProfile::Class::Directional:
+        return std::string(((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u) ? "Sun " : "Directional Light ") + std::to_string(emitter_index + 1u);
+      case EmitterProfile::Class::Environment:
+        return std::string(((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u) ? "Sky " : "Environment ") + std::to_string(emitter_index + 1u);
+      case EmitterProfile::Class::Area:
+        return std::string("Area Light ") + std::to_string(emitter_index + 1u);
+      default:
+        return std::string("Emitter ") + std::to_string(emitter_index + 1u);
+    }
+  };
+  auto resource_label = [&](SceneAttachment::Type type, uint32_t resource_index) {
+    switch (type) {
+      case SceneAttachment::Type::Mesh: {
+        const char* name = _mesh_mapping.name_for(resource_index);
+        return name != nullptr ? std::string(name) : (std::string("Mesh ") + std::to_string(resource_index + 1u));
+      }
+      case SceneAttachment::Type::Camera:
+        if ((resource_index < scene_rep.data().cameras.size()) && (scene_rep.data().cameras[resource_index].id.empty() == false)) {
+          return scene_rep.data().cameras[resource_index].id;
+        }
+        return std::string("Camera ") + std::to_string(resource_index + 1u);
+      case SceneAttachment::Type::Emitter:
+        return emitter_label(resource_index);
+      case SceneAttachment::Type::Medium: {
+        const char* name = _medium_mapping.name_for(resource_index);
+        return name != nullptr ? std::string(name) : (std::string("Medium ") + std::to_string(resource_index + 1u));
+      }
+    }
+    return std::string("Unknown");
+  };
+
+  SceneAttachment::Type attach_type = SceneAttachment::Type::Mesh;
+  uint32_t attach_resource = kInvalidIndex;
+  const bool attach_available = static_cast<bool>(callbacks.node_resource_attached);
+  if (attach_available == false) {
+    ImGui::BeginDisabled();
+  }
+  if (ImGui::Button("Add Attachment", ImVec2(-FLT_MIN, 0.0f))) {
+    ImGui::OpenPopup("##add_node_attachment");
+  }
+  if (attach_available == false) {
+    ImGui::EndDisabled();
+  }
+  if (ImGui::BeginPopup("##add_node_attachment")) {
+    if (ImGui::BeginMenu("Mesh", scene_rep.data().meshes.empty() == false)) {
+      for (uint32_t mesh_index = 0u; mesh_index < scene_rep.data().meshes.size(); ++mesh_index) {
+        const std::string label = resource_label(SceneAttachment::Type::Mesh, mesh_index) + "##attach_mesh_" + std::to_string(mesh_index);
+        if (ImGui::MenuItem(label.c_str())) {
+          attach_type = SceneAttachment::Type::Mesh;
+          attach_resource = mesh_index;
+        }
+      }
+      ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Camera", scene_rep.data().cameras.empty() == false)) {
+      for (uint32_t camera_index = 0u; camera_index < scene_rep.data().cameras.size(); ++camera_index) {
+        const std::string label = resource_label(SceneAttachment::Type::Camera, camera_index) + "##attach_camera_" + std::to_string(camera_index);
+        if (ImGui::MenuItem(label.c_str())) {
+          attach_type = SceneAttachment::Type::Camera;
+          attach_resource = camera_index;
+        }
+      }
+      ImGui::EndMenu();
+    }
+    const bool has_attachable_emitter = std::any_of(scene_rep.data().emitter_profiles.begin(), scene_rep.data().emitter_profiles.end(), [](const EmitterProfile& emitter) {
+      return emitter.cls != EmitterProfile::Class::Area;
+    });
+    if (ImGui::BeginMenu("Emitter", has_attachable_emitter)) {
+      for (uint32_t emitter_index = 0u; emitter_index < scene_rep.data().emitter_profiles.size(); ++emitter_index) {
+        if (scene_rep.data().emitter_profiles[emitter_index].cls == EmitterProfile::Class::Area) {
+          continue;
+        }
+        const std::string label = resource_label(SceneAttachment::Type::Emitter, emitter_index) + "##attach_emitter_" + std::to_string(emitter_index);
+        if (ImGui::MenuItem(label.c_str())) {
+          attach_type = SceneAttachment::Type::Emitter;
+          attach_resource = emitter_index;
+        }
+      }
+      ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Medium", scene_rep.data().mediums_vector.empty() == false)) {
+      for (uint32_t medium_index = 0u; medium_index < scene_rep.data().mediums_vector.size(); ++medium_index) {
+        const std::string label = resource_label(SceneAttachment::Type::Medium, medium_index) + "##attach_medium_" + std::to_string(medium_index);
+        if (ImGui::MenuItem(label.c_str())) {
+          attach_type = SceneAttachment::Type::Medium;
+          attach_resource = medium_index;
+        }
+      }
+      ImGui::EndMenu();
+    }
+    ImGui::EndPopup();
+  }
+
+  uint32_t detach_request = kInvalidIndex;
+  static constexpr const char* kAttachmentNames[] = {"Mesh", "Camera", "Emitter", "Medium"};
+  if (node.attachment_count == 0u) {
+    ImGui::TextDisabled("None");
+  }
   for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
     const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+    const uint32_t local_attachment_index = attachment_index - node.attachment_offset;
     const uint32_t type_index = static_cast<uint32_t>(attachment.type);
     const char* type_name = type_index < std::size(kAttachmentNames) ? kAttachmentNames[type_index] : "Unknown";
+    const std::string header = std::string(type_name) + " · " + resource_label(attachment.type, attachment.resource_index);
     ImGui::PushID(static_cast<int>(attachment_index));
-    ImGui::SeparatorText(type_name);
+    ImGui::SeparatorText(header.c_str());
+    const bool detach_available = static_cast<bool>(callbacks.node_resource_detached);
+    if (detach_available == false) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button("Remove Attachment", ImVec2(-FLT_MIN, 0.0f)) && detach_available) {
+      detach_request = local_attachment_index;
+    }
+    if (detach_available == false) {
+      ImGui::EndDisabled();
+    }
     switch (attachment.type) {
       case SceneAttachment::Type::Mesh: {
         if (attachment.resource_index < scene_rep.data().meshes.size()) {
@@ -4977,6 +5881,12 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
   }
 
   build_node_appearance_properties(scene_rep, node, attachment_end, data);
+
+  if ((detach_request != kInvalidIndex) && callbacks.node_resource_detached) {
+    _scene_edit_status = callbacks.node_resource_detached(node_index, detach_request).status;
+  } else if ((attach_resource != kInvalidIndex) && callbacks.node_resource_attached) {
+    _scene_edit_status = callbacks.node_resource_attached(node_index, attach_type, attach_resource).status;
+  }
 }
 
 void UI::finish_node_transform_editor_interaction() {
@@ -4994,16 +5904,6 @@ void UI::finish_node_transform_editor_interaction() {
 
 void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& data) {
   _gizmo_captures_mouse = false;
-  auto notify_transform_change = [&]() {
-    if (callbacks.scene_transforms_changed) {
-      callbacks.scene_transforms_changed();
-    } else {
-      scene_rep.update_medium_bounds();
-      if (callbacks.scene_settings_changed) {
-        callbacks.scene_settings_changed();
-      }
-    }
-  };
   auto finish_interaction = [&]() {
     if (_gizmo_was_using && callbacks.scene_transform_interaction_finished) {
       callbacks.scene_transform_interaction_finished();
@@ -5018,6 +5918,10 @@ void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& 
   SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
   const uint32_t node_index = static_cast<uint32_t>(_selection.index);
   if ((node_index >= hierarchy.nodes.size()) || (node_index >= hierarchy.world_transforms.size())) {
+    finish_interaction();
+    return;
+  }
+  if (static_cast<bool>(callbacks.node_transform_changed) == false) {
     finish_interaction();
     return;
   }
@@ -5102,19 +6006,10 @@ void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& 
     callbacks.scene_transform_interaction_started();
   }
 
-  if (transform_changed) {
-    const AffineTransform previous_local_transform = node.local_transform;
+  if (transform_changed && callbacks.node_transform_changed) {
     const AffineTransform edited_world_transform = affine_from_matrix(world_matrix);
     const AffineTransform edited_local_transform = (node.parent_index == kInvalidIndex) ? edited_world_transform : multiply_affine(inverse_parent, edited_world_transform);
-    if (hierarchy.set_local_transform(node_index, edited_local_transform) && scene_rep.data().resolve_hierarchy()) {
-      scene_rep.update_active_camera();
-      notify_transform_change();
-    } else {
-      hierarchy.set_local_transform(node_index, previous_local_transform);
-      if (scene_rep.data().resolve_hierarchy() == false) {
-        log::error("Failed to restore scene hierarchy after rejecting an invalid gizmo transform");
-      }
-    }
+    _scene_edit_status = callbacks.node_transform_changed(node_index, edited_local_transform).status;
   }
 
   if (interaction_finished) {
@@ -5206,14 +6101,22 @@ void UI::build_material_selection_properties(SceneRepresentation& scene_rep, con
 
     ImGui::TextUnformatted("Name");
     full_width_item();
-    const bool name_edit_active = ImGui::InputText("##material_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
-    const bool name_commit = (ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter)));
-    if (name_commit) {
-      if (callbacks.material_renamed) {
-        callbacks.material_renamed(material_index, std::string(_name_edit_buffer));
-        _pending_selection = {SelectionKind::Material, material_index, true};
-      }
+    const bool rename_available = static_cast<bool>(callbacks.material_renamed);
+    if (rename_available == false) {
+      ImGui::BeginDisabled();
     }
+    const bool name_edited = ImGui::InputText("##material_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
+    if (name_edited) {
+      _name_edit_pending = true;
+    }
+    const bool rename_committed = ImGui::IsItemDeactivatedAfterEdit();
+    if (rename_available == false) {
+      ImGui::EndDisabled();
+    }
+    if (rename_committed) {
+      commit_name_edit(true);
+    }
+    build_resource_edit_feedback(SelectionKind::Material);
     bool changed = build_material(scene_rep, material, data);
     if (changed) {
       queue_material_change(material_index);
@@ -5361,12 +6264,22 @@ void UI::build_medium_selection_properties(SceneRepresentation& scene_rep, const
   update_name_buffer(SelectionKind::Medium, _selection.index, medium_name);
   ImGui::TextUnformatted("Name");
   full_width_item();
-  bool name_edit_active = ImGui::InputText("##medium_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
-  bool name_commit = ImGui::IsItemDeactivatedAfterEdit() || (name_edit_active && ImGui::IsKeyPressed(ImGuiKey_Enter));
-  if (name_commit && callbacks.medium_renamed) {
-    callbacks.medium_renamed(medium_index, std::string(_name_edit_buffer));
-    _pending_selection = {SelectionKind::Medium, medium_index, true};
+  const bool rename_available = static_cast<bool>(callbacks.medium_renamed);
+  if (rename_available == false) {
+    ImGui::BeginDisabled();
   }
+  const bool name_edited = ImGui::InputText("##medium_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
+  if (name_edited) {
+    _name_edit_pending = true;
+  }
+  const bool rename_committed = ImGui::IsItemDeactivatedAfterEdit();
+  if (rename_available == false) {
+    ImGui::EndDisabled();
+  }
+  if (rename_committed) {
+    commit_name_edit(true);
+  }
+  build_resource_edit_feedback(SelectionKind::Medium);
   build_medium_resource_properties(scene_rep, medium_index);
 }
 
@@ -5392,8 +6305,13 @@ void UI::build_medium_resource_properties(SceneRepresentation& scene_rep, uint32
   }
   const bool changed = build_medium(edited_medium, absorption, scattering);
   if (changed) {
+    const bool representation_changed = (edited_medium.cls != medium.cls) || (edited_medium.grid_type_enum() != medium.grid_type_enum());
+    begin_medium_interaction();
     queue_medium_change(medium_index);
     medium = edited_medium;
+    if (representation_changed) {
+      scene_rep.data().mediums.clear_volume_path(medium_index);
+    }
     if (absorption != nullptr) {
       scene_rep.data().spectrum_values[medium.absorption_index] = edited_absorption;
     }
@@ -5404,11 +6322,41 @@ void UI::build_medium_resource_properties(SceneRepresentation& scene_rep, uint32
 }
 
 void UI::build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
+  (void)ctx;
   if ((_selection.index < 0) || (static_cast<uint32_t>(_selection.index) >= scene_rep.data().emitter_profiles.size())) {
     ImGui::Text("Invalid emitter selection");
     return;
   }
-  uint32_t emitter_index = static_cast<uint32_t>(_selection.index);
+
+  const uint32_t emitter_index = static_cast<uint32_t>(_selection.index);
+  const EmitterProfile& emitter = scene_rep.data().emitter_profiles[emitter_index];
+  const std::vector<std::string>& emitter_names = scene_rep.emitter_names();
+  const std::string emitter_name = ((emitter_index < emitter_names.size()) && (emitter_names[emitter_index].empty() == false))
+                                     ? emitter_names[emitter_index]
+                                     : std::string(format_string("Light %u", emitter_index + 1u));
+  update_name_buffer(SelectionKind::Emitter, _selection.index, emitter_name.c_str());
+  ImGui::TextUnformatted("Name");
+  full_width_item();
+  const bool rename_available = (emitter.cls != EmitterProfile::Class::Area) && static_cast<bool>(callbacks.emitter_renamed);
+  if (rename_available == false) {
+    ImGui::BeginDisabled();
+  }
+  const bool name_edited = ImGui::InputText("##emitter_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
+  if (name_edited) {
+    _name_edit_pending = true;
+  }
+  const bool rename_committed = ImGui::IsItemDeactivatedAfterEdit();
+  if (rename_available == false) {
+    ImGui::EndDisabled();
+    draw_item_tooltip(emitter_name.c_str(), ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled);
+  }
+  if (rename_committed) {
+    commit_name_edit(true);
+  }
+  build_resource_edit_feedback(SelectionKind::Emitter);
+  if (emitter.cls == EmitterProfile::Class::Area) {
+    draw_disabled_wrapped_text("Derived from an emissive material. Edit its emission below.");
+  }
   build_emitter_resource_properties(scene_rep, emitter_index, data, true);
 }
 
@@ -5440,13 +6388,23 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
   }
   if (emitter.cls == EmitterProfile::Class::Area) {
     _material_editor_rendered_this_frame = true;
+    arm_material_interaction();
+  } else {
+    _emitter_editor_rendered_this_frame = true;
+    arm_emitter_interaction();
   }
 
   bool common_changed = false;
   if (emitter.cls == EmitterProfile::Class::Area) {
     auto& material = scene_rep.data().materials[material_index];
-    std::string area_preset_id = "area_material_emission_" + std::to_string(material_index);
-    common_changed = emission_picker(scene_rep, "Emission", area_preset_id.c_str(), material.emission.spectrum_index, data);
+    const std::string material_id = std::to_string(material_index);
+    const std::string area_preset_id = "area_material_emission_" + material_id;
+    const bool spectrum_changed = emission_picker(scene_rep, "Emission", area_preset_id.c_str(), material.emission.spectrum_index, data);
+    ImGui::TextUnformatted("Emission Texture");
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    const std::string texture_label = "Emission Texture##area_emission_texture_" + material_id;
+    const bool texture_changed = image_picker(scene_rep, texture_label.c_str(), material.emission.image_index, Image::BuildSamplingTable | Image::RepeatU | Image::RepeatV);
+    common_changed = spectrum_changed || texture_changed;
     if (common_changed && (material_index < scene_rep.data().materials.size())) {
       float3 integrated = material.emission.spectrum_index < scene_rep.data().spectrum_values.size()  //
                             ? scene_rep.data().spectrum_values[material.emission.spectrum_index].integrated()
@@ -5501,7 +6459,8 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
 
       const char* mat_name = _material_mapping.name_for(material_index);
       if (mat_name != nullptr) {
-        ImGui::Text("Material: %s", mat_name);
+        const std::string material_label = std::string("Material: ") + mat_name;
+        draw_text_with_ellipsis(material_label.c_str());
       } else {
         ImGui::Text("Material index: %u", material_index);
       }
@@ -5626,26 +6585,11 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     }
   }
 
-  if (standalone_actions && (emitter.cls != EmitterProfile::Class::Area)) {
-    ImGui::Spacing();
-    ImGui::Separator();
-    ImGui::Spacing();
-    push_semantic_button_colors(terminate_button_colors(_theme));
-    bool emitter_deleted = false;
-    if (ImGui::Button("Delete Emitter", ImVec2(-1.0f, 0.0f))) {
-      emitter_deleted = callbacks.emitter_deleted && callbacks.emitter_deleted(emitter_index);
-    }
-    ImGui::PopStyleColor(3);
-    if (emitter_deleted) {
-      set_selection(SelectionKind::None, -1, false);
-      return;
-    }
-  }
   if (material_changed && (material_index < scene_rep.data().materials.size())) {
     queue_material_change(material_index);
   }
-  if (changed && (material_changed == false) && callbacks.emitter_changed) {
-    callbacks.emitter_changed(emitter_index);
+  if (changed && (material_changed == false)) {
+    queue_emitter_change(emitter_index);
   }
 }
 
@@ -5775,6 +6719,60 @@ void UI::build_node_appearance_properties(SceneRepresentation& scene_rep, const 
     ImGui::PopID();
   }
   ImGui::PopID();
+}
+
+void UI::build_camera_resource_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
+  (void)ctx;
+  if ((_selection.index < 0) || (static_cast<uint32_t>(_selection.index) >= scene_rep.data().cameras.size())) {
+    ImGui::Text("Invalid camera selection");
+    return;
+  }
+
+  const uint32_t camera_index = static_cast<uint32_t>(_selection.index);
+  SceneData::CameraInfo& camera_info = scene_rep.data().cameras[camera_index];
+  const std::string camera_name = camera_info.id.empty() ? std::string(format_string("Camera %u", camera_index + 1u)) : camera_info.id;
+  update_name_buffer(SelectionKind::Camera, _selection.index, camera_name.c_str());
+  ImGui::TextUnformatted("Name");
+  full_width_item();
+  const bool rename_available = static_cast<bool>(callbacks.camera_renamed);
+  if (rename_available == false) {
+    ImGui::BeginDisabled();
+  }
+  const bool name_edited = ImGui::InputText("##camera_name", _name_edit_buffer, sizeof(_name_edit_buffer), ImGuiInputTextFlags_AutoSelectAll);
+  if (name_edited) {
+    _name_edit_pending = true;
+  }
+  const bool rename_committed = ImGui::IsItemDeactivatedAfterEdit();
+  if (rename_available == false) {
+    ImGui::EndDisabled();
+  }
+  if (rename_committed) {
+    commit_name_edit(true);
+  }
+  build_resource_edit_feedback(SelectionKind::Camera);
+
+  bool attachment_enabled = false;
+  const SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
+  for (uint32_t node_index = 0u; (node_index < hierarchy.nodes.size()) && (attachment_enabled == false); ++node_index) {
+    const SceneNode& node = hierarchy.nodes[node_index];
+    const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+    if ((attachment_end < node.attachment_offset) || (attachment_end > hierarchy.attachments.size())) {
+      continue;
+    }
+    const bool node_enabled = (node_index < hierarchy.effective_enabled.size()) && (hierarchy.effective_enabled[node_index] != 0u);
+    if (node_enabled == false) {
+      continue;
+    }
+    for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+      if ((attachment.type == SceneAttachment::Type::Camera) && (attachment.resource_index == camera_index)) {
+        attachment_enabled = true;
+        break;
+      }
+    }
+  }
+
+  build_camera_selection_properties(scene_rep, camera_info.cam, camera_index, attachment_enabled, data);
 }
 
 void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, bool attachment_enabled, const FrameData& data) {

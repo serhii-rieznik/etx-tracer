@@ -191,6 +191,7 @@ void SceneData::clear(TaskScheduler& scheduler) {
   materials.clear();
   meshes.clear();
   emitter_profiles.clear();
+  emitter_names.clear();
   spectrum_values.clear();
   images_vector.clear();
   mediums_vector.clear();
@@ -208,6 +209,43 @@ void SceneData::clear(TaskScheduler& scheduler) {
   materials_file_name.clear();
   images.init(1024u);
   mediums.init(1024u);
+}
+
+void SceneData::swap_contents(SceneData& other) {
+  using std::swap;
+  swap(vertices.pos, other.vertices.pos);
+  swap(vertices.nrm, other.vertices.nrm);
+  swap(vertices.tan, other.vertices.tan);
+  swap(vertices.btn, other.vertices.btn);
+  swap(vertices.tex, other.vertices.tex);
+  swap(triangles, other.triangles);
+  swap(materials, other.materials);
+  swap(meshes, other.meshes);
+  swap(emitter_profiles, other.emitter_profiles);
+  swap(emitter_names, other.emitter_names);
+  swap(spectrum_values, other.spectrum_values);
+  swap(images_vector, other.images_vector);
+  swap(mediums_vector, other.mediums_vector);
+  swap(energy_compensation_interfaces, other.energy_compensation_interfaces);
+  swap(hierarchy, other.hierarchy);
+  swap(buffer_pool, other.buffer_pool);
+  images.swap_contents(other.images);
+  mediums.swap_contents(other.mediums);
+  swap(material_mapping, other.material_mapping);
+  swap(mesh_mapping, other.mesh_mapping);
+  swap(spectrum_names, other.spectrum_names);
+  swap(material_to_emitter_profile, other.material_to_emitter_profile);
+  swap(gltf_image_mapping, other.gltf_image_mapping);
+  swap(gltf_material_mapping, other.gltf_material_mapping);
+  swap(cameras, other.cameras);
+  swap(json_file_name, other.json_file_name);
+  swap(geometry_file_name, other.geometry_file_name);
+  swap(materials_file_name, other.materials_file_name);
+  swap(pixel_filter, other.pixel_filter);
+  swap(defaults, other.defaults);
+  swap(options, other.options);
+  swap(_camera_attachment_nodes_scratch, other._camera_attachment_nodes_scratch);
+  swap(_medium_attachment_nodes_scratch, other._medium_attachment_nodes_scratch);
 }
 
 uint32_t SceneData::add_spectrum(const char* source_id, const SpectralDistribution& spd) {
@@ -326,8 +364,8 @@ bool SceneData::resolve_hierarchy() {
           }
           if (hierarchy.effective_enabled[node_index] != 0u) {
             if (_camera_attachment_nodes_scratch[attachment.resource_index] != kInvalidIndex) {
-              log::error("Camera %u is attached to multiple enabled nodes (%u and %u)", attachment.resource_index,
-                _camera_attachment_nodes_scratch[attachment.resource_index], node_index);
+              log::error("Camera %u is attached to multiple enabled nodes (%u and %u)", attachment.resource_index, _camera_attachment_nodes_scratch[attachment.resource_index],
+                node_index);
               return false;
             }
             _camera_attachment_nodes_scratch[attachment.resource_index] = node_index;
@@ -344,8 +382,8 @@ bool SceneData::resolve_hierarchy() {
           }
           if (hierarchy.effective_enabled[node_index] != 0u) {
             if (_medium_attachment_nodes_scratch[attachment.resource_index] != kInvalidIndex) {
-              log::error("Medium %u is attached to multiple enabled nodes (%u and %u)", attachment.resource_index,
-                _medium_attachment_nodes_scratch[attachment.resource_index], node_index);
+              log::error("Medium %u is attached to multiple enabled nodes (%u and %u)", attachment.resource_index, _medium_attachment_nodes_scratch[attachment.resource_index],
+                node_index);
               return false;
             }
             _medium_attachment_nodes_scratch[attachment.resource_index] = node_index;

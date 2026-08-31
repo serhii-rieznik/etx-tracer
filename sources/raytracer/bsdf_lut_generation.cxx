@@ -1,4 +1,5 @@
 #include "bsdf_lut_generation.hxx"
+#include "headless_render_context.hxx"
 
 #include <etx/core/environment.hxx>
 #include <etx/core/log.hxx>
@@ -558,16 +559,23 @@ bool pregenerate_named_bsdf_energy_compensation_lut_cache() {
     }
   }
 
-  log::info("Pregenerating named BSDF energy-compensation cache: dielectric SPDs=%zu conductor SPDs=%zu dielectric interfaces=%u conductor interfaces=%u",
-    dielectrics.size(), conductors.size(), dielectric_material_count, conductor_material_count);
+  HeadlessRenderContext render_context = {};
+  render_context.init();
+  if (render_context.context().valid() == false) {
+    log::error("Named BSDF energy-compensation cache pregeneration requires a GPU context");
+    return false;
+  }
+
+  log::info("Pregenerating named BSDF energy-compensation cache: dielectric SPDs=%zu conductor SPDs=%zu dielectric interfaces=%u conductor interfaces=%u", dielectrics.size(),
+    conductors.size(), dielectric_material_count, conductor_material_count);
 
   const auto time_begin = std::chrono::steady_clock::now();
-  const bool result = ensure_energy_compensation_interfaces(data, scheduler);
+  const bool result = ensure_energy_compensation_interfaces(data, scheduler, render_context.context());
+  render_context.cleanup();
   const auto time_end = std::chrono::steady_clock::now();
   const double elapsed_seconds = std::chrono::duration<double>(time_end - time_begin).count();
   if (result) {
-    log::info("Finished named BSDF energy-compensation cache pregeneration in %.3f seconds; cache entries=%zu", elapsed_seconds,
-      data.energy_compensation_interfaces.size());
+    log::info("Finished named BSDF energy-compensation cache pregeneration in %.3f seconds; cache entries=%zu", elapsed_seconds, data.energy_compensation_interfaces.size());
   }
   return result;
 }

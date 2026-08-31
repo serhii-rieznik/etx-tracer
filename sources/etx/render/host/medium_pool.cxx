@@ -20,6 +20,7 @@ struct MediumPoolImpl {
   void init(uint32_t capacity) {
     mediums.reserve(capacity);
     mapping.reserve(capacity);
+    volume_paths.reserve(capacity);
   }
 
   void cleanup() {
@@ -35,6 +36,7 @@ struct MediumPoolImpl {
 
     uint32_t handle = static_cast<uint32_t>(mediums.size());
     mediums.emplace_back();
+    volume_paths.emplace_back((volume_file != nullptr) ? volume_file : "");
 
     Medium& medium = mediums[handle];
     medium.cls = cls;
@@ -130,9 +132,82 @@ struct MediumPoolImpl {
     return final;
   }
 
+  uint32_t duplicate(uint32_t index, const std::string& desired_name) {
+    if (index >= mediums.size()) {
+      return kInvalidIndex;
+    }
+
+    const uint32_t duplicate_index = static_cast<uint32_t>(mediums.size());
+    const Medium source = mediums[index];
+    mediums.emplace_back(source);
+    volume_paths.push_back(volume_paths[index]);
+    Medium& duplicate = mediums.back();
+    duplicate.density_buffer = {};
+    duplicate.density_data = {};
+    if ((duplicate.grid.density_image_index != kInvalidIndex) && (duplicate.grid.density_image_index < image_pool.array_size())) {
+      duplicate.grid.density_image_index = image_pool.add_copy(duplicate.grid.density_image_index);
+      duplicate.density_view = image_pool.get(duplicate.grid.density_image_index).pixels.r32;
+    } else {
+      duplicate.grid.density_image_index = kInvalidIndex;
+      duplicate.density_view = {};
+    }
+    std::string name = desired_name.empty() ? ("medium-" + std::to_string(index) + " Copy") : desired_name;
+    uint32_t suffix = 2u;
+    const std::string base_name = name;
+    while (mapping.count(name) > 0u) {
+      name = base_name + " " + std::to_string(suffix++);
+    }
+    mapping.emplace(std::move(name), duplicate_index);
+    return duplicate_index;
+  }
+
+  bool remove(uint32_t index, std::vector<uint32_t>& old_to_new) {
+    if (index >= mediums.size()) {
+      return false;
+    }
+
+    old_to_new.resize(mediums.size());
+    for (uint32_t old_index = 0u; old_index < mediums.size(); ++old_index) {
+      old_to_new[old_index] = old_index < index ? old_index : ((old_index == index) ? kInvalidIndex : old_index - 1u);
+    }
+
+    free_medium(mediums[index]);
+    mediums.erase(mediums.begin() + index);
+    volume_paths.erase(volume_paths.begin() + index);
+    for (auto mapping_it = mapping.begin(); mapping_it != mapping.end();) {
+      const uint32_t old_index = mapping_it->second;
+      if (old_index == index) {
+        mapping_it = mapping.erase(mapping_it);
+        continue;
+      }
+      if ((old_index != kInvalidIndex) && (old_index > index)) {
+        mapping_it->second = old_index - 1u;
+      }
+      ++mapping_it;
+    }
+    return true;
+  }
+
   const Medium& get(uint32_t handle) const {
     ETX_CRITICAL(handle < mediums.size());
     return mediums[handle];
+  }
+
+  bool replace_mapping(MediumPool::Mapping&& replacement) {
+    if (replacement.size() != mediums.size()) {
+      return false;
+    }
+
+    std::vector<bool> mapped_indices(mediums.size(), false);
+    for (const auto& [name, index] : replacement) {
+      if (name.empty() || (index >= mediums.size()) || mapped_indices[index]) {
+        return false;
+      }
+      mapped_indices[index] = true;
+    }
+
+    mapping = std::move(replacement);
+    return true;
   }
 
   void remove_all() {
@@ -141,9 +216,12 @@ struct MediumPoolImpl {
     }
     mediums.clear();
     mapping.clear();
+    volume_paths.clear();
   }
 
   void free_medium(Medium& m) {
+    buffer_pool.destroy(m.density_buffer);
+    image_pool.remove(m.grid.density_image_index);
     m.density_view = {};
     m.density_data = {};
     m.density_buffer = {};
@@ -227,6 +305,7 @@ struct MediumPoolImpl {
   BufferPool& buffer_pool;
   ImagePool& image_pool;
   MediumPool::Mapping mapping;
+  std::vector<std::string> volume_paths;
 };
 
 MediumPool::MediumPool(std::vector<Medium>& external_mediums, BufferPool& buffer_pool, ImagePool& image_pool) {
@@ -247,6 +326,12 @@ void MediumPool::cleanup() {
   _private->cleanup();
 }
 
+void MediumPool::swap_contents(MediumPool& other) {
+  using std::swap;
+  swap(_private->mapping, other._private->mapping);
+  swap(_private->volume_paths, other._private->volume_paths);
+}
+
 uint32_t MediumPool::add(Medium::Class cls, const std::string& id, const char* volume, uint32_t absorption_index, uint32_t scattering_index, float g, bool explicit_connections) {
   return _private->add(cls, id, volume, absorption_index, scattering_index, g, explicit_connections);
 }
@@ -261,6 +346,7 @@ uint32_t MediumPool::add_noise(Medium::Class cls, const std::string& id, NoiseFu
 
   uint32_t handle = static_cast<uint32_t>(_private->mediums.size());
   _private->mediums.emplace_back();
+  _private->volume_paths.emplace_back();
 
   Medium& medium = _private->mediums[handle];
   medium.cls = cls;
@@ -287,6 +373,14 @@ uint32_t MediumPool::add_noise(Medium::Class cls, const std::string& id, NoiseFu
 
   _private->mapping[id] = handle;
   return handle;
+}
+
+uint32_t MediumPool::duplicate(uint32_t index, const std::string& desired_name) {
+  return _private->duplicate(index, desired_name);
+}
+
+bool MediumPool::remove(uint32_t index, std::vector<uint32_t>& old_to_new) {
+  return _private->remove(index, old_to_new);
 }
 
 Medium& MediumPool::get(uint32_t handle) {
@@ -320,6 +414,27 @@ uint32_t MediumPool::find(const char* id) {
 
 const MediumPool::Mapping& MediumPool::mapping() const {
   return _private->mapping;
+}
+
+bool MediumPool::replace_mapping(Mapping&& mapping) {
+  return _private->replace_mapping(std::move(mapping));
+}
+
+const std::string& MediumPool::volume_path(uint32_t index) const {
+  static const std::string empty_path;
+  return index < _private->volume_paths.size() ? _private->volume_paths[index] : empty_path;
+}
+
+void MediumPool::set_volume_path(uint32_t index, const std::string& path) {
+  if (index < _private->volume_paths.size()) {
+    _private->volume_paths[index] = path;
+  }
+}
+
+void MediumPool::clear_volume_path(uint32_t index) {
+  if (index < _private->volume_paths.size()) {
+    _private->volume_paths[index].clear();
+  }
 }
 
 }  // namespace etx

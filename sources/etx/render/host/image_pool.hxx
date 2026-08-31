@@ -14,8 +14,10 @@ struct ImagePool {
 
   void init(uint32_t capacity);
   void cleanup();
+  void swap_contents(ImagePool& other);
 
   uint32_t add_copy(const Image& img);
+  uint32_t add_copy(uint32_t handle);
   uint32_t add_from_file(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale);
   uint32_t add_from_data(const float4* data, const uint2& dimensions, uint32_t image_options, const float2& offset, const float2& scale);
   uint32_t add_from_data_3d(const float4* data, const uint3& dimensions, uint32_t image_options, const float3& offset, const float3& scale);

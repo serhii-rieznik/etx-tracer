@@ -539,6 +539,9 @@
       byId('stop').disabled = !serverConnected || !state.controls.can_stop || commandPending('stop');
       byId('restart').disabled = !serverConnected || !state.controls.can_restart || commandPending('restart');
       byId('denoise').disabled = !serverConnected || !state.can_denoise || commandPending('denoise');
+      if ((state.run_state === 'failed') && state.runtime.failure_reason && !pendingCommands.size && !submittingCommands.size) {
+        setMessage(state.runtime.failure_reason, 'error');
+      }
 
       if (state.scene_file !== currentSceneFile) {
         currentSceneFile = state.scene_file;

@@ -180,7 +180,7 @@ void IntegratorThread::set_integrator(Integrator* i) {
 }
 
 bool IntegratorThread::running() const {
-  return (_private->integrator != nullptr) && (_private->latest_state == Integrator::State::Running);
+  return (_private->integrator != nullptr) && (_private->latest_state != Integrator::State::Stopped);
 }
 
 const Integrator::Status& IntegratorThread::status() const {

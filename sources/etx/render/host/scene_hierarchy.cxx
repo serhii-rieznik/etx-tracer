@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 namespace etx {
 namespace {
@@ -205,8 +206,8 @@ bool invert_affine(const AffineTransform& transform, AffineTransform& result, do
     {c01 * inverse_determinant, (a00 * a22 - a02 * a20) * inverse_determinant, (a02 * a10 - a00 * a12) * inverse_determinant},
     {c02 * inverse_determinant, (a01 * a20 - a00 * a21) * inverse_determinant, (a00 * a11 - a01 * a10) * inverse_determinant},
   };
-  const double matrix_norm = std::max({std::abs(a00) + std::abs(a01) + std::abs(a02), std::abs(a10) + std::abs(a11) + std::abs(a12),
-    std::abs(a20) + std::abs(a21) + std::abs(a22)});
+  const double matrix_norm =
+    std::max({std::abs(a00) + std::abs(a01) + std::abs(a02), std::abs(a10) + std::abs(a11) + std::abs(a12), std::abs(a20) + std::abs(a21) + std::abs(a22)});
   const double inverse_norm = std::max({std::abs(inverse[0][0]) + std::abs(inverse[0][1]) + std::abs(inverse[0][2]),
     std::abs(inverse[1][0]) + std::abs(inverse[1][1]) + std::abs(inverse[1][2]), std::abs(inverse[2][0]) + std::abs(inverse[2][1]) + std::abs(inverse[2][2])});
   if ((matrix_norm * inverse_norm * static_cast<double>(std::numeric_limits<float>::epsilon())) >= 1.0) {
@@ -224,7 +225,8 @@ bool invert_affine(const AffineTransform& transform, AffineTransform& result, do
         (finite_float(inverse_translation[row]) == false)) {
       return false;
     }
-    result.rows[row] = {static_cast<float>(inverse[row][0]), static_cast<float>(inverse[row][1]), static_cast<float>(inverse[row][2]), static_cast<float>(inverse_translation[row])};
+    result.rows[row] = {static_cast<float>(inverse[row][0]), static_cast<float>(inverse[row][1]), static_cast<float>(inverse[row][2]),
+      static_cast<float>(inverse_translation[row])};
   }
   return true;
 }
@@ -272,6 +274,181 @@ uint32_t SceneHierarchy::add_node(const char* name, uint32_t parent_index, const
   _topology_dirty = true;
   _resolved_state_dirty = true;
   return node_index;
+}
+
+uint32_t SceneHierarchy::duplicate_subtree(uint32_t node_index) {
+  if (node_index >= nodes.size()) {
+    return kInvalidIndex;
+  }
+
+  SceneHierarchy updated_hierarchy = *this;
+  if ((updated_hierarchy.rebuild_topology() == false) || (updated_hierarchy.node_names.size() != updated_hierarchy.nodes.size())) {
+    return kInvalidIndex;
+  }
+
+  const uint32_t subtree_begin = updated_hierarchy.order_position[node_index];
+  const uint32_t subtree_end = updated_hierarchy.subtree_end_position[node_index];
+  if ((subtree_begin == kInvalidIndex) || (subtree_begin >= subtree_end) || (subtree_end > updated_hierarchy.evaluation_order.size())) {
+    return kInvalidIndex;
+  }
+
+  uint64_t duplicated_attachment_count = 0u;
+  for (uint32_t order_position = subtree_begin; order_position < subtree_end; ++order_position) {
+    const uint32_t source_index = updated_hierarchy.evaluation_order[order_position];
+    const SceneNode& source_node = updated_hierarchy.nodes[source_index];
+    const uint64_t attachment_end = static_cast<uint64_t>(source_node.attachment_offset) + source_node.attachment_count;
+    if (attachment_end > updated_hierarchy.attachments.size()) {
+      return kInvalidIndex;
+    }
+    for (uint64_t attachment_index = source_node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      if (updated_hierarchy.attachments[attachment_index].type != SceneAttachment::Type::Mesh) {
+        return kInvalidIndex;
+      }
+    }
+    duplicated_attachment_count += source_node.attachment_count;
+  }
+
+  const uint64_t duplicated_node_count = static_cast<uint64_t>(subtree_end) - subtree_begin;
+  if (((static_cast<uint64_t>(updated_hierarchy.nodes.size()) + duplicated_node_count) >= kInvalidIndex) ||
+      ((static_cast<uint64_t>(updated_hierarchy.attachments.size()) + duplicated_attachment_count) > std::numeric_limits<uint32_t>::max())) {
+    return kInvalidIndex;
+  }
+
+  updated_hierarchy.nodes.reserve(updated_hierarchy.nodes.size() + static_cast<size_t>(duplicated_node_count));
+  updated_hierarchy.node_names.reserve(updated_hierarchy.node_names.size() + static_cast<size_t>(duplicated_node_count));
+  updated_hierarchy.attachments.reserve(updated_hierarchy.attachments.size() + static_cast<size_t>(duplicated_attachment_count));
+
+  std::vector<uint32_t> duplicate_indices(updated_hierarchy.nodes.size(), kInvalidIndex);
+  uint32_t duplicated_root_index = kInvalidIndex;
+  for (uint32_t order_position = subtree_begin; order_position < subtree_end; ++order_position) {
+    const uint32_t source_index = updated_hierarchy.evaluation_order[order_position];
+    const SceneNode source_node = updated_hierarchy.nodes[source_index];
+    uint32_t duplicated_parent_index = source_node.parent_index;
+    if (source_index != node_index) {
+      if ((source_node.parent_index >= duplicate_indices.size()) || (duplicate_indices[source_node.parent_index] == kInvalidIndex)) {
+        return kInvalidIndex;
+      }
+      duplicated_parent_index = duplicate_indices[source_node.parent_index];
+    }
+
+    const std::string& source_name = updated_hierarchy.node_names[source_index];
+    const uint32_t duplicated_index = updated_hierarchy.add_node(source_name.c_str(), duplicated_parent_index, source_node.local_transform);
+    if (duplicated_index == kInvalidIndex) {
+      return kInvalidIndex;
+    }
+    updated_hierarchy.node_names[duplicated_index] = source_name;
+    updated_hierarchy.nodes[duplicated_index].flags = source_node.flags;
+    duplicate_indices[source_index] = duplicated_index;
+    if (source_index == node_index) {
+      duplicated_root_index = duplicated_index;
+    }
+
+    const uint64_t attachment_end = static_cast<uint64_t>(source_node.attachment_offset) + source_node.attachment_count;
+    for (uint64_t attachment_index = source_node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment source_attachment = updated_hierarchy.attachments[attachment_index];
+      if (updated_hierarchy.add_attachment(duplicated_index, source_attachment) == false) {
+        return kInvalidIndex;
+      }
+    }
+  }
+
+  if ((duplicated_root_index == kInvalidIndex) || (updated_hierarchy.rebuild_topology() == false)) {
+    return kInvalidIndex;
+  }
+
+  *this = std::move(updated_hierarchy);
+  return duplicated_root_index;
+}
+
+bool SceneHierarchy::remove_subtree(uint32_t node_index, std::vector<uint32_t>& old_to_new) {
+  if (node_index >= nodes.size()) {
+    return false;
+  }
+
+  SceneHierarchy source_hierarchy = *this;
+  if ((source_hierarchy.rebuild_topology() == false) || (source_hierarchy.node_names.size() != source_hierarchy.nodes.size())) {
+    return false;
+  }
+
+  const uint32_t subtree_begin = source_hierarchy.order_position[node_index];
+  const uint32_t subtree_end = source_hierarchy.subtree_end_position[node_index];
+  if ((subtree_begin == kInvalidIndex) || (subtree_begin >= subtree_end) || (subtree_end > source_hierarchy.evaluation_order.size())) {
+    return false;
+  }
+
+  std::vector<uint8_t> removed_nodes(source_hierarchy.nodes.size(), 0u);
+  for (uint32_t order_position = subtree_begin; order_position < subtree_end; ++order_position) {
+    removed_nodes[source_hierarchy.evaluation_order[order_position]] = 1u;
+  }
+
+  std::vector<uint32_t> index_mapping(source_hierarchy.nodes.size(), kInvalidIndex);
+  uint32_t retained_node_count = 0u;
+  uint64_t retained_attachment_count = 0u;
+  for (uint32_t source_index = 0u; source_index < source_hierarchy.nodes.size(); ++source_index) {
+    const SceneNode& source_node = source_hierarchy.nodes[source_index];
+    const uint64_t attachment_end = static_cast<uint64_t>(source_node.attachment_offset) + source_node.attachment_count;
+    if (attachment_end > source_hierarchy.attachments.size()) {
+      return false;
+    }
+    if (removed_nodes[source_index] != 0u) {
+      continue;
+    }
+    index_mapping[source_index] = retained_node_count++;
+    retained_attachment_count += source_node.attachment_count;
+  }
+  if (retained_attachment_count > std::numeric_limits<uint32_t>::max()) {
+    return false;
+  }
+
+  SceneHierarchy updated_hierarchy;
+  updated_hierarchy.nodes.reserve(retained_node_count);
+  updated_hierarchy.node_names.reserve(retained_node_count);
+  updated_hierarchy.attachments.reserve(static_cast<size_t>(retained_attachment_count));
+
+  for (uint32_t source_index = 0u; source_index < source_hierarchy.nodes.size(); ++source_index) {
+    if (removed_nodes[source_index] != 0u) {
+      continue;
+    }
+    SceneNode retained_node = source_hierarchy.nodes[source_index];
+    retained_node.attachment_offset = 0u;
+    retained_node.attachment_count = 0u;
+    updated_hierarchy.nodes.emplace_back(retained_node);
+    updated_hierarchy.node_names.emplace_back(source_hierarchy.node_names[source_index]);
+  }
+
+  for (uint32_t source_index = 0u; source_index < source_hierarchy.nodes.size(); ++source_index) {
+    const uint32_t retained_index = index_mapping[source_index];
+    if (retained_index == kInvalidIndex) {
+      continue;
+    }
+
+    const SceneNode& source_node = source_hierarchy.nodes[source_index];
+    if (source_node.parent_index == kInvalidIndex) {
+      updated_hierarchy.nodes[retained_index].parent_index = kInvalidIndex;
+    } else {
+      if ((source_node.parent_index >= index_mapping.size()) || (index_mapping[source_node.parent_index] == kInvalidIndex)) {
+        return false;
+      }
+      updated_hierarchy.nodes[retained_index].parent_index = index_mapping[source_node.parent_index];
+    }
+
+    const uint64_t attachment_end = static_cast<uint64_t>(source_node.attachment_offset) + source_node.attachment_count;
+    if (source_node.attachment_count > 0u) {
+      updated_hierarchy.nodes[retained_index].attachment_offset = static_cast<uint32_t>(updated_hierarchy.attachments.size());
+      updated_hierarchy.nodes[retained_index].attachment_count = source_node.attachment_count;
+      for (uint64_t attachment_index = source_node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+        updated_hierarchy.attachments.emplace_back(source_hierarchy.attachments[attachment_index]);
+      }
+    }
+  }
+
+  if (updated_hierarchy.rebuild_topology() == false) {
+    return false;
+  }
+
+  *this = std::move(updated_hierarchy);
+  old_to_new = std::move(index_mapping);
+  return true;
 }
 
 bool SceneHierarchy::set_parent(uint32_t node_index, uint32_t parent_index) {

@@ -116,7 +116,7 @@ struct GPURaytracingRenderer : public Renderer {
   void set_batch_coarse_progress(bool value);
   void set_kernel_timing_enabled(bool value);
   const RendererKernelTimingStats& kernel_timing_stats() const {
-    return _kernel_timing_stats;
+    return (_preserved_timing_stats_valid && (_render_timing_active == false)) ? _preserved_kernel_timing_stats : _kernel_timing_stats;
   }
   uint32_t wavefront_steps_per_render() const {
     return _wavefront_steps_per_render;
@@ -128,6 +128,7 @@ struct GPURaytracingRenderer : public Renderer {
     return _wavefront_auto_tuning_enabled;
   }
   void set_compile_stage_filter(const std::string&);
+  void set_sample_limit(uint32_t sample_limit);
   bool set_render_window(const uint2& origin, const uint2& size, const uint2& full_size);
   void reset_render_window();
 
@@ -376,7 +377,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene);
   bool refit_top_level_acceleration_structure(RHIContext& ctx, const SceneData& scene_data);
   bool update_preview_camera_buffer(RHIDevice& device, const Camera& camera, const uint2& dimensions, uint32_t frame_index, uint32_t& descriptor_index);
-  bool ensure_preview_texture(RHIDevice& device, const uint2& dimensions);
+  bool ensure_preview_texture(RHIContext& ctx, const uint2& dimensions);
   void destroy_preview_resources(RHIDevice& device);
   bool upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer);
   bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
@@ -399,6 +400,7 @@ struct GPURaytracingRenderer : public Renderer {
   void reset_wavefront_auto_tuning();
   void update_wavefront_auto_tuning(uint32_t executed_steps, double elapsed_ms, bool budget_consumed, bool measurement_valid);
   void stop_render_timing();
+  void preserve_render_statistics();
   void reset_kernel_timings();
   void update_kernel_timing_stats();
   void set_preparation_failed(const std::string& message, const char* phase = "Failed");
@@ -626,6 +628,7 @@ struct GPURaytracingRenderer : public Renderer {
 
   KernelTimingAccumulator _kernel_timing_accumulators[static_cast<uint32_t>(PipelineStage::Count)] = {};
   RendererKernelTimingStats _kernel_timing_stats = {};
+  RendererKernelTimingStats _preserved_kernel_timing_stats = {};
 
   std::string _compile_stage_filter = {};
   std::string _runtime_failure_reason = {};
@@ -641,9 +644,11 @@ struct GPURaytracingRenderer : public Renderer {
   std::chrono::steady_clock::time_point _render_started_at = {};
   std::chrono::steady_clock::time_point _kernel_timing_started_at = {};
   double _last_render_elapsed_seconds = 0.0;
+  double _preserved_render_elapsed_seconds = 0.0;
   uint32_t _preparation_generation = 0u;
   uint32_t _published_pipeline_count = 0u;
   uint32_t _publish_pipeline_index = 0u;
+  uint32_t _sample_limit = 0u;
   uint32_t _last_target_samples = 0u;
   bool _compile_filter_matched = false;
   bool _initialized = false;
@@ -654,6 +659,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool _display_output_valid = false;
   bool _cleanup_wait_succeeded = false;
   bool _render_timing_active = false;
+  bool _preserved_timing_stats_valid = false;
   bool _kernel_timing_enabled = false;
   bool _scene_valid = false;
   RunState _run_state = RunState::Stopped;

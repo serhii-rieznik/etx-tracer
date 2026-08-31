@@ -118,8 +118,20 @@ std::string normalized_existing_scene_path(const std::string& value) {
   }
 
   std::error_code ec = {};
-  if (std::filesystem::is_regular_file(path, ec) == false) {
-    return {};
+  const bool scene_file_exists = std::filesystem::is_regular_file(path, ec);
+  if (scene_file_exists == false) {
+    static constexpr const char* recovery_suffixes[] = {".save-preparing", ".save-pending", ".save-committed", ".save-backup"};
+    bool recovery_file_exists = false;
+    for (const char* suffix : recovery_suffixes) {
+      ec.clear();
+      recovery_file_exists = std::filesystem::is_regular_file(path.string() + suffix, ec);
+      if (recovery_file_exists) {
+        break;
+      }
+    }
+    if (recovery_file_exists == false) {
+      return {};
+    }
   }
 
   const std::filesystem::path canonical_path = std::filesystem::weakly_canonical(path, ec);
@@ -283,6 +295,7 @@ void RTApplication::init(const ApplicationConfig& config) {
   {
     ETX_PROFILER_NAMED_SCOPE("app_bind_ui_callbacks");
     ui.callbacks.quit_selected = [this]() {
+      _scene_dirty = false;
       submit_command({.type = ApplicationCommandType::Quit});
     };
     ui.callbacks.reference_image_selected = [this](std::string path) {
@@ -325,11 +338,15 @@ void RTApplication::init(const ApplicationConfig& config) {
     };
     ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
     ui.callbacks.material_added = std::bind(&RTApplication::on_material_added, this);
+    ui.callbacks.material_duplicated = std::bind(&RTApplication::on_material_duplicated, this, std::placeholders::_1);
+    ui.callbacks.material_deleted = std::bind(&RTApplication::on_material_deleted, this, std::placeholders::_1);
     ui.callbacks.material_renamed = std::bind(&RTApplication::on_material_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
     ui.callbacks.material_interaction_started = std::bind(&RTApplication::on_material_interaction_started, this);
     ui.callbacks.material_interaction_finished = std::bind(&RTApplication::on_material_interaction_finished, this, std::placeholders::_1);
     ui.callbacks.medium_added = std::bind(&RTApplication::on_medium_added, this);
+    ui.callbacks.medium_duplicated = std::bind(&RTApplication::on_medium_duplicated, this, std::placeholders::_1);
+    ui.callbacks.medium_deleted = std::bind(&RTApplication::on_medium_deleted, this, std::placeholders::_1);
     ui.callbacks.medium_renamed = std::bind(&RTApplication::on_medium_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
     ui.callbacks.medium_interaction_started = std::bind(&RTApplication::on_medium_interaction_started, this);
@@ -337,14 +354,30 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.mesh_material_changed = std::bind(&RTApplication::on_mesh_material_changed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.mesh_material_made_unique = std::bind(&RTApplication::on_make_mesh_material_unique, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
+    ui.callbacks.emitter_interaction_started = std::bind(&RTApplication::on_emitter_interaction_started, this);
+    ui.callbacks.emitter_interaction_finished = std::bind(&RTApplication::on_emitter_interaction_finished, this, std::placeholders::_1);
     ui.callbacks.emitter_added = std::bind(&RTApplication::on_emitter_added, this, std::placeholders::_1);
+    ui.callbacks.emitter_duplicated = std::bind(&RTApplication::on_emitter_duplicated, this, std::placeholders::_1);
     ui.callbacks.emitter_deleted = std::bind(&RTApplication::on_emitter_deleted, this, std::placeholders::_1);
+    ui.callbacks.emitter_renamed = std::bind(&RTApplication::on_emitter_renamed, this, std::placeholders::_1, std::placeholders::_2);
+    ui.callbacks.camera_added = std::bind(&RTApplication::on_camera_added, this);
+    ui.callbacks.camera_duplicated = std::bind(&RTApplication::on_camera_duplicated, this, std::placeholders::_1);
+    ui.callbacks.camera_deleted = std::bind(&RTApplication::on_camera_deleted, this, std::placeholders::_1);
+    ui.callbacks.camera_renamed = std::bind(&RTApplication::on_camera_renamed, this, std::placeholders::_1, std::placeholders::_2);
+    ui.callbacks.empty_node_added = std::bind(&RTApplication::on_empty_node_added, this);
+    ui.callbacks.primitive_added = std::bind(&RTApplication::on_primitive_added, this, std::placeholders::_1);
+    ui.callbacks.node_duplicated = std::bind(&RTApplication::on_node_duplicated, this, std::placeholders::_1);
+    ui.callbacks.node_deleted = std::bind(&RTApplication::on_node_deleted, this, std::placeholders::_1);
+    ui.callbacks.node_reparented = std::bind(&RTApplication::on_node_reparented, this, std::placeholders::_1, std::placeholders::_2);
+    ui.callbacks.node_enabled_changed = std::bind(&RTApplication::on_node_enabled_changed, this, std::placeholders::_1, std::placeholders::_2);
+    ui.callbacks.node_transform_changed = std::bind(&RTApplication::on_node_transform_changed, this, std::placeholders::_1, std::placeholders::_2);
+    ui.callbacks.node_geometry_edited = std::bind(&RTApplication::on_node_geometry_edited, this, std::placeholders::_1, std::placeholders::_2);
+    ui.callbacks.node_resource_attached = std::bind(&RTApplication::on_node_resource_attached, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
+    ui.callbacks.node_resource_detached = std::bind(&RTApplication::on_node_resource_detached, this, std::placeholders::_1, std::placeholders::_2);
+    ui.callbacks.node_renamed = std::bind(&RTApplication::on_node_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.camera_changed = std::bind(&RTApplication::on_camera_changed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
     ui.callbacks.scene_modified = std::bind(&RTApplication::mark_scene_dirty, this);
-    ui.callbacks.scene_discarded = [this]() {
-      _scene_dirty = false;
-    };
     ui.callbacks.scene_transforms_changed = std::bind(&RTApplication::on_scene_transforms_changed, this);
     ui.callbacks.scene_transform_interaction_started = std::bind(&RTApplication::on_scene_transform_interaction_started, this);
     ui.callbacks.scene_transform_interaction_finished = std::bind(&RTApplication::on_scene_transform_interaction_finished, this);
@@ -423,7 +456,7 @@ void RTApplication::init(const ApplicationConfig& config) {
     if (restored_scene.empty() && !_recent_files.empty()) {
       restored_scene = _recent_files.back();
     }
-    if (!restored_scene.empty() && !load_scene_file(restored_scene, SceneRepresentation::LoadEverything, false)) {
+    if ((restored_scene.empty() == false) && (load_scene_file(restored_scene, SceneRepresentation::LoadEverything | SceneRepresentation::PreferRecoveredSave, false) == false)) {
       _options.remove("scene");
     }
   }
@@ -826,36 +859,43 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     return false;
   }
 
+  log::warning("Loading scene %s...", scene_file.c_str());
+  SceneRepresentation::IntegratorData integrator_data;
+  SceneRepresentation loaded_scene(scheduler, _ior_database);
+  loaded_scene.set_scattering_rhi(render_context.get_context());
+  {
+    ETX_PROFILER_NAMED_SCOPE("app_scene_load_from_file");
+    if ((loaded_scene.load_from_file(scene_file.c_str(), options, &integrator_data) == false) || (loaded_scene.valid() == false)) {
+      log::error("Failed to load scene from file: %s", scene_file.c_str());
+      return false;
+    }
+  }
+
+  if (_scene_transform_interaction_active) {
+    on_scene_transform_interaction_finished();
+  }
   if (_active_renderer != nullptr) {
     _active_renderer->stop();
+  }
+  scene.replace_loaded_scene(loaded_scene);
+  if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
+    _active_renderer->camera_controller()->sync_from_camera();
   }
   ui.reset_scene_state();
   _material_interaction_active = false;
   _material_interaction_cpu_was_running = false;
+  _medium_interaction_active = false;
+  _medium_interaction_cpu_was_active = false;
+  _emitter_interaction_active = false;
+  _emitter_interaction_cpu_was_running = false;
   _material_render_resource_preparation_active = false;
   _restart_cpu_after_material_resource_preparation = false;
   _restart_gpu_after_material_resource_preparation = false;
-
-  log::warning("Loading scene %s...", scene_file.c_str());
-  SceneRepresentation::IntegratorData integrator_data;
-  {
-    ETX_PROFILER_NAMED_SCOPE("app_scene_load_from_file");
-    if (scene.load_from_file(scene_file.c_str(), options, &integrator_data) == false) {
-      log::error("Failed to load scene from file: %s", scene_file.c_str());
-      _current_scene_file.clear();
-      return false;
-    }
-  }
-  _current_scene_file = scene_file;
+  _current_scene_file = scene.data().json_file_name.empty() ? scene_file : env().resolve_to_absolute(scene.data().json_file_name);
   log::warning("Setting output dimensions...");
   {
     ETX_PROFILER_NAMED_SCOPE("app_scene_set_output_dimensions");
     cpu_renderer.set_output_dimensions(render_context.get_context(), scene.camera().film_size);
-  }
-
-  if (scene.valid() == false) {
-    _current_scene_file.clear();
-    return false;
   }
 
   if ((_active_renderer == &gpu_renderer) && !ensure_gpu_renderer_initialized()) {
@@ -1137,17 +1177,78 @@ void RTApplication::on_options_changed() {
   }
 }
 
-uint32_t RTApplication::on_material_added() {
-  mark_scene_dirty();
-  const uint32_t material_index = scene.add_material(nullptr);
-  notify_scene_might_have_changed();
-  return material_index;
+SceneResourceEditResult RTApplication::on_material_added() {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneResourceEditResult result = scene.create_material(nullptr);
+  if (result.succeeded()) {
+    mark_scene_dirty();
+    notify_scene_might_have_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
 }
 
-void RTApplication::on_material_renamed(uint32_t index, const std::string& name) {
-  mark_scene_dirty();
-  scene.rename_material(index, name.c_str());
-  notify_scene_might_have_changed();
+SceneResourceEditResult RTApplication::on_material_duplicated(uint32_t index) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneResourceEditResult result = scene.duplicate_material(index);
+  if (result.succeeded()) {
+    _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+    on_material_changed(result.resource_index);
+  } else if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+SceneResourceEditResult RTApplication::on_material_deleted(uint32_t index) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneResourceEditResult result = scene.delete_material(index);
+  if (result.succeeded()) {
+    mark_scene_dirty();
+    notify_scene_might_have_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+std::string RTApplication::on_material_renamed(uint32_t index, const std::string& name) {
+  std::string current_name;
+  for (const auto& [resource_name, resource_index] : scene.material_mapping()) {
+    if (resource_index == index) {
+      current_name = resource_name;
+      break;
+    }
+  }
+  const std::string renamed = scene.rename_material(index, name.c_str());
+  if ((renamed.empty() == false) && (renamed != current_name)) {
+    const bool cpu_was_running = cpu_renderer.is_running();
+    if (cpu_was_running) {
+      cpu_renderer.stop();
+    }
+    mark_scene_dirty();
+    scene.create_area_emitters_from_materials();
+    notify_scene_might_have_changed();
+    if (cpu_was_running) {
+      cpu_renderer.restart();
+    }
+  }
+  return renamed;
 }
 
 void RTApplication::on_material_changed(uint32_t index) {
@@ -1206,18 +1307,73 @@ void RTApplication::on_material_interaction_finished(const std::vector<uint32_t>
   on_material_changed(material_indices.front());
 }
 
-uint32_t RTApplication::on_medium_added() {
-  mark_scene_dirty();
-  const uint32_t medium_index = scene.add_medium(nullptr);
-  scene.update_medium_bounds();
-  notify_scene_might_have_changed();
-  return medium_index;
+SceneResourceEditResult RTApplication::on_medium_added() {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneResourceEditResult result = scene.create_medium(nullptr);
+  if (result.succeeded()) {
+    mark_scene_dirty();
+    scene.update_medium_bounds();
+    notify_scene_might_have_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
 }
 
-void RTApplication::on_medium_renamed(uint32_t index, const std::string& name) {
-  mark_scene_dirty();
-  scene.rename_medium(index, name.c_str());
-  notify_scene_might_have_changed();
+SceneResourceEditResult RTApplication::on_medium_duplicated(uint32_t index) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneResourceEditResult result = scene.duplicate_medium(index);
+  if (result.succeeded()) {
+    mark_scene_dirty();
+    scene.update_medium_bounds();
+    notify_scene_might_have_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+SceneResourceEditResult RTApplication::on_medium_deleted(uint32_t index) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneResourceEditResult result = scene.delete_medium(index);
+  if (result.succeeded()) {
+    mark_scene_dirty();
+    scene.update_medium_bounds();
+    notify_scene_might_have_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+std::string RTApplication::on_medium_renamed(uint32_t index, const std::string& name) {
+  std::string current_name;
+  for (const auto& [resource_name, resource_index] : scene.medium_mapping()) {
+    if (resource_index == index) {
+      current_name = resource_name;
+      break;
+    }
+  }
+  const std::string renamed = scene.rename_medium(index, name.c_str());
+  if ((renamed.empty() == false) && (renamed != current_name)) {
+    mark_scene_dirty();
+  }
+  return renamed;
 }
 
 void RTApplication::on_medium_changed(uint32_t index) {
@@ -1318,26 +1474,27 @@ void RTApplication::on_emitter_changed(uint32_t index) {
   mark_scene_dirty();
   const bool cpu_was_running = cpu_renderer.is_running();
   bool atmosphere_related = false;
+  bool rebuild_all_atmospheres = false;
   uint32_t atmosphere_emitter_index = kInvalidIndex;
   if (index < scene.data().emitter_profiles.size()) {
     const auto& emitter = scene.data().emitter_profiles[index];
     if ((emitter.cls == EmitterProfile::Class::Environment) && ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u)) {
       atmosphere_related = true;
       atmosphere_emitter_index = index;
-    } else if ((emitter.cls == EmitterProfile::Class::Directional) && (emitter.reference_emitter_index != kInvalidIndex) &&
-               (emitter.reference_emitter_index < scene.data().emitter_profiles.size())) {
-      const auto& referenced = scene.data().emitter_profiles[emitter.reference_emitter_index];
-      atmosphere_related = (referenced.cls == EmitterProfile::Class::Environment) && ((referenced.meta & EmitterProfile::Meta::Atmosphere) != 0u);
-      if (atmosphere_related) {
-        atmosphere_emitter_index = emitter.reference_emitter_index;
-      }
+    } else if (emitter.cls == EmitterProfile::Class::Directional) {
+      atmosphere_related = true;
+      rebuild_all_atmospheres = true;
     }
 
     if (atmosphere_related) {
       if (cpu_was_running) {
         cpu_renderer.stop();
       }
-      scene.rebuild_atmosphere_emitter(atmosphere_emitter_index);
+      if (rebuild_all_atmospheres) {
+        rebuild_all_atmosphere_emitters();
+      } else {
+        scene.rebuild_atmosphere_emitter(atmosphere_emitter_index);
+      }
     }
   }
 
@@ -1347,47 +1504,92 @@ void RTApplication::on_emitter_changed(uint32_t index) {
   }
 }
 
-void RTApplication::on_emitter_added(uint32_t type) {
-  ETX_PROFILER_SCOPE();
-  mark_scene_dirty();
-  const bool cpu_was_running = cpu_renderer.is_running();
-  if (cpu_was_running) {
+void RTApplication::on_emitter_interaction_started() {
+  if (_emitter_interaction_active) {
+    return;
+  }
+
+  _emitter_interaction_active = true;
+  _emitter_interaction_cpu_was_running = cpu_renderer.is_running();
+  if (_emitter_interaction_cpu_was_running) {
     cpu_renderer.stop();
   }
+}
 
-  switch (type) {
-    case 0: {
-      scene.add_environment_emitter({1.0f, 1.0f, 1.0f}, kInvalidIndex);
-      break;
-    }
-    case 1: {
-      scene.add_directional_emitter({0.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, 0.5422f, kInvalidIndex);
-      break;
-    }
-    case 2: {
-      scene.add_atmosphere_emitter({
-        .scattering = {.altitude = 1000.0f, .anisotropy = 0.825f, .rayleigh_scale = 1.0f, .mie_scale = 1.0f, .ozone_scale = 1.0f},
-        .quality = 0.125f,
-      });
-      break;
-    }
+void RTApplication::on_emitter_interaction_finished(uint32_t index) {
+  if (_emitter_interaction_active == false) {
+    return;
   }
 
-  notify_scene_might_have_changed();
+  _emitter_interaction_active = false;
+  const bool cpu_was_running = _emitter_interaction_cpu_was_running;
+  _emitter_interaction_cpu_was_running = false;
+  if (index != kInvalidIndex) {
+    on_emitter_changed(index);
+  }
   if (cpu_was_running) {
     cpu_renderer.restart();
   }
 }
 
-bool RTApplication::on_emitter_deleted(uint32_t index) {
+SceneResourceEditResult RTApplication::on_emitter_added(uint32_t type) {
   ETX_PROFILER_SCOPE();
   const bool cpu_was_running = cpu_renderer.is_running();
   if (cpu_was_running) {
     cpu_renderer.stop();
   }
 
-  const bool deleted = scene.delete_emitter(index);
-  if (deleted) {
+  SceneResourceEditResult result = {.status = SceneResourceEditStatus::InvalidResource};
+  switch (type) {
+    case 0: {
+      result = {.resource_index = scene.add_environment_emitter({1.0f, 1.0f, 1.0f}, kInvalidIndex)};
+      break;
+    }
+    case 1: {
+      result = {.resource_index = scene.add_directional_emitter({0.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f}, 0.5422f, kInvalidIndex)};
+      break;
+    }
+    case 2: {
+      const uint32_t emitter_index = static_cast<uint32_t>(scene.data().emitter_profiles.size());
+      scene.add_atmosphere_emitter({
+        .scattering = {.altitude = 1000.0f, .anisotropy = 0.825f, .rayleigh_scale = 1.0f, .mie_scale = 1.0f, .ozone_scale = 1.0f},
+        .quality = 0.125f,
+      });
+      result = (scene.data().emitter_profiles.size() > emitter_index) ? SceneResourceEditResult{.resource_index = emitter_index}
+                                                                      : SceneResourceEditResult{.status = SceneResourceEditStatus::ResourceUpdateFailed};
+      break;
+    }
+    default:
+      break;
+  }
+
+  if (result.succeeded()) {
+    mark_scene_dirty();
+    notify_scene_might_have_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+SceneResourceEditResult RTApplication::on_emitter_duplicated(uint32_t index) {
+  ETX_PROFILER_SCOPE();
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const bool directional_emitter = (index < scene.data().emitter_profiles.size()) && (scene.data().emitter_profiles[index].cls == EmitterProfile::Class::Directional);
+  const bool atmosphere_emitter = (index < scene.data().emitter_profiles.size()) && (scene.data().emitter_profiles[index].cls == EmitterProfile::Class::Environment) &&
+                                  ((scene.data().emitter_profiles[index].meta & EmitterProfile::Meta::Atmosphere) != 0u);
+  const SceneResourceEditResult result = scene.duplicate_emitter(index);
+  if (result.succeeded()) {
+    if (directional_emitter) {
+      rebuild_all_atmosphere_emitters();
+    } else if (atmosphere_emitter) {
+      scene.rebuild_atmosphere_emitter(result.resource_index);
+    }
     mark_scene_dirty();
     notify_scene_might_have_changed();
   }
@@ -1395,7 +1597,233 @@ bool RTApplication::on_emitter_deleted(uint32_t index) {
   if (cpu_was_running) {
     cpu_renderer.restart();
   }
-  return deleted;
+  return result;
+}
+
+SceneResourceEditResult RTApplication::on_emitter_deleted(uint32_t index) {
+  ETX_PROFILER_SCOPE();
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const bool directional_emitter = (index < scene.data().emitter_profiles.size()) && (scene.data().emitter_profiles[index].cls == EmitterProfile::Class::Directional);
+  const SceneResourceEditResult result = scene.delete_emitter_profile(index);
+  if (result.succeeded()) {
+    if (directional_emitter) {
+      rebuild_all_atmosphere_emitters();
+    }
+    mark_scene_dirty();
+    notify_scene_might_have_changed();
+  }
+
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+std::string RTApplication::on_emitter_renamed(uint32_t index, const std::string& name) {
+  const std::vector<std::string>& emitter_names = scene.emitter_names();
+  const std::string current_name = index < emitter_names.size() ? emitter_names[index] : std::string();
+  const std::string renamed = scene.rename_emitter(index, name.c_str());
+  if ((renamed.empty() == false) && (renamed != current_name)) {
+    mark_scene_dirty();
+  }
+  return renamed;
+}
+
+SceneResourceEditResult RTApplication::on_camera_added() {
+  const SceneResourceEditResult result = scene.create_camera(nullptr);
+  if (result.succeeded()) {
+    mark_scene_dirty();
+    notify_scene_might_have_changed();
+  }
+  return result;
+}
+
+SceneResourceEditResult RTApplication::on_camera_duplicated(uint32_t index) {
+  const SceneResourceEditResult result = scene.duplicate_camera(index);
+  if (result.succeeded()) {
+    mark_scene_dirty();
+    notify_scene_might_have_changed();
+  }
+  return result;
+}
+
+SceneResourceEditResult RTApplication::on_camera_deleted(uint32_t index) {
+  const SceneResourceEditResult result = scene.delete_camera(index);
+  if (result.succeeded()) {
+    mark_scene_dirty();
+    notify_scene_might_have_changed();
+  }
+  return result;
+}
+
+std::string RTApplication::on_camera_renamed(uint32_t index, const std::string& name) {
+  const std::string current_name = index < scene.data().cameras.size() ? scene.data().cameras[index].id : std::string();
+  const std::string renamed = scene.rename_camera(index, name.c_str());
+  if ((renamed.empty() == false) && (renamed != current_name)) {
+    mark_scene_dirty();
+  }
+  return renamed;
+}
+
+SceneEditResult RTApplication::on_empty_node_added() {
+  const SceneEditResult result = scene.create_empty_node();
+  if (result.succeeded()) {
+    handle_scene_hierarchy_changed();
+  }
+  return result;
+}
+
+SceneEditResult RTApplication::on_primitive_added(ScenePrimitive primitive) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneEditResult result = scene.create_primitive(primitive);
+  if (result.succeeded()) {
+    scene.create_area_emitters_from_materials();
+    handle_scene_hierarchy_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+SceneEditResult RTApplication::on_node_duplicated(uint32_t node_index) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneEditResult result = scene.duplicate_node_subtree(node_index);
+  if (result.succeeded()) {
+    handle_scene_hierarchy_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+SceneEditResult RTApplication::on_node_deleted(uint32_t node_index) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneEditResult result = scene.delete_node_subtree(node_index);
+  if (result.succeeded()) {
+    handle_scene_hierarchy_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+SceneEditResult RTApplication::on_node_reparented(uint32_t node_index, uint32_t parent_index) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneEditResult result = scene.reparent_node(node_index, parent_index);
+  if (result.succeeded()) {
+    handle_scene_hierarchy_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+SceneEditResult RTApplication::on_node_enabled_changed(uint32_t node_index, bool enabled) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneEditResult result = scene.set_node_enabled(node_index, enabled);
+  if (result.succeeded()) {
+    handle_scene_hierarchy_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+SceneEditResult RTApplication::on_node_transform_changed(uint32_t node_index, const AffineTransform& transform) {
+  const SceneEditResult result = scene.set_node_local_transform(node_index, transform);
+  if (result.succeeded()) {
+    on_scene_transforms_changed();
+  }
+  return result;
+}
+
+NodeGeometryEditResult RTApplication::on_node_geometry_edited(uint32_t node_index, NodeGeometryOperation operation) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const NodeGeometryEditResult result = scene.edit_node_geometry(node_index, operation);
+  if (result == NodeGeometryEditResult::Success) {
+    scene.update_medium_bounds();
+    scene.update_active_camera();
+    mark_scene_dirty();
+    notify_scene_might_have_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+SceneEditResult RTApplication::on_node_resource_attached(uint32_t node_index, SceneAttachment::Type type, uint32_t resource_index) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneEditResult result = scene.attach_node_resource(node_index, type, resource_index);
+  if (result.succeeded()) {
+    handle_scene_hierarchy_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+SceneEditResult RTApplication::on_node_resource_detached(uint32_t node_index, uint32_t local_attachment_index) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+
+  const SceneEditResult result = scene.detach_node_resource(node_index, local_attachment_index);
+  if (result.succeeded()) {
+    handle_scene_hierarchy_changed();
+  }
+  if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+std::string RTApplication::on_node_renamed(uint32_t node_index, const std::string& name) {
+  const std::string current_name = node_index < scene.data().hierarchy.node_names.size() ? scene.data().hierarchy.node_names[node_index] : std::string();
+  const std::string renamed = scene.rename_node(node_index, name.c_str());
+  if ((renamed.empty() == false) && (renamed != current_name)) {
+    mark_scene_dirty();
+  }
+  return renamed;
 }
 
 void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
@@ -1455,6 +1883,23 @@ void RTApplication::on_scene_transforms_changed() {
     _active_renderer->camera_controller()->sync_from_camera();
   }
   notify_scene_transforms_changed();
+}
+
+void RTApplication::handle_scene_hierarchy_changed() {
+  mark_scene_dirty();
+  if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
+    _active_renderer->camera_controller()->sync_from_camera();
+  }
+  notify_scene_might_have_changed();
+}
+
+void RTApplication::rebuild_all_atmosphere_emitters() {
+  for (uint32_t emitter_index = 0u; emitter_index < scene.data().emitter_profiles.size(); ++emitter_index) {
+    const EmitterProfile& emitter = scene.data().emitter_profiles[emitter_index];
+    if ((emitter.cls == EmitterProfile::Class::Environment) && ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u)) {
+      scene.rebuild_atmosphere_emitter(emitter_index);
+    }
+  }
 }
 
 void RTApplication::on_scene_transform_interaction_started() {
@@ -1942,9 +2387,10 @@ void RTApplication::poll_material_render_resource_preparation() {
 
 void RTApplication::finish_material_render_resource_preparation(bool resources_ready) {
   _material_render_resource_preparation_active = false;
-  if (resources_ready) {
-    notify_scene_might_have_changed();
+  if (resources_ready == false) {
+    return;
   }
+  notify_scene_might_have_changed();
   if (_restart_cpu_after_material_resource_preparation && (_material_interaction_active == false)) {
     cpu_renderer.restart();
     _restart_cpu_after_material_resource_preparation = false;

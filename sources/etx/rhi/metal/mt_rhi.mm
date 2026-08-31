@@ -3821,8 +3821,7 @@ void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
 
     const NSUInteger source_stride = sizeof(RHIAccelerationStructureInstance);
     const NSUInteger source_size = static_cast<NSUInteger>(desc.instance_count) * source_stride;
-    if ((desc.instance_buffer_offset > instance_buffer_it->second.buffer.length) ||
-        ((instance_buffer_it->second.buffer.length - static_cast<NSUInteger>(desc.instance_buffer_offset)) < source_size)) {
+    if ((desc.instance_buffer_offset > instance_buffer_it->second.buffer.length) || ((instance_buffer_it->second.buffer.length - static_cast<NSUInteger>(desc.instance_buffer_offset)) < source_size)) {
       log::error("Metal RHI: TLAS instance source buffer is too small");
       return;
     }

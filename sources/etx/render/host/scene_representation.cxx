@@ -17,6 +17,8 @@
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/host/scene_serialization.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
+#include <etx/render/host/scene_procedural_geometry.hxx>
+#include <etx/render/host/exr.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 
 #include <etx/render/host/scene_obj_loader.hxx>
@@ -24,6 +26,10 @@
 #include <etx/render/host/scene_tungsten_loader.hxx>
 
 #include <mikktspace.h>
+
+#include <array>
+#include <fstream>
+#include <unordered_set>
 namespace etx {
 
 namespace {
@@ -46,6 +52,535 @@ bool finite_point(const float3& value) {
 bool valid_direction(const float3& value) {
   const float length_squared = dot(value, value);
   return finite_point(value) && std::isfinite(length_squared) && (length_squared > 0.0f);
+}
+
+bool write_file_contents(const std::filesystem::path& path, const std::string& contents) {
+  FILE* file = fopen(path.string().c_str(), "wb");
+  if (file == nullptr) {
+    log::error("Failed to open file for writing: %s", path.string().c_str());
+    return false;
+  }
+
+  const size_t bytes_written = fwrite(contents.data(), 1, contents.size(), file);
+  const bool flush_succeeded = fflush(file) == 0;
+  const bool close_succeeded = fclose(file) == 0;
+  if ((bytes_written != contents.size()) || (flush_succeeded == false) || (close_succeeded == false)) {
+    log::error("Failed to write file: %s", path.string().c_str());
+    return false;
+  }
+
+  return true;
+}
+
+std::string content_hash_string(uint64_t hash) {
+  char buffer[17] = {};
+  snprintf(buffer, sizeof(buffer), "%016llx", static_cast<unsigned long long>(hash));
+  return buffer;
+}
+
+bool path_is_within_directory(const std::filesystem::path& path, const std::filesystem::path& directory) {
+  std::error_code error;
+  const std::filesystem::path relative = std::filesystem::relative(path, directory, error);
+  if (error || relative.empty() || relative.is_absolute()) {
+    return false;
+  }
+  for (const std::filesystem::path& component : relative) {
+    if (component == "..") {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool managed_scene_asset_path(const std::filesystem::path& path) {
+  const std::string directory_name = path.parent_path().filename().string();
+  return directory_name.ends_with(".etx.assets");
+}
+
+bool inspect_scene_asset_path(const std::filesystem::path& path, bool& file_exists) {
+  std::error_code error;
+  const std::filesystem::file_status status = std::filesystem::symlink_status(path, error);
+  if (status.type() == std::filesystem::file_type::not_found) {
+    file_exists = false;
+    return true;
+  }
+  if (error) {
+    log::error("Failed to inspect scene asset: %s", path.string().c_str());
+    return false;
+  }
+  if (std::filesystem::is_regular_file(status) == false) {
+    log::error("Expected scene asset to be a regular file: %s", path.string().c_str());
+    return false;
+  }
+  file_exists = true;
+  return true;
+}
+
+bool binary_files_match(const std::filesystem::path& first, const std::filesystem::path& second) {
+  std::error_code error;
+  const uintmax_t first_size = std::filesystem::file_size(first, error);
+  if (error) {
+    return false;
+  }
+  const uintmax_t second_size = std::filesystem::file_size(second, error);
+  if (error || (first_size != second_size)) {
+    return false;
+  }
+
+  std::ifstream first_file(first, std::ios::binary);
+  std::ifstream second_file(second, std::ios::binary);
+  if ((first_file.is_open() == false) || (second_file.is_open() == false)) {
+    return false;
+  }
+  std::array<uint8_t, 64u * 1024u> first_buffer = {};
+  std::array<uint8_t, 64u * 1024u> second_buffer = {};
+  uintmax_t remaining = first_size;
+  while (remaining > 0u) {
+    const size_t bytes_to_read = static_cast<size_t>(std::min<uintmax_t>(first_buffer.size(), remaining));
+    first_file.read(reinterpret_cast<char*>(first_buffer.data()), static_cast<std::streamsize>(bytes_to_read));
+    second_file.read(reinterpret_cast<char*>(second_buffer.data()), static_cast<std::streamsize>(bytes_to_read));
+    if ((first_file.gcount() != static_cast<std::streamsize>(bytes_to_read)) || (second_file.gcount() != static_cast<std::streamsize>(bytes_to_read)) ||
+        (memcmp(first_buffer.data(), second_buffer.data(), bytes_to_read) != 0)) {
+      return false;
+    }
+    remaining -= bytes_to_read;
+  }
+  return true;
+}
+
+bool hash_binary_file(const std::filesystem::path& path, uint64_t& hash, uint64_t& total_size) {
+  std::ifstream file(path, std::ios::binary);
+  if (file.is_open() == false) {
+    return false;
+  }
+
+  hash = 0u;
+  total_size = 0u;
+  std::array<uint8_t, 64u * 1024u> buffer = {};
+  while (true) {
+    file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+    const std::streamsize bytes_read = file.gcount();
+    if (bytes_read > 0) {
+      hash = etx_hash64_continue(buffer.data(), static_cast<uint64_t>(bytes_read), hash);
+      total_size += static_cast<uint64_t>(bytes_read);
+    }
+    if (bytes_read < static_cast<std::streamsize>(buffer.size())) {
+      break;
+    }
+  }
+  if (file.bad() || (total_size == 0u)) {
+    return false;
+  }
+
+  hash = etx_hash64_continue(&total_size, sizeof(total_size), hash);
+  return true;
+}
+
+struct StagedSceneFile {
+  std::filesystem::path destination;
+  std::filesystem::path staged;
+  std::filesystem::path backup;
+  bool destination_existed = false;
+  bool destination_backed_up = false;
+  bool staged_installed = false;
+};
+
+struct SceneSavePaths {
+  std::filesystem::path geometry;
+  std::filesystem::path materials;
+  std::filesystem::path json;
+};
+
+std::filesystem::path path_with_suffix(std::filesystem::path path, const char* suffix) {
+  path += suffix;
+  return path;
+}
+
+bool strip_scene_extension(std::string& name, const char* extension) {
+  const size_t extension_length = std::strlen(extension);
+  if ((name.size() < extension_length) || (name.compare(name.size() - extension_length, extension_length, extension) != 0)) {
+    return false;
+  }
+  name.resize(name.size() - extension_length);
+  return true;
+}
+
+SceneSavePaths scene_save_paths(const std::filesystem::path& source_path) {
+  const std::filesystem::path normalized_source = source_path.lexically_normal();
+  const std::filesystem::path base_directory = normalized_source.has_parent_path() ? normalized_source.parent_path() : std::filesystem::current_path();
+  std::string base_name = normalized_source.filename().string();
+  bool keep_stripping = true;
+  while (keep_stripping) {
+    keep_stripping = false;
+    if (strip_scene_extension(base_name, ".json")) {
+      keep_stripping = true;
+    }
+    if (strip_scene_extension(base_name, ".etx")) {
+      keep_stripping = true;
+    }
+    if (strip_scene_extension(base_name, ".obj")) {
+      keep_stripping = true;
+    }
+    if (strip_scene_extension(base_name, ".gltf")) {
+      keep_stripping = true;
+    }
+    if (strip_scene_extension(base_name, ".glb")) {
+      keep_stripping = true;
+    }
+  }
+  if (base_name.empty()) {
+    base_name = "scene";
+  }
+
+  return {
+    .geometry = (base_directory / (base_name + ".etx")).lexically_normal(),
+    .materials = (base_directory / (base_name + ".etx.materials")).lexically_normal(),
+    .json = (base_directory / (base_name + ".etx.json")).lexically_normal(),
+  };
+}
+
+std::array<StagedSceneFile, 3u> staged_scene_files(const SceneSavePaths& paths) {
+  const auto staged_path = [](const std::filesystem::path& destination) {
+    return path_with_suffix(destination, ".save-staged");
+  };
+  const auto backup_path = [](const std::filesystem::path& destination) {
+    return path_with_suffix(destination, ".save-backup");
+  };
+  return {{
+    {paths.geometry, staged_path(paths.geometry), backup_path(paths.geometry)},
+    {paths.materials, staged_path(paths.materials), backup_path(paths.materials)},
+    {paths.json, staged_path(paths.json), backup_path(paths.json)},
+  }};
+}
+
+std::filesystem::path scene_save_marker(const std::array<StagedSceneFile, 3u>& files, const char* state) {
+  std::filesystem::path marker = files[2].destination;
+  marker += ".save-";
+  marker += state;
+  return marker;
+}
+
+bool inspect_scene_save_path(const std::filesystem::path& path, const char* description, bool& file_exists) {
+  std::error_code error;
+  const std::filesystem::file_status status = std::filesystem::symlink_status(path, error);
+  if (status.type() == std::filesystem::file_type::not_found) {
+    file_exists = false;
+    return true;
+  }
+  if (error) {
+    log::error("Failed to inspect %s: %s", description, path.string().c_str());
+    return false;
+  }
+  if ((std::filesystem::is_regular_file(status) == false) && (std::filesystem::is_symlink(status) == false)) {
+    log::error("Expected %s to be a file: %s", description, path.string().c_str());
+    return false;
+  }
+  file_exists = true;
+  return true;
+}
+
+bool remove_scene_save_file(const std::filesystem::path& path, const char* description) {
+  std::error_code error;
+  const std::filesystem::file_status status = std::filesystem::symlink_status(path, error);
+  if (status.type() == std::filesystem::file_type::not_found) {
+    return true;
+  }
+  if (error) {
+    log::warning("Failed to inspect %s: %s", description, path.string().c_str());
+    return false;
+  }
+  if ((std::filesystem::is_regular_file(status) == false) && (std::filesystem::is_symlink(status) == false)) {
+    log::error("Refusing to remove non-file %s: %s", description, path.string().c_str());
+    return false;
+  }
+  std::filesystem::remove(path, error);
+  if (error) {
+    log::warning("Failed to remove %s: %s", description, path.string().c_str());
+    return false;
+  }
+  return true;
+}
+
+bool discard_staged_scene_files(std::array<StagedSceneFile, 3u>& files) {
+  bool discarded = true;
+  for (StagedSceneFile& file : files) {
+    discarded = remove_scene_save_file(file.staged, "staged scene file") && discarded;
+  }
+  return discarded;
+}
+
+bool restore_scene_files(std::array<StagedSceneFile, 3u>& files) {
+  bool restored = true;
+  for (StagedSceneFile& file : files) {
+    if (file.staged_installed == false) {
+      continue;
+    }
+    std::error_code error;
+    std::filesystem::remove(file.destination, error);
+    if (error) {
+      log::error("Failed to remove incomplete scene file during save rollback: %s", file.destination.string().c_str());
+      restored = false;
+      continue;
+    }
+    file.staged_installed = false;
+  }
+
+  for (auto file = files.rbegin(); file != files.rend(); ++file) {
+    if (file->destination_backed_up == false) {
+      continue;
+    }
+    std::error_code error;
+    std::filesystem::rename(file->backup, file->destination, error);
+    if (error) {
+      log::error("Failed to restore scene file after save failure: %s", file->destination.string().c_str());
+      restored = false;
+      continue;
+    }
+    file->destination_backed_up = false;
+  }
+
+  restored = discard_staged_scene_files(files) && restored;
+  return restored;
+}
+
+bool commit_staged_scene_files(std::array<StagedSceneFile, 3u>& files) {
+  for (StagedSceneFile& file : files) {
+    if (inspect_scene_save_path(file.destination, "scene destination", file.destination_existed) == false) {
+      (void)restore_scene_files(files);
+      return false;
+    }
+  }
+
+  std::string transaction_state;
+  transaction_state.reserve(files.size());
+  for (const StagedSceneFile& file : files) {
+    transaction_state.push_back(file.destination_existed ? '1' : '0');
+  }
+  const std::filesystem::path pending_marker = scene_save_marker(files, "pending");
+  const std::filesystem::path committed_marker = scene_save_marker(files, "committed");
+  const std::filesystem::path preparing_marker = scene_save_marker(files, "preparing");
+  if (write_file_contents(preparing_marker, transaction_state) == false) {
+    (void)restore_scene_files(files);
+    remove_scene_save_file(preparing_marker, "scene save marker");
+    return false;
+  }
+  std::error_code marker_error;
+  std::filesystem::rename(preparing_marker, pending_marker, marker_error);
+  if (marker_error) {
+    log::error("Failed to start scene save transaction: %s", pending_marker.string().c_str());
+    (void)restore_scene_files(files);
+    remove_scene_save_file(preparing_marker, "scene save marker");
+    return false;
+  }
+
+  for (StagedSceneFile& file : files) {
+    if (file.destination_existed == false) {
+      continue;
+    }
+
+    std::error_code error;
+    std::filesystem::rename(file.destination, file.backup, error);
+    if (error) {
+      log::error("Failed to preserve scene file before saving: %s", file.destination.string().c_str());
+      if (restore_scene_files(files)) {
+        remove_scene_save_file(pending_marker, "scene save marker");
+      }
+      return false;
+    }
+    file.destination_backed_up = true;
+  }
+
+  for (StagedSceneFile& file : files) {
+    std::error_code error;
+    std::filesystem::rename(file.staged, file.destination, error);
+    if (error) {
+      log::error("Failed to install saved scene file: %s", file.destination.string().c_str());
+      if (restore_scene_files(files)) {
+        remove_scene_save_file(pending_marker, "scene save marker");
+      }
+      return false;
+    }
+    file.staged_installed = true;
+  }
+
+  marker_error.clear();
+  std::filesystem::rename(pending_marker, committed_marker, marker_error);
+  if (marker_error) {
+    log::error("Failed to commit scene save transaction: %s", committed_marker.string().c_str());
+    if (restore_scene_files(files)) {
+      remove_scene_save_file(pending_marker, "scene save marker");
+    }
+    return false;
+  }
+
+  for (StagedSceneFile& file : files) {
+    if (file.destination_backed_up == false) {
+      continue;
+    }
+    std::error_code error;
+    std::filesystem::remove(file.backup, error);
+    if (error) {
+      log::warning("Failed to remove scene save backup: %s", file.backup.string().c_str());
+      continue;
+    }
+    file.destination_backed_up = false;
+  }
+  return true;
+}
+
+bool read_scene_save_state(const std::filesystem::path& marker, std::array<bool, 3u>& destination_existed) {
+  FILE* file = fopen(marker.string().c_str(), "rb");
+  if (file == nullptr) {
+    log::error("Failed to open scene save marker: %s", marker.string().c_str());
+    return false;
+  }
+
+  std::array<char, 3u> state = {};
+  const size_t bytes_read = fread(state.data(), 1, state.size(), file);
+  const bool close_succeeded = fclose(file) == 0;
+  if ((bytes_read != state.size()) || (close_succeeded == false)) {
+    log::error("Failed to read scene save marker: %s", marker.string().c_str());
+    return false;
+  }
+  for (size_t index = 0u; index < state.size(); ++index) {
+    if ((state[index] != '0') && (state[index] != '1')) {
+      log::error("Invalid scene save marker: %s", marker.string().c_str());
+      return false;
+    }
+    destination_existed[index] = state[index] == '1';
+  }
+  return true;
+}
+
+bool recover_interrupted_scene_save(std::array<StagedSceneFile, 3u>& files, bool& committed_scene_available) {
+  committed_scene_available = false;
+  const std::filesystem::path pending_marker = scene_save_marker(files, "pending");
+  const std::filesystem::path committed_marker = scene_save_marker(files, "committed");
+  const std::filesystem::path preparing_marker = scene_save_marker(files, "preparing");
+  bool pending_exists = false;
+  if (inspect_scene_save_path(pending_marker, "scene save marker", pending_exists) == false) {
+    return false;
+  }
+  bool committed_exists = false;
+  if (inspect_scene_save_path(committed_marker, "scene save marker", committed_exists) == false) {
+    return false;
+  }
+
+  if (committed_exists) {
+    bool complete_scene = true;
+    for (const StagedSceneFile& file : files) {
+      bool destination_exists = false;
+      if (inspect_scene_save_path(file.destination, "committed scene file", destination_exists) == false) {
+        return false;
+      }
+      if (destination_exists == false) {
+        complete_scene = false;
+      }
+    }
+    if (complete_scene) {
+      bool cleanup_succeeded = true;
+      for (StagedSceneFile& file : files) {
+        cleanup_succeeded = remove_scene_save_file(file.backup, "scene save backup") && cleanup_succeeded;
+      }
+      cleanup_succeeded = discard_staged_scene_files(files) && cleanup_succeeded;
+      cleanup_succeeded = remove_scene_save_file(preparing_marker, "scene save marker") && cleanup_succeeded;
+      cleanup_succeeded = remove_scene_save_file(pending_marker, "scene save marker") && cleanup_succeeded;
+      if (cleanup_succeeded) {
+        (void)remove_scene_save_file(committed_marker, "scene save marker");
+      }
+      committed_scene_available = true;
+      return true;
+    }
+  }
+
+  if (pending_exists || committed_exists) {
+    const std::filesystem::path& state_marker = pending_exists ? pending_marker : committed_marker;
+    std::array<bool, 3u> destination_existed = {};
+    if (read_scene_save_state(state_marker, destination_existed) == false) {
+      return false;
+    }
+
+    bool recovered = true;
+    for (size_t index = 0u; index < files.size(); ++index) {
+      StagedSceneFile& file = files[index];
+      bool backup_exists = false;
+      if (inspect_scene_save_path(file.backup, "scene save backup", backup_exists) == false) {
+        recovered = false;
+        continue;
+      }
+
+      if (destination_existed[index]) {
+        if (backup_exists) {
+          if (remove_scene_save_file(file.destination, "incomplete scene file") == false) {
+            log::error("Failed to remove incomplete scene file: %s", file.destination.string().c_str());
+            recovered = false;
+            continue;
+          }
+          std::error_code error;
+          std::filesystem::rename(file.backup, file.destination, error);
+          if (error) {
+            log::error("Failed to recover scene save backup: %s", file.destination.string().c_str());
+            recovered = false;
+          }
+          continue;
+        }
+
+        bool destination_exists = false;
+        if ((inspect_scene_save_path(file.destination, "original scene file", destination_exists) == false) || (destination_exists == false)) {
+          log::error("Original scene file is unavailable after an interrupted save: %s", file.destination.string().c_str());
+          recovered = false;
+        }
+        continue;
+      }
+
+      if (remove_scene_save_file(file.destination, "incomplete scene file") == false) {
+        log::error("Failed to remove incomplete scene file: %s", file.destination.string().c_str());
+        recovered = false;
+      }
+      if (backup_exists) {
+        recovered = remove_scene_save_file(file.backup, "unexpected scene save backup") && recovered;
+      }
+    }
+
+    if (recovered == false) {
+      return false;
+    }
+    (void)discard_staged_scene_files(files);
+    remove_scene_save_file(preparing_marker, "scene save marker");
+    remove_scene_save_file(pending_marker, "scene save marker");
+    remove_scene_save_file(committed_marker, "scene save marker");
+    log::warning("Recovered scene files after an interrupted save");
+    return true;
+  }
+
+  for (StagedSceneFile& file : files) {
+    bool backup_exists = false;
+    if (inspect_scene_save_path(file.backup, "scene save backup", backup_exists) == false) {
+      return false;
+    }
+    if (backup_exists == false) {
+      continue;
+    }
+    bool destination_exists = false;
+    if (inspect_scene_save_path(file.destination, "scene destination", destination_exists) == false) {
+      return false;
+    }
+    if (destination_exists) {
+      log::error("Ambiguous scene save backup requires manual recovery: %s", file.backup.string().c_str());
+      return false;
+    }
+    std::error_code error;
+    std::filesystem::rename(file.backup, file.destination, error);
+    if (error) {
+      log::error("Failed to recover orphaned scene save backup: %s", file.destination.string().c_str());
+      return false;
+    }
+  }
+  if (discard_staged_scene_files(files) == false) {
+    return false;
+  }
+  remove_scene_save_file(preparing_marker, "scene save marker");
+  return true;
 }
 
 NodeGeometryEditResult analyze_node_geometry_edit(const SceneData& data, uint32_t node_index, NodeGeometryOperation operation, bool validate_contents,
@@ -173,6 +708,102 @@ NodeGeometryEditResult compute_node_surface_center(const SceneData& data, const 
   }
   center = {static_cast<float>(values[0]), static_cast<float>(values[1]), static_cast<float>(values[2])};
   return NodeGeometryEditResult::Success;
+}
+
+bool node_geometry_storage_is_private(const SceneData& data, uint32_t node_index, const NodeGeometryEditAnalysis& analysis, std::vector<uint32_t>& vertex_indices) {
+  const auto mesh_is_selected = [&analysis](uint32_t mesh_index) {
+    return std::find(analysis.mesh_indices.begin(), analysis.mesh_indices.end(), mesh_index) != analysis.mesh_indices.end();
+  };
+  const auto mesh_ranges_overlap = [](const Mesh& first, const Mesh& second) {
+    const uint64_t first_end = static_cast<uint64_t>(first.triangle_offset) + first.triangle_count;
+    const uint64_t second_end = static_cast<uint64_t>(second.triangle_offset) + second.triangle_count;
+    return (static_cast<uint64_t>(first.triangle_offset) < second_end) && (static_cast<uint64_t>(second.triangle_offset) < first_end);
+  };
+
+  for (uint32_t candidate_index = 0u; candidate_index < data.hierarchy.nodes.size(); ++candidate_index) {
+    if (candidate_index == node_index) {
+      continue;
+    }
+    const SceneNode& candidate = data.hierarchy.nodes[candidate_index];
+    const uint64_t attachment_end = static_cast<uint64_t>(candidate.attachment_offset) + candidate.attachment_count;
+    if (attachment_end > data.hierarchy.attachments.size()) {
+      return false;
+    }
+    for (uint32_t attachment_index = candidate.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = data.hierarchy.attachments[attachment_index];
+      if ((attachment.type == SceneAttachment::Type::Mesh) && mesh_is_selected(attachment.resource_index)) {
+        return false;
+      }
+    }
+  }
+
+  for (uint32_t first_index = 0u; first_index < analysis.mesh_indices.size(); ++first_index) {
+    const Mesh& first = data.meshes[analysis.mesh_indices[first_index]];
+    for (uint32_t second_index = first_index + 1u; second_index < analysis.mesh_indices.size(); ++second_index) {
+      if (mesh_ranges_overlap(first, data.meshes[analysis.mesh_indices[second_index]])) {
+        return false;
+      }
+    }
+  }
+
+  for (uint32_t mesh_index = 0u; mesh_index < data.meshes.size(); ++mesh_index) {
+    if (mesh_is_selected(mesh_index)) {
+      continue;
+    }
+    const Mesh& mesh = data.meshes[mesh_index];
+    if (mesh.triangle_count == 0u) {
+      continue;
+    }
+    const uint64_t triangle_end = static_cast<uint64_t>(mesh.triangle_offset) + mesh.triangle_count;
+    if (triangle_end > data.triangles.size()) {
+      return false;
+    }
+    for (uint32_t selected_mesh_index : analysis.mesh_indices) {
+      if (mesh_ranges_overlap(mesh, data.meshes[selected_mesh_index])) {
+        return false;
+      }
+    }
+  }
+
+  size_t maximum_vertex_count = 0u;
+  for (uint32_t mesh_index : analysis.mesh_indices) {
+    maximum_vertex_count += static_cast<size_t>(data.meshes[mesh_index].triangle_count) * 3u;
+  }
+  vertex_indices.clear();
+  vertex_indices.reserve(maximum_vertex_count);
+  for (uint32_t mesh_index : analysis.mesh_indices) {
+    const Mesh& mesh = data.meshes[mesh_index];
+    const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
+    for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+      const Triangle& triangle = data.triangles[triangle_index];
+      vertex_indices.insert(vertex_indices.end(), std::begin(triangle.i), std::end(triangle.i));
+    }
+  }
+  std::sort(vertex_indices.begin(), vertex_indices.end());
+  vertex_indices.erase(std::unique(vertex_indices.begin(), vertex_indices.end()), vertex_indices.end());
+
+  const auto triangle_is_selected = [&data, &analysis](uint32_t triangle_index) {
+    for (uint32_t mesh_index : analysis.mesh_indices) {
+      const Mesh& mesh = data.meshes[mesh_index];
+      const uint64_t triangle_end = static_cast<uint64_t>(mesh.triangle_offset) + mesh.triangle_count;
+      if ((triangle_index >= mesh.triangle_offset) && (static_cast<uint64_t>(triangle_index) < triangle_end)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  for (uint32_t triangle_index = 0u; triangle_index < data.triangles.size(); ++triangle_index) {
+    if (triangle_is_selected(triangle_index)) {
+      continue;
+    }
+    const Triangle& triangle = data.triangles[triangle_index];
+    for (uint32_t corner = 0u; corner < 3u; ++corner) {
+      if (std::binary_search(vertex_indices.begin(), vertex_indices.end(), triangle.i[corner])) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 std::string source_mesh_name(const SceneData& data, uint32_t mesh_index) {
@@ -382,6 +1013,747 @@ std::string rename_entry(std::unordered_map<std::string, uint32_t>& mapping, uin
   return final;
 }
 
+std::string mapping_name(const std::unordered_map<std::string, uint32_t>& mapping, uint32_t index, const char* fallback_prefix) {
+  for (const auto& [name, mapped_index] : mapping) {
+    if (mapped_index == index) {
+      return name;
+    }
+  }
+  return std::string(fallback_prefix) + std::to_string(index);
+}
+
+std::string unique_mapping_name(const std::unordered_map<std::string, uint32_t>& mapping, const char* desired_name, const char* fallback_prefix) {
+  const std::string base = ((desired_name != nullptr) && (desired_name[0] != 0)) ? desired_name : fallback_prefix;
+  std::string result = base;
+  uint32_t suffix = 2u;
+  while (mapping.contains(result)) {
+    result = base + " " + std::to_string(suffix++);
+  }
+  return result;
+}
+
+std::vector<uint32_t> removal_remapping(size_t resource_count, uint32_t removed_index) {
+  std::vector<uint32_t> result(resource_count);
+  for (uint32_t old_index = 0u; old_index < resource_count; ++old_index) {
+    result[old_index] = old_index < removed_index ? old_index : ((old_index == removed_index) ? kInvalidIndex : old_index - 1u);
+  }
+  return result;
+}
+
+void erase_mapping_resource(std::unordered_map<std::string, uint32_t>& mapping, uint32_t removed_index) {
+  for (auto it = mapping.begin(); it != mapping.end();) {
+    if (it->second == removed_index) {
+      it = mapping.erase(it);
+      continue;
+    }
+    if ((it->second != kInvalidIndex) && (it->second > removed_index)) {
+      --it->second;
+    }
+    ++it;
+  }
+}
+
+void remap_hierarchy_resource(SceneHierarchy& hierarchy, SceneAttachment::Type type, uint32_t removed_index) {
+  for (SceneAttachment& attachment : hierarchy.attachments) {
+    if ((attachment.type == type) && (attachment.resource_index != kInvalidIndex) && (attachment.resource_index > removed_index)) {
+      --attachment.resource_index;
+    }
+  }
+}
+
+std::string unique_named_resource(const std::vector<std::string>& names, const char* desired_name, const char* fallback, uint32_t excluded_index) {
+  const std::string base = ((desired_name != nullptr) && (desired_name[0] != 0)) ? desired_name : fallback;
+  auto available = [&](const std::string& candidate) {
+    for (uint32_t index = 0u; index < names.size(); ++index) {
+      if ((index != excluded_index) && (names[index] == candidate)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  std::string result = base;
+  uint32_t suffix = 2u;
+  while (available(result) == false) {
+    result = base + " " + std::to_string(suffix++);
+  }
+  return result;
+}
+
+const char* default_emitter_name(const EmitterProfile& profile) {
+  if (profile.cls == EmitterProfile::Class::Area) {
+    return "Area Light";
+  }
+  if (profile.cls == EmitterProfile::Class::Environment) {
+    return (profile.meta & EmitterProfile::Meta::Atmosphere) ? "Atmosphere" : "Environment Light";
+  }
+  return "Directional Light";
+}
+
+void ensure_emitter_names(SceneData& data) {
+  if (data.emitter_names.size() > data.emitter_profiles.size()) {
+    data.emitter_names.resize(data.emitter_profiles.size());
+  }
+  while (data.emitter_names.size() < data.emitter_profiles.size()) {
+    const uint32_t emitter_index = static_cast<uint32_t>(data.emitter_names.size());
+    const char* fallback = default_emitter_name(data.emitter_profiles[emitter_index]);
+    data.emitter_names.push_back(unique_named_resource(data.emitter_names, fallback, fallback, kInvalidIndex));
+  }
+}
+
+std::vector<uint32_t> serialized_emitter_indices(const SceneData& data) {
+  std::vector<uint32_t> result;
+  result.reserve(data.emitter_profiles.size());
+  for (uint32_t emitter_index = 0u; emitter_index < data.emitter_profiles.size(); ++emitter_index) {
+    const EmitterProfile& emitter = data.emitter_profiles[emitter_index];
+    if ((emitter.cls == EmitterProfile::Class::Environment) && ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u)) {
+      result.push_back(emitter_index);
+    }
+  }
+  for (uint32_t emitter_index = 0u; emitter_index < data.emitter_profiles.size(); ++emitter_index) {
+    const EmitterProfile& emitter = data.emitter_profiles[emitter_index];
+    if ((emitter.cls == EmitterProfile::Class::Environment) && ((emitter.meta & EmitterProfile::Meta::Atmosphere) == 0u)) {
+      result.push_back(emitter_index);
+    }
+  }
+  for (uint32_t emitter_index = 0u; emitter_index < data.emitter_profiles.size(); ++emitter_index) {
+    if (data.emitter_profiles[emitter_index].cls == EmitterProfile::Class::Directional) {
+      result.push_back(emitter_index);
+    }
+  }
+  return result;
+}
+
+bool internal_scene_resource_name(const std::string& name) {
+  return (name.compare(0, 4, "et::") == 0) || (name.compare(0, 5, "etx::") == 0);
+}
+
+struct SerializedMaterialEntry {
+  uint32_t material_index = kInvalidIndex;
+  std::string id;
+  std::vector<std::string> authored_names;
+};
+
+struct SerializedMediumEntry {
+  uint32_t medium_index = kInvalidIndex;
+  std::string id;
+  std::string authored_name;
+};
+
+struct SerializedCameraEntry {
+  uint32_t camera_index = kInvalidIndex;
+  std::string id;
+  std::string authored_name;
+};
+
+bool build_serialized_material_entries(const SceneData& data, std::vector<SerializedMaterialEntry>& result) {
+  std::unordered_map<uint32_t, uint32_t> entry_mapping;
+  result.clear();
+  result.reserve(data.material_mapping.size());
+  for (const auto& mapping : data.material_mapping) {
+    if (internal_scene_resource_name(mapping.first)) {
+      continue;
+    }
+    if (mapping.second >= data.materials.size()) {
+      log::error("Cannot save material %s: material index %u is invalid", mapping.first.c_str(), mapping.second);
+      return false;
+    }
+
+    const auto existing = entry_mapping.find(mapping.second);
+    if (existing != entry_mapping.end()) {
+      result[existing->second].authored_names.push_back(mapping.first);
+      continue;
+    }
+
+    const uint32_t entry_index = static_cast<uint32_t>(result.size());
+    entry_mapping[mapping.second] = entry_index;
+    SerializedMaterialEntry& entry = result.emplace_back();
+    entry.material_index = mapping.second;
+    entry.id = "saved_material_" + std::to_string(mapping.second);
+    entry.authored_names.push_back(mapping.first);
+  }
+
+  for (SerializedMaterialEntry& entry : result) {
+    std::sort(entry.authored_names.begin(), entry.authored_names.end());
+  }
+  std::sort(result.begin(), result.end(), [](const SerializedMaterialEntry& a, const SerializedMaterialEntry& b) {
+    return a.material_index < b.material_index;
+  });
+  return true;
+}
+
+bool build_serialized_medium_entries(const SceneData& data, std::vector<SerializedMediumEntry>& result) {
+  if (data.mediums.mapping().size() != data.mediums.array_size()) {
+    log::error("Cannot save media: the name mapping does not match the medium array");
+    return false;
+  }
+
+  std::unordered_set<uint32_t> mapped_indices;
+  result.clear();
+  result.reserve(data.mediums.mapping().size());
+  for (const auto& [name, medium_index] : data.mediums.mapping()) {
+    if ((name.empty()) || (medium_index >= data.mediums.array_size()) || (mapped_indices.insert(medium_index).second == false)) {
+      log::error("Cannot save medium %s: its name mapping is invalid", name.c_str());
+      return false;
+    }
+
+    SerializedMediumEntry& entry = result.emplace_back();
+    entry.medium_index = medium_index;
+    entry.id = "saved_medium_" + std::to_string(medium_index);
+    entry.authored_name = name;
+  }
+
+  std::sort(result.begin(), result.end(), [](const SerializedMediumEntry& a, const SerializedMediumEntry& b) {
+    return a.medium_index < b.medium_index;
+  });
+  return true;
+}
+
+std::vector<SerializedCameraEntry> build_serialized_camera_entries(const SceneData& data) {
+  std::vector<SerializedCameraEntry> result;
+  result.reserve(data.cameras.size());
+  for (uint32_t camera_index = 0u; camera_index < data.cameras.size(); ++camera_index) {
+    SerializedCameraEntry& entry = result.emplace_back();
+    entry.camera_index = camera_index;
+    entry.id = "saved_camera_" + std::to_string(camera_index);
+    entry.authored_name = data.cameras[camera_index].id;
+  }
+  return result;
+}
+
+bool json_float_value(const nlohmann::json& value, float& result) {
+  if (value.is_number() == false) {
+    return false;
+  }
+
+  double parsed = 0.0;
+  try {
+    parsed = value.get<double>();
+  } catch (const nlohmann::json::exception&) {
+    return false;
+  }
+  const double maximum = static_cast<double>(std::numeric_limits<float>::max());
+  if ((std::isfinite(parsed) == false) || (parsed < -maximum) || (parsed > maximum)) {
+    return false;
+  }
+
+  result = static_cast<float>(parsed);
+  return std::isfinite(result);
+}
+
+nlohmann::json serialize_spectral_distribution(const SpectralDistribution& spectrum) {
+  nlohmann::json result = nlohmann::json::object();
+  result["integrated"] = {spectrum.integrated_value.x, spectrum.integrated_value.y, spectrum.integrated_value.z};
+  nlohmann::json samples = nlohmann::json::array();
+  for (uint32_t sample_index = 0u; sample_index < spectrum.spectral_entry_count; ++sample_index) {
+    samples.push_back(spectrum.spectral_entries[sample_index].wavelength);
+    samples.push_back(spectrum.spectral_entries[sample_index].power);
+  }
+  result["samples"] = std::move(samples);
+  return result;
+}
+
+bool spectral_distribution_serializable(const SpectralDistribution& spectrum) {
+  if ((spectrum.spectral_entry_count > WavelengthCount) || (finite_point(spectrum.integrated_value) == false)) {
+    return false;
+  }
+  float previous_wavelength = -std::numeric_limits<float>::infinity();
+  for (uint32_t sample_index = 0u; sample_index < spectrum.spectral_entry_count; ++sample_index) {
+    const SpectralDistribution::Entry& entry = spectrum.spectral_entries[sample_index];
+    if ((std::isfinite(entry.wavelength) == false) || (std::isfinite(entry.power) == false) || (entry.wavelength <= previous_wavelength)) {
+      return false;
+    }
+    previous_wavelength = entry.wavelength;
+  }
+  return true;
+}
+
+bool deserialize_spectral_distribution(const nlohmann::json& source, SpectralDistribution& result) {
+  if ((source.is_object() == false) || (source.contains("integrated") == false) || (source["integrated"].is_array() == false) || (source["integrated"].size() != 3u) ||
+      (source.contains("samples") == false) || (source["samples"].is_array() == false) || ((source["samples"].size() % 2u) != 0u) ||
+      ((source["samples"].size() / 2u) > WavelengthCount)) {
+    return false;
+  }
+
+  result = {};
+  if ((json_float_value(source["integrated"][0u], result.integrated_value.x) == false) || (json_float_value(source["integrated"][1u], result.integrated_value.y) == false) ||
+      (json_float_value(source["integrated"][2u], result.integrated_value.z) == false)) {
+    return false;
+  }
+
+  const nlohmann::json& samples = source["samples"];
+  result.spectral_entry_count = static_cast<uint32_t>(samples.size() / 2u);
+  float previous_wavelength = -std::numeric_limits<float>::infinity();
+  for (uint32_t sample_index = 0u; sample_index < result.spectral_entry_count; ++sample_index) {
+    SpectralDistribution::Entry& entry = result.spectral_entries[sample_index];
+    if ((json_float_value(samples[2u * sample_index], entry.wavelength) == false) || (json_float_value(samples[2u * sample_index + 1u], entry.power) == false) ||
+        (entry.wavelength <= previous_wavelength)) {
+      return false;
+    }
+    previous_wavelength = entry.wavelength;
+  }
+  return true;
+}
+
+nlohmann::json serialize_scene_spectral_overrides(const SceneData& data, const std::vector<SerializedMaterialEntry>& material_entries,
+  const std::vector<SerializedMediumEntry>& medium_entries, bool& valid) {
+  valid = true;
+  nlohmann::json values = nlohmann::json::array();
+  std::unordered_map<uint32_t, uint32_t> spectrum_mapping;
+
+  auto spectrum_reference = [&](uint32_t spectrum_index, const char* context) -> nlohmann::json {
+    if (spectrum_index == kInvalidIndex) {
+      return nullptr;
+    }
+    if (spectrum_index >= data.spectrum_values.size()) {
+      log::error("Cannot save %s: spectrum index %u is invalid", context, spectrum_index);
+      valid = false;
+      return nullptr;
+    }
+    if (spectral_distribution_serializable(data.spectrum_values[spectrum_index]) == false) {
+      log::error("Cannot save %s: spectrum index %u contains invalid data", context, spectrum_index);
+      valid = false;
+      return nullptr;
+    }
+    const auto existing = spectrum_mapping.find(spectrum_index);
+    if (existing != spectrum_mapping.end()) {
+      return existing->second;
+    }
+    const uint32_t serialized_index = static_cast<uint32_t>(values.size());
+    spectrum_mapping[spectrum_index] = serialized_index;
+    values.push_back(serialize_spectral_distribution(data.spectrum_values[spectrum_index]));
+    return serialized_index;
+  };
+
+  auto serialize_ior = [&](const RefractiveIndex& ior, const char* context) {
+    return nlohmann::json{
+      {"class", ior.cls},
+      {"eta", spectrum_reference(ior.eta_index, context)},
+      {"k", spectrum_reference(ior.k_index, context)},
+    };
+  };
+
+  nlohmann::json materials = nlohmann::json::array();
+  for (const SerializedMaterialEntry& entry : material_entries) {
+    const Material& material = data.materials[entry.material_index];
+    materials.push_back({
+      {"name", entry.id},
+      {"reflectance", spectrum_reference(material.reflectance.spectrum_index, "material reflectance")},
+      {"scattering", spectrum_reference(material.scattering.spectrum_index, "material scattering")},
+      {"emission", spectrum_reference(material.emission.spectrum_index, "material emission")},
+      {"subsurface", spectrum_reference(material.subsurface.spectrum_index, "material subsurface")},
+      {"external_ior", serialize_ior(material.ext_ior, "external IOR")},
+      {"internal_ior", serialize_ior(material.int_ior, "internal IOR")},
+      {"thinfilm_ior", serialize_ior(material.thinfilm.ior, "thin-film IOR")},
+    });
+  }
+
+  nlohmann::json mediums = nlohmann::json::array();
+  for (const SerializedMediumEntry& entry : medium_entries) {
+    if (entry.medium_index >= data.mediums.array_size()) {
+      log::error("Cannot save medium %s: medium index %u is invalid", entry.authored_name.c_str(), entry.medium_index);
+      valid = false;
+      continue;
+    }
+    const Medium& medium = data.mediums.get(entry.medium_index);
+    mediums.push_back({
+      {"name", entry.id},
+      {"absorption", spectrum_reference(medium.absorption_index, "medium absorption")},
+      {"scattering", spectrum_reference(medium.scattering_index, "medium scattering")},
+    });
+  }
+
+  nlohmann::json emitters = nlohmann::json::array();
+  for (const uint32_t emitter_index : serialized_emitter_indices(data)) {
+    const EmitterProfile& emitter = data.emitter_profiles[emitter_index];
+    emitters.push_back(spectrum_reference(emitter.emission.spectrum_index, "emitter emission"));
+  }
+
+  return {
+    {"version", 1u},
+    {"values", std::move(values)},
+    {"materials", std::move(materials)},
+    {"mediums", std::move(mediums)},
+    {"emitters", std::move(emitters)},
+  };
+}
+
+bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& data) {
+  if ((source.is_object() == false) || (source.contains("version") == false) || (source["version"].is_number_unsigned() == false) || (source["version"].get<uint64_t>() != 1u) ||
+      (source.contains("values") == false) || (source["values"].is_array() == false) || (source.contains("materials") == false) || (source["materials"].is_array() == false) ||
+      (source.contains("mediums") == false) || (source["mediums"].is_array() == false) || (source.contains("emitters") == false) || (source["emitters"].is_array() == false)) {
+    return false;
+  }
+
+  std::vector<SpectralDistribution> decoded_values;
+  decoded_values.reserve(source["values"].size());
+  for (const nlohmann::json& value : source["values"]) {
+    SpectralDistribution& decoded = decoded_values.emplace_back();
+    if (deserialize_spectral_distribution(value, decoded) == false) {
+      return false;
+    }
+  }
+
+  std::vector<uint32_t> spectrum_mapping;
+  spectrum_mapping.reserve(decoded_values.size());
+  for (const SpectralDistribution& value : decoded_values) {
+    spectrum_mapping.push_back(data.add_spectrum(value));
+  }
+
+  auto resolve_reference = [&](const nlohmann::json& reference, uint32_t& result) {
+    if (reference.is_null()) {
+      result = kInvalidIndex;
+      return true;
+    }
+    if (reference.is_number_unsigned() == false) {
+      return false;
+    }
+    const uint64_t serialized_index = reference.get<uint64_t>();
+    if (serialized_index >= spectrum_mapping.size()) {
+      return false;
+    }
+    result = spectrum_mapping[serialized_index];
+    return true;
+  };
+
+  auto apply_ior = [&](const nlohmann::json& serialized, RefractiveIndex& result) {
+    if ((serialized.is_object() == false) || (serialized.contains("class") == false) || (serialized["class"].is_number_unsigned() == false) ||
+        (serialized["class"].get<uint64_t>() > SpectralDistribution::Illuminant) || (serialized.contains("eta") == false) || (serialized.contains("k") == false)) {
+      return false;
+    }
+    result.cls = serialized["class"].get<uint32_t>();
+    return resolve_reference(serialized["eta"], result.eta_index) && resolve_reference(serialized["k"], result.k_index);
+  };
+
+  size_t expected_material_count = 0u;
+  for (const auto& mapping : data.material_mapping) {
+    if (internal_scene_resource_name(mapping.first) == false) {
+      ++expected_material_count;
+    }
+  }
+  if (source["materials"].size() != expected_material_count) {
+    return false;
+  }
+  std::unordered_set<std::string> restored_materials;
+  for (const nlohmann::json& serialized : source["materials"]) {
+    if ((serialized.is_object() == false) || (serialized.contains("name") == false) || (serialized["name"].is_string() == false) || (serialized.contains("reflectance") == false) ||
+        (serialized.contains("scattering") == false) || (serialized.contains("emission") == false) || (serialized.contains("subsurface") == false) ||
+        (serialized.contains("external_ior") == false) || (serialized.contains("internal_ior") == false) || (serialized.contains("thinfilm_ior") == false)) {
+      return false;
+    }
+    const std::string& name = serialized["name"].get_ref<const std::string&>();
+    if (restored_materials.insert(name).second == false) {
+      return false;
+    }
+    const auto mapping = data.material_mapping.find(name);
+    if ((mapping == data.material_mapping.end()) || (mapping->second >= data.materials.size())) {
+      return false;
+    }
+    Material& material = data.materials[mapping->second];
+    if ((resolve_reference(serialized["reflectance"], material.reflectance.spectrum_index) == false) ||
+        (resolve_reference(serialized["scattering"], material.scattering.spectrum_index) == false) ||
+        (resolve_reference(serialized["emission"], material.emission.spectrum_index) == false) ||
+        (resolve_reference(serialized["subsurface"], material.subsurface.spectrum_index) == false) || (apply_ior(serialized["external_ior"], material.ext_ior) == false) ||
+        (apply_ior(serialized["internal_ior"], material.int_ior) == false) || (apply_ior(serialized["thinfilm_ior"], material.thinfilm.ior) == false)) {
+      return false;
+    }
+  }
+
+  if (source["mediums"].size() != data.mediums.mapping().size()) {
+    return false;
+  }
+  std::unordered_set<std::string> restored_mediums;
+  for (const nlohmann::json& serialized : source["mediums"]) {
+    if ((serialized.is_object() == false) || (serialized.contains("name") == false) || (serialized["name"].is_string() == false) || (serialized.contains("absorption") == false) ||
+        (serialized.contains("scattering") == false)) {
+      return false;
+    }
+    const std::string& name = serialized["name"].get_ref<const std::string&>();
+    if (restored_mediums.insert(name).second == false) {
+      return false;
+    }
+    const auto mapping = data.mediums.mapping().find(name);
+    if ((mapping == data.mediums.mapping().end()) || (mapping->second >= data.mediums.array_size())) {
+      return false;
+    }
+    Medium& medium = data.mediums.get(mapping->second);
+    if ((resolve_reference(serialized["absorption"], medium.absorption_index) == false) || (resolve_reference(serialized["scattering"], medium.scattering_index) == false)) {
+      return false;
+    }
+  }
+
+  const std::vector<uint32_t> emitter_indices = serialized_emitter_indices(data);
+  if (source["emitters"].size() != emitter_indices.size()) {
+    return false;
+  }
+  for (uint32_t serialized_index = 0u; serialized_index < emitter_indices.size(); ++serialized_index) {
+    EmitterProfile& emitter = data.emitter_profiles[emitter_indices[serialized_index]];
+    if (resolve_reference(source["emitters"][serialized_index], emitter.emission.spectrum_index) == false) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool restore_scene_material_names(const nlohmann::json& source, SceneData& data) {
+  if (source.is_array() == false) {
+    return false;
+  }
+
+  SceneRepresentation::MaterialMapping restored_mapping;
+  restored_mapping.reserve(data.material_mapping.size());
+  for (const auto& mapping : data.material_mapping) {
+    if (internal_scene_resource_name(mapping.first)) {
+      restored_mapping.emplace(mapping);
+    }
+  }
+
+  std::unordered_set<std::string> serialized_ids;
+  std::unordered_set<std::string> authored_names;
+  for (const nlohmann::json& binding : source) {
+    if ((binding.is_object() == false) || (binding.contains("id") == false) || (binding["id"].is_string() == false) || (binding.contains("names") == false) ||
+        (binding["names"].is_array() == false) || binding["names"].empty()) {
+      return false;
+    }
+
+    const std::string& id = binding["id"].get_ref<const std::string&>();
+    if (id.empty() || internal_scene_resource_name(id) || (serialized_ids.insert(id).second == false)) {
+      return false;
+    }
+    const auto material = data.material_mapping.find(id);
+    if ((material == data.material_mapping.end()) || (material->second >= data.materials.size())) {
+      return false;
+    }
+    for (const nlohmann::json& serialized_name : binding["names"]) {
+      if (serialized_name.is_string() == false) {
+        return false;
+      }
+      const std::string& name = serialized_name.get_ref<const std::string&>();
+      if (name.empty() || internal_scene_resource_name(name) || (authored_names.insert(name).second == false)) {
+        return false;
+      }
+      restored_mapping[name] = material->second;
+    }
+  }
+
+  for (const auto& mapping : data.material_mapping) {
+    if ((internal_scene_resource_name(mapping.first) == false) && (serialized_ids.count(mapping.first) == 0u)) {
+      return false;
+    }
+  }
+
+  data.material_mapping = std::move(restored_mapping);
+  return true;
+}
+
+bool restore_scene_medium_names(const nlohmann::json& source, SceneData& data) {
+  if ((source.is_array() == false) || (source.size() != data.mediums.mapping().size()) || (source.size() != data.mediums.array_size())) {
+    return false;
+  }
+
+  MediumPool::Mapping restored_mapping;
+  restored_mapping.reserve(source.size());
+  std::unordered_set<std::string> serialized_ids;
+  for (const nlohmann::json& binding : source) {
+    if ((binding.is_object() == false) || (binding.contains("id") == false) || (binding["id"].is_string() == false) || (binding.contains("name") == false) ||
+        (binding["name"].is_string() == false)) {
+      return false;
+    }
+
+    const std::string& id = binding["id"].get_ref<const std::string&>();
+    const std::string& name = binding["name"].get_ref<const std::string&>();
+    if (id.empty() || name.empty() || (serialized_ids.insert(id).second == false)) {
+      return false;
+    }
+    const auto medium = data.mediums.mapping().find(id);
+    if ((medium == data.mediums.mapping().end()) || (medium->second >= data.mediums.array_size()) || (restored_mapping.emplace(name, medium->second).second == false)) {
+      return false;
+    }
+  }
+
+  for (const auto& mapping : data.mediums.mapping()) {
+    if (serialized_ids.count(mapping.first) == 0u) {
+      return false;
+    }
+  }
+  return data.mediums.replace_mapping(std::move(restored_mapping));
+}
+
+bool restore_scene_camera_names(const nlohmann::json& source, SceneData& data) {
+  if ((source.is_array() == false) || (source.size() != data.cameras.size())) {
+    return false;
+  }
+
+  std::unordered_map<std::string, uint32_t> camera_indices;
+  camera_indices.reserve(data.cameras.size());
+  for (uint32_t camera_index = 0u; camera_index < data.cameras.size(); ++camera_index) {
+    if ((data.cameras[camera_index].id.empty()) || (camera_indices.emplace(data.cameras[camera_index].id, camera_index).second == false)) {
+      return false;
+    }
+  }
+
+  std::vector<std::string> restored_names(data.cameras.size());
+  std::vector<bool> restored_indices(data.cameras.size(), false);
+  for (const nlohmann::json& binding : source) {
+    if ((binding.is_object() == false) || (binding.contains("id") == false) || (binding["id"].is_string() == false) || (binding.contains("name") == false) ||
+        (binding["name"].is_string() == false)) {
+      return false;
+    }
+
+    const std::string& id = binding["id"].get_ref<const std::string&>();
+    const auto camera = camera_indices.find(id);
+    if ((camera == camera_indices.end()) || restored_indices[camera->second]) {
+      return false;
+    }
+    restored_names[camera->second] = binding["name"].get<std::string>();
+    restored_indices[camera->second] = true;
+  }
+
+  for (uint32_t camera_index = 0u; camera_index < data.cameras.size(); ++camera_index) {
+    if (restored_indices[camera_index] == false) {
+      return false;
+    }
+    data.cameras[camera_index].id = std::move(restored_names[camera_index]);
+  }
+  return true;
+}
+
+uint32_t clone_spectrum(SceneData& data, uint32_t spectrum_index) {
+  return spectrum_index < data.spectrum_values.size() ? data.add_spectrum(data.spectrum_values[spectrum_index]) : kInvalidIndex;
+}
+
+Material clone_material_resources(SceneData& data, const Material& source) {
+  Material result = source;
+  result.reflectance.spectrum_index = clone_spectrum(data, source.reflectance.spectrum_index);
+  result.scattering.spectrum_index = clone_spectrum(data, source.scattering.spectrum_index);
+  result.emission.spectrum_index = clone_spectrum(data, source.emission.spectrum_index);
+  result.subsurface.spectrum_index = clone_spectrum(data, source.subsurface.spectrum_index);
+  result.thinfilm.ior.eta_index = clone_spectrum(data, source.thinfilm.ior.eta_index);
+  result.thinfilm.ior.k_index = clone_spectrum(data, source.thinfilm.ior.k_index);
+  result.ext_ior.eta_index = clone_spectrum(data, source.ext_ior.eta_index);
+  result.ext_ior.k_index = clone_spectrum(data, source.ext_ior.k_index);
+  result.int_ior.eta_index = clone_spectrum(data, source.int_ior.eta_index);
+  result.int_ior.k_index = clone_spectrum(data, source.int_ior.k_index);
+  result.energy_compensation_interface_index = kInvalidIndex;
+  result.conductor_energy_compensation_interface_index = kInvalidIndex;
+  return result;
+}
+
+std::string unique_node_name(const SceneHierarchy& hierarchy, const char* desired_name) {
+  const std::string base = ((desired_name != nullptr) && (desired_name[0] != 0)) ? desired_name : "Empty Node";
+  auto available = [&](const std::string& candidate) {
+    return std::find(hierarchy.node_names.begin(), hierarchy.node_names.end(), candidate) == hierarchy.node_names.end();
+  };
+  if (available(base)) {
+    return base;
+  }
+
+  uint32_t suffix = 2u;
+  std::string candidate;
+  do {
+    candidate = base + " " + std::to_string(suffix++);
+  } while (available(candidate) == false);
+  return candidate;
+}
+
+std::string unique_renamed_node_name(const SceneHierarchy& hierarchy, uint32_t node_index, const char* desired_name) {
+  if (node_index >= hierarchy.nodes.size()) {
+    return {};
+  }
+  const std::string current_name = (node_index < hierarchy.node_names.size()) ? hierarchy.node_names[node_index] : std::string{};
+  const std::string base = ((desired_name != nullptr) && (desired_name[0] != 0)) ? desired_name : (current_name.empty() ? "Node" : current_name);
+  auto available = [&](const std::string& candidate) {
+    for (uint32_t index = 0u; index < hierarchy.node_names.size(); ++index) {
+      if ((index != node_index) && (hierarchy.node_names[index] == candidate)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  if (available(base)) {
+    return base;
+  }
+
+  uint32_t suffix = 2u;
+  std::string candidate;
+  do {
+    candidate = base + " " + std::to_string(suffix++);
+  } while (available(candidate) == false);
+  return candidate;
+}
+
+bool valid_attachment_resource(const SceneData& data, SceneAttachment::Type type, uint32_t resource_index) {
+  switch (type) {
+    case SceneAttachment::Type::Mesh:
+      return resource_index < data.meshes.size();
+    case SceneAttachment::Type::Camera:
+      return resource_index < data.cameras.size();
+    case SceneAttachment::Type::Emitter:
+      return (resource_index < data.emitter_profiles.size()) && (data.emitter_profiles[resource_index].cls != EmitterProfile::Class::Area);
+    case SceneAttachment::Type::Medium:
+      return resource_index < data.mediums.array_size();
+  }
+  return false;
+}
+
+bool resource_is_attached(const SceneHierarchy& hierarchy, SceneAttachment::Type type, uint32_t resource_index, uint32_t excluded_node_index) {
+  for (uint32_t node_index = 0u; node_index < hierarchy.nodes.size(); ++node_index) {
+    if (node_index == excluded_node_index) {
+      continue;
+    }
+    const SceneNode& node = hierarchy.nodes[node_index];
+    const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+    if ((attachment_end < node.attachment_offset) || (attachment_end > hierarchy.attachments.size())) {
+      continue;
+    }
+    for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+      if ((attachment.type == type) && (attachment.resource_index == resource_index)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool subtree_contains_active_camera(const SceneData& data, uint32_t node_index) {
+  const SceneHierarchy& hierarchy = data.hierarchy;
+  if (node_index >= hierarchy.nodes.size()) {
+    return false;
+  }
+
+  for (uint32_t camera_node_index = 0u; camera_node_index < hierarchy.nodes.size(); ++camera_node_index) {
+    const SceneNode& camera_node = hierarchy.nodes[camera_node_index];
+    const uint32_t attachment_end = camera_node.attachment_offset + camera_node.attachment_count;
+    if ((attachment_end < camera_node.attachment_offset) || (attachment_end > hierarchy.attachments.size())) {
+      continue;
+    }
+    bool active_camera_attached = false;
+    for (uint32_t attachment_index = camera_node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+      if ((attachment.type == SceneAttachment::Type::Camera) && (attachment.resource_index < data.cameras.size()) && data.cameras[attachment.resource_index].active) {
+        active_camera_attached = true;
+        break;
+      }
+    }
+    if (active_camera_attached == false) {
+      continue;
+    }
+
+    uint32_t ancestor_index = camera_node_index;
+    for (uint32_t depth = 0u; (depth <= hierarchy.nodes.size()) && (ancestor_index != kInvalidIndex); ++depth) {
+      if (ancestor_index == node_index) {
+        return true;
+      }
+      if (ancestor_index >= hierarchy.nodes.size()) {
+        break;
+      }
+      ancestor_index = hierarchy.nodes[ancestor_index].parent_index;
+    }
+  }
+  return false;
+}
+
 bool scene_has_environment_emitter(const SceneData& data) {
   for (const auto& profile : data.emitter_profiles) {
     if (profile.cls == EmitterProfile::Class::Environment) {
@@ -436,6 +1808,88 @@ const char* node_geometry_edit_result_message(NodeGeometryEditResult result) {
   return "The geometry edit failed.";
 }
 
+const char* scene_edit_status_message(SceneEditStatus status) {
+  switch (status) {
+    case SceneEditStatus::Success:
+      return "";
+    case SceneEditStatus::InvalidNode:
+      return "The selected node is no longer available.";
+    case SceneEditStatus::InvalidParent:
+      return "The node cannot be parented there.";
+    case SceneEditStatus::InvalidResource:
+      return "The selected resource is no longer available.";
+    case SceneEditStatus::DuplicateAttachment:
+      return "This resource is already attached to the node.";
+    case SceneEditStatus::ResourceAlreadyAttached:
+      return "This resource is already owned by another node.";
+    case SceneEditStatus::UnsupportedAttachments:
+      return "Subtrees containing cameras, lights, or media cannot be duplicated.";
+    case SceneEditStatus::ActiveCameraProtected:
+      return "Keep the active camera enabled or activate another camera before this edit.";
+    case SceneEditStatus::InvalidTransform:
+      return "The edit would give an attached camera, light, or medium an invalid transform.";
+    case SceneEditStatus::GeometryGenerationFailed:
+      return "The object geometry could not be generated.";
+    case SceneEditStatus::HierarchyUpdateFailed:
+      return "The scene hierarchy could not be updated.";
+  }
+  return "The scene edit failed.";
+}
+
+const char* scene_resource_edit_status_message(SceneResourceEditStatus status) {
+  switch (status) {
+    case SceneResourceEditStatus::Success:
+      return "";
+    case SceneResourceEditStatus::InvalidResource:
+      return "The selected resource is no longer available.";
+    case SceneResourceEditStatus::ResourceInUse:
+      return "The resource is still referenced by the scene.";
+    case SceneResourceEditStatus::ActiveResource:
+      return "Activate another camera before deleting this one.";
+    case SceneResourceEditStatus::ManagedResource:
+      return "This resource is managed by the scene and cannot be deleted.";
+    case SceneResourceEditStatus::ResourceUpdateFailed:
+      return "The scene resource could not be updated.";
+  }
+  return "The scene resource edit failed.";
+}
+
+const char* scene_primitive_name(ScenePrimitive primitive) {
+  switch (primitive) {
+    case ScenePrimitive::Sphere:
+      return "Sphere";
+    case ScenePrimitive::Box:
+      return "Box";
+    case ScenePrimitive::Plane:
+      return "Plane";
+    case ScenePrimitive::Disk:
+      return "Disk";
+    case ScenePrimitive::Cylinder:
+      return "Cylinder";
+    case ScenePrimitive::Cone:
+      return "Cone";
+    case ScenePrimitive::Capsule:
+      return "Capsule";
+    case ScenePrimitive::Torus:
+      return "Torus";
+    case ScenePrimitive::Ring:
+      return "Ring";
+    case ScenePrimitive::Tube:
+      return "Tube";
+    case ScenePrimitive::Tetrahedron:
+      return "Tetrahedron";
+    case ScenePrimitive::Cube:
+      return "Cube";
+    case ScenePrimitive::Octahedron:
+      return "Octahedron";
+    case ScenePrimitive::Dodecahedron:
+      return "Dodecahedron";
+    case ScenePrimitive::Icosahedron:
+      return "Icosahedron";
+  }
+  return "Object";
+}
+
 void material_class_to_string(Material::Class cls, const char** str) {
   static const char* names[] = {
     "diffuse",
@@ -469,6 +1923,7 @@ struct SceneRepresentationImpl {
   TaskScheduler& scheduler;
   SceneData data;
   Camera active_camera;
+  bool scene_valid = false;
   std::mutex mt;
   RHIContext* rhi = nullptr;
   scattering::GpuContext scattering_gpu = {};
@@ -557,6 +2012,7 @@ struct SceneRepresentationImpl {
     }
     energy_compensation_generation = {};
     energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
+    scene_valid = false;
     data.clear(scheduler);
     medium_authored_bounds.clear();
     medium_bounds_scratch.clear();
@@ -909,6 +2365,8 @@ struct SceneRepresentationImpl {
   }
 
   bool update_medium_bounds();
+  bool update_active_camera();
+  SceneEditStatus finalize_hierarchy_edit(SceneHierarchy& original_hierarchy);
   void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
 
   void set_mesh_material_impl(uint32_t mesh_index, uint32_t material_index);
@@ -921,14 +2379,13 @@ struct SceneRepresentationImpl {
   EnergyCompensationPreparationState poll_energy_compensation_interface_preparation();
   EnergyCompensationPreparationStatus energy_compensation_interface_preparation_status() const;
   bool ensure_scattering_gpu_context();
-  void generate_pixel_sampler_image();
+  void generate_pixel_sampler_image(float radius);
 
   void create_area_emitters_from_materials();
-  bool delete_emitter(uint32_t emitter_index);
   void setup_atmosphere_references();
 
   bool finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len, bool force_tangents,
-    bool spectral_scene);
+    bool spectral_scene, float pixel_filter_radius, bool preserve_unattached_cameras);
 };
 
 void build_camera(Camera& camera, const float3& position, const float3& direction, const float3& up, const uint2& viewport, const float fov) {
@@ -1148,6 +2605,156 @@ Camera transform_camera(const Camera& source, const AffineTransform& position_tr
   return result;
 }
 
+bool hierarchy_attachment_transforms_valid(const SceneData& data) {
+  const SceneHierarchy& hierarchy = data.hierarchy;
+  for (uint32_t node_index : hierarchy.evaluation_order) {
+    if ((node_index >= hierarchy.nodes.size()) || (node_index >= hierarchy.effective_enabled.size())) {
+      return false;
+    }
+    if (hierarchy.effective_enabled[node_index] == 0u) {
+      continue;
+    }
+
+    const SceneNode& node = hierarchy.nodes[node_index];
+    const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+    if ((attachment_end < node.attachment_offset) || (attachment_end > hierarchy.attachments.size())) {
+      return false;
+    }
+    for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+      const bool camera_attachment = attachment.type == SceneAttachment::Type::Camera;
+      const bool medium_attachment = attachment.type == SceneAttachment::Type::Medium;
+      const bool distant_emitter_attachment = (attachment.type == SceneAttachment::Type::Emitter) && (attachment.resource_index < data.emitter_profiles.size()) &&
+                                              (data.emitter_profiles[attachment.resource_index].cls != EmitterProfile::Class::Area);
+      if ((camera_attachment == false) && (medium_attachment == false) && (distant_emitter_attachment == false)) {
+        continue;
+      }
+      if (node_index >= hierarchy.world_transforms.size()) {
+        return false;
+      }
+
+      if (camera_attachment || distant_emitter_attachment) {
+        if ((node_index >= hierarchy.orientation_valid.size()) || (hierarchy.orientation_valid[node_index] == 0u) || (node_index >= hierarchy.world_orientations.size())) {
+          return false;
+        }
+      }
+
+      double determinant = 0.0;
+      AffineTransform inverse = {};
+      if ((camera_attachment || medium_attachment) && (invert_affine(hierarchy.world_transforms[node_index], inverse, determinant) == false)) {
+        return false;
+      }
+      if (camera_attachment && (invert_affine(hierarchy.world_orientations[node_index], inverse, determinant) == false)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+bool active_camera_attachment_enabled(const SceneData& data) {
+  const auto camera_it = std::find_if(data.cameras.begin(), data.cameras.end(), [](const auto& entry) {
+    return entry.active;
+  });
+  if (camera_it == data.cameras.end()) {
+    return true;
+  }
+
+  const uint32_t active_camera_index = static_cast<uint32_t>(std::distance(data.cameras.begin(), camera_it));
+  bool attachment_found = false;
+  for (uint32_t node_index = 0u; node_index < data.hierarchy.nodes.size(); ++node_index) {
+    const SceneNode& node = data.hierarchy.nodes[node_index];
+    const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+    if ((attachment_end < node.attachment_offset) || (attachment_end > data.hierarchy.attachments.size())) {
+      return false;
+    }
+    for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = data.hierarchy.attachments[attachment_index];
+      if ((attachment.type != SceneAttachment::Type::Camera) || (attachment.resource_index != active_camera_index)) {
+        continue;
+      }
+      attachment_found = true;
+      if ((node_index < data.hierarchy.effective_enabled.size()) && (data.hierarchy.effective_enabled[node_index] != 0u)) {
+        return true;
+      }
+    }
+  }
+  return attachment_found == false;
+}
+
+bool SceneRepresentationImpl::update_active_camera() {
+  if ((data.hierarchy.resolved_state_current() == false) && (data.resolve_hierarchy() == false)) {
+    return false;
+  }
+
+  const auto camera_it = std::find_if(data.cameras.begin(), data.cameras.end(), [](const auto& entry) {
+    return entry.active;
+  });
+  if (camera_it == data.cameras.end()) {
+    return true;
+  }
+
+  Camera updated_camera = camera_it->cam;
+  const uint32_t camera_index = static_cast<uint32_t>(std::distance(data.cameras.begin(), camera_it));
+  bool enabled_attachment_found = false;
+  for (uint32_t node_index : data.hierarchy.evaluation_order) {
+    if ((node_index >= data.hierarchy.nodes.size()) || (node_index >= data.hierarchy.effective_enabled.size()) || (data.hierarchy.effective_enabled[node_index] == 0u)) {
+      continue;
+    }
+    const SceneNode& node = data.hierarchy.nodes[node_index];
+    const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+    if ((attachment_end < node.attachment_offset) || (attachment_end > data.hierarchy.attachments.size())) {
+      return false;
+    }
+    for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      const SceneAttachment& attachment = data.hierarchy.attachments[attachment_index];
+      if ((attachment.type == SceneAttachment::Type::Camera) && (attachment.resource_index == camera_index)) {
+        enabled_attachment_found = true;
+        break;
+      }
+    }
+    if (enabled_attachment_found) {
+      break;
+    }
+  }
+
+  if (enabled_attachment_found) {
+    AttachmentTransform transform = {};
+    if (find_attachment_transform(data, SceneAttachment::Type::Camera, camera_index, transform) == false) {
+      return false;
+    }
+    updated_camera = transform_camera(camera_it->cam, transform.object_to_world, transform.orientation_to_world);
+  }
+  active_camera = updated_camera;
+  return true;
+}
+
+SceneEditStatus SceneRepresentationImpl::finalize_hierarchy_edit(SceneHierarchy& original_hierarchy) {
+  const auto restore_original = [&]() {
+    data.hierarchy = std::move(original_hierarchy);
+    const bool hierarchy_restored = data.resolve_hierarchy();
+    const bool medium_state_restored = hierarchy_restored && update_medium_bounds();
+    const bool camera_state_restored = medium_state_restored && update_active_camera();
+    if (camera_state_restored == false) {
+      log::error("Failed to restore scene state after rejecting a hierarchy edit");
+    }
+  };
+
+  if (data.resolve_hierarchy() == false) {
+    restore_original();
+    return SceneEditStatus::HierarchyUpdateFailed;
+  }
+  if (active_camera_attachment_enabled(data) == false) {
+    restore_original();
+    return SceneEditStatus::ActiveCameraProtected;
+  }
+  if ((hierarchy_attachment_transforms_valid(data) == false) || (update_medium_bounds() == false) || (update_active_camera() == false)) {
+    restore_original();
+    return SceneEditStatus::InvalidTransform;
+  }
+  return SceneEditStatus::Success;
+}
+
 bool camera_pose_is_canonical(const Camera& camera) {
   return (camera.position.x == 0.0f) && (camera.position.y == 0.0f) && (camera.position.z == 0.0f) && (camera.direction.x == kWorldForward.x) &&
          (camera.direction.y == kWorldForward.y) && (camera.direction.z == kWorldForward.z) && (camera.up.x == kWorldUp.x) && (camera.up.y == kWorldUp.y) &&
@@ -1173,7 +2780,7 @@ bool camera_pose_transform(const Camera& camera, AffineTransform& result) {
   return true;
 }
 
-bool ensure_camera_nodes(SceneData& data) {
+bool ensure_camera_nodes(SceneData& data, bool preserve_unattached_cameras) {
   for (uint32_t camera_index = 0u; camera_index < data.cameras.size(); ++camera_index) {
     uint32_t attachment_node_index = kInvalidIndex;
     uint32_t local_attachment_index = kInvalidIndex;
@@ -1196,6 +2803,9 @@ bool ensure_camera_nodes(SceneData& data) {
     if (attachment_count > 1u) {
       log::error("Camera %u is attached to multiple scene nodes; camera resources require one owning node", camera_index);
       return false;
+    }
+    if ((attachment_count == 0u) && preserve_unattached_cameras) {
+      continue;
     }
     if ((attachment_count == 1u) && camera_pose_is_canonical(data.cameras[camera_index].cam)) {
       continue;
@@ -1280,6 +2890,28 @@ const SceneRepresentation::MeshMapping& SceneRepresentation::mesh_mapping() cons
   return _private->data.mesh_mapping;
 }
 
+void SceneRepresentation::replace_loaded_scene(SceneRepresentation& source) {
+  if (this == &source) {
+    return;
+  }
+  cancel_energy_compensation_interface_preparation();
+  _private->data.swap_contents(source._private->data);
+  using std::swap;
+  swap(_private->active_camera, source._private->active_camera);
+  swap(_private->scene_valid, source._private->scene_valid);
+  swap(_private->medium_authored_bounds, source._private->medium_authored_bounds);
+  swap(_private->medium_bounds_scratch, source._private->medium_bounds_scratch);
+  swap(_private->medium_has_bounds_scratch, source._private->medium_has_bounds_scratch);
+  swap(_private->medium_attachment_nodes_scratch, source._private->medium_attachment_nodes_scratch);
+  swap(_private->integrator_data, source._private->integrator_data);
+  swap(_private->rhi, source._private->rhi);
+  swap(_private->scattering_gpu, source._private->scattering_gpu);
+  swap(_private->scattering_gpu_ready, source._private->scattering_gpu_ready);
+  swap(_private->energy_compensation_generation, source._private->energy_compensation_generation);
+  swap(_private->energy_compensation_preparation_state, source._private->energy_compensation_preparation_state);
+  swap(_private->energy_compensation_preparation_started_at, source._private->energy_compensation_preparation_started_at);
+}
+
 uint32_t SceneRepresentation::add_material(const char* name) {
   uint32_t index = _private->data.add_material(name);
   auto& mat = _private->data.materials[index];
@@ -1297,6 +2929,73 @@ uint32_t SceneRepresentation::add_material(const char* name) {
   return index;
 }
 
+SceneResourceEditResult SceneRepresentation::create_material(const char* name) {
+  const std::string unique_name = unique_mapping_name(_private->data.material_mapping, name, "Material");
+  const uint32_t material_index = add_material(unique_name.c_str());
+  return {.status = SceneResourceEditStatus::Success, .resource_index = material_index};
+}
+
+SceneResourceEditResult SceneRepresentation::duplicate_material(uint32_t index) {
+  SceneData& scene_data = _private->data;
+  if (index >= scene_data.materials.size()) {
+    return {.status = SceneResourceEditStatus::InvalidResource};
+  }
+
+  const std::string source_name = mapping_name(scene_data.material_mapping, index, "material-");
+  const std::string duplicate_name = unique_mapping_name(scene_data.material_mapping, (source_name + " Copy").c_str(), "Material Copy");
+  const Material material = clone_material_resources(scene_data, scene_data.materials[index]);
+  const uint32_t duplicate_index = scene_data.clone_material(material, duplicate_name.c_str());
+  return {.status = SceneResourceEditStatus::Success, .resource_index = duplicate_index};
+}
+
+SceneResourceEditResult SceneRepresentation::delete_material(uint32_t index) {
+  SceneData& scene_data = _private->data;
+  if (index >= scene_data.materials.size()) {
+    return {.status = SceneResourceEditStatus::InvalidResource};
+  }
+  if ((scene_data.defaults.subsurface_scatter_material == index) || (scene_data.defaults.subsurface_exit_material == index) || (scene_data.defaults.missing_material == index)) {
+    return {.status = SceneResourceEditStatus::ManagedResource};
+  }
+  for (const Triangle& triangle : scene_data.triangles) {
+    if (triangle.material_index == index) {
+      return {.status = SceneResourceEditStatus::ResourceInUse};
+    }
+  }
+
+  SceneResourceEditResult result = {
+    .status = SceneResourceEditStatus::Success,
+    .resource_index = kInvalidIndex,
+    .resource_remapping = removal_remapping(scene_data.materials.size(), index),
+  };
+  scene_data.materials.erase(scene_data.materials.begin() + index);
+  erase_mapping_resource(scene_data.material_mapping, index);
+  for (Triangle& triangle : scene_data.triangles) {
+    if ((triangle.material_index != kInvalidIndex) && (triangle.material_index > index)) {
+      --triangle.material_index;
+    }
+  }
+  for (auto gltf_material = scene_data.gltf_material_mapping.begin(); gltf_material != scene_data.gltf_material_mapping.end();) {
+    if (gltf_material->second == index) {
+      gltf_material = scene_data.gltf_material_mapping.erase(gltf_material);
+      continue;
+    }
+    if ((gltf_material->second != kInvalidIndex) && (gltf_material->second > index)) {
+      --gltf_material->second;
+    }
+    ++gltf_material;
+  }
+  auto remap_default = [index](uint32_t& default_index) {
+    if ((default_index != kInvalidIndex) && (default_index > index)) {
+      --default_index;
+    }
+  };
+  remap_default(scene_data.defaults.subsurface_scatter_material);
+  remap_default(scene_data.defaults.subsurface_exit_material);
+  remap_default(scene_data.defaults.missing_material);
+  scene_data.material_to_emitter_profile.clear();
+  return result;
+}
+
 std::string SceneRepresentation::rename_material(uint32_t index, const char* name) {
   return rename_entry(_private->data.material_mapping, index, name, "material-");
 }
@@ -1310,8 +3009,251 @@ uint32_t SceneRepresentation::add_medium(const char* name) {
   return _private->data.mediums.add(Medium::Homogeneous, id, nullptr, absorption_index, scattering_index, 0.0f, true);
 }
 
+SceneResourceEditResult SceneRepresentation::create_medium(const char* name) {
+  const std::string unique_name = unique_mapping_name(_private->data.mediums.mapping(), name, "Medium");
+  const uint32_t medium_index = add_medium(unique_name.c_str());
+  const Medium& medium = _private->data.mediums.get(medium_index);
+  if (_private->medium_authored_bounds.size() <= medium_index) {
+    _private->medium_authored_bounds.resize(static_cast<size_t>(medium_index) + 1u, medium.bounds);
+  }
+  return {.status = SceneResourceEditStatus::Success, .resource_index = medium_index};
+}
+
+SceneResourceEditResult SceneRepresentation::duplicate_medium(uint32_t index) {
+  SceneData& scene_data = _private->data;
+  if (index >= scene_data.mediums.array_size()) {
+    return {.status = SceneResourceEditStatus::InvalidResource};
+  }
+
+  const std::string source_name = mapping_name(scene_data.mediums.mapping(), index, "medium-");
+  const std::string duplicate_name = unique_mapping_name(scene_data.mediums.mapping(), (source_name + " Copy").c_str(), "Medium Copy");
+  const uint32_t duplicate_index = scene_data.mediums.duplicate(index, duplicate_name);
+  if (duplicate_index == kInvalidIndex) {
+    return {.status = SceneResourceEditStatus::ResourceUpdateFailed};
+  }
+  Medium& duplicate = scene_data.mediums.get(duplicate_index);
+  duplicate.absorption_index = clone_spectrum(scene_data, duplicate.absorption_index);
+  duplicate.scattering_index = clone_spectrum(scene_data, duplicate.scattering_index);
+  const BoundingBox authored_bounds = index < _private->medium_authored_bounds.size() ? _private->medium_authored_bounds[index] : duplicate.bounds;
+  _private->medium_authored_bounds.push_back(authored_bounds);
+  return {.status = SceneResourceEditStatus::Success, .resource_index = duplicate_index};
+}
+
+SceneResourceEditResult SceneRepresentation::delete_medium(uint32_t index) {
+  SceneData& scene_data = _private->data;
+  if (index >= scene_data.mediums.array_size()) {
+    return {.status = SceneResourceEditStatus::InvalidResource};
+  }
+  for (const Material& material : scene_data.materials) {
+    if ((material.int_medium == index) || (material.ext_medium == index)) {
+      return {.status = SceneResourceEditStatus::ResourceInUse};
+    }
+  }
+  for (const EmitterProfile& emitter : scene_data.emitter_profiles) {
+    if (emitter.medium_index == index) {
+      return {.status = SceneResourceEditStatus::ResourceInUse};
+    }
+  }
+  for (const SceneData::CameraInfo& camera_info : scene_data.cameras) {
+    if (camera_info.cam.medium_index == index) {
+      return {.status = SceneResourceEditStatus::ResourceInUse};
+    }
+  }
+  if ((_private->active_camera.medium_index == index) || resource_is_attached(scene_data.hierarchy, SceneAttachment::Type::Medium, index, kInvalidIndex)) {
+    return {.status = SceneResourceEditStatus::ResourceInUse};
+  }
+
+  std::vector<uint32_t> remapping;
+  if (scene_data.mediums.remove(index, remapping) == false) {
+    return {.status = SceneResourceEditStatus::ResourceUpdateFailed};
+  }
+  auto remap_medium = [index](uint32_t& medium_index) {
+    if ((medium_index != kInvalidIndex) && (medium_index > index)) {
+      --medium_index;
+    }
+  };
+  for (Material& material : scene_data.materials) {
+    remap_medium(material.int_medium);
+    remap_medium(material.ext_medium);
+  }
+  for (EmitterProfile& emitter : scene_data.emitter_profiles) {
+    remap_medium(emitter.medium_index);
+  }
+  for (SceneData::CameraInfo& camera_info : scene_data.cameras) {
+    remap_medium(camera_info.cam.medium_index);
+  }
+  remap_medium(_private->active_camera.medium_index);
+  remap_hierarchy_resource(scene_data.hierarchy, SceneAttachment::Type::Medium, index);
+  if (index < _private->medium_authored_bounds.size()) {
+    _private->medium_authored_bounds.erase(_private->medium_authored_bounds.begin() + index);
+  }
+  _private->medium_bounds_scratch.clear();
+  _private->medium_has_bounds_scratch.clear();
+  _private->medium_attachment_nodes_scratch.clear();
+  return {.status = SceneResourceEditStatus::Success, .resource_index = kInvalidIndex, .resource_remapping = std::move(remapping)};
+}
+
 std::string SceneRepresentation::rename_medium(uint32_t index, const char* name) {
   return _private->data.mediums.rename(index, (name != nullptr) ? name : "");
+}
+
+SceneResourceEditResult SceneRepresentation::create_camera(const char* name) {
+  SceneData& scene_data = _private->data;
+  std::vector<std::string> camera_names;
+  camera_names.reserve(scene_data.cameras.size());
+  for (const SceneData::CameraInfo& camera_info : scene_data.cameras) {
+    camera_names.push_back(camera_info.id);
+  }
+  SceneData::CameraInfo camera_info = {};
+  camera_info.cam = _private->active_camera;
+  camera_info.id = unique_named_resource(camera_names, name, "Camera", kInvalidIndex);
+  camera_info.active = scene_data.cameras.empty();
+  const uint32_t camera_index = static_cast<uint32_t>(scene_data.cameras.size());
+  scene_data.cameras.push_back(std::move(camera_info));
+  return {.status = SceneResourceEditStatus::Success, .resource_index = camera_index};
+}
+
+SceneResourceEditResult SceneRepresentation::duplicate_camera(uint32_t index) {
+  SceneData& scene_data = _private->data;
+  if (index >= scene_data.cameras.size()) {
+    return {.status = SceneResourceEditStatus::InvalidResource};
+  }
+  std::vector<std::string> camera_names;
+  camera_names.reserve(scene_data.cameras.size());
+  for (const SceneData::CameraInfo& camera_info : scene_data.cameras) {
+    camera_names.push_back(camera_info.id);
+  }
+  SceneData::CameraInfo duplicate = scene_data.cameras[index];
+  duplicate.active = false;
+  duplicate.id = unique_named_resource(camera_names, (duplicate.id + " Copy").c_str(), "Camera Copy", kInvalidIndex);
+  const uint32_t duplicate_index = static_cast<uint32_t>(scene_data.cameras.size());
+  scene_data.cameras.push_back(std::move(duplicate));
+  return {.status = SceneResourceEditStatus::Success, .resource_index = duplicate_index};
+}
+
+SceneResourceEditResult SceneRepresentation::delete_camera(uint32_t index) {
+  SceneData& scene_data = _private->data;
+  if (index >= scene_data.cameras.size()) {
+    return {.status = SceneResourceEditStatus::InvalidResource};
+  }
+  if ((scene_data.cameras[index].active) || (scene_data.cameras.size() == 1u)) {
+    return {.status = SceneResourceEditStatus::ActiveResource};
+  }
+  if (resource_is_attached(scene_data.hierarchy, SceneAttachment::Type::Camera, index, kInvalidIndex)) {
+    return {.status = SceneResourceEditStatus::ResourceInUse};
+  }
+  SceneResourceEditResult result = {
+    .status = SceneResourceEditStatus::Success,
+    .resource_index = kInvalidIndex,
+    .resource_remapping = removal_remapping(scene_data.cameras.size(), index),
+  };
+  scene_data.cameras.erase(scene_data.cameras.begin() + index);
+  remap_hierarchy_resource(scene_data.hierarchy, SceneAttachment::Type::Camera, index);
+  return result;
+}
+
+std::string SceneRepresentation::rename_camera(uint32_t index, const char* name) {
+  SceneData& scene_data = _private->data;
+  if (index >= scene_data.cameras.size()) {
+    return {};
+  }
+  std::vector<std::string> camera_names;
+  camera_names.reserve(scene_data.cameras.size());
+  for (const SceneData::CameraInfo& camera_info : scene_data.cameras) {
+    camera_names.push_back(camera_info.id);
+  }
+  scene_data.cameras[index].id = unique_named_resource(camera_names, name, "Camera", index);
+  return scene_data.cameras[index].id;
+}
+
+SceneResourceEditResult SceneRepresentation::duplicate_emitter(uint32_t index) {
+  SceneData& scene_data = _private->data;
+  if (index >= scene_data.emitter_profiles.size()) {
+    return {.status = SceneResourceEditStatus::InvalidResource};
+  }
+  if (scene_data.emitter_profiles[index].cls == EmitterProfile::Class::Area) {
+    return {.status = SceneResourceEditStatus::ManagedResource};
+  }
+
+  ensure_emitter_names(scene_data);
+  EmitterProfile duplicate = scene_data.emitter_profiles[index];
+  duplicate.emission.spectrum_index = clone_spectrum(scene_data, duplicate.emission.spectrum_index);
+  if ((duplicate.emission.image_index != kInvalidIndex) && (duplicate.emission.image_index < scene_data.images.array_size())) {
+    duplicate.emission.image_index = scene_data.images.add_copy(duplicate.emission.image_index);
+  }
+  const uint32_t duplicate_index = static_cast<uint32_t>(scene_data.emitter_profiles.size());
+  const std::string duplicate_name = unique_named_resource(scene_data.emitter_names, (scene_data.emitter_names[index] + " Copy").c_str(), "Light Copy", kInvalidIndex);
+  scene_data.emitter_profiles.push_back(duplicate);
+  scene_data.emitter_names.push_back(duplicate_name);
+  return {.status = SceneResourceEditStatus::Success, .resource_index = duplicate_index};
+}
+
+SceneResourceEditResult SceneRepresentation::delete_emitter_profile(uint32_t index) {
+  SceneData& scene_data = _private->data;
+  if (index >= scene_data.emitter_profiles.size()) {
+    return {.status = SceneResourceEditStatus::InvalidResource};
+  }
+  if (scene_data.emitter_profiles[index].cls == EmitterProfile::Class::Area) {
+    return {.status = SceneResourceEditStatus::ManagedResource};
+  }
+  if (resource_is_attached(scene_data.hierarchy, SceneAttachment::Type::Emitter, index, kInvalidIndex)) {
+    return {.status = SceneResourceEditStatus::ResourceInUse};
+  }
+  for (uint32_t emitter_index = 0u; emitter_index < scene_data.emitter_profiles.size(); ++emitter_index) {
+    if ((emitter_index != index) && (scene_data.emitter_profiles[emitter_index].reference_emitter_index == index)) {
+      return {.status = SceneResourceEditStatus::ResourceInUse};
+    }
+  }
+  for (const Triangle& triangle : scene_data.triangles) {
+    if (triangle.emitter_index == index) {
+      return {.status = SceneResourceEditStatus::ResourceInUse};
+    }
+  }
+  for (const auto& material_emitter : scene_data.material_to_emitter_profile) {
+    if (material_emitter.second == index) {
+      return {.status = SceneResourceEditStatus::ResourceInUse};
+    }
+  }
+
+  ensure_emitter_names(scene_data);
+  SceneResourceEditResult result = {
+    .status = SceneResourceEditStatus::Success,
+    .resource_index = kInvalidIndex,
+    .resource_remapping = removal_remapping(scene_data.emitter_profiles.size(), index),
+  };
+  scene_data.emitter_profiles.erase(scene_data.emitter_profiles.begin() + index);
+  scene_data.emitter_names.erase(scene_data.emitter_names.begin() + index);
+  remap_hierarchy_resource(scene_data.hierarchy, SceneAttachment::Type::Emitter, index);
+  for (EmitterProfile& emitter : scene_data.emitter_profiles) {
+    if ((emitter.reference_emitter_index != kInvalidIndex) && (emitter.reference_emitter_index > index)) {
+      --emitter.reference_emitter_index;
+    }
+  }
+  for (Triangle& triangle : scene_data.triangles) {
+    if ((triangle.emitter_index != kInvalidIndex) && (triangle.emitter_index > index)) {
+      --triangle.emitter_index;
+    }
+  }
+  for (auto& material_emitter : scene_data.material_to_emitter_profile) {
+    if ((material_emitter.second != kInvalidIndex) && (material_emitter.second > index)) {
+      --material_emitter.second;
+    }
+  }
+  return result;
+}
+
+std::string SceneRepresentation::rename_emitter(uint32_t index, const char* name) {
+  SceneData& scene_data = _private->data;
+  if ((index >= scene_data.emitter_profiles.size()) || (scene_data.emitter_profiles[index].cls == EmitterProfile::Class::Area)) {
+    return {};
+  }
+  ensure_emitter_names(scene_data);
+  scene_data.emitter_names[index] = unique_named_resource(scene_data.emitter_names, name, default_emitter_name(scene_data.emitter_profiles[index]), index);
+  return scene_data.emitter_names[index];
+}
+
+const std::vector<std::string>& SceneRepresentation::emitter_names() const {
+  return _private->data.emitter_names;
 }
 
 void SceneRepresentation::update_medium_bounds() {
@@ -1319,16 +3261,8 @@ void SceneRepresentation::update_medium_bounds() {
 }
 
 void SceneRepresentation::update_active_camera() {
-  auto it = std::find_if(_private->data.cameras.begin(), _private->data.cameras.end(), [](const auto& e) {
-    return e.active;
-  });
-  if (it != _private->data.cameras.end()) {
-    _private->active_camera = it->cam;
-    const uint32_t camera_index = static_cast<uint32_t>(std::distance(_private->data.cameras.begin(), it));
-    AttachmentTransform transform = {};
-    if (find_attachment_transform(_private->data, SceneAttachment::Type::Camera, camera_index, transform)) {
-      _private->active_camera = transform_camera(it->cam, transform.object_to_world, transform.orientation_to_world);
-    }
+  if (_private->update_active_camera() == false) {
+    log::error("Failed to update the active camera from the scene hierarchy");
   }
 }
 
@@ -1434,6 +3368,351 @@ void SceneRepresentation::set_mesh_material(uint32_t mesh_index, uint32_t materi
   _private->set_mesh_material_impl(mesh_index, material_index);
 }
 
+SceneEditResult SceneRepresentation::create_empty_node() {
+  SceneHierarchy& hierarchy = _private->data.hierarchy;
+  const std::string name = unique_node_name(hierarchy, "Empty Node");
+  const uint32_t node_index = hierarchy.add_node(name.c_str(), kInvalidIndex, {});
+  if (node_index == kInvalidIndex) {
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  if (_private->data.resolve_hierarchy() == false) {
+    std::vector<uint32_t> remapping;
+    hierarchy.remove_subtree(node_index, remapping);
+    _private->data.resolve_hierarchy();
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  return {.status = SceneEditStatus::Success, .node_index = node_index};
+}
+
+SceneEditResult SceneRepresentation::create_primitive(ScenePrimitive primitive) {
+  SceneData& scene_data = _private->data;
+  const size_t position_count = scene_data.vertices.pos.size();
+  if ((scene_data.vertices.nrm.size() != position_count) || (scene_data.vertices.tan.size() != position_count) || (scene_data.vertices.btn.size() != position_count) ||
+      (scene_data.vertices.tex.size() != position_count)) {
+    return {.status = SceneEditStatus::GeometryGenerationFailed};
+  }
+
+  const size_t normal_count = scene_data.vertices.nrm.size();
+  const size_t tangent_count = scene_data.vertices.tan.size();
+  const size_t bitangent_count = scene_data.vertices.btn.size();
+  const size_t texcoord_count = scene_data.vertices.tex.size();
+  const size_t triangle_count = scene_data.triangles.size();
+  const size_t mesh_count = scene_data.meshes.size();
+  const size_t material_count = scene_data.materials.size();
+  const size_t spectrum_count = scene_data.spectrum_values.size();
+  const size_t spectrum_name_count = scene_data.spectrum_names.size();
+  const SceneHierarchy original_hierarchy = scene_data.hierarchy;
+  const SceneRepresentation::MeshMapping original_mesh_mapping = scene_data.mesh_mapping;
+  const SceneRepresentation::MaterialMapping original_material_mapping = scene_data.material_mapping;
+  auto rollback = [&]() {
+    scene_data.vertices.pos.resize(position_count);
+    scene_data.vertices.nrm.resize(normal_count);
+    scene_data.vertices.tan.resize(tangent_count);
+    scene_data.vertices.btn.resize(bitangent_count);
+    scene_data.vertices.tex.resize(texcoord_count);
+    scene_data.triangles.resize(triangle_count);
+    scene_data.meshes.resize(mesh_count);
+    scene_data.materials.resize(material_count);
+    scene_data.spectrum_values.resize(spectrum_count);
+    scene_data.spectrum_names.resize(spectrum_name_count);
+    scene_data.hierarchy = original_hierarchy;
+    scene_data.mesh_mapping = original_mesh_mapping;
+    scene_data.material_mapping = original_material_mapping;
+    scene_data.resolve_hierarchy();
+  };
+
+  uint32_t material_index = kInvalidIndex;
+  const auto default_material = scene_data.material_mapping.find("Default Material");
+  if ((default_material != scene_data.material_mapping.end()) && (default_material->second < scene_data.materials.size())) {
+    material_index = default_material->second;
+  } else {
+    material_index = create_material("Default Material").resource_index;
+  }
+
+  ProceduralGeometryDefinition definition = {};
+  definition.id = unique_node_name(scene_data.hierarchy, scene_primitive_name(primitive));
+  definition.material_index = material_index;
+  definition.dimensions = {1.0f, 1.0f, 1.0f};
+  definition.radius = 0.5f;
+  definition.segments = 64u;
+  definition.subdivisions = 3u;
+  switch (primitive) {
+    case ScenePrimitive::Sphere:
+      definition.cls = ProceduralGeometryDefinition::Class::Sphere;
+      break;
+    case ScenePrimitive::Box:
+    case ScenePrimitive::Cube:
+      definition.cls = ProceduralGeometryDefinition::Class::Box;
+      break;
+    case ScenePrimitive::Plane:
+      definition.cls = ProceduralGeometryDefinition::Class::Plane;
+      definition.dimensions.y = 0.0f;
+      break;
+    case ScenePrimitive::Disk:
+      definition.cls = ProceduralGeometryDefinition::Class::Disk;
+      definition.thickness = 0.0f;
+      break;
+    case ScenePrimitive::Cylinder:
+      definition.cls = ProceduralGeometryDefinition::Class::Disk;
+      definition.thickness = 1.0f;
+      break;
+    case ScenePrimitive::Cone:
+      definition.cls = ProceduralGeometryDefinition::Class::Cone;
+      break;
+    case ScenePrimitive::Capsule:
+      definition.cls = ProceduralGeometryDefinition::Class::Capsule;
+      definition.dimensions.y = 2.0f;
+      definition.subdivisions = 12u;
+      break;
+    case ScenePrimitive::Torus:
+      definition.cls = ProceduralGeometryDefinition::Class::Torus;
+      definition.inner_radius = 0.15f;
+      definition.subdivisions = 24u;
+      break;
+    case ScenePrimitive::Ring:
+      definition.cls = ProceduralGeometryDefinition::Class::Disk;
+      definition.inner_radius = 0.25f;
+      definition.thickness = 0.0f;
+      break;
+    case ScenePrimitive::Tube:
+      definition.cls = ProceduralGeometryDefinition::Class::Disk;
+      definition.inner_radius = 0.35f;
+      definition.thickness = 1.0f;
+      break;
+    case ScenePrimitive::Tetrahedron:
+      definition.cls = ProceduralGeometryDefinition::Class::Tetrahedron;
+      break;
+    case ScenePrimitive::Octahedron:
+      definition.cls = ProceduralGeometryDefinition::Class::Octahedron;
+      break;
+    case ScenePrimitive::Dodecahedron:
+      definition.cls = ProceduralGeometryDefinition::Class::Dodecahedron;
+      break;
+    case ScenePrimitive::Icosahedron:
+      definition.cls = ProceduralGeometryDefinition::Class::Icosahedron;
+      break;
+  }
+
+  if ((generate_procedural_geometry(scene_data, {definition}) != 1u) || (scene_data.meshes.size() != (mesh_count + 1u)) ||
+      (scene_data.hierarchy.nodes.size() != (original_hierarchy.nodes.size() + 1u))) {
+    rollback();
+    return {.status = SceneEditStatus::GeometryGenerationFailed};
+  }
+  const uint32_t node_index = static_cast<uint32_t>(original_hierarchy.nodes.size());
+  if (scene_data.resolve_hierarchy() == false) {
+    rollback();
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  return {.status = SceneEditStatus::Success, .node_index = node_index, .mesh_index = static_cast<uint32_t>(mesh_count)};
+}
+
+SceneEditResult SceneRepresentation::duplicate_node_subtree(uint32_t node_index) {
+  SceneData& scene_data = _private->data;
+  SceneHierarchy& hierarchy = scene_data.hierarchy;
+  if (node_index >= hierarchy.nodes.size()) {
+    return {.status = SceneEditStatus::InvalidNode};
+  }
+  if ((hierarchy.rebuild_topology() == false) || (node_index >= hierarchy.order_position.size()) || (node_index >= hierarchy.subtree_end_position.size())) {
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+
+  const uint32_t subtree_begin = hierarchy.order_position[node_index];
+  const uint32_t subtree_end = std::min<uint32_t>(hierarchy.subtree_end_position[node_index], static_cast<uint32_t>(hierarchy.evaluation_order.size()));
+  for (uint32_t order_position = subtree_begin; order_position < subtree_end; ++order_position) {
+    const uint32_t source_index = hierarchy.evaluation_order[order_position];
+    if (source_index >= hierarchy.nodes.size()) {
+      return {.status = SceneEditStatus::HierarchyUpdateFailed};
+    }
+    const SceneNode& source_node = hierarchy.nodes[source_index];
+    const uint32_t attachment_end = source_node.attachment_offset + source_node.attachment_count;
+    if ((attachment_end < source_node.attachment_offset) || (attachment_end > hierarchy.attachments.size())) {
+      return {.status = SceneEditStatus::HierarchyUpdateFailed};
+    }
+    for (uint32_t attachment_index = source_node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+      if (hierarchy.attachments[attachment_index].type != SceneAttachment::Type::Mesh) {
+        return {.status = SceneEditStatus::UnsupportedAttachments};
+      }
+    }
+  }
+
+  SceneHierarchy original = hierarchy;
+  const uint32_t original_node_count = static_cast<uint32_t>(hierarchy.nodes.size());
+  const uint32_t duplicate_index = hierarchy.duplicate_subtree(node_index);
+  if (duplicate_index == kInvalidIndex) {
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  for (uint32_t new_node_index = original_node_count; new_node_index < hierarchy.nodes.size(); ++new_node_index) {
+    const std::string source_name = (new_node_index < hierarchy.node_names.size()) ? hierarchy.node_names[new_node_index] : std::string{"Node"};
+    const std::string desired_name = source_name + " Copy";
+    hierarchy.node_names[new_node_index] = unique_renamed_node_name(hierarchy, new_node_index, desired_name.c_str());
+  }
+  const SceneEditStatus finalize_status = _private->finalize_hierarchy_edit(original);
+  if (finalize_status != SceneEditStatus::Success) {
+    return {.status = finalize_status};
+  }
+  return {.status = SceneEditStatus::Success, .node_index = duplicate_index};
+}
+
+SceneEditResult SceneRepresentation::delete_node_subtree(uint32_t node_index) {
+  SceneData& scene_data = _private->data;
+  SceneHierarchy& hierarchy = scene_data.hierarchy;
+  if (node_index >= hierarchy.nodes.size()) {
+    return {.status = SceneEditStatus::InvalidNode};
+  }
+  if (subtree_contains_active_camera(scene_data, node_index)) {
+    return {.status = SceneEditStatus::ActiveCameraProtected};
+  }
+
+  SceneHierarchy original = hierarchy;
+  std::vector<uint32_t> remapping;
+  if (hierarchy.remove_subtree(node_index, remapping) == false) {
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  const SceneEditStatus finalize_status = _private->finalize_hierarchy_edit(original);
+  if (finalize_status != SceneEditStatus::Success) {
+    return {.status = finalize_status};
+  }
+  return {.status = SceneEditStatus::Success, .node_index = kInvalidIndex, .node_remapping = std::move(remapping)};
+}
+
+SceneEditResult SceneRepresentation::reparent_node(uint32_t node_index, uint32_t parent_index) {
+  SceneHierarchy& hierarchy = _private->data.hierarchy;
+  if (node_index >= hierarchy.nodes.size()) {
+    return {.status = SceneEditStatus::InvalidNode};
+  }
+  if ((parent_index != kInvalidIndex) && (parent_index >= hierarchy.nodes.size())) {
+    return {.status = SceneEditStatus::InvalidParent};
+  }
+  if (hierarchy.nodes[node_index].parent_index == parent_index) {
+    return {.status = SceneEditStatus::Success, .node_index = node_index};
+  }
+
+  SceneHierarchy original = hierarchy;
+  if (hierarchy.reparent_preserve_world(node_index, parent_index) == false) {
+    return {.status = SceneEditStatus::InvalidParent};
+  }
+  const SceneEditStatus finalize_status = _private->finalize_hierarchy_edit(original);
+  if (finalize_status != SceneEditStatus::Success) {
+    return {.status = finalize_status};
+  }
+  return {.status = SceneEditStatus::Success, .node_index = node_index};
+}
+
+SceneEditResult SceneRepresentation::set_node_enabled(uint32_t node_index, bool enabled) {
+  SceneHierarchy& hierarchy = _private->data.hierarchy;
+  if (node_index >= hierarchy.nodes.size()) {
+    return {.status = SceneEditStatus::InvalidNode};
+  }
+  if ((enabled == false) && subtree_contains_active_camera(_private->data, node_index)) {
+    return {.status = SceneEditStatus::ActiveCameraProtected};
+  }
+
+  SceneHierarchy original = hierarchy;
+  if (hierarchy.set_enabled(node_index, enabled) == false) {
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  const SceneEditStatus finalize_status = _private->finalize_hierarchy_edit(original);
+  if (finalize_status != SceneEditStatus::Success) {
+    return {.status = finalize_status};
+  }
+  return {.status = SceneEditStatus::Success, .node_index = node_index};
+}
+
+SceneEditResult SceneRepresentation::set_node_local_transform(uint32_t node_index, const AffineTransform& transform) {
+  SceneHierarchy& hierarchy = _private->data.hierarchy;
+  if (node_index >= hierarchy.nodes.size()) {
+    return {.status = SceneEditStatus::InvalidNode};
+  }
+
+  SceneHierarchy original = hierarchy;
+  if (hierarchy.set_local_transform(node_index, transform) == false) {
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  const SceneEditStatus finalize_status = _private->finalize_hierarchy_edit(original);
+  if (finalize_status != SceneEditStatus::Success) {
+    return {.status = finalize_status};
+  }
+  return {.status = SceneEditStatus::Success, .node_index = node_index};
+}
+
+SceneEditResult SceneRepresentation::attach_node_resource(uint32_t node_index, SceneAttachment::Type type, uint32_t resource_index) {
+  SceneData& scene_data = _private->data;
+  SceneHierarchy& hierarchy = scene_data.hierarchy;
+  if (node_index >= hierarchy.nodes.size()) {
+    return {.status = SceneEditStatus::InvalidNode};
+  }
+  if (valid_attachment_resource(scene_data, type, resource_index) == false) {
+    return {.status = SceneEditStatus::InvalidResource};
+  }
+
+  const SceneNode& node = hierarchy.nodes[node_index];
+  const uint32_t attachment_end = node.attachment_offset + node.attachment_count;
+  if ((attachment_end < node.attachment_offset) || (attachment_end > hierarchy.attachments.size())) {
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  for (uint32_t attachment_index = node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
+    const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+    if ((attachment.type == type) && (attachment.resource_index == resource_index)) {
+      return {.status = SceneEditStatus::DuplicateAttachment};
+    }
+  }
+  if (((type == SceneAttachment::Type::Camera) || (type == SceneAttachment::Type::Medium)) && resource_is_attached(hierarchy, type, resource_index, node_index)) {
+    return {.status = SceneEditStatus::ResourceAlreadyAttached};
+  }
+
+  SceneHierarchy original = hierarchy;
+  if (hierarchy.add_attachment(node_index, {type, resource_index, 0u, 0u}) == false) {
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  const SceneEditStatus finalize_status = _private->finalize_hierarchy_edit(original);
+  if (finalize_status != SceneEditStatus::Success) {
+    return {.status = finalize_status};
+  }
+  return {.status = SceneEditStatus::Success, .node_index = node_index};
+}
+
+SceneEditResult SceneRepresentation::detach_node_resource(uint32_t node_index, uint32_t local_attachment_index) {
+  SceneData& scene_data = _private->data;
+  SceneHierarchy& hierarchy = scene_data.hierarchy;
+  if (node_index >= hierarchy.nodes.size()) {
+    return {.status = SceneEditStatus::InvalidNode};
+  }
+  const SceneNode& node = hierarchy.nodes[node_index];
+  if (local_attachment_index >= node.attachment_count) {
+    return {.status = SceneEditStatus::InvalidResource};
+  }
+  const uint32_t attachment_index = node.attachment_offset + local_attachment_index;
+  if (attachment_index >= hierarchy.attachments.size()) {
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  const SceneAttachment& attachment = hierarchy.attachments[attachment_index];
+  if ((attachment.type == SceneAttachment::Type::Camera) && (attachment.resource_index < scene_data.cameras.size()) && scene_data.cameras[attachment.resource_index].active) {
+    return {.status = SceneEditStatus::ActiveCameraProtected};
+  }
+
+  SceneHierarchy original = hierarchy;
+  if (hierarchy.remove_attachment(node_index, local_attachment_index) == false) {
+    return {.status = SceneEditStatus::HierarchyUpdateFailed};
+  }
+  const SceneEditStatus finalize_status = _private->finalize_hierarchy_edit(original);
+  if (finalize_status != SceneEditStatus::Success) {
+    return {.status = finalize_status};
+  }
+  return {.status = SceneEditStatus::Success, .node_index = node_index};
+}
+
+std::string SceneRepresentation::rename_node(uint32_t node_index, const char* name) {
+  SceneHierarchy& hierarchy = _private->data.hierarchy;
+  if (node_index >= hierarchy.nodes.size()) {
+    return {};
+  }
+  if (hierarchy.node_names.size() < hierarchy.nodes.size()) {
+    hierarchy.node_names.resize(hierarchy.nodes.size());
+  }
+  hierarchy.node_names[node_index] = unique_renamed_node_name(hierarchy, node_index, name);
+  return hierarchy.node_names[node_index];
+}
+
 NodeGeometryEditResult SceneRepresentation::validate_node_geometry_edit(uint32_t node_index, NodeGeometryOperation operation) const {
   return analyze_node_geometry_edit(_private->data, node_index, operation, false, nullptr);
 }
@@ -1454,12 +3733,6 @@ NodeGeometryEditResult SceneRepresentation::edit_node_geometry(uint32_t node_ind
     if (result != NodeGeometryEditResult::Success) {
       return result;
     }
-  }
-
-  PendingNodeGeometry pending = {};
-  result = build_edited_meshes(scene_data, analysis, operation, original_node_transform, center, pending);
-  if (result != NodeGeometryEditResult::Success) {
-    return result;
   }
 
   AffineTransform node_transform = {};
@@ -1487,6 +3760,145 @@ NodeGeometryEditResult SceneRepresentation::edit_node_geometry(uint32_t node_ind
     original_child_transforms.push_back(candidate.local_transform);
     edited_child_transforms.push_back(operation == NodeGeometryOperation::BakeLocalTransform ? multiply_affine(original_node_transform, candidate.local_transform)
                                                                                              : multiply_affine(child_compensation, candidate.local_transform));
+  }
+
+  std::vector<uint32_t> private_vertex_indices;
+  if (node_geometry_storage_is_private(scene_data, node_index, analysis, private_vertex_indices)) {
+    const bool has_normals = scene_data.vertices.nrm.empty() == false;
+    const bool has_tangents = scene_data.vertices.tan.empty() == false;
+    SceneInstance bake_instance = {};
+    if (operation == NodeGeometryOperation::BakeLocalTransform) {
+      AffineTransform inverse = {};
+      double determinant = 0.0;
+      if (invert_affine(original_node_transform, inverse, determinant) == false) {
+        return NodeGeometryEditResult::SingularTransform;
+      }
+      bake_instance.object_to_world = original_node_transform;
+      bake_instance.world_to_object = inverse;
+      if (determinant < 0.0) {
+        bake_instance.flags |= SceneInstance::Mirrored;
+      }
+    }
+
+    std::vector<Vertex> original_vertices;
+    std::vector<Vertex> edited_vertices;
+    original_vertices.reserve(private_vertex_indices.size());
+    edited_vertices.reserve(private_vertex_indices.size());
+    for (uint32_t vertex_index : private_vertex_indices) {
+      Vertex original_vertex = {};
+      original_vertex.pos = scene_data.vertices.pos[vertex_index];
+      if (has_normals) {
+        original_vertex.nrm = scene_data.vertices.nrm[vertex_index];
+      }
+      if (has_tangents) {
+        original_vertex.tan = scene_data.vertices.tan[vertex_index];
+        original_vertex.btn = scene_data.vertices.btn[vertex_index];
+      }
+      Vertex edited_vertex = original_vertex;
+      if (operation == NodeGeometryOperation::CenterPivot) {
+        edited_vertex.pos -= center;
+      } else {
+        edited_vertex = scene_instance_transform_vertex(bake_instance, edited_vertex);
+      }
+      if ((finite_point(edited_vertex.pos) == false) || (has_normals && (valid_direction(edited_vertex.nrm) == false)) ||
+          (has_tangents && ((finite_point(edited_vertex.tan) == false) || (finite_point(edited_vertex.btn) == false)))) {
+        return NodeGeometryEditResult::InvalidGeometry;
+      }
+      original_vertices.push_back(original_vertex);
+      edited_vertices.push_back(edited_vertex);
+    }
+
+    size_t selected_triangle_count = 0u;
+    for (uint32_t mesh_index : analysis.mesh_indices) {
+      selected_triangle_count += scene_data.meshes[mesh_index].triangle_count;
+    }
+    std::vector<uint32_t> edited_triangle_indices;
+    std::vector<Triangle> original_triangles;
+    std::vector<Mesh> original_meshes;
+    edited_triangle_indices.reserve(selected_triangle_count);
+    original_triangles.reserve(selected_triangle_count);
+    original_meshes.reserve(analysis.mesh_indices.size());
+    for (uint32_t mesh_index : analysis.mesh_indices) {
+      const Mesh& mesh = scene_data.meshes[mesh_index];
+      original_meshes.push_back(mesh);
+      const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
+      for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+        edited_triangle_indices.push_back(triangle_index);
+        original_triangles.push_back(scene_data.triangles[triangle_index]);
+      }
+    }
+
+    for (uint32_t vertex = 0u; vertex < private_vertex_indices.size(); ++vertex) {
+      const uint32_t vertex_index = private_vertex_indices[vertex];
+      scene_data.vertices.pos[vertex_index] = edited_vertices[vertex].pos;
+      if (has_normals) {
+        scene_data.vertices.nrm[vertex_index] = edited_vertices[vertex].nrm;
+      }
+      if (has_tangents) {
+        scene_data.vertices.tan[vertex_index] = edited_vertices[vertex].tan;
+        scene_data.vertices.btn[vertex_index] = edited_vertices[vertex].btn;
+      }
+    }
+
+    for (uint32_t mesh_index : analysis.mesh_indices) {
+      Mesh& mesh = scene_data.meshes[mesh_index];
+      mesh.bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
+      mesh.bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
+      const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
+      for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
+        Triangle& triangle = scene_data.triangles[triangle_index];
+        const float3& p0 = scene_data.vertices.pos[triangle.i[0]];
+        const float3& p1 = scene_data.vertices.pos[triangle.i[1]];
+        const float3& p2 = scene_data.vertices.pos[triangle.i[2]];
+        mesh.bbox_min = min(mesh.bbox_min, min(p0, min(p1, p2)));
+        mesh.bbox_max = max(mesh.bbox_max, max(p0, max(p1, p2)));
+        const float3 geometric_normal = cross(p1 - p0, p2 - p0);
+        if (dot(geometric_normal, geometric_normal) > 0.0f) {
+          triangle.geo_n = normalize(geometric_normal);
+        }
+      }
+    }
+
+    bool hierarchy_updated = hierarchy.set_local_transform(node_index, node_transform);
+    for (uint32_t child = 0u; hierarchy_updated && (child < child_indices.size()); ++child) {
+      hierarchy_updated = hierarchy.set_local_transform(child_indices[child], edited_child_transforms[child]);
+    }
+    hierarchy_updated = hierarchy_updated && scene_data.resolve_hierarchy();
+    if (hierarchy_updated) {
+      return NodeGeometryEditResult::Success;
+    }
+
+    for (uint32_t vertex = 0u; vertex < private_vertex_indices.size(); ++vertex) {
+      const uint32_t vertex_index = private_vertex_indices[vertex];
+      scene_data.vertices.pos[vertex_index] = original_vertices[vertex].pos;
+      if (has_normals) {
+        scene_data.vertices.nrm[vertex_index] = original_vertices[vertex].nrm;
+      }
+      if (has_tangents) {
+        scene_data.vertices.tan[vertex_index] = original_vertices[vertex].tan;
+        scene_data.vertices.btn[vertex_index] = original_vertices[vertex].btn;
+      }
+    }
+    for (uint32_t triangle = 0u; triangle < edited_triangle_indices.size(); ++triangle) {
+      scene_data.triangles[edited_triangle_indices[triangle]] = original_triangles[triangle];
+    }
+    for (uint32_t mesh = 0u; mesh < analysis.mesh_indices.size(); ++mesh) {
+      scene_data.meshes[analysis.mesh_indices[mesh]] = original_meshes[mesh];
+    }
+    hierarchy.set_local_transform(node_index, original_node_transform);
+    for (uint32_t child = 0u; child < child_indices.size(); ++child) {
+      hierarchy.set_local_transform(child_indices[child], original_child_transforms[child]);
+    }
+    if (scene_data.resolve_hierarchy() == false) {
+      log::error("Failed to restore scene hierarchy after rejecting an in-place node geometry edit");
+    }
+    return NodeGeometryEditResult::HierarchyUpdateFailed;
+  }
+
+  PendingNodeGeometry pending = {};
+  result = build_edited_meshes(scene_data, analysis, operation, original_node_transform, center, pending);
+  if (result != NodeGeometryEditResult::Success) {
+    return result;
   }
 
   const size_t original_position_count = scene_data.vertices.pos.size();
@@ -1566,10 +3978,11 @@ void SceneRepresentation::set_integrator_data(const IntegratorData& integrator_d
 }
 
 bool SceneRepresentation::valid() const {
-  return true;
+  return _private->scene_valid;
 }
 
 uint32_t SceneRepresentation::add_environment_emitter(const float3& color, uint32_t medium_index) {
+  ensure_emitter_names(_private->data);
   uint32_t profile_index = uint32_t(_private->data.emitter_profiles.size());
 
   auto& e = _private->data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
@@ -1582,10 +3995,12 @@ uint32_t SceneRepresentation::add_environment_emitter(const float3& color, uint3
   uint32_t image_options = Image::BuildSamplingTable | Image::RepeatU;
   e.emission.image_index = _private->data.add_image(uniform_image_data.data(), kUniformEnvImageDimensions, image_options, {}, {1.0f, 1.0f});
   e.medium_index = medium_index;
+  _private->data.emitter_names.push_back(unique_named_resource(_private->data.emitter_names, "Environment Light", "Environment Light", kInvalidIndex));
   return profile_index;
 }
 
 uint32_t SceneRepresentation::add_directional_emitter(const float3& direction, const float3& color, float angular_diameter_degrees, uint32_t medium_index) {
+  ensure_emitter_names(_private->data);
   uint32_t profile_index = uint32_t(_private->data.emitter_profiles.size());
 
   auto& e = _private->data.emitter_profiles.emplace_back(EmitterProfile::Class::Directional);
@@ -1594,6 +4009,7 @@ uint32_t SceneRepresentation::add_directional_emitter(const float3& direction, c
   e.directional.direction = normalize(direction);
   e.directional.angular_size = angular_diameter_degrees * kPi / 180.0f;
   e.medium_index = medium_index;
+  _private->data.emitter_names.push_back(unique_named_resource(_private->data.emitter_names, "Directional Light", "Directional Light", kInvalidIndex));
 
   return profile_index;
 }
@@ -1603,11 +4019,12 @@ void SceneRepresentation::create_area_emitters_from_materials() {
 }
 
 bool SceneRepresentation::delete_emitter(uint32_t emitter_index) {
-  return _private->delete_emitter(emitter_index);
+  return delete_emitter_profile(emitter_index).succeeded();
 }
 
 void SceneRepresentation::add_atmosphere_emitter(const AtmosphereEmitterParameters& params) {
   _private->add_atmosphere_emitter(params);
+  ensure_emitter_names(_private->data);
 }
 
 void SceneRepresentation::rebuild_atmosphere_emitter(uint32_t emitter_index) {
@@ -1851,7 +4268,65 @@ void remap_emitter_references(std::vector<EmitterProfile>& profiles, const std::
   }
 }
 
-nlohmann::json serialize_scene_hierarchy(const SceneHierarchy& hierarchy) {
+std::string scene_attachment_resource_name(const SceneData& data, SceneAttachment::Type type, uint32_t resource_index) {
+  switch (type) {
+    case SceneAttachment::Type::Mesh:
+      return resource_index < data.meshes.size() ? mapping_name(data.mesh_mapping, resource_index, "mesh-") : std::string{};
+    case SceneAttachment::Type::Camera:
+      return resource_index < data.cameras.size() ? data.cameras[resource_index].id : std::string{};
+    case SceneAttachment::Type::Emitter:
+      return resource_index < data.emitter_names.size() ? data.emitter_names[resource_index] : std::string{};
+    case SceneAttachment::Type::Medium:
+      return resource_index < data.mediums.array_size() ? mapping_name(data.mediums.mapping(), resource_index, "medium-") : std::string{};
+  }
+  return {};
+}
+
+uint32_t scene_attachment_resource_index(const SceneData& data, SceneAttachment::Type type, const std::string& name) {
+  switch (type) {
+    case SceneAttachment::Type::Mesh: {
+      const auto found = data.mesh_mapping.find(name);
+      return found != data.mesh_mapping.end() ? found->second : kInvalidIndex;
+    }
+    case SceneAttachment::Type::Camera: {
+      uint32_t result = kInvalidIndex;
+      for (uint32_t index = 0u; index < data.cameras.size(); ++index) {
+        if (data.cameras[index].id == name) {
+          if (result != kInvalidIndex) {
+            return kInvalidIndex;
+          }
+          result = index;
+        }
+      }
+      return result;
+    }
+    case SceneAttachment::Type::Emitter: {
+      uint32_t result = kInvalidIndex;
+      for (uint32_t index = 0u; index < data.emitter_names.size(); ++index) {
+        if (data.emitter_names[index] == name) {
+          if (result != kInvalidIndex) {
+            return kInvalidIndex;
+          }
+          result = index;
+        }
+      }
+      return result;
+    }
+    case SceneAttachment::Type::Medium: {
+      const auto found = data.mediums.mapping().find(name);
+      return found != data.mediums.mapping().end() ? found->second : kInvalidIndex;
+    }
+  }
+  return kInvalidIndex;
+}
+
+nlohmann::json serialize_scene_hierarchy(const SceneData& data) {
+  const SceneHierarchy& hierarchy = data.hierarchy;
+  const std::vector<uint32_t> emitter_serialization_order = serialized_emitter_indices(data);
+  std::vector<uint32_t> emitter_serialized_indices(data.emitter_profiles.size(), kInvalidIndex);
+  for (uint32_t serialized_index = 0u; serialized_index < emitter_serialization_order.size(); ++serialized_index) {
+    emitter_serialized_indices[emitter_serialization_order[serialized_index]] = serialized_index;
+  }
   nlohmann::json result = nlohmann::json::object();
   result["version"] = 1u;
   nlohmann::json nodes = nlohmann::json::array();
@@ -1879,7 +4354,17 @@ nlohmann::json serialize_scene_hierarchy(const SceneHierarchy& hierarchy) {
         if (type_name == nullptr) {
           continue;
         }
-        attachments.push_back({{"type", type_name}, {"index", attachment.resource_index}, {"flags", attachment.flags}});
+        uint32_t serialized_resource_index = attachment.resource_index;
+        if ((attachment.type == SceneAttachment::Type::Emitter) && (attachment.resource_index < emitter_serialized_indices.size()) &&
+            (emitter_serialized_indices[attachment.resource_index] != kInvalidIndex)) {
+          serialized_resource_index = emitter_serialized_indices[attachment.resource_index];
+        }
+        nlohmann::json attachment_json = {{"type", type_name}, {"index", serialized_resource_index}, {"flags", attachment.flags}};
+        const std::string resource_name = scene_attachment_resource_name(data, attachment.type, attachment.resource_index);
+        if (resource_name.empty() == false) {
+          attachment_json["name"] = resource_name;
+        }
+        attachments.push_back(std::move(attachment_json));
       }
     }
     node_json["attachments"] = std::move(attachments);
@@ -1974,6 +4459,15 @@ bool deserialize_scene_hierarchy(const nlohmann::json& source, SceneData& data) 
         return false;
       }
       attachment.resource_index = static_cast<uint32_t>(resource_index);
+      if (attachment_json.contains("name")) {
+        if (attachment_json["name"].is_string() == false) {
+          return false;
+        }
+        const uint32_t named_resource_index = scene_attachment_resource_index(data, attachment.type, attachment_json["name"].get<std::string>());
+        if (named_resource_index != kInvalidIndex) {
+          attachment.resource_index = named_resource_index;
+        }
+      }
       if (attachment_json.contains("flags")) {
         const uint64_t flags = attachment_json["flags"].get<uint64_t>();
         if (flags > kInvalidIndex) {
@@ -2013,6 +4507,21 @@ void synthesize_identity_scene_hierarchy(SceneData& data) {
 }
 
 bool SceneRepresentation::load_from_file(const char* filename, uint32_t options, IntegratorData* out_integrator) {
+  if ((filename == nullptr) || (filename[0] == 0)) {
+    return false;
+  }
+  const SceneSavePaths interrupted_save_paths = scene_save_paths(filename);
+  std::array<StagedSceneFile, 3u> interrupted_save_files = staged_scene_files(interrupted_save_paths);
+  bool committed_scene_available = false;
+  if (recover_interrupted_scene_save(interrupted_save_files, committed_scene_available) == false) {
+    return false;
+  }
+  std::string committed_scene_file;
+  if (committed_scene_available && ((options & PreferRecoveredSave) != 0u)) {
+    committed_scene_file = interrupted_save_paths.json.generic_string();
+    filename = committed_scene_file.c_str();
+  }
+
   IntegratorData parsed_integrator_data = {};
   IntegratorData* integrator_data = out_integrator;
   if (integrator_data == nullptr) {
@@ -2048,7 +4557,12 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   bool use_focal_len = false;
   bool force_tangents = false;
   bool spectral_scene = false;
+  float pixel_filter_radius = 1.5f;
   nlohmann::json hierarchy_json;
+  nlohmann::json material_names_json;
+  nlohmann::json medium_names_json;
+  nlohmann::json camera_names_json;
+  nlohmann::json spectral_overrides_json;
 
   const bool raw_model_file = (strcmp(get_file_ext(filename), ".json") != 0);
 
@@ -2104,7 +4618,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
       uint32_t load_result = load_from_tungsten_file(filename, _private->data, _private->ior_database, _private->scheduler, _private->active_camera);
       if ((load_result & SceneLoadSucceeded) == 0)
         return false;
-      return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene);
+      return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene, pixel_filter_radius,
+        false);
     }
 
     if (parsed == false) {
@@ -2131,6 +4646,12 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         _private->data.options.max_path_length = static_cast<uint32_t>(max(int64_t(1), int_value));
       } else if (json_get_int(i, "min-path-length", int_value)) {
         _private->data.options.min_path_length = static_cast<uint32_t>(max(int64_t(1), int_value));
+      } else if ((json_get_float(i, "noise-threshold", float_value)) && (std::isfinite(float_value))) {
+        _private->data.options.noise_threshold = clamp(float_value, 0.0f, 1.0f);
+      } else if ((json_get_float(i, "radiance-clamp", float_value)) && (std::isfinite(float_value))) {
+        _private->data.options.radiance_clamp = max(float_value, 0.0f);
+      } else if ((json_get_float(i, "pixel-filter-radius", float_value)) && (std::isfinite(float_value))) {
+        pixel_filter_radius = clamp(float_value, 0.0f, 32.0f);
       } else if (json_get_string(i, "geometry", str_value)) {
         _private->data.geometry_file_name = std::string(base_folder) + str_value;
       } else if (json_get_string(i, "materials", str_value)) {
@@ -2145,6 +4666,23 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         _private->data.options.properties[Scene::Properties::BlueNoise] = bool_value;
       } else if ((key == "scene_hierarchy") && obj.is_object()) {
         hierarchy_json = obj;
+      } else if (key == "material_names") {
+        material_names_json = obj;
+      } else if (key == "medium_names") {
+        medium_names_json = obj;
+      } else if (key == "camera_names") {
+        camera_names_json = obj;
+      } else if (key == "spectral_overrides") {
+        spectral_overrides_json = obj;
+      } else if ((key == "emitter_names") && obj.is_array()) {
+        _private->data.emitter_names.clear();
+        for (const nlohmann::json& emitter_name : obj) {
+          if (emitter_name.is_string() == false) {
+            _private->data.emitter_names.clear();
+            break;
+          }
+          _private->data.emitter_names.push_back(emitter_name.get<std::string>());
+        }
       } else if (json_get_string(i, "light_sampling", str_value)) {
         if (str_value == "uniform") {
           _private->data.options.light_sampling = Scene::LightSampling::Uniform;
@@ -2338,6 +4876,23 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
     return false;
   }
 
+  if ((spectral_overrides_json.is_null() == false) && (apply_scene_spectral_overrides(spectral_overrides_json, _private->data) == false)) {
+    log::error("Failed to restore spectral scene data from %s", filename);
+    return false;
+  }
+  if ((medium_names_json.is_null() == false) && (restore_scene_medium_names(medium_names_json, _private->data) == false)) {
+    log::error("Failed to restore medium names from %s", filename);
+    return false;
+  }
+  if ((material_names_json.is_null() == false) && (restore_scene_material_names(material_names_json, _private->data) == false)) {
+    log::error("Failed to restore material names from %s", filename);
+    return false;
+  }
+  if ((camera_names_json.is_null() == false) && (restore_scene_camera_names(camera_names_json, _private->data) == false)) {
+    log::error("Failed to restore camera names from %s", filename);
+    return false;
+  }
+
   if (hierarchy_json.is_null() == false) {
     _private->data.hierarchy.clear();
     if (deserialize_scene_hierarchy(hierarchy_json, _private->data) == false) {
@@ -2376,7 +4931,8 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
     entry.cam.clip_far = default_camera.clip_far;
   }
 
-  return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene);
+  return _private->finalize_scene_loading(options, base_folder, load_result, camera_fov, use_focal_len, camera_focal_len, force_tangents, spectral_scene, pixel_filter_radius,
+    hierarchy_json.is_null() == false);
 }
 
 bool SceneRepresentationImpl::update_medium_bounds() {
@@ -2525,45 +5081,31 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     return {};
   }
 
-  std::filesystem::path base_path = std::filesystem::path(base_file).lexically_normal();
-  std::filesystem::path base_dir = base_path.has_parent_path() ? base_path.parent_path() : std::filesystem::current_path();
-
-  auto strip_extension = [](std::string& name, const char* ext) {
-    size_t ext_length = std::strlen(ext);
-    if ((name.size() >= ext_length) && (name.compare(name.size() - ext_length, ext_length, ext) == 0)) {
-      name.resize(name.size() - ext_length);
-      return true;
-    }
-    return false;
-  };
-
-  std::string base_name = base_path.filename().string();
-  bool keep_stripping = true;
-  while (keep_stripping) {
-    keep_stripping = false;
-    if (strip_extension(base_name, ".json")) {
-      keep_stripping = true;
-    }
-    if (strip_extension(base_name, ".etx")) {
-      keep_stripping = true;
-    }
-    if (strip_extension(base_name, ".obj")) {
-      keep_stripping = true;
-    }
-    if (strip_extension(base_name, ".gltf")) {
-      keep_stripping = true;
-    }
-    if (strip_extension(base_name, ".glb")) {
-      keep_stripping = true;
-    }
+  const SceneSavePaths paths = scene_save_paths(base_file);
+  const std::filesystem::path& json_path = paths.json;
+  const std::filesystem::path& materials_path = paths.materials;
+  const std::filesystem::path& geometry_path = paths.geometry;
+  const std::filesystem::path asset_directory = path_with_suffix(geometry_path, ".assets");
+  std::array<StagedSceneFile, 3u> scene_files = staged_scene_files(paths);
+  bool committed_scene_available = false;
+  if (recover_interrupted_scene_save(scene_files, committed_scene_available) == false) {
+    return {};
   }
 
-  if (base_name.empty()) {
-    base_name = "scene";
+  std::vector<SerializedMaterialEntry> serialized_material_entries;
+  if (build_serialized_material_entries(impl->data, serialized_material_entries) == false) {
+    return {};
   }
-
-  std::filesystem::path json_path = (base_dir / (base_name + ".etx.json")).lexically_normal();
-  std::filesystem::path materials_path = (base_dir / (base_name + ".etx.materials")).lexically_normal();
+  std::vector<SerializedMediumEntry> serialized_medium_entries;
+  if (build_serialized_medium_entries(impl->data, serialized_medium_entries) == false) {
+    return {};
+  }
+  const std::vector<SerializedCameraEntry> serialized_camera_entries = build_serialized_camera_entries(impl->data);
+  SceneSerialization::MaterialNameMapping serialized_material_names;
+  serialized_material_names.reserve(serialized_material_entries.size());
+  for (const SerializedMaterialEntry& entry : serialized_material_entries) {
+    serialized_material_names[entry.material_index] = entry.id;
+  }
 
   auto to_relative = [](const std::filesystem::path& target, const std::filesystem::path& base_folder) {
     std::error_code ec = {};
@@ -2571,7 +5113,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if (ec.value() == 0) {
       std::string result = relative_path.generic_string();
       if (result.empty()) {
-        result = target.filename().generic_string();
+        result = target.generic_string();
       }
       return result;
     }
@@ -2579,25 +5121,17 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     return target.generic_string();
   };
 
-  std::filesystem::path geometry_path = base_dir / (base_name + ".etx");
   std::string geometry_ref = to_relative(geometry_path, json_path.parent_path());
   std::string materials_ref = to_relative(materials_path, json_path.parent_path());
-
-  auto geometry_export_start = std::chrono::high_resolution_clock::now();
-  SceneSerialization archive;
-  if (archive.save_to_file(impl->data, geometry_path) == false) {
-    log::error("Failed to export geometry to %s", geometry_path.string().c_str());
-    return {};
-  }
-  auto geometry_export_end = std::chrono::high_resolution_clock::now();
-  auto geometry_export_duration = std::chrono::duration_cast<std::chrono::milliseconds>(geometry_export_end - geometry_export_start);
-  log::info("Geometry export: %lld ms", geometry_export_duration.count());
 
   nlohmann::json js = nlohmann::json::object();
   js["samples"] = impl->data.options.samples;
   js["random-termination-start"] = impl->data.options.random_path_termination;
   js["max-path-length"] = impl->data.options.max_path_length;
   js["min-path-length"] = impl->data.options.min_path_length;
+  js["noise-threshold"] = impl->data.options.noise_threshold;
+  js["radiance-clamp"] = impl->data.options.radiance_clamp;
+  js["pixel-filter-radius"] = impl->data.pixel_filter.radius;
   js["geometry"] = geometry_ref;
   if (materials_ref.empty() == false) {
     js["materials"] = materials_ref;
@@ -2605,7 +5139,36 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   js["spectral"] = impl->data.options.properties[Scene::Properties::Spectral];
   js["multiple_importance_sampling"] = impl->data.options.properties[Scene::Properties::MultipleImportanceSampling];
   js["blue_noise"] = impl->data.options.properties[Scene::Properties::BlueNoise];
-  js["scene_hierarchy"] = serialize_scene_hierarchy(impl->data.hierarchy);
+  ensure_emitter_names(impl->data);
+  js["scene_hierarchy"] = serialize_scene_hierarchy(impl->data);
+  nlohmann::json material_names_json = nlohmann::json::array();
+  for (const SerializedMaterialEntry& entry : serialized_material_entries) {
+    material_names_json.push_back({{"id", entry.id}, {"names", entry.authored_names}});
+  }
+  js["material_names"] = std::move(material_names_json);
+  nlohmann::json medium_names_json = nlohmann::json::array();
+  for (const SerializedMediumEntry& entry : serialized_medium_entries) {
+    medium_names_json.push_back({{"id", entry.id}, {"name", entry.authored_name}});
+  }
+  js["medium_names"] = std::move(medium_names_json);
+  nlohmann::json camera_names_json = nlohmann::json::array();
+  for (const SerializedCameraEntry& entry : serialized_camera_entries) {
+    camera_names_json.push_back({{"id", entry.id}, {"name", entry.authored_name}});
+  }
+  if (camera_names_json.empty() == false) {
+    js["camera_names"] = std::move(camera_names_json);
+  }
+  bool spectral_overrides_valid = false;
+  nlohmann::json spectral_overrides = serialize_scene_spectral_overrides(impl->data, serialized_material_entries, serialized_medium_entries, spectral_overrides_valid);
+  if (spectral_overrides_valid == false) {
+    return {};
+  }
+  js["spectral_overrides"] = std::move(spectral_overrides);
+  nlohmann::json emitter_names_json = nlohmann::json::array();
+  for (uint32_t emitter_index : serialized_emitter_indices(impl->data)) {
+    emitter_names_json.push_back(impl->data.emitter_names[emitter_index]);
+  }
+  js["emitter_names"] = std::move(emitter_names_json);
 
   switch (impl->data.options.light_sampling) {
     case Scene::LightSampling::Uniform:
@@ -2673,12 +5236,6 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     }
   }
 
-  auto json_write_start = std::chrono::high_resolution_clock::now();
-  json_to_file(js, json_path.string().c_str());
-  auto json_write_end = std::chrono::high_resolution_clock::now();
-  auto json_write_duration = std::chrono::duration_cast<std::chrono::milliseconds>(json_write_end - json_write_start);
-  log::info("JSON config write: %lld ms", json_write_duration.count());
-
   auto sanitize_name = [](const std::string& value) {
     std::string result = value;
     for (char& ch : result) {
@@ -2689,19 +5246,10 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     return result;
   };
 
-  std::vector<std::pair<std::string, uint32_t>> medium_entries;
-  medium_entries.reserve(impl->data.mediums.mapping().size());
-  for (const auto& entry : impl->data.mediums.mapping()) {
-    medium_entries.emplace_back(entry.first, entry.second);
-  }
-  std::sort(medium_entries.begin(), medium_entries.end(), [](const auto& a, const auto& b) {
-    return a.first < b.first;
-  });
-
   std::unordered_map<uint32_t, std::string> medium_names;
-  medium_names.reserve(medium_entries.size());
-  for (const auto& entry : medium_entries) {
-    medium_names[entry.second] = entry.first;
+  medium_names.reserve(serialized_medium_entries.size());
+  for (const SerializedMediumEntry& entry : serialized_medium_entries) {
+    medium_names[entry.medium_index] = entry.id;
   }
 
   auto spectrum_rgb = [&](uint32_t index) -> float3 {
@@ -2727,27 +5275,256 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     return impl->data.spectrum_values[index];
   };
 
-  auto texture_path = [&](uint32_t image_index) -> std::string {
-    if (image_index == kInvalidIndex) {
+  auto is_white_fallback_image = [&](uint32_t image_index) {
+    if (image_index >= impl->data.images.array_size()) {
+      return false;
+    }
+    const Image& image = impl->data.images.get(image_index);
+    if ((image.isize.x != 1u) || (image.isize.y != 1u) || (image.isize.z != 1u) || (image.format != Image::Format::RGBA32F) || (image.pixels.f32.a == nullptr) ||
+        (image.pixels.f32.count == 0u)) {
+      return false;
+    }
+    const float4& pixel = image.pixels.f32.a[0u];
+    return (pixel.x == 1.0f) && (pixel.y == 1.0f) && (pixel.z == 1.0f) && (pixel.w == 1.0f);
+  };
+
+  auto ensure_asset_directory = [&]() {
+    std::error_code error;
+    std::filesystem::create_directories(asset_directory, error);
+    if (error) {
+      log::error("Failed to create scene asset directory: %s", asset_directory.string().c_str());
+      return false;
+    }
+    return true;
+  };
+
+  auto install_staged_asset = [&](const std::filesystem::path& staged, const std::filesystem::path& destination) {
+    std::error_code error;
+    std::filesystem::rename(staged, destination, error);
+    if (error) {
+      log::error("Failed to install scene asset: %s", destination.string().c_str());
+      (void)remove_scene_save_file(staged, "staged scene asset");
+      return false;
+    }
+    return true;
+  };
+
+  auto publish_staged_asset = [&](const std::filesystem::path& staged, const std::string& file_name) -> std::string {
+    const std::filesystem::path destination = asset_directory / file_name;
+    bool destination_exists = false;
+    if (inspect_scene_asset_path(destination, destination_exists) == false) {
+      (void)remove_scene_save_file(staged, "staged scene asset");
       return {};
     }
-    std::string stored = impl->data.images.path(image_index);
-    if (stored.empty() || stored.compare(0, 5, "##mem") == 0) {
+    if (destination_exists) {
+      const bool matches = binary_files_match(destination, staged);
+      (void)remove_scene_save_file(staged, "staged scene asset");
+      if (matches == false) {
+        log::error("Existing scene asset does not match its content hash: %s", destination.string().c_str());
+        return {};
+      }
+      return to_relative(destination, materials_path.parent_path());
+    }
+    if (install_staged_asset(staged, destination) == false) {
       return {};
     }
-    std::filesystem::path tex_path = std::filesystem::path(stored).lexically_normal();
-    return to_relative(tex_path, materials_path.parent_path());
+    return to_relative(destination, materials_path.parent_path());
+  };
+
+  const std::filesystem::path application_temporary_directory = std::filesystem::path(env().tmp_folder()).lexically_normal();
+  std::error_code system_temporary_path_error;
+  const std::filesystem::path system_temporary_directory = std::filesystem::temp_directory_path(system_temporary_path_error).lexically_normal();
+  auto managed_source_path = [&](const std::filesystem::path& source) {
+    const bool system_temporary_source = (system_temporary_path_error.value() == 0) && path_is_within_directory(source, system_temporary_directory);
+    return path_is_within_directory(source, application_temporary_directory) || system_temporary_source || managed_scene_asset_path(source);
+  };
+
+  auto persist_managed_image = [&](uint32_t image_index) -> std::string {
+    if (ensure_asset_directory() == false) {
+      return {};
+    }
+
+    const Image& image = impl->data.images.get(image_index);
+    const uint64_t pixel_count = 1ull * image.isize.x * image.isize.y;
+    bool pixel_data_available = false;
+    if (image.format == Image::Format::RGBA32F) {
+      pixel_data_available = (image.pixels.f32.a != nullptr) && (pixel_count <= image.pixels.f32.count);
+    } else if (image.format == Image::Format::RGBA8) {
+      pixel_data_available = (image.pixels.u8.a != nullptr) && (pixel_count <= image.pixels.u8.count);
+    } else if (image.format == Image::Format::R32F) {
+      pixel_data_available = (image.pixels.r32.a != nullptr) && (pixel_count <= image.pixels.r32.count);
+    } else if (Image::is_compressed_bc_format(image.format)) {
+      pixel_data_available = (image.pixels.compressed.a != nullptr) && (image.pixels.compressed.count > 0u);
+    }
+    if ((image.isize.x == 0u) || (image.isize.y == 0u) || (image.isize.z != 1u) || (pixel_count > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) ||
+        (pixel_data_available == false)) {
+      log::error("Cannot persist managed image %u: unsupported or incomplete pixel data", image_index);
+      return {};
+    }
+
+    std::vector<float4> converted_pixels;
+    const float4* pixels = image.format == Image::Format::RGBA32F ? image.pixels.f32.a : nullptr;
+    if (pixels == nullptr) {
+      converted_pixels.resize(static_cast<size_t>(pixel_count));
+      pixels = converted_pixels.data();
+    }
+    for (uint32_t pixel_index = 0u; pixel_index < static_cast<uint32_t>(pixel_count); ++pixel_index) {
+      const float4 pixel = image.pixel(pixel_index);
+      if ((std::isfinite(pixel.x) == false) || (std::isfinite(pixel.y) == false) || (std::isfinite(pixel.z) == false) || (std::isfinite(pixel.w) == false) || (pixel.x < 0.0f) ||
+          (pixel.y < 0.0f) || (pixel.z < 0.0f) || (pixel.w < 0.0f)) {
+        log::error("Cannot persist managed image %u: EXR requires finite non-negative pixels", image_index);
+        return {};
+      }
+      if (converted_pixels.empty() == false) {
+        converted_pixels[pixel_index] = pixel;
+      }
+    }
+
+    const std::filesystem::path staged = asset_directory / "image-save-staged.exr";
+    bool staged_exists = false;
+    if (inspect_scene_asset_path(staged, staged_exists) == false) {
+      return {};
+    }
+    if (staged_exists && (remove_scene_save_file(staged, "staged scene asset") == false)) {
+      return {};
+    }
+
+    std::string encode_error;
+    if (save_exr_image(staged.string().c_str(), pixels, {image.isize.x, image.isize.y}, &encode_error) == false) {
+      log::error("Failed to encode managed scene image %u: %s", image_index, encode_error.c_str());
+      (void)remove_scene_save_file(staged, "staged scene asset");
+      return {};
+    }
+
+    uint64_t hash = 0u;
+    uint64_t encoded_size = 0u;
+    if (hash_binary_file(staged, hash, encoded_size) == false) {
+      log::error("Failed to hash managed scene image %u", image_index);
+      (void)remove_scene_save_file(staged, "staged scene asset");
+      return {};
+    }
+    return publish_staged_asset(staged, "image-" + content_hash_string(hash) + ".exr");
+  };
+
+  auto persist_managed_file = [&](const std::filesystem::path& source, const char* prefix, const char* extension) -> std::string {
+    if (ensure_asset_directory() == false) {
+      return {};
+    }
+
+    const std::filesystem::path staged = asset_directory / (std::string(prefix) + "save-staged");
+    bool staged_exists = false;
+    if (inspect_scene_asset_path(staged, staged_exists) == false) {
+      return {};
+    }
+    if (staged_exists && (remove_scene_save_file(staged, "staged scene asset") == false)) {
+      return {};
+    }
+
+    std::ifstream input(source, std::ios::binary);
+    std::ofstream output(staged, std::ios::binary | std::ios::trunc);
+    if ((input.is_open() == false) || (output.is_open() == false)) {
+      log::error("Failed to open scene dependency for persistence: %s", source.string().c_str());
+      (void)remove_scene_save_file(staged, "staged scene asset");
+      return {};
+    }
+
+    std::array<uint8_t, 64u * 1024u> buffer = {};
+    uint64_t hash = 0u;
+    uint64_t total_size = 0u;
+    while (true) {
+      input.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+      const std::streamsize bytes_read = input.gcount();
+      if (bytes_read > 0) {
+        output.write(reinterpret_cast<const char*>(buffer.data()), bytes_read);
+        if (output.good() == false) {
+          break;
+        }
+        hash = etx_hash64_continue(buffer.data(), static_cast<uint64_t>(bytes_read), hash);
+        total_size += static_cast<uint64_t>(bytes_read);
+      }
+      if (bytes_read < static_cast<std::streamsize>(buffer.size())) {
+        break;
+      }
+    }
+    output.flush();
+    const bool streams_succeeded = (input.bad() == false) && output.good() && (total_size > 0u);
+    input.close();
+    output.close();
+    if ((streams_succeeded == false) || output.fail()) {
+      log::error("Failed to persist scene dependency: %s", source.string().c_str());
+      (void)remove_scene_save_file(staged, "staged scene asset");
+      return {};
+    }
+
+    hash = etx_hash64_continue(&total_size, sizeof(total_size), hash);
+    const std::filesystem::path destination = asset_directory / (std::string(prefix) + content_hash_string(hash) + extension);
+    bool destination_exists = false;
+    if (inspect_scene_asset_path(destination, destination_exists) == false) {
+      (void)remove_scene_save_file(staged, "staged scene asset");
+      return {};
+    }
+    if (destination_exists) {
+      const bool matches = binary_files_match(staged, destination);
+      (void)remove_scene_save_file(staged, "staged scene asset");
+      if (matches == false) {
+        log::error("Existing scene asset does not match its content hash: %s", destination.string().c_str());
+        return {};
+      }
+      return to_relative(destination, materials_path.parent_path());
+    }
+    if (install_staged_asset(staged, destination) == false) {
+      return {};
+    }
+    return to_relative(destination, materials_path.parent_path());
+  };
+
+  auto texture_path = [&](uint32_t image_index, bool omit_white_fallback) -> std::string {
+    if ((image_index == kInvalidIndex) || (image_index >= impl->data.images.array_size())) {
+      return {};
+    }
+    const std::string stored = impl->data.images.path(image_index);
+    if ((stored.compare(0, 2, "##") == 0) || stored.empty()) {
+      if (omit_white_fallback && is_white_fallback_image(image_index)) {
+        return {};
+      }
+      return persist_managed_image(image_index);
+    }
+    const std::filesystem::path source = std::filesystem::path(stored).lexically_normal();
+    if (managed_source_path(source)) {
+      return persist_managed_image(image_index);
+    }
+    return to_relative(source, materials_path.parent_path());
+  };
+
+  auto write_path_token = [&](std::ostringstream& stream, const std::string& path, const char* context) {
+    for (const unsigned char character : path) {
+      if (character < 0x20u) {
+        log::error("Cannot save %s path containing control characters", context);
+        return false;
+      }
+    }
+    stream << std::quoted(path);
+    return true;
   };
 
   auto write_texture_line = [&](std::ostringstream& stream, const char* label, uint32_t image_index, uint32_t channel) {
-    std::string path = texture_path(image_index);
-    if (path.empty() == false) {
-      stream << label << " " << path;
-      if (channel != kInvalidIndex) {
-        stream << " channel " << channel;
-      }
-      stream << "\n";
+    if (image_index == kInvalidIndex) {
+      return true;
     }
+    const std::string path = texture_path(image_index, false);
+    if (path.empty()) {
+      log::error("Cannot save %s texture: its source file is unavailable", label);
+      return false;
+    }
+    stream << label << " ";
+    if (write_path_token(stream, path, label) == false) {
+      return false;
+    }
+    if (channel != kInvalidIndex) {
+      stream << " channel " << channel;
+    }
+    stream << "\n";
+    return true;
   };
 
   auto write_spectrum_line = [&](std::ostringstream& stream, const char* label, uint32_t index, bool use_gamma) {
@@ -2762,14 +5539,71 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   };
 
   std::ostringstream materials_stream;
-  materials_stream.setf(std::ios::fixed, std::ios::floatfield);
-  materials_stream << std::setprecision(6);
+  materials_stream << std::setprecision(std::numeric_limits<float>::max_digits10);
 
   const IORDatabase& database = impl->ior_database;
+  std::vector<std::pair<uint32_t, std::filesystem::path>> persisted_volume_paths;
+
+  for (const SerializedMediumEntry& entry : serialized_medium_entries) {
+    const uint32_t pool_index = entry.medium_index;
+    const Medium& medium = impl->data.mediums.get(pool_index);
+    materials_stream << "newmtl et::medium\n";
+    materials_stream << "id " << entry.id << "\n";
+    float3 absorption = impl->data.spectrum_values[medium.absorption_index].integrated();
+    if ((std::fabs(absorption.x) >= kEpsilon) || (std::fabs(absorption.y) >= kEpsilon) || (std::fabs(absorption.z) >= kEpsilon)) {
+      materials_stream << "absorption " << absorption.x << " " << absorption.y << " " << absorption.z << "\n";
+    }
+    float3 scattering = impl->data.spectrum_values[medium.scattering_index].integrated();
+    if ((std::fabs(scattering.x) >= kEpsilon) || (std::fabs(scattering.y) >= kEpsilon) || (std::fabs(scattering.z) >= kEpsilon)) {
+      materials_stream << "scattering " << scattering.x << " " << scattering.y << " " << scattering.z << "\n";
+    }
+    if (std::fabs(medium.phase_function_g) >= kEpsilon) {
+      materials_stream << "anisotropy " << medium.phase_function_g << "\n";
+    }
+    if (medium.enable_explicit_connections == false) {
+      materials_stream << "enclosed 1\n";
+    }
+    const std::string& source_volume_path = impl->data.mediums.volume_path(pool_index);
+    if (source_volume_path.empty() == false) {
+      const std::filesystem::path volume_source = std::filesystem::path(source_volume_path).lexically_normal();
+      const bool persist_volume = managed_source_path(volume_source);
+      const std::string saved_volume_path = persist_volume ? persist_managed_file(volume_source, "volume-", ".nvdb") : to_relative(volume_source, materials_path.parent_path());
+      if (saved_volume_path.empty()) {
+        log::error("Cannot save volume dependency: %s", source_volume_path.c_str());
+        return {};
+      }
+      if (persist_volume) {
+        std::filesystem::path persisted_path = saved_volume_path;
+        if (persisted_path.is_relative()) {
+          persisted_path = materials_path.parent_path() / persisted_path;
+        }
+        persisted_volume_paths.emplace_back(pool_index, persisted_path.lexically_normal());
+      }
+      materials_stream << "volume ";
+      if (write_path_token(materials_stream, saved_volume_path, "volume") == false) {
+        return {};
+      }
+      materials_stream << "\n";
+    } else if ((medium.cls == Medium::Heterogeneous) && (medium.grid_type_enum() == DensityGrid::Type::Texture3D)) {
+      log::error("Cannot save file-backed medium %s: its source volume path is unavailable", entry.authored_name.c_str());
+      return {};
+    } else if ((medium.cls == Medium::Heterogeneous) && (medium.grid_type_enum() == DensityGrid::Type::NoiseFunction)) {
+      materials_stream << "noise type " << static_cast<uint32_t>(medium.noise_type_enum()) << " scale " << medium.grid.noise_scale << " octaves " << medium.grid.noise_octaves
+                       << " lacunarity " << medium.grid.noise_lacunarity << " persistence " << medium.grid.noise_persistence << " seed " << medium.grid.noise_seed << " power "
+                       << medium.grid.noise_power << " sharpness " << medium.grid.noise_sharpness << " offset " << medium.grid.noise_offset.x << " " << medium.grid.noise_offset.y
+                       << " " << medium.grid.noise_offset.z << " border_fade " << medium.grid.noise_enable_border_fade << " border_fade_distance "
+                       << medium.grid.noise_border_fade_distance << "\n";
+    }
+    materials_stream << "\n";
+  }
 
   const auto write_camera = [&](const Camera& camera, const std::string& camera_id, bool active) {
-    if (camera.film_size.x == 0u) {
-      return;
+    if ((camera.film_size.x == 0u) || (camera.film_size.y == 0u)) {
+      if (camera_id.empty()) {
+        return true;
+      }
+      log::error("Cannot save camera %s: its viewport is invalid", camera_id.c_str());
+      return false;
     }
     const float3 target = camera.position + camera.direction;
     materials_stream << "newmtl et::camera\n";
@@ -2795,30 +5629,46 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if (camera.clip_far != 1000.0f) {
       materials_stream << "clip-far " << camera.clip_far << "\n";
     }
+    const std::string lens_shape = texture_path(camera.lens_image, false);
+    if (lens_shape.empty() == false) {
+      materials_stream << "shape ";
+      if (write_path_token(materials_stream, lens_shape, "camera lens") == false) {
+        return false;
+      }
+      materials_stream << "\n";
+    } else if (camera.lens_image != kInvalidIndex) {
+      log::error("Cannot save camera %s: its lens image source file is unavailable", camera_id.empty() ? "camera" : camera_id.c_str());
+      return false;
+    }
     const bool camera_medium_valid = (camera.medium_index != kInvalidIndex) && (medium_names.count(camera.medium_index) > 0);
     if (camera_medium_valid) {
       materials_stream << "ext_medium " << medium_names[camera.medium_index] << "\n";
     }
     if (camera_id.empty() == false) {
       materials_stream << "id " << camera_id << "\n";
-      materials_stream << "active " << (active ? 1 : 0) << "\n";
     }
+    materials_stream << "active " << (active ? 1 : 0) << "\n";
     materials_stream << "\n";
+    return true;
   };
 
   if (impl->data.cameras.empty()) {
-    write_camera(impl->active_camera, {}, true);
+    if (write_camera(impl->active_camera, {}, true) == false) {
+      return {};
+    }
   } else {
-    for (uint32_t camera_index = 0u; camera_index < impl->data.cameras.size(); ++camera_index) {
-      const SceneData::CameraInfo& entry = impl->data.cameras[camera_index];
-      const Camera* camera_to_save = &entry.cam;
-      if (entry.active) {
+    for (const SerializedCameraEntry& serialized_entry : serialized_camera_entries) {
+      const SceneData::CameraInfo& camera_entry = impl->data.cameras[serialized_entry.camera_index];
+      const Camera* camera_to_save = &camera_entry.cam;
+      if (camera_entry.active) {
         AttachmentTransform transform = {};
-        if (find_attachment_transform(impl->data, SceneAttachment::Type::Camera, camera_index, transform) == false) {
+        if (find_attachment_transform(impl->data, SceneAttachment::Type::Camera, serialized_entry.camera_index, transform) == false) {
           camera_to_save = &impl->active_camera;
         }
       }
-      write_camera(*camera_to_save, entry.id, entry.active);
+      if (write_camera(*camera_to_save, serialized_entry.id, camera_entry.active) == false) {
+        return {};
+      }
     }
   }
 
@@ -2849,6 +5699,10 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     }
     materials_stream << "quality " << env_profile.atmosphere.quality << "\n";
     materials_stream << "color " << env_color.x << " " << env_color.y << " " << env_color.z << "\n";
+    const bool atmosphere_medium_valid = (env_profile.medium_index != kInvalidIndex) && (medium_names.count(env_profile.medium_index) > 0u);
+    if (atmosphere_medium_valid) {
+      materials_stream << "ext_medium " << medium_names[env_profile.medium_index] << "\n";
+    }
     materials_stream << "\n";
   }
 
@@ -2862,9 +5716,16 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     }
 
     materials_stream << "newmtl et::env\n";
-    std::string env_path = texture_path(profile.emission.image_index);
+    std::string env_path = texture_path(profile.emission.image_index, true);
     if (env_path.empty() == false) {
-      materials_stream << "image " << env_path << "\n";
+      materials_stream << "image ";
+      if (write_path_token(materials_stream, env_path, "environment image") == false) {
+        return {};
+      }
+      materials_stream << "\n";
+    } else if (is_white_fallback_image(profile.emission.image_index) == false) {
+      log::error("Cannot save environment light: its image source file is unavailable");
+      return {};
     }
     float3 env_color = spectrum_rgb(profile.emission.spectrum_index);
     materials_stream << "color " << env_color.x << " " << env_color.y << " " << env_color.z << "\n";
@@ -2906,10 +5767,24 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
                                        ((impl->data.emitter_profiles[profile.reference_emitter_index].meta & EmitterProfile::Meta::Atmosphere) != 0u);
     if (references_atmosphere) {
       materials_stream << "use_as_sun 1\n";
+      const auto atmosphere_position = std::find(atmosphere_emitter_indices.begin(), atmosphere_emitter_indices.end(), profile.reference_emitter_index);
+      if (atmosphere_position != atmosphere_emitter_indices.end()) {
+        materials_stream << "atmosphere_index " << std::distance(atmosphere_emitter_indices.begin(), atmosphere_position) << "\n";
+      }
     }
-    std::string dir_path = texture_path(profile.emission.image_index);
+    std::string dir_path;
+    if (references_atmosphere == false) {
+      dir_path = texture_path(profile.emission.image_index, false);
+    }
     if (dir_path.empty() == false) {
-      materials_stream << "image " << dir_path << "\n";
+      materials_stream << "image ";
+      if (write_path_token(materials_stream, dir_path, "directional image") == false) {
+        return {};
+      }
+      materials_stream << "\n";
+    } else if ((profile.emission.image_index != kInvalidIndex) && (references_atmosphere == false)) {
+      log::error("Cannot save directional light: its image source file is unavailable");
+      return {};
     }
     bool dir_medium_valid = (profile.medium_index != kInvalidIndex) && (medium_names.count(profile.medium_index) > 0);
     if (dir_medium_valid) {
@@ -2918,61 +5793,13 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "\n";
   }
 
-  for (uint64_t medium_index = 0; medium_index < medium_entries.size(); ++medium_index) {
-    uint32_t pool_index = medium_entries[medium_index].second;
-    const Medium& medium = impl->data.mediums.get(pool_index);
-    materials_stream << "newmtl et::medium\n";
-    materials_stream << "id " << medium_entries[medium_index].first << "\n";
-    float3 absorption = impl->data.spectrum_values[medium.absorption_index].integrated();
-    if ((std::fabs(absorption.x) >= kEpsilon) || (std::fabs(absorption.y) >= kEpsilon) || (std::fabs(absorption.z) >= kEpsilon)) {
-      materials_stream << "absorption " << absorption.x << " " << absorption.y << " " << absorption.z << "\n";
-    }
-    float3 scattering = impl->data.spectrum_values[medium.scattering_index].integrated();
-    if ((std::fabs(scattering.x) >= kEpsilon) || (std::fabs(scattering.y) >= kEpsilon) || (std::fabs(scattering.z) >= kEpsilon)) {
-      materials_stream << "scattering " << scattering.x << " " << scattering.y << " " << scattering.z << "\n";
-    }
-    if (std::fabs(medium.phase_function_g) >= kEpsilon) {
-      materials_stream << "anisotropy " << medium.phase_function_g << "\n";
-    }
-    if (medium.enable_explicit_connections == false) {
-      materials_stream << "enclosed 1\n";
-    }
-    if (medium.grid_type_enum() == DensityGrid::Type::NoiseFunction) {
-      materials_stream << "noise type " << static_cast<uint32_t>(medium.noise_type_enum()) << " scale " << medium.grid.noise_scale << " octaves " << medium.grid.noise_octaves
-                       << " lacunarity " << medium.grid.noise_lacunarity << " persistence " << medium.grid.noise_persistence << " seed " << medium.grid.noise_seed << " power "
-                       << medium.grid.noise_power << " sharpness " << medium.grid.noise_sharpness << " offset " << medium.grid.noise_offset.x << " " << medium.grid.noise_offset.y
-                       << " " << medium.grid.noise_offset.z << " border_fade " << medium.grid.noise_enable_border_fade << " border_fade_distance "
-                       << medium.grid.noise_border_fade_distance << "\n";
-    }
-    materials_stream << "\n";
-  }
-
-  auto is_internal_name = [](const std::string& name) {
-    return name.compare(0, 4, "et::") == 0 || name.compare(0, 5, "etx::") == 0;
-  };
-
-  std::vector<std::pair<std::string, uint32_t>> material_entries;
-  material_entries.reserve(impl->data.material_mapping.size());
-  for (const auto& entry : impl->data.material_mapping) {
-    material_entries.emplace_back(entry.first, entry.second);
-  }
-  std::sort(material_entries.begin(), material_entries.end(), [](const auto& a, const auto& b) {
-    return a.first < b.first;
-  });
-
-  for (const auto& entry : material_entries) {
-    const std::string& name = entry.first;
-    if (is_internal_name(name)) {
-      continue;
-    }
-    uint32_t index = entry.second;
-    if (index >= impl->data.materials.size()) {
-      log::warning("Material index %u out of bounds for material %s", index, name.c_str());
-      continue;
-    }
+  for (const SerializedMaterialEntry& entry : serialized_material_entries) {
+    const std::string& serialized_name = entry.id;
+    const std::string& display_name = entry.authored_names.front();
+    const uint32_t index = entry.material_index;
     const Material& material = impl->data.materials[index];
 
-    materials_stream << "newmtl " << name << "\n";
+    materials_stream << "newmtl " << serialized_name << "\n";
     materials_stream << "material class " << material_class_to_string(material.cls) << "\n";
 
     write_spectrum_line(materials_stream, "Kd", material.scattering.spectrum_index, true);
@@ -3000,18 +5827,26 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       materials_stream << "transmission " << material.transmission.value.x << "\n";
     }
 
-    write_texture_line(materials_stream, "map_Kd", material.scattering.image_index, kInvalidIndex);
-    write_texture_line(materials_stream, "map_Ks", material.reflectance.image_index, kInvalidIndex);
-    write_texture_line(materials_stream, "map_Kt", material.scattering.image_index, kInvalidIndex);
-    write_texture_line(materials_stream, "map_Pr", material.roughness.image_index, material.roughness.channel);
-    write_texture_line(materials_stream, "map_Ml", material.metalness.image_index, material.metalness.channel);
-    write_texture_line(materials_stream, "map_Tm", material.transmission.image_index, material.transmission.channel);
+    if ((write_texture_line(materials_stream, "map_Kd", material.scattering.image_index, kInvalidIndex) == false) ||
+        (write_texture_line(materials_stream, "map_Ks", material.reflectance.image_index, kInvalidIndex) == false) ||
+        (write_texture_line(materials_stream, "map_Kt", material.scattering.image_index, kInvalidIndex) == false) ||
+        (write_texture_line(materials_stream, "map_Pr", material.roughness.image_index, material.roughness.channel) == false) ||
+        (write_texture_line(materials_stream, "map_Ml", material.metalness.image_index, material.metalness.channel) == false) ||
+        (write_texture_line(materials_stream, "map_Tm", material.transmission.image_index, material.transmission.channel) == false)) {
+      return {};
+    }
 
     if ((material.normal_image_index != kInvalidIndex) || (std::fabs(material.normal_scale - 1.0f) >= kEpsilon)) {
-      std::string normal_path = texture_path(material.normal_image_index);
+      std::string normal_path = texture_path(material.normal_image_index, false);
       materials_stream << "normalmap";
       if (normal_path.empty() == false) {
-        materials_stream << " image " << normal_path;
+        materials_stream << " image ";
+        if (write_path_token(materials_stream, normal_path, "normal map") == false) {
+          return {};
+        }
+      } else if (material.normal_image_index != kInvalidIndex) {
+        log::error("Cannot save material %s: its normal map source file is unavailable", display_name.c_str());
+        return {};
       }
       materials_stream << " scale " << material.normal_scale << "\n";
     }
@@ -3074,9 +5909,15 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if (has_emission_texture || has_emission_spectrum) {
       materials_stream << "emitter";
       if (has_emission_texture) {
-        std::string emission_path = texture_path(material.emission.image_index);
+        std::string emission_path = texture_path(material.emission.image_index, false);
         if (emission_path.empty() == false) {
-          materials_stream << " image " << emission_path;
+          materials_stream << " image ";
+          if (write_path_token(materials_stream, emission_path, "emission texture") == false) {
+            return {};
+          }
+        } else {
+          log::error("Cannot save material %s: its emission texture source file is unavailable", display_name.c_str());
+          return {};
         }
       }
       if (has_emission_spectrum) {
@@ -3094,6 +5935,17 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
 
     if (material.subsurface_cls != SubsurfaceMaterial::Disabled) {
       materials_stream << "subsurface";
+      if (material.subsurface.image_index != kInvalidIndex) {
+        const std::string subsurface_path = texture_path(material.subsurface.image_index, false);
+        if (subsurface_path.empty()) {
+          log::error("Cannot save material %s: its subsurface texture has no source file", display_name.c_str());
+          return {};
+        }
+        materials_stream << " image ";
+        if (write_path_token(materials_stream, subsurface_path, "subsurface texture") == false) {
+          return {};
+        }
+      }
       if (material.subsurface_path == SubsurfaceMaterial::RefractedPath) {
         materials_stream << " path refracted";
       }
@@ -3103,11 +5955,17 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     }
 
     if ((material.thinfilm.thinkness_image != kInvalidIndex) || (std::fabs(material.thinfilm.min_thickness) >= kEpsilon) ||
-        (std::fabs(material.thinfilm.max_thickness) >= kEpsilon)) {
+        (std::fabs(material.thinfilm.max_thickness) >= kEpsilon) || (std::fabs(material.thinfilm.weight - 1.0f) >= kEpsilon)) {
       materials_stream << "thinfilm";
-      std::string thinfilm_path = texture_path(material.thinfilm.thinkness_image);
+      std::string thinfilm_path = texture_path(material.thinfilm.thinkness_image, false);
       if (thinfilm_path.empty() == false) {
-        materials_stream << " image " << thinfilm_path;
+        materials_stream << " image ";
+        if (write_path_token(materials_stream, thinfilm_path, "thin-film texture") == false) {
+          return {};
+        }
+      } else if (material.thinfilm.thinkness_image != kInvalidIndex) {
+        log::error("Cannot save material %s: its thin-film texture source file is unavailable", display_name.c_str());
+        return {};
       }
       materials_stream << " range " << material.thinfilm.min_thickness << " " << material.thinfilm.max_thickness;
       materials_stream << " weight " << clamp(material.thinfilm.weight, 0.0f, 1.0f);
@@ -3136,21 +5994,52 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     materials_stream << "\n";
   }
 
-  std::string materials_string = materials_stream.str();
+  const std::string materials_string = materials_stream.str();
 
-  auto materials_write_start = std::chrono::high_resolution_clock::now();
-  FILE* materials_file = fopen(materials_path.string().c_str(), "wb");
-  if (materials_file == nullptr) {
-    log::error("Failed to open materials file for writing: %s", materials_path.string().c_str());
+  std::string json_string;
+  try {
+    json_string = js.dump(2);
+  } catch (const nlohmann::json::exception& error) {
+    log::error("Failed to serialize scene config: %s", error.what());
     return {};
   }
-  fwrite(materials_string.data(), 1, materials_string.size(), materials_file);
-  fflush(materials_file);
-  fclose(materials_file);
-  auto materials_write_end = std::chrono::high_resolution_clock::now();
-  auto materials_write_duration = std::chrono::duration_cast<std::chrono::milliseconds>(materials_write_end - materials_write_start);
+
+  const auto geometry_export_start = std::chrono::high_resolution_clock::now();
+  SceneSerialization archive;
+  if (archive.save_to_file(impl->data, scene_files[0].staged, serialized_material_names) == false) {
+    log::error("Failed to stage geometry for %s", geometry_path.string().c_str());
+    discard_staged_scene_files(scene_files);
+    return {};
+  }
+  const auto geometry_export_end = std::chrono::high_resolution_clock::now();
+  const auto geometry_export_duration = std::chrono::duration_cast<std::chrono::milliseconds>(geometry_export_end - geometry_export_start);
+  log::info("Geometry export: %lld ms", geometry_export_duration.count());
+
+  const auto materials_write_start = std::chrono::high_resolution_clock::now();
+  if (write_file_contents(scene_files[1].staged, materials_string) == false) {
+    discard_staged_scene_files(scene_files);
+    return {};
+  }
+  const auto materials_write_end = std::chrono::high_resolution_clock::now();
+  const auto materials_write_duration = std::chrono::duration_cast<std::chrono::milliseconds>(materials_write_end - materials_write_start);
   log::info("Materials file write: %lld ms (%zu bytes)", materials_write_duration.count(), materials_string.size());
 
+  const auto json_write_start = std::chrono::high_resolution_clock::now();
+  if (write_file_contents(scene_files[2].staged, json_string) == false) {
+    discard_staged_scene_files(scene_files);
+    return {};
+  }
+  const auto json_write_end = std::chrono::high_resolution_clock::now();
+  const auto json_write_duration = std::chrono::duration_cast<std::chrono::milliseconds>(json_write_end - json_write_start);
+  log::info("JSON config write: %lld ms", json_write_duration.count());
+
+  if (commit_staged_scene_files(scene_files) == false) {
+    return {};
+  }
+
+  for (const auto& [medium_index, volume_path] : persisted_volume_paths) {
+    impl->data.mediums.set_volume_path(medium_index, volume_path.generic_string());
+  }
   impl->data.json_file_name = json_path.generic_string();
   impl->data.materials_file_name = materials_path.generic_string();
 
@@ -3161,12 +6050,12 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   return json_path.generic_string();
 }
 
-void SceneRepresentationImpl::generate_pixel_sampler_image() {
+void SceneRepresentationImpl::generate_pixel_sampler_image(float radius) {
   std::vector<float4> sampler_image;
   Film::generate_filter_image(Film::PixelFilterBlackmanHarris, sampler_image);
   uint32_t image_options = Image::BuildSamplingTable | Image::UniformSamplingTable;
   uint32_t image_index = data.images.add_from_data(sampler_image.data(), {Film::PixelFilterSize, Film::PixelFilterSize}, image_options, {}, {1.0f, 1.0f});
-  data.pixel_filter = {image_index, 1.5f};
+  data.pixel_filter = {image_index, radius};
 }
 
 void SceneRepresentationImpl::setup_atmosphere_references() {
@@ -3189,7 +6078,7 @@ void SceneRepresentationImpl::setup_atmosphere_references() {
 }
 
 bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const char* base_folder, uint32_t load_result, float camera_fov, bool use_focal_len, float camera_focal_len,
-  bool force_tangents, bool spectral_scene) {
+  bool force_tangents, bool spectral_scene, float pixel_filter_radius, bool preserve_unattached_cameras) {
   if (data.resolve_hierarchy() == false) {
     log::error("Failed to resolve scene hierarchy");
     return false;
@@ -3242,7 +6131,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   validate_materials();
   validate_mediums();
 
-  generate_pixel_sampler_image();
+  generate_pixel_sampler_image(pixel_filter_radius);
 
   if (ensure_energy_compensation_interfaces() == false) {
     return false;
@@ -3303,7 +6192,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   }
 
   SceneData::CameraInfo& selected_camera = select_active_camera(data);
-  if ((ensure_camera_nodes(data) == false) || (data.resolve_hierarchy() == false)) {
+  if ((ensure_camera_nodes(data, preserve_unattached_cameras) == false) || (data.resolve_hierarchy() == false)) {
     log::error("Failed to attach cameras to the scene hierarchy");
     return false;
   }
@@ -3315,13 +6204,17 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
     camera = transform_camera(selected_camera.cam, camera_transform.object_to_world, camera_transform.orientation_to_world);
   }
 
+  scene_valid = true;
   return true;
 }
 
 void SceneRepresentationImpl::create_area_emitters_from_materials() {
+  ensure_emitter_names(data);
   std::vector<uint32_t> old_to_new(data.emitter_profiles.size(), kInvalidIndex);
   std::vector<EmitterProfile> non_area_profiles;
+  std::vector<std::string> non_area_names;
   non_area_profiles.reserve(data.emitter_profiles.size());
+  non_area_names.reserve(data.emitter_profiles.size());
   for (uint32_t old_index = 0u; old_index < data.emitter_profiles.size(); ++old_index) {
     const EmitterProfile& profile = data.emitter_profiles[old_index];
     if (profile.cls == EmitterProfile::Class::Area) {
@@ -3329,10 +6222,12 @@ void SceneRepresentationImpl::create_area_emitters_from_materials() {
     }
     old_to_new[old_index] = static_cast<uint32_t>(non_area_profiles.size());
     non_area_profiles.emplace_back(profile);
+    non_area_names.emplace_back(data.emitter_names[old_index]);
   }
   remap_emitter_attachments(data.hierarchy, old_to_new);
   remap_emitter_references(non_area_profiles, old_to_new);
   data.emitter_profiles = std::move(non_area_profiles);
+  data.emitter_names = std::move(non_area_names);
 
   // Clear triangle emitter references (now point to profiles, not instances)
   for (Triangle& tri : data.triangles) {
@@ -3367,53 +6262,14 @@ void SceneRepresentationImpl::create_area_emitters_from_materials() {
       EmitterProfile& profile = data.emitter_profiles.emplace_back(EmitterProfile::Class::Area);
       profile.emission = mtl.emission;
       profile.medium_index = kInvalidIndex;
+      const std::string material_name = mapping_name(data.material_mapping, tri.material_index, "material-");
+      const std::string area_name = material_name + " Light";
+      data.emitter_names.push_back(unique_named_resource(data.emitter_names, area_name.c_str(), "Area Light", kInvalidIndex));
     }
 
     // Mark triangle as referencing this emitter profile
     data.triangles[tri_index].emitter_index = profile_index;
   }
-}
-
-bool SceneRepresentationImpl::delete_emitter(uint32_t emitter_index) {
-  if (emitter_index >= data.emitter_profiles.size()) {
-    return false;
-  }
-
-  const auto& profile = data.emitter_profiles[emitter_index];
-
-  // Don't allow deleting area emitters - they are managed by materials
-  if (profile.cls == EmitterProfile::Class::Area) {
-    return false;
-  }
-
-  std::vector<uint32_t> old_to_new(data.emitter_profiles.size(), kInvalidIndex);
-  std::vector<EmitterProfile> retained_profiles;
-  retained_profiles.reserve(data.emitter_profiles.size() - 1u);
-  for (uint32_t old_index = 0u; old_index < data.emitter_profiles.size(); ++old_index) {
-    if (old_index == emitter_index) {
-      continue;
-    }
-    old_to_new[old_index] = static_cast<uint32_t>(retained_profiles.size());
-    retained_profiles.emplace_back(data.emitter_profiles[old_index]);
-  }
-  remap_emitter_attachments(data.hierarchy, old_to_new);
-  remap_emitter_references(retained_profiles, old_to_new);
-  data.emitter_profiles = std::move(retained_profiles);
-
-  // Drop stale atmosphere/sun references after profile indices changed.
-  setup_atmosphere_references();
-
-  // Rebuild area emitters from materials (this will update triangle references)
-  create_area_emitters_from_materials();
-
-  for (uint32_t i = 0; i < data.emitter_profiles.size(); ++i) {
-    const auto& current_profile = data.emitter_profiles[i];
-    if ((current_profile.cls == EmitterProfile::Class::Environment) && ((current_profile.meta & EmitterProfile::Meta::Atmosphere) != 0u)) {
-      rebuild_atmosphere_emitter(i);
-    }
-  }
-
-  return true;
 }
 
 }  // namespace etx

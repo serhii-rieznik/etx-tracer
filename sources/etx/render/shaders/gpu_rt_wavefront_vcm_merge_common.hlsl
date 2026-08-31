@@ -20,6 +20,10 @@ bool wavefront_vcm_merge_load_input(uint dispatch_index, out GPUWavefrontResourc
   if ((resources.vcm_grid_heads_buffer == kInvalidIndex) || (resources.vcm_grid_next_buffer == kInvalidIndex) || (constants.vcm_radius <= 0.0f)) {
     return false;
   }
+  if ((constants.dispatch_item_count != 0u) && (dispatch_index >= constants.dispatch_item_count)) {
+    return false;
+  }
+  dispatch_index += constants.dispatch_item_offset;
 #if ETX_ENABLE_WORK_QUEUES
   uint material_queue_count = wavefront_material_queue_count(resources, true, constants.work_queue_index);
   if (dispatch_index >= material_queue_count) {

@@ -1076,6 +1076,26 @@ struct UPBPBeamGrid {
     return static_cast<uint32_t>(_beams.size());
   }
 
+  const Bounds& bounds() const {
+    return _bounds;
+  }
+
+  float inverse_cell_size() const {
+    return _inverse_cell_size;
+  }
+
+  const std::array<uint32_t, 3u>& resolution() const {
+    return _resolution;
+  }
+
+  const std::vector<uint32_t>& cell_offsets() const {
+    return _cell_offsets;
+  }
+
+  const std::vector<uint32_t>& beam_indices() const {
+    return _beam_indices;
+  }
+
   uint64_t storage_bytes() const {
     return static_cast<uint64_t>(_beams.capacity()) * sizeof(UPBPBeamReference) + static_cast<uint64_t>(_beam_indices.capacity()) * sizeof(uint32_t) +
            static_cast<uint64_t>(_cell_offsets.capacity()) * sizeof(uint32_t);

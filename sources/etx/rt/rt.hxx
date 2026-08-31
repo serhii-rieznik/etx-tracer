@@ -22,6 +22,8 @@ struct Raytracing {
   const Camera& camera() const;
 
   const Scene& scene() const;
+  uint32_t sample_limit() const;
+  void set_sample_limit(uint32_t sample_limit);
   void commit(const SceneData& scene_data, const Camera& camera, const UpdateFlags& changes);
 
   bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;

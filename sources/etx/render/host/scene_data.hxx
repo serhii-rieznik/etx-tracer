@@ -163,6 +163,7 @@ struct SceneData {
   std::vector<Material> materials;
   std::vector<Mesh> meshes;
   std::vector<EmitterProfile> emitter_profiles;
+  std::vector<std::string> emitter_names;
   std::vector<SpectralDistribution> spectrum_values;
   std::vector<Image> images_vector;
   std::vector<Medium> mediums_vector;
@@ -198,6 +199,7 @@ struct SceneData {
   SceneHashes compute_hashes() const;
 
   void clear(TaskScheduler& scheduler);
+  void swap_contents(SceneData& other);
 
   uint32_t add_spectrum(const char* source_id, const SpectralDistribution& spd);
   uint32_t add_spectrum(const char* id);

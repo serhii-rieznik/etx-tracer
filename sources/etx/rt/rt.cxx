@@ -36,6 +36,7 @@ struct RaytracingImpl {
   Film& film;
 
   Scene scene = {};
+  uint32_t sample_limit = 0u;
   RTCDevice rt_device = {};
   RTCScene rt_scene = {};
   std::vector<RTCScene> mesh_scenes = {};
@@ -310,6 +311,14 @@ const Camera& Raytracing::camera() const {
 
 const Scene& Raytracing::scene() const {
   return _private->scene;
+}
+
+uint32_t Raytracing::sample_limit() const {
+  return (_private->sample_limit > 0u) ? _private->sample_limit : _private->scene.options.samples;
+}
+
+void Raytracing::set_sample_limit(uint32_t sample_limit) {
+  _private->sample_limit = sample_limit;
 }
 
 void Raytracing::commit(const SceneData& scene_data, const Camera& camera, const UpdateFlags& changes) {

@@ -37,6 +37,7 @@ struct BatchRenderOptions {
   bool override_crop = false;
   bool override_strategy_flags = false;
   bool override_bdpt_mode = false;
+  double time_seconds = 0.0;
   float exposure = 1.0f;
 };
 

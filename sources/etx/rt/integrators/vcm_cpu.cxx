@@ -215,7 +215,7 @@ struct CPUVCMImpl {
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;
 
-    if ((*state == Integrator::State::WaitingForCompletion) || (*state == Integrator::State::Stopped) || (vcm_iteration.iteration + 1 >= rt.scene().options.samples)) {
+    if ((*state == Integrator::State::WaitingForCompletion) || (*state == Integrator::State::Stopped) || (vcm_iteration.iteration + 1 >= rt.sample_limit())) {
       *state = Integrator::State::Stopped;
       return;
     }

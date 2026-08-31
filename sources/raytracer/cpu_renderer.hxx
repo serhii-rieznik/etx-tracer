@@ -103,6 +103,7 @@ struct CPURaytracingRenderer : public Renderer {
 
   std::chrono::steady_clock::time_point _render_started_at = {};
   double _last_render_elapsed_seconds = 0.0;
+  std::string _runtime_failure_reason = {};
   bool _render_timing_active = false;
 
   RHIBindlessHandle _output_staging_buffers[kRHIMaxFrames] = {};

@@ -41,6 +41,59 @@ void set_error(std::string* error, exr_result result) {
   }
 }
 
+struct ExrWriteImage {
+  std::vector<float> planes[4];
+  exr_channel channels[4] = {};
+  void* image_planes[4] = {};
+  exr_part part = {};
+  exr_image image = {};
+  exr_compression compression = EXR_COMPRESSION_NONE;
+};
+
+bool prepare_exr_write_image(const float4* pixels, uint2 dimensions, ExrWriteImage& result, std::string* error) {
+  if ((pixels == nullptr) || (dimensions.x == 0u) || (dimensions.y == 0u) || (dimensions.x > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) ||
+      (dimensions.y > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()))) {
+    set_error(error, EXR_ERROR_INVALID_ARGUMENT);
+    return false;
+  }
+
+  const size_t pixel_count = static_cast<size_t>(dimensions.x) * static_cast<size_t>(dimensions.y);
+  for (auto& plane : result.planes) {
+    plane.resize(pixel_count);
+  }
+  for (size_t pixel_index = 0; pixel_index < pixel_count; ++pixel_index) {
+    result.planes[0][pixel_index] = pixels[pixel_index].w;
+    result.planes[1][pixel_index] = pixels[pixel_index].z;
+    result.planes[2][pixel_index] = pixels[pixel_index].y;
+    result.planes[3][pixel_index] = pixels[pixel_index].x;
+  }
+
+  constexpr const char* channel_names[4] = {"A", "B", "G", "R"};
+  for (int index = 0; index < 4; ++index) {
+    strcpy(result.channels[index].name, channel_names[index]);
+    result.channels[index].pixel_type = EXR_PIXEL_FLOAT;
+    result.channels[index].x_sampling = 1;
+    result.channels[index].y_sampling = 1;
+    result.image_planes[index] = result.planes[index].data();
+  }
+
+  result.part.header.part_type = EXR_PART_SCANLINE;
+  result.part.header.data_window = {0, 0, static_cast<int32_t>(dimensions.x - 1u), static_cast<int32_t>(dimensions.y - 1u)};
+  result.part.header.display_window = result.part.header.data_window;
+  result.part.header.pixel_aspect_ratio = 1.0f;
+  result.part.header.screen_window_width = 1.0f;
+  result.part.header.num_channels = 4;
+  result.part.header.channels = result.channels;
+  result.part.width = static_cast<int32_t>(dimensions.x);
+  result.part.height = static_cast<int32_t>(dimensions.y);
+  result.part.images = result.image_planes;
+
+  result.image.num_parts = 1;
+  result.image.parts = &result.part;
+  result.compression = ((dimensions.x < 16u) && (dimensions.y < 16u)) ? EXR_COMPRESSION_NONE : EXR_COMPRESSION_ZIP;
+  return true;
+}
+
 }  // namespace
 
 bool load_exr_image(const char* path, std::vector<float4>& pixels, uint2& dimensions, std::string* error) {
@@ -76,8 +129,7 @@ bool load_exr_image(const char* path, std::vector<float4>& pixels, uint2& dimens
 
   const size_t width = static_cast<size_t>(part.width);
   const size_t height = static_cast<size_t>(part.height);
-  if ((height > std::numeric_limits<size_t>::max() / width) || (width > std::numeric_limits<uint32_t>::max()) ||
-      (height > std::numeric_limits<uint32_t>::max())) {
+  if ((height > std::numeric_limits<size_t>::max() / width) || (width > std::numeric_limits<uint32_t>::max()) || (height > std::numeric_limits<uint32_t>::max())) {
     exr_image_free(&image);
     set_error(error, EXR_ERROR_INVALID_FILE);
     return false;
@@ -143,55 +195,17 @@ bool save_exr_image(const char* path, const float4* pixels, uint2 dimensions, st
   if (error != nullptr) {
     error->clear();
   }
-  if ((path == nullptr) || (pixels == nullptr) || (dimensions.x == 0u) || (dimensions.y == 0u) ||
-      (dimensions.x > static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) ||
-      (dimensions.y > static_cast<uint32_t>(std::numeric_limits<int32_t>::max()))) {
+  if (path == nullptr) {
     set_error(error, EXR_ERROR_INVALID_ARGUMENT);
     return false;
   }
 
-  const size_t pixel_count = static_cast<size_t>(dimensions.x) * static_cast<size_t>(dimensions.y);
-  std::vector<float> planes[4];
-  for (auto& plane : planes) {
-    plane.resize(pixel_count);
+  ExrWriteImage write_image;
+  if (prepare_exr_write_image(pixels, dimensions, write_image, error) == false) {
+    return false;
   }
-  for (size_t pixel_index = 0; pixel_index < pixel_count; ++pixel_index) {
-    planes[0][pixel_index] = pixels[pixel_index].w;
-    planes[1][pixel_index] = pixels[pixel_index].z;
-    planes[2][pixel_index] = pixels[pixel_index].y;
-    planes[3][pixel_index] = pixels[pixel_index].x;
-  }
-
-  exr_channel channels[4] = {};
-  constexpr const char* channel_names[4] = {"A", "B", "G", "R"};
-  void* images[4] = {};
-  for (int i = 0; i < 4; ++i) {
-    strcpy(channels[i].name, channel_names[i]);
-    channels[i].pixel_type = EXR_PIXEL_FLOAT;
-    channels[i].x_sampling = 1;
-    channels[i].y_sampling = 1;
-    images[i] = planes[i].data();
-  }
-
-  exr_part part = {};
-  part.header.part_type = EXR_PART_SCANLINE;
-  part.header.data_window = {0, 0, static_cast<int32_t>(dimensions.x - 1u), static_cast<int32_t>(dimensions.y - 1u)};
-  part.header.display_window = part.header.data_window;
-  part.header.pixel_aspect_ratio = 1.0f;
-  part.header.screen_window_width = 1.0f;
-  part.header.num_channels = 4;
-  part.header.channels = channels;
-  part.width = static_cast<int32_t>(dimensions.x);
-  part.height = static_cast<int32_t>(dimensions.y);
-  part.images = images;
-
-  exr_image image = {};
-  image.num_parts = 1;
-  image.parts = &part;
-
-  const exr_compression compression = ((dimensions.x < 16u) && (dimensions.y < 16u)) ? EXR_COMPRESSION_NONE : EXR_COMPRESSION_ZIP;
-  const exr_result save_result = exr_save_to_file(path, &image, compression);
-  if (!EXR_OK(save_result)) {
+  const exr_result save_result = exr_save_to_file(path, &write_image.image, write_image.compression);
+  if (EXR_OK(save_result) == false) {
     set_error(error, save_result);
     return false;
   }

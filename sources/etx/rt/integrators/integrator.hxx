@@ -77,6 +77,14 @@ struct Integrator {
     return "Basic Integrator (not able to render anything)";
   }
 
+  virtual bool failed() const {
+    return false;
+  }
+
+  virtual const char* failure_reason() const {
+    return "";
+  }
+
   virtual PathProgress path_progress() const {
     return {};
   }

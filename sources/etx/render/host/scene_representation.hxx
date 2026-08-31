@@ -46,6 +46,72 @@ enum class NodeGeometryEditResult : uint32_t {
 
 const char* node_geometry_edit_result_message(NodeGeometryEditResult result);
 
+enum class ScenePrimitive : uint32_t {
+  Sphere,
+  Box,
+  Plane,
+  Disk,
+  Cylinder,
+  Cone,
+  Capsule,
+  Torus,
+  Ring,
+  Tube,
+  Tetrahedron,
+  Cube,
+  Octahedron,
+  Dodecahedron,
+  Icosahedron,
+};
+
+enum class SceneEditStatus : uint32_t {
+  Success,
+  InvalidNode,
+  InvalidParent,
+  InvalidResource,
+  DuplicateAttachment,
+  ResourceAlreadyAttached,
+  UnsupportedAttachments,
+  ActiveCameraProtected,
+  InvalidTransform,
+  GeometryGenerationFailed,
+  HierarchyUpdateFailed,
+};
+
+struct SceneEditResult {
+  SceneEditStatus status = SceneEditStatus::Success;
+  uint32_t node_index = kInvalidIndex;
+  uint32_t mesh_index = kInvalidIndex;
+  std::vector<uint32_t> node_remapping;
+
+  bool succeeded() const {
+    return status == SceneEditStatus::Success;
+  }
+};
+
+enum class SceneResourceEditStatus : uint32_t {
+  Success,
+  InvalidResource,
+  ResourceInUse,
+  ActiveResource,
+  ManagedResource,
+  ResourceUpdateFailed,
+};
+
+struct SceneResourceEditResult {
+  SceneResourceEditStatus status = SceneResourceEditStatus::Success;
+  uint32_t resource_index = kInvalidIndex;
+  std::vector<uint32_t> resource_remapping;
+
+  bool succeeded() const {
+    return status == SceneResourceEditStatus::Success;
+  }
+};
+
+const char* scene_edit_status_message(SceneEditStatus status);
+const char* scene_resource_edit_status_message(SceneResourceEditStatus status);
+const char* scene_primitive_name(ScenePrimitive primitive);
+
 struct SceneRepresentation {
   using MaterialMapping = std::unordered_map<std::string, uint32_t>;
   using MediumMapping = std::unordered_map<std::string, uint32_t>;
@@ -54,6 +120,7 @@ struct SceneRepresentation {
   enum : uint32_t {
     LoadGeometry = 0u,
     SetupCamera = 1u << 0u,
+    PreferRecoveredSave = 1u << 1u,
     LoadEverything = LoadGeometry | SetupCamera,
   };
 
@@ -67,6 +134,7 @@ struct SceneRepresentation {
 
   bool load_from_file(const char* filename, uint32_t options, IntegratorData* out_integrator = nullptr);
   std::string save_to_file(const char* filename, Integrator::Type selected_type = Integrator::Type::Invalid, Integrator* integrator_array[] = nullptr, size_t integrator_count = 0);
+  void replace_loaded_scene(SceneRepresentation& source);
 
   Camera& mutable_camera();
   SceneData& data();
@@ -76,11 +144,35 @@ struct SceneRepresentation {
   const MeshMapping& mesh_mapping() const;
 
   uint32_t add_material(const char* name = nullptr);
+  SceneResourceEditResult create_material(const char* name);
+  SceneResourceEditResult duplicate_material(uint32_t index);
+  SceneResourceEditResult delete_material(uint32_t index);
   std::string rename_material(uint32_t index, const char* name);
   uint32_t add_medium(const char* name = nullptr);
+  SceneResourceEditResult create_medium(const char* name);
+  SceneResourceEditResult duplicate_medium(uint32_t index);
+  SceneResourceEditResult delete_medium(uint32_t index);
   std::string rename_medium(uint32_t index, const char* name);
+  SceneResourceEditResult create_camera(const char* name);
+  SceneResourceEditResult duplicate_camera(uint32_t index);
+  SceneResourceEditResult delete_camera(uint32_t index);
+  std::string rename_camera(uint32_t index, const char* name);
+  SceneResourceEditResult duplicate_emitter(uint32_t index);
+  SceneResourceEditResult delete_emitter_profile(uint32_t index);
+  std::string rename_emitter(uint32_t index, const char* name);
+  const std::vector<std::string>& emitter_names() const;
   std::string rename_mesh(uint32_t index, const char* name);
   void set_mesh_material(uint32_t mesh_index, uint32_t material_index);
+  SceneEditResult create_empty_node();
+  SceneEditResult create_primitive(ScenePrimitive primitive);
+  SceneEditResult duplicate_node_subtree(uint32_t node_index);
+  SceneEditResult delete_node_subtree(uint32_t node_index);
+  SceneEditResult reparent_node(uint32_t node_index, uint32_t parent_index);
+  SceneEditResult set_node_enabled(uint32_t node_index, bool enabled);
+  SceneEditResult set_node_local_transform(uint32_t node_index, const AffineTransform& transform);
+  SceneEditResult attach_node_resource(uint32_t node_index, SceneAttachment::Type type, uint32_t resource_index);
+  SceneEditResult detach_node_resource(uint32_t node_index, uint32_t local_attachment_index);
+  std::string rename_node(uint32_t node_index, const char* name);
   NodeGeometryEditResult validate_node_geometry_edit(uint32_t node_index, NodeGeometryOperation operation) const;
   NodeGeometryEditResult edit_node_geometry(uint32_t node_index, NodeGeometryOperation operation);
   void update_medium_bounds();

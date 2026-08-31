@@ -32,10 +32,13 @@ struct MaterialIndexMapping {
 #pragma pack(pop)
 
 struct SceneSerialization {
+  using MaterialNameMapping = std::unordered_map<uint32_t, std::string>;
+
   SceneSerialization();
   ~SceneSerialization();
 
   bool save_to_file(const SceneData& data, const std::filesystem::path& path);
+  bool save_to_file(const SceneData& data, const std::filesystem::path& path, const MaterialNameMapping& material_names);
   bool load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, const IORDatabase& database, TaskScheduler& scheduler);
   void parse_material_definitions(const char* base_dir, const std::vector<MaterialDefinition>& materials, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler);
   bool parse_materials_file(const std::filesystem::path& path, const char* base_dir, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler);

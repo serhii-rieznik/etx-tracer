@@ -232,25 +232,47 @@ struct UI {
     std::function<void()> cancel_renderer_preparation_selected;
     std::function<void()> options_changed;
     std::function<void()> use_image_as_reference;
-    std::function<uint32_t()> material_added;
-    std::function<void(uint32_t, const std::string&)> material_renamed;
+    std::function<SceneResourceEditResult()> material_added;
+    std::function<SceneResourceEditResult(uint32_t)> material_duplicated;
+    std::function<SceneResourceEditResult(uint32_t)> material_deleted;
+    std::function<std::string(uint32_t, const std::string&)> material_renamed;
     std::function<void(uint32_t)> material_changed;
     std::function<void()> material_interaction_started;
     std::function<void(const std::vector<uint32_t>&)> material_interaction_finished;
-    std::function<uint32_t()> medium_added;
-    std::function<void(uint32_t, const std::string&)> medium_renamed;
+    std::function<SceneResourceEditResult()> medium_added;
+    std::function<SceneResourceEditResult(uint32_t)> medium_duplicated;
+    std::function<SceneResourceEditResult(uint32_t)> medium_deleted;
+    std::function<std::string(uint32_t, const std::string&)> medium_renamed;
     std::function<void(uint32_t)> medium_changed;
     std::function<void()> medium_interaction_started;
     std::function<void(const std::vector<uint32_t>&)> medium_interaction_finished;
     std::function<void(uint32_t, uint32_t)> mesh_material_changed;          // mesh_index, new_material_index
     std::function<uint32_t(uint32_t, uint32_t)> mesh_material_made_unique;  // mesh_index, source_material_index
     std::function<void(uint32_t)> emitter_changed;
-    std::function<void(uint32_t)> emitter_added;  // 0=environment, 1=directional, 2=atmosphere
-    std::function<bool(uint32_t)> emitter_deleted;
+    std::function<void()> emitter_interaction_started;
+    std::function<void(uint32_t)> emitter_interaction_finished;
+    std::function<SceneResourceEditResult(uint32_t)> emitter_added;  // 0=environment, 1=directional, 2=atmosphere
+    std::function<SceneResourceEditResult(uint32_t)> emitter_duplicated;
+    std::function<SceneResourceEditResult(uint32_t)> emitter_deleted;
+    std::function<std::string(uint32_t, const std::string&)> emitter_renamed;
+    std::function<SceneResourceEditResult()> camera_added;
+    std::function<SceneResourceEditResult(uint32_t)> camera_duplicated;
+    std::function<SceneResourceEditResult(uint32_t)> camera_deleted;
+    std::function<std::string(uint32_t, const std::string&)> camera_renamed;
+    std::function<SceneEditResult()> empty_node_added;
+    std::function<SceneEditResult(ScenePrimitive)> primitive_added;
+    std::function<SceneEditResult(uint32_t)> node_duplicated;
+    std::function<SceneEditResult(uint32_t)> node_deleted;
+    std::function<SceneEditResult(uint32_t, uint32_t)> node_reparented;
+    std::function<SceneEditResult(uint32_t, bool)> node_enabled_changed;
+    std::function<SceneEditResult(uint32_t, const AffineTransform&)> node_transform_changed;
+    std::function<NodeGeometryEditResult(uint32_t, NodeGeometryOperation)> node_geometry_edited;
+    std::function<SceneEditResult(uint32_t, SceneAttachment::Type, uint32_t)> node_resource_attached;
+    std::function<SceneEditResult(uint32_t, uint32_t)> node_resource_detached;
+    std::function<std::string(uint32_t, const std::string&)> node_renamed;
     std::function<void(uint2 /* viewport */, uint32_t /* pixel size*/)> camera_changed;
     std::function<void()> scene_settings_changed;
     std::function<void()> scene_modified;
-    std::function<void()> scene_discarded;
     std::function<void()> scene_transforms_changed;
     std::function<void()> scene_transform_interaction_started;
     std::function<void()> scene_transform_interaction_finished;
@@ -278,6 +300,7 @@ struct UI {
     Material,
     Medium,
     Emitter,
+    Camera,
     Rendering,  // Combined Scene + Integrator properties
   };
 
@@ -301,6 +324,14 @@ struct UI {
   bool emission_picker(SceneRepresentation& scene_rep, const char* label, const char* id_suffix, uint32_t& spectrum_index, const FrameData&);
   bool medium_dropdown(const char* label, uint32_t& medium);
   void update_name_buffer(SelectionKind kind, int32_t index, const char* current_name);
+  void commit_name_edit(bool preserve_selection);
+  void select_scene_edit_node(const SceneEditResult& result);
+  void apply_node_remapping(const std::vector<uint32_t>& old_to_new);
+  void request_node_deletion(uint32_t node_index);
+  void select_resource_edit_result(SelectionKind kind, const SceneResourceEditResult& result);
+  void apply_resource_remapping(SelectionKind kind, const std::vector<uint32_t>& old_to_new);
+  void request_resource_deletion(SelectionKind kind, uint32_t resource_index);
+  void build_resource_edit_feedback(SelectionKind kind) const;
 
   void reset_selection();
   void clear_selection_history();
@@ -311,10 +342,17 @@ struct UI {
   void set_material_selection_range(int32_t index);
   std::vector<uint32_t> selected_material_indices(SceneRepresentation& scene_rep) const;
   void apply_material_changes(SceneRepresentation& scene_rep, const std::vector<uint32_t>& material_indices, const Material& before, const Material& after) const;
+  void begin_material_interaction();
+  void arm_material_interaction();
   void queue_material_change(uint32_t material_index);
   void finish_material_interaction();
+  void begin_medium_interaction();
   void queue_medium_change(uint32_t medium_index);
   void finish_medium_interaction();
+  void begin_emitter_interaction();
+  void arm_emitter_interaction();
+  void queue_emitter_change(uint32_t emitter_index);
+  void finish_emitter_interaction();
   void reload_geometry();
   void reload_scene();
   void set_selection(SelectionKind kind, int32_t index, bool track_history = true);
@@ -341,6 +379,8 @@ struct UI {
   void build_unsaved_changes_modal();
   void build_scene_objects_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_scene_tree_window(SceneRepresentation& scene_rep, const BuildContext& ctx);
+  void build_node_deletion_modal(SceneRepresentation& scene_rep);
+  void build_resource_deletion_modal(SceneRepresentation& scene_rep);
   void build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& data);
   void finish_node_transform_editor_interaction();
   void build_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
@@ -350,8 +390,10 @@ struct UI {
 
   void build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_node_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
+  void build_node_attachments(SceneRepresentation& scene_rep, uint32_t node_index, const FrameData& data);
   void build_medium_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
+  void build_camera_resource_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_atmosphere_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
   uint32_t build_mesh_material_assignment(SceneRepresentation& scene_rep, uint32_t mesh_index);
   uint32_t material_mesh_usage_count(const SceneRepresentation& scene_rep, uint32_t material_index) const;
@@ -461,6 +503,15 @@ struct UI {
   } _node_transform_editor;
   int32_t _node_geometry_edit_result_node = -1;
   NodeGeometryEditResult _node_geometry_edit_result = NodeGeometryEditResult::Success;
+  SceneEditStatus _scene_edit_status = SceneEditStatus::Success;
+  SceneResourceEditStatus _resource_edit_status = SceneResourceEditStatus::Success;
+  SelectionKind _resource_edit_status_kind = SelectionKind::None;
+  uint32_t _scene_tree_reveal_node = kInvalidIndex;
+  uint32_t _pending_node_deletion = kInvalidIndex;
+  bool _node_deletion_modal_requested = false;
+  SelectionKind _pending_resource_deletion_kind = SelectionKind::None;
+  uint32_t _pending_resource_deletion = kInvalidIndex;
+  bool _resource_deletion_modal_requested = false;
 
   enum class GizmoOperation : uint32_t {
     Translate,
@@ -484,6 +535,9 @@ struct UI {
   bool _medium_interaction_active = false;
   bool _medium_editor_rendered_this_frame = false;
   std::vector<uint32_t> _medium_interaction_indices = {};
+  bool _emitter_interaction_active = false;
+  bool _emitter_editor_rendered_this_frame = false;
+  uint32_t _emitter_interaction_index = kInvalidIndex;
 
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;
@@ -492,8 +546,11 @@ struct UI {
   SelectionState _selection;
   SelectionState _name_edit_selection = {};
   char _name_edit_buffer[256] = {};
+  char _name_edit_original_buffer[256] = {};
+  bool _name_edit_pending = false;
   std::vector<SelectionState> _selection_history;
   int32_t _selection_history_cursor = -1;
+  bool _inspector_tab_requested = false;
   uint32_t _ui_setup = UIDefaults;
   RHIImGuiTheme _theme = RHIImGuiTheme::Dark;
   bool _embedded_menu_enabled = true;
@@ -501,6 +558,7 @@ struct UI {
   std::unordered_map<std::string, SpectrumEditorState> _spectrum_editors;
   std::unordered_map<std::string, bool> _material_anisotropy;
   std::vector<int32_t> _selected_material_positions;
+  std::vector<uint32_t> _pending_material_selection_indices;
   int32_t _material_selection_anchor = -1;
   bool _updating_material_multi_selection = false;
   const std::vector<uint32_t>* _editing_material_indices = nullptr;

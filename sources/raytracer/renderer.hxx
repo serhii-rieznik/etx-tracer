@@ -123,6 +123,7 @@ struct RendererUPBPStatus {
 struct RendererStatus {
   RendererMode mode = RendererMode::CPURaytracing;
   RendererStatusState state = RendererStatusState::Unavailable;
+  std::string message = {};
   RendererProgressKind progress_kind = RendererProgressKind::None;
   uint32_t completed_units = 0u;
   uint32_t total_units = 0u;

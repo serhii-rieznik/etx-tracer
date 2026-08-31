@@ -5,6 +5,7 @@
 #include <etx/render/host/film.hxx>
 #include <etx/render/host/scene_global.hxx>
 #include <etx/render/host/scene_representation.hxx>
+#include <etx/render/interop/sampler_policy.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/rt/integrators/integrator.hxx>
 #include <etx/rt/shared/bdpt_mode.hxx>
@@ -18,6 +19,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -64,6 +66,16 @@ bool parse_f32_argument(const char* value, float& result) {
   }
 
   return true;
+}
+
+bool parse_f64_argument(const char* value, double& result) {
+  if ((value == nullptr) || (value[0] == 0)) {
+    return false;
+  }
+
+  char* end_ptr = nullptr;
+  result = std::strtod(value, &end_ptr);
+  return (end_ptr != nullptr) && (end_ptr[0] == 0) && std::isfinite(result);
 }
 
 bool parse_u32_pair_argument(const char* value, char separator, uint32_t& first, uint32_t& second) {
@@ -392,6 +404,7 @@ const char* batch_usage_string() {
          "  --bdpt-mode <pt|lt|bdpt-fast|bdpt-full>\n"
          "  --renderer <cpu|gpu>\n"
          "  --samples <count>\n"
+         "  --time <seconds>                  Minimum render time; the active sample always completes\n"
          "  --bsdf-lut-samples <count>\n"
          "  --max-path-length <count>\n"
          "  --random-seed <value>\n"
@@ -939,6 +952,8 @@ bool prepare_batch_output_buffer(const BatchRenderOptions& options, const float4
 void apply_batch_scene_overrides(const BatchRenderOptions& options, SceneRepresentation& scene) {
   if (options.samples > 0u) {
     scene.data().options.samples = options.samples;
+  } else if (options.time_seconds > 0.0) {
+    scene.data().options.samples = kSamplerBlueNoiseSampleCount;
   }
 
   if (options.max_path_length > 0u) {
@@ -2452,29 +2467,64 @@ bool run_cpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
 
   session.cpu_renderer.film().clear(Film::ClearEverything);
   session.cpu_renderer.integrator_thread().suppress_next_scene_commit_run();
+  session.rt.set_sample_limit((options.time_seconds > 0.0) ? std::numeric_limits<uint32_t>::max() : 0u);
+  session.cpu_renderer.integrator_thread().commit_scene_changes();
   session.cpu_renderer.start();
+  const auto render_begin = std::chrono::steady_clock::now();
 
+  const bool time_limited = options.time_seconds > 0.0;
   uint32_t last_completed_iterations = 0u;
-  const uint32_t target_iterations = session.scene.data().options.samples;
+  const uint32_t target_iterations = time_limited ? std::numeric_limits<uint32_t>::max() : session.scene.data().options.samples;
+  bool finish_requested = false;
+  auto last_progress_log_time = render_begin;
 
   while (true) {
+    if (time_limited && (finish_requested == false)) {
+      const double elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - render_begin).count();
+      if (elapsed_seconds >= options.time_seconds) {
+        session.cpu_renderer.finish();
+        finish_requested = true;
+      }
+    }
+
     session.cpu_renderer.integrator_thread().update();
 
     const Integrator::Status& status = session.cpu_renderer.integrator_thread().status();
     if (status.completed_iterations != last_completed_iterations) {
-      log::info("Rendering progress: %u / %u", status.completed_iterations, target_iterations);
+      if (time_limited) {
+        const auto current_time = std::chrono::steady_clock::now();
+        const double elapsed_seconds = std::chrono::duration<double>(current_time - render_begin).count();
+        if ((std::chrono::duration<double>(current_time - last_progress_log_time).count() >= 1.0) || (elapsed_seconds >= options.time_seconds)) {
+          log::info("Rendering progress: samples=%u elapsed=%.3fs / %.3fs", status.completed_iterations, elapsed_seconds, options.time_seconds);
+          last_progress_log_time = current_time;
+        }
+      } else {
+        log::info("Rendering progress: %u / %u", status.completed_iterations, target_iterations);
+      }
       last_completed_iterations = status.completed_iterations;
     }
 
-    if (session.cpu_renderer.is_running() == false) {
-      if (status.completed_iterations >= target_iterations) {
+    const Integrator* current_integrator = session.cpu_renderer.current_integrator();
+    if (current_integrator->state() == Integrator::State::Stopped) {
+      if (current_integrator->failed()) {
+        log::error("CPU batch render failed: %s", current_integrator->failure_reason());
+        return false;
+      }
+      if ((time_limited && finish_requested && (status.completed_iterations > 0u)) || ((time_limited == false) && (status.completed_iterations >= target_iterations))) {
         break;
       }
-      log::error("CPU batch render stopped before completion: %s", session.cpu_renderer.current_integrator()->status_str());
+      log::error("CPU batch render stopped before completion: %s", current_integrator->status_str());
       return false;
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
+  const double render_wall_time_ms = elapsed_ms(render_begin, std::chrono::steady_clock::now());
+  if (time_limited) {
+    log::info("CPU batch render timing: mode=time samples=%u total=%.2fms budget=%.3fs", last_completed_iterations, render_wall_time_ms, options.time_seconds);
+  } else {
+    log::info("CPU batch render timing: mode=samples samples=%u total=%.2fms", last_completed_iterations, render_wall_time_ms);
   }
 
   uint32_t output_layer = ViewLayer::Result;
@@ -2521,6 +2571,7 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     return false;
   }
 
+  session.gpu_renderer.on_scene_changed(session.scene);
   session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene);
   if (session.gpu_renderer.finish_preparation(session.render_context.context(), session.scene) == false) {
     if (session.gpu_renderer.runtime_failed()) {
@@ -2533,9 +2584,11 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   session.gpu_renderer.set_wavefront_steps_per_render(options.gpu_wavefront_steps_per_frame);
   session.gpu_renderer.set_batch_coarse_progress(true);
   session.gpu_renderer.set_kernel_timing_enabled(options.gpu_kernel_timings);
+  session.gpu_renderer.set_sample_limit((options.time_seconds > 0.0) ? std::numeric_limits<uint32_t>::max() : 0u);
   session.gpu_renderer.start();
 
-  const uint32_t target_sample_count = max(1u, session.scene.data().options.samples);
+  const bool time_limited = options.time_seconds > 0.0;
+  const uint32_t target_sample_count = time_limited ? std::numeric_limits<uint32_t>::max() : max(1u, session.scene.data().options.samples);
   const uint64_t frames_per_sample_budget = std::max<uint64_t>(4096u, static_cast<uint64_t>(session.scene.data().options.max_path_length) + 2u);
   const uint64_t max_gpu_frame_count_u64 = std::max<uint64_t>(1024u, static_cast<uint64_t>(target_sample_count) * frames_per_sample_budget);
   const uint32_t max_gpu_frame_count = static_cast<uint32_t>(std::min<uint64_t>(max_gpu_frame_count_u64, std::numeric_limits<uint32_t>::max()));
@@ -2544,16 +2597,18 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   double first_frame_time_ms = 0.0;
   uint32_t frame_index = 0u;
   uint32_t last_logged_sample_count = session.gpu_renderer.completed_samples();
-  while ((session.gpu_renderer.completed_samples() < target_sample_count) && (frame_index < max_gpu_frame_count)) {
+  bool finish_requested = false;
+  auto last_progress_log_time = render_begin;
+  while (session.gpu_renderer.is_running() && (frame_index < max_gpu_frame_count)) {
     const auto frame_begin = std::chrono::steady_clock::now();
     const auto begin_frame_begin = std::chrono::steady_clock::now();
     session.render_context.begin_frame();
     const auto begin_frame_end = std::chrono::steady_clock::now();
     Renderer::FrameData frame_data = {};
     frame_data.dt = 0.0f;
-    const auto render_begin = std::chrono::steady_clock::now();
+    const auto frame_render_begin = std::chrono::steady_clock::now();
     session.gpu_renderer.render(session.render_context.context(), session.scene, frame_data);
-    const auto render_end = std::chrono::steady_clock::now();
+    const auto frame_render_end = std::chrono::steady_clock::now();
     if (session.gpu_renderer.runtime_failed()) {
       session.render_context.end_frame();
       log::error("GPU batch render failed: %s", session.gpu_renderer.runtime_failure_reason().c_str());
@@ -2568,17 +2623,44 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     if (frame_index == 0u) {
       first_frame_time_ms = frame_time_ms;
       log::info("GPU first-frame timing: total=%.2fms begin_frame=%.2fms render=%.2fms end_frame=%.2fms", frame_time_ms, elapsed_ms(begin_frame_begin, begin_frame_end),
-        elapsed_ms(render_begin, render_end), elapsed_ms(end_frame_begin, end_frame_end));
+        elapsed_ms(frame_render_begin, frame_render_end), elapsed_ms(end_frame_begin, end_frame_end));
     }
 
     frame_index += 1u;
     const uint32_t completed_sample_count = session.gpu_renderer.completed_samples();
-    if ((completed_sample_count != last_logged_sample_count) || (completed_sample_count >= target_sample_count)) {
-      log::info("GPU rendering progress: frames=%u samples=%u / %u", frame_index, completed_sample_count, target_sample_count);
+    const bool sample_completed = completed_sample_count != last_logged_sample_count;
+    if (sample_completed || ((time_limited == false) && (completed_sample_count >= target_sample_count))) {
+      if (time_limited) {
+        const auto current_time = std::chrono::steady_clock::now();
+        const double elapsed_seconds = std::chrono::duration<double>(current_time - render_begin).count();
+        if ((std::chrono::duration<double>(current_time - last_progress_log_time).count() >= 1.0) || (elapsed_seconds >= options.time_seconds)) {
+          log::info("GPU rendering progress: frames=%u samples=%u elapsed=%.3fs / %.3fs", frame_index, completed_sample_count, elapsed_seconds, options.time_seconds);
+          last_progress_log_time = current_time;
+        }
+      } else {
+        log::info("GPU rendering progress: frames=%u samples=%u / %u", frame_index, completed_sample_count, target_sample_count);
+      }
       last_logged_sample_count = completed_sample_count;
     }
+
+    if (time_limited && (finish_requested == false)) {
+      const double elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - render_begin).count();
+      if (elapsed_seconds >= options.time_seconds) {
+        if (sample_completed) {
+          session.gpu_renderer.stop();
+        } else {
+          session.gpu_renderer.finish();
+        }
+        finish_requested = true;
+      }
+    }
   }
-  if (session.gpu_renderer.completed_samples() < target_sample_count) {
+  const uint32_t completed_sample_count = session.gpu_renderer.completed_samples();
+  if (time_limited && ((finish_requested == false) || (completed_sample_count == 0u) || session.gpu_renderer.is_running())) {
+    log::error("GPU batch render did not complete a sample after the %.3fs time budget within %u frames", options.time_seconds, max_gpu_frame_count);
+    return false;
+  }
+  if ((time_limited == false) && (completed_sample_count < target_sample_count)) {
     log::error("GPU batch render did not reach target samples (%u / %u) within %u frames", session.gpu_renderer.completed_samples(), target_sample_count, max_gpu_frame_count);
     return false;
   }
@@ -2586,8 +2668,13 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   const double render_wall_time_ms = std::chrono::duration<double, std::milli>(render_end - render_begin).count();
   const double average_frame_time_ms = total_frame_time_ms / static_cast<double>(frame_index);
   const double steady_state_frame_time_ms = (frame_index > 1u) ? ((total_frame_time_ms - first_frame_time_ms) / static_cast<double>(frame_index - 1u)) : first_frame_time_ms;
-  log::info("GPU batch render timing: frames=%u total=%.2fms first=%.2fms avg=%.2fms steady=%.2fms", frame_index, render_wall_time_ms, first_frame_time_ms, average_frame_time_ms,
-    steady_state_frame_time_ms);
+  if (time_limited) {
+    log::info("GPU batch render timing: mode=time frames=%u samples=%u total=%.2fms budget=%.3fs first=%.2fms avg=%.2fms steady=%.2fms", frame_index, completed_sample_count,
+      render_wall_time_ms, options.time_seconds, first_frame_time_ms, average_frame_time_ms, steady_state_frame_time_ms);
+  } else {
+    log::info("GPU batch render timing: mode=samples frames=%u samples=%u total=%.2fms first=%.2fms avg=%.2fms steady=%.2fms", frame_index, completed_sample_count,
+      render_wall_time_ms, first_frame_time_ms, average_frame_time_ms, steady_state_frame_time_ms);
+  }
 
   if (options.gpu_kernel_timings) {
     const RendererKernelTimingStats& timing_stats = session.gpu_renderer.kernel_timing_stats();
@@ -3015,6 +3102,27 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
         message += batch_usage_string();
         return BatchModeCommand::Error;
       }
+      if (options.samples == 0u) {
+        message = "--samples must be greater than zero\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (argument == "--time") {
+      batch_argument_seen = true;
+      if ((i + 1) >= argc) {
+        message = "Missing value for --time\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
+      if ((parse_f64_argument(argv[i + 1], options.time_seconds) == false) || (options.time_seconds <= 0.0)) {
+        message = "--time must be a finite value greater than zero\n\n";
+        message += batch_usage_string();
+        return BatchModeCommand::Error;
+      }
       i += 1;
       continue;
     }
@@ -3263,11 +3371,17 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
     return BatchModeCommand::None;
   }
 
+  if ((options.samples > 0u) && (options.time_seconds > 0.0)) {
+    message = "Use either --samples or --time\n\n";
+    message += batch_usage_string();
+    return BatchModeCommand::Error;
+  }
+
   if (generate_bsdf_luts_requested) {
     if ((options.scene_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) || (options.integrator.empty() == false) ||
-        (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) || (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) ||
-        (options.strict_comparison) || (options.denoise) || (options.override_random_seed) || (options.override_resolution) || (options.override_crop) ||
-        (options.override_strategy_flags) || (options.override_bdpt_mode) || (options.exposure != 1.0f)) {
+        (options.renderer != "cpu") || (options.samples > 0u) || (options.time_seconds > 0.0) || (options.max_path_length > 0u) || (options.gpu_compile_only) ||
+        (options.gpu_compile_stage.empty() == false) || (options.strict_comparison) || (options.denoise) || (options.override_random_seed) || (options.override_resolution) ||
+        (options.override_crop) || (options.override_strategy_flags) || (options.override_bdpt_mode) || (options.exposure != 1.0f)) {
       message = "--generate-bsdf-luts accepts only --output and --bsdf-lut-samples\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
@@ -3278,9 +3392,10 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
 
   if (pregenerate_bsdf_lut_cache_requested) {
     if ((options.scene_file.empty() == false) || (options.output_file.empty() == false) || (options.reference_file.empty() == false) || (options.compare_mode.empty() == false) ||
-        (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.max_path_length > 0u) || (options.gpu_compile_only) ||
-        (options.gpu_compile_stage.empty() == false) || (options.strict_comparison) || (options.denoise) || (options.override_random_seed) || (options.override_resolution) ||
-        (options.override_crop) || (options.override_strategy_flags) || (options.override_bdpt_mode) || (options.exposure != 1.0f) || (options.bsdf_lut_samples != 512u)) {
+        (options.integrator.empty() == false) || (options.renderer != "cpu") || (options.samples > 0u) || (options.time_seconds > 0.0) || (options.max_path_length > 0u) ||
+        (options.gpu_compile_only) || (options.gpu_compile_stage.empty() == false) || (options.strict_comparison) || (options.denoise) || (options.override_random_seed) ||
+        (options.override_resolution) || (options.override_crop) || (options.override_strategy_flags) || (options.override_bdpt_mode) || (options.exposure != 1.0f) ||
+        (options.bsdf_lut_samples != 512u)) {
       message = "--pregenerate-bsdf-lut-cache does not accept additional options\n\n";
       message += batch_usage_string();
       return BatchModeCommand::Error;
@@ -3340,6 +3455,12 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
 
   if (options.strict_comparison) {
     message = "--strict-comparison requires --full-comparison\n\n";
+    message += batch_usage_string();
+    return BatchModeCommand::Error;
+  }
+
+  if (options.gpu_compile_only && (options.time_seconds > 0.0)) {
+    message = "--time cannot be used with --gpu-compile-only\n\n";
     message += batch_usage_string();
     return BatchModeCommand::Error;
   }

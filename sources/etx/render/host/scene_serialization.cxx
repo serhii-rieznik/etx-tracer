@@ -191,28 +191,104 @@ struct SceneSerializationImpl {
 
   bool get_file(const char* base_dir, const std::string& base) {
     memset(_file_buffer, 0, sizeof(_file_buffer));
-    if (base.empty() == false) {
-      snprintf(_file_buffer, sizeof(_file_buffer), "%s/%s", base_dir, base.c_str());
-      return true;
+    if (base.empty()) {
+      return false;
     }
-    return false;
+
+    std::filesystem::path file_path = base;
+    if (file_path.is_relative()) {
+      file_path = std::filesystem::path(base_dir) / file_path;
+    }
+    const std::string resolved_path = file_path.lexically_normal().generic_string();
+    if (resolved_path.size() >= sizeof(_file_buffer)) {
+      log::error("Resolved asset path is too long: %s", resolved_path.c_str());
+      return false;
+    }
+    memcpy(_file_buffer, resolved_path.c_str(), resolved_path.size() + 1u);
+    return true;
   }
 
   std::vector<const char*> split_params(char* data) {
     std::vector<const char*> params;
-    const char* begin = data;
-    char* token = data;
-    while (*token != 0) {
-      if (*token == 0x20) {
-        *token++ = 0;
-        params.emplace_back(begin);
-        begin = token;
-      } else {
-        ++token;
+    char* cursor = data;
+    while (*cursor != 0) {
+      while ((*cursor != 0) && std::isspace(static_cast<unsigned char>(*cursor))) {
+        ++cursor;
       }
+      if (*cursor == 0) {
+        break;
+      }
+
+      if (*cursor != '"') {
+        params.emplace_back(cursor);
+        while ((*cursor != 0) && (std::isspace(static_cast<unsigned char>(*cursor)) == 0)) {
+          ++cursor;
+        }
+        if (*cursor != 0) {
+          *cursor++ = 0;
+        }
+        continue;
+      }
+
+      char* output = cursor;
+      params.emplace_back(output);
+      ++cursor;
+      while ((*cursor != 0) && (*cursor != '"')) {
+        if ((*cursor == '\\') && (cursor[1] != 0)) {
+          ++cursor;
+        }
+        *output++ = *cursor++;
+      }
+      if (*cursor == '"') {
+        ++cursor;
+      }
+      while ((*cursor != 0) && (std::isspace(static_cast<unsigned char>(*cursor)) == 0)) {
+        *output++ = *cursor++;
+      }
+      *output = 0;
     }
-    params.emplace_back(begin);
     return params;
+  }
+
+  bool decode_path_value(char* data, std::string& path) {
+    char* begin = data;
+    while ((*begin != 0) && std::isspace(static_cast<unsigned char>(*begin))) {
+      ++begin;
+    }
+    if (*begin == 0) {
+      return false;
+    }
+
+    if (*begin == '"') {
+      const auto params = split_params(begin);
+      if (params.size() != 1u) {
+        return false;
+      }
+      path = params[0];
+      return path.empty() == false;
+    }
+
+    char* end = begin + strlen(begin);
+    while ((end > begin) && std::isspace(static_cast<unsigned char>(end[-1]))) {
+      --end;
+    }
+    *end = 0;
+    path = begin;
+    return path.empty() == false;
+  }
+
+  bool get_path_value(const char* base_dir, char* data) {
+    std::string path;
+    return decode_path_value(data, path) && get_file(base_dir, path);
+  }
+
+  bool get_path_value(const char* base_dir, const std::string& data) {
+    if (data.size() >= kDataBufferSize) {
+      return false;
+    }
+    char buffer[kDataBufferSize] = {};
+    memcpy(buffer, data.c_str(), data.size() + 1u);
+    return get_path_value(base_dir, buffer);
   }
 
   uint32_t load_reflectance_spectrum(SceneData& data, char* values) {
@@ -281,7 +357,7 @@ struct SceneSerializationImpl {
     return emitter_spectrum;
   }
 
-  bool write_data_to_file(const SceneData& data, std::ofstream& file) {
+  bool write_data_to_file(const SceneData& data, std::ofstream& file, const SceneSerialization::MaterialNameMapping& serialized_material_names) {
     _string_table.clear();
 
     if (data.vertices.pos.empty() == false) {
@@ -339,6 +415,12 @@ struct SceneSerializationImpl {
 
       for (uint32_t saved_idx : referenced_indices) {
         if (saved_idx < data.materials.size()) {
+          const auto serialized_name = serialized_material_names.find(saved_idx);
+          if (serialized_name != serialized_material_names.end()) {
+            uint32_t name_index = add_string(normalize_material_name(serialized_name->second));
+            mappings.push_back({saved_idx, name_index});
+            continue;
+          }
           for (const auto& [name, runtime_idx] : data.material_mapping) {
             if (runtime_idx == saved_idx && !is_internal_name(name)) {
               std::string normalized_name = normalize_material_name(name);
@@ -425,7 +507,7 @@ struct SceneSerializationImpl {
     return write_chunk_to_file(file, kChunkIdStringTable, &string_count, sizeof(uint64_t), string_data.data(), string_data.size());
   }
 
-  bool write_to_file(const SceneData& data, const std::filesystem::path& path) {
+  bool write_to_file(const SceneData& data, const std::filesystem::path& path, const SceneSerialization::MaterialNameMapping& serialized_material_names) {
     std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
     if (file.is_open() == false) {
       log::error("Failed to open file for writing: %s", path.string().c_str());
@@ -444,7 +526,7 @@ struct SceneSerializationImpl {
     auto start_pos = file.tellp();
 
     // Write all data chunks directly to file
-    if (!write_data_to_file(data, file)) {
+    if (write_data_to_file(data, file, serialized_material_names) == false) {
       log::error("Failed to write data chunks");
       return false;
     }
@@ -1031,9 +1113,11 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "shape")) {
-      char tmp_buffer[2048] = {};
-      snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, _data_buffer);
-      entry.cam.lens_image = data.add_image(tmp_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable, {}, {1.0f, 1.0f});
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      if (get_path_value(base_dir, buffer)) {
+        entry.cam.lens_image = data.add_image(_file_buffer, Image::BuildSamplingTable | Image::UniformSamplingTable, {}, {1.0f, 1.0f});
+      }
     }
 
     if (get_param(material, "ext_medium")) {
@@ -1199,13 +1283,18 @@ struct SceneSerializationImpl {
 
     Medium::Class cls = Medium::Homogeneous;
 
-    char tmp_buffer[2048] = {};
-    bool has_volume = false;
+    std::string volume_path;
     if (get_param(material, "volume")) {
-      if (strlen(_data_buffer) > 0) {
-        snprintf(tmp_buffer, sizeof(tmp_buffer), "%s%s", base_dir, _data_buffer);
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      std::string decoded_path;
+      if (decode_path_value(buffer, decoded_path)) {
+        std::filesystem::path source_path = decoded_path;
+        if (source_path.is_relative()) {
+          source_path = std::filesystem::path(base_dir) / source_path;
+        }
+        volume_path = source_path.lexically_normal().generic_string();
         cls = Medium::Heterogeneous;
-        has_volume = true;
       }
     }
 
@@ -1283,7 +1372,7 @@ struct SceneSerializationImpl {
       return;
     }
 
-    data.add_medium(cls, name.c_str(), tmp_buffer, s_a, s_t, anisotropy, explicit_connections);
+    data.add_medium(cls, name.c_str(), volume_path.c_str(), s_a, s_t, anisotropy, explicit_connections);
   }
 
   void parse_directional_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
@@ -1306,9 +1395,11 @@ struct SceneSerializationImpl {
     e.directional.direction = normalize(e.directional.direction);
 
     if (get_param(material, "image")) {
-      char tmp_buffer[2048] = {};
-      snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, _data_buffer);
-      e.emission.image_index = data.add_image(tmp_buffer, Image::Regular, {}, {1.0f, 1.0f});
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      if (get_path_value(base_dir, buffer)) {
+        e.emission.image_index = data.add_image(_file_buffer, Image::Regular, {}, {1.0f, 1.0f});
+      }
     }
 
     if (get_param(material, "angular_diameter")) {
@@ -1326,7 +1417,19 @@ struct SceneSerializationImpl {
       e.medium_index = m;
     }
 
-    if (get_param(material, "use_as_sun")) {
+    bool atmosphere_reference_loaded = false;
+    if (get_param(material, "atmosphere_index")) {
+      uint32_t atmosphere_index = kInvalidIndex;
+      if ((sscanf(_data_buffer, "%u", &atmosphere_index) == 1) && (atmosphere_index < data.emitter_profiles.size())) {
+        const EmitterProfile& candidate = data.emitter_profiles[atmosphere_index];
+        if ((candidate.cls == EmitterProfile::Class::Environment) && ((candidate.meta & EmitterProfile::Meta::Atmosphere) != 0u)) {
+          e.reference_emitter_index = atmosphere_index;
+          atmosphere_reference_loaded = true;
+        }
+      }
+    }
+
+    if ((atmosphere_reference_loaded == false) && get_param(material, "use_as_sun")) {
       int use_as_sun = 0;
       if ((sscanf(_data_buffer, "%d", &use_as_sun) == 1) && (use_as_sun != 0)) {
         for (uint32_t i = 0u; i < data.emitter_profiles.size(); ++i) {
@@ -1343,9 +1446,13 @@ struct SceneSerializationImpl {
   void parse_env_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
     auto& e = data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
 
-    char tmp_buffer[2048] = {};
+    std::string image_path;
     if (get_param(material, "image")) {
-      snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, _data_buffer);
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      if (get_path_value(base_dir, buffer)) {
+        image_path = _file_buffer;
+      }
     }
 
     float rotation = 0.0f;
@@ -1360,7 +1467,7 @@ struct SceneSerializationImpl {
         u_scale = val;
       }
     }
-    e.emission.image_index = data.add_image(tmp_buffer, Image::BuildSamplingTable | Image::RepeatU, {rotation, 0.0f}, {u_scale, 1.0f});
+    e.emission.image_index = data.add_image(image_path.c_str(), Image::BuildSamplingTable | Image::RepeatU, {rotation, 0.0f}, {u_scale, 1.0f});
 
     if (get_param(material, "color")) {
       char buffer[kDataBufferSize] = {};
@@ -1442,7 +1549,14 @@ struct SceneSerializationImpl {
     }
 
     AtmosphereEmitterParameters params{{scattering_params}, quality, env_spectrum};
-    data.add_atmosphere_emitter(params);
+    const uint32_t emitter_index = data.add_atmosphere_emitter(params);
+    if (get_param(material, "ext_medium")) {
+      const uint32_t medium_index = data.mediums.find(_data_buffer);
+      if (medium_index == kInvalidIndex) {
+        log::warning("Medium %s was not declared, but used in atmosphere emitter as external medium", _data_buffer);
+      }
+      data.emitter_profiles[emitter_index].medium_index = medium_index;
+    }
   }
 
   void parse_spectrum(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
@@ -1640,7 +1754,7 @@ struct SceneSerializationImpl {
       emission_spd = load_illuminant_spectrum(data, _data_buffer);
       emission_spd_defined = true;
       auto map_ke_it = material.properties.find("map_Ke");
-      if (map_ke_it != material.properties.end() && get_file(base_dir, map_ke_it->second)) {
+      if ((map_ke_it != material.properties.end()) && get_path_value(base_dir, map_ke_it->second)) {
         mtl.emission.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::BuildSamplingTable, {}, {1.0f, 1.0f});
       }
     }
@@ -1648,7 +1762,7 @@ struct SceneSerializationImpl {
     // Handle map_Ke even without Ke parameter (for textured emission with default strength)
     if (mtl.emission.image_index == kInvalidIndex) {
       auto map_ke_it = material.properties.find("map_Ke");
-      if (map_ke_it != material.properties.end() && get_file(base_dir, map_ke_it->second)) {
+      if ((map_ke_it != material.properties.end()) && get_path_value(base_dir, map_ke_it->second)) {
         is_emitter = true;
         if (!emission_spd_defined) {
           emission_spd = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
@@ -1818,30 +1932,38 @@ struct SceneSerializationImpl {
     }
 
     if (get_param(material, "map_Kd")) {
-      if (get_file(base_dir, _data_buffer)) {
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      if (get_path_value(base_dir, buffer)) {
         mtl.scattering.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
       }
     }
 
     if (get_param(material, "map_Ks")) {
-      if (get_file(base_dir, _data_buffer)) {
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      if (get_path_value(base_dir, buffer)) {
         mtl.reflectance.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
       }
     }
 
     if (get_param(material, "map_Kt")) {
-      if (get_file(base_dir, _data_buffer)) {
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      if (get_path_value(base_dir, buffer)) {
         mtl.scattering.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
       }
     }
 
     if (mtl.cls == MaterialClass::Translucent) {
-      SpectralImage black = {};
-      black.spectrum_index = data.defaults.black_spectrum;
       if (((base_applied == false) && (explicit_reflectance == false)) && explicit_transmission) {
+        SpectralImage black = {};
+        black.spectrum_index = data.add_spectrum(data.spectrum_values[data.defaults.black_spectrum]);
         mtl.reflectance = black;
       }
       if (((base_applied == false) && (explicit_transmission == false)) && explicit_reflectance) {
+        SpectralImage black = {};
+        black.spectrum_index = data.add_spectrum(data.spectrum_values[data.defaults.black_spectrum]);
         mtl.scattering = black;
       }
     }
@@ -1924,9 +2046,9 @@ struct SceneSerializationImpl {
       auto params = split_params(buffer);
       for (uint64_t i = 0, e = params.size(); i < e; ++i) {
         if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
-          char tmp_buffer[1024] = {};
-          snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, params[i + 1]);
-          mtl.normal_image_index = data.add_image(tmp_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
+          if (get_file(base_dir, params[i + 1])) {
+            mtl.normal_image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
+          }
           i += 1;
         }
         if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
@@ -1943,9 +2065,9 @@ struct SceneSerializationImpl {
 
       for (uint64_t i = 0, e = params.size(); i < e; ++i) {
         if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
-          char tmp_buffer[1024] = {};
-          snprintf(tmp_buffer, sizeof(tmp_buffer), "%s/%s", base_dir, params[i + 1]);
-          mtl.thinfilm.thinkness_image = data.add_image(tmp_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
+          if (get_file(base_dir, params[i + 1])) {
+            mtl.thinfilm.thinkness_image = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
+          }
           i += 1;
         }
 
@@ -2075,8 +2197,17 @@ struct SceneSerializationImpl {
           scattering_distances.y = static_cast<float>(atof(params[i + 2]));
           scattering_distances.z = static_cast<float>(atof(params[i + 3]));
           i += 3;
+        } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
+          subsurface_scale = static_cast<float>(atof(params[i + 1]));
+          i += 1;
+        } else if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
+          if (get_file(base_dir, params[i + 1])) {
+            mtl.subsurface.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+          }
+          i += 1;
         }
       }
+      mtl.subsurface.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance(subsurface_scale * scattering_distances));
     }
   }
 
@@ -2154,7 +2285,12 @@ SceneSerialization::~SceneSerialization() {
 }
 
 bool SceneSerialization::save_to_file(const SceneData& data, const std::filesystem::path& path) {
-  return _private->write_to_file(data, path);
+  const MaterialNameMapping material_names;
+  return _private->write_to_file(data, path, material_names);
+}
+
+bool SceneSerialization::save_to_file(const SceneData& data, const std::filesystem::path& path, const MaterialNameMapping& material_names) {
+  return _private->write_to_file(data, path, material_names);
 }
 
 bool SceneSerialization::load_from_file(const std::filesystem::path& path, SceneData& data, const char* materials_file, const IORDatabase& database, TaskScheduler& scheduler) {

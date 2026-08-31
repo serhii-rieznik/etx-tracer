@@ -1536,7 +1536,7 @@ struct CPUUPBPImpl {
         static_cast<double>(debug_info[DebugCameraBeamPreparationTime].value), static_cast<double>(debug_info[DebugCameraPB2DTime].value),
         static_cast<double>(debug_info[DebugCameraBB1DTime].value), static_cast<double>(debug_info[DebugCameraFilmSubmissionTime].value));
     }
-    if ((*state == Integrator::State::WaitingForCompletion) || (status.current_iteration + 1u >= scene.options.samples)) {
+    if ((*state == Integrator::State::WaitingForCompletion) || (status.current_iteration + 1u >= rt.sample_limit())) {
       *state = Integrator::State::Stopped;
       return;
     }
@@ -1556,6 +1556,14 @@ CPUUPBP::~CPUUPBP() {
 }
 
 const char* CPUUPBP::status_str() const {
+  return _private->status_string();
+}
+
+bool CPUUPBP::failed() const {
+  return _private->failed.load();
+}
+
+const char* CPUUPBP::failure_reason() const {
   return _private->status_string();
 }
 

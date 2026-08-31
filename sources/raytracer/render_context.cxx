@@ -288,9 +288,9 @@ void RenderContext::init(const RenderContextConfig& config) {
   }
 
   const RHICapabilities capabilities = _private->rhi_context.capabilities();
-  log::info("RenderContext RHI backend: %s (swapchain=%u, bindless=%u, timestamps=%u, ray_tracing=%u)", backend_name(backend),
+  log::info("RenderContext RHI backend: %s (swapchain=%u, bindless=%u, timestamps=%u, ray_tracing=%u, ray_traversal_class=%u)", backend_name(backend),
     static_cast<uint32_t>(capabilities.supports_swapchain), static_cast<uint32_t>(capabilities.supports_bindless), static_cast<uint32_t>(capabilities.supports_timestamps),
-    static_cast<uint32_t>(capabilities.supports_ray_tracing));
+    static_cast<uint32_t>(capabilities.supports_ray_tracing), static_cast<uint32_t>(capabilities.ray_traversal_class));
 
   _private->imgui_enabled = config.enable_imgui && _private->runtime_output.imgui_supported();
   if (_private->imgui_enabled) {

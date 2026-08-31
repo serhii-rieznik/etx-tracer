@@ -12,6 +12,14 @@ struct ProceduralGeometryDefinition {
     Sphere,
     Plane,
     Disk,
+    Box,
+    Cone,
+    Capsule,
+    Torus,
+    Tetrahedron,
+    Octahedron,
+    Dodecahedron,
+    Icosahedron,
   };
 
   Class cls = Class::Invalid;

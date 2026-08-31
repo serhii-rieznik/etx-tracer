@@ -23,9 +23,9 @@ struct ImagePoolImpl {
     remove_all();
   }
 
-  uint32_t add_copy(const Image& img) {
-    std::string path = "##mem" + std::to_string(1u + counter++);
-    uint32_t handle = create_entry(path);
+  uint32_t add_copy(const Image& source_image, const std::string& path, const std::string& key) {
+    const Image img = source_image;
+    const uint32_t handle = create_entry(path, key);
 
     auto& image = images[handle];
     const BufferHandle dst_pixel_buffer = image.pixel_buffer;
@@ -116,6 +116,24 @@ struct ImagePoolImpl {
     }
 
     return handle;
+  }
+
+  uint32_t add_copy(const Image& img) {
+    const std::string path = "##mem" + std::to_string(1u + counter++);
+    return add_copy(img, path, path);
+  }
+
+  uint32_t add_copy(uint32_t source_handle) {
+    if ((source_handle >= images.size()) || (source_handle >= paths.size())) {
+      return kInvalidIndex;
+    }
+
+    std::string path = paths[source_handle];
+    if (path.empty()) {
+      path = "##mem" + std::to_string(1u + counter++);
+    }
+    const std::string key = path + "#copy-" + std::to_string(1u + counter++);
+    return add_copy(images[source_handle], path, key);
   }
 
   uint32_t add_from_file(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale) {
@@ -684,7 +702,7 @@ struct ImagePoolImpl {
 
   static std::string file_image_key(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale) {
     return path + "#" + std::to_string(image_options) + "#" + std::to_string(offset.x) + "#" + std::to_string(offset.y) + "#" + std::to_string(scale.x) + "#" +
-      std::to_string(scale.y);
+           std::to_string(scale.y);
   }
 
   uint32_t create_entry(const std::string& path) {
@@ -721,8 +739,20 @@ void ImagePool::cleanup() {
   _private->cleanup();
 }
 
+void ImagePool::swap_contents(ImagePool& other) {
+  using std::swap;
+  swap(_private->paths, other._private->paths);
+  swap(_private->keys, other._private->keys);
+  swap(_private->mapping, other._private->mapping);
+  swap(_private->counter, other._private->counter);
+}
+
 uint32_t ImagePool::add_copy(const Image& img) {
   return _private->add_copy(img);
+}
+
+uint32_t ImagePool::add_copy(uint32_t handle) {
+  return _private->add_copy(handle);
 }
 
 uint32_t ImagePool::add_from_file(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale) {
