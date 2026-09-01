@@ -114,8 +114,8 @@ struct RTApplication {
   void on_camera_changed(uint2 viewport, uint32_t pixel_size);
   void on_scene_settings_changed();
   void on_scene_transforms_changed();
-  void on_scene_transform_interaction_started();
-  void on_scene_transform_interaction_finished();
+  void on_preview_interaction_started();
+  void on_preview_interaction_finished();
   void on_denoise_selected();
   void on_view_scene(uint32_t direction);
   void on_clear_recent_files();
@@ -133,7 +133,12 @@ struct RTApplication {
   void handle_scene_hierarchy_changed();
   void rebuild_all_atmosphere_emitters();
   void notify_scene_might_have_changed();
+  void notify_camera_changed();
   void notify_scene_transforms_changed();
+  void update_camera_interaction(float dt);
+  void update_preview_interaction(SceneUpdateScope scope);
+  void finish_preview();
+  void cancel_preview();
   RendererStatus current_renderer_status() const;
   void sync_ui_renderer_state();
   void process_application_commands();
@@ -159,7 +164,7 @@ struct RTApplication {
   RasterizationRenderer raster_renderer;
   GPURaytracingRenderer gpu_renderer;
   Renderer* _active_renderer = nullptr;
-  Renderer* _scene_transform_interaction_renderer = nullptr;
+  Renderer* _preview_source_renderer = nullptr;
   Renderer* _pending_reference_capture_renderer = nullptr;
   bool _gpu_renderer_initialized = false;
   bool _gpu_renderer_supported = false;
@@ -171,7 +176,10 @@ struct RTApplication {
   bool _initialization_started = false;
   std::atomic<bool> _initialized = false;
   bool _scene_global_initialized = false;
-  bool _scene_transform_interaction_active = false;
+  bool _preview_active = false;
+  bool _preview_resume_after_end = false;
+  bool _camera_preview_claim_active = false;
+  bool _camera_preview_delayed_release = false;
   bool _material_render_resource_preparation_active = false;
   bool _restart_cpu_after_material_resource_preparation = false;
   bool _restart_gpu_after_material_resource_preparation = false;
@@ -179,6 +187,10 @@ struct RTApplication {
   bool _platform_color_scheme_initialized = false;
   PlatformColorScheme _platform_color_scheme = PlatformColorScheme::Dark;
   SaveImageMode _pending_gpu_save_image_mode = SaveImageMode::RGB;
+  SceneUpdateScope _preview_update_scope = SceneUpdateScope::None;
+  uint32_t _preview_interaction_count = 0u;
+  uint32_t _output_pixel_size = 1u;
+  double _camera_preview_idle_seconds = 0.0;
 
   Options _options;
   ViewParameters _view_parameters = {

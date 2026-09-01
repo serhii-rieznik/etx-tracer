@@ -887,6 +887,7 @@ Json state_json(const ApplicationStateSnapshot& state) {
     {"integrator_value", static_cast<uint32_t>(state.integrator_type)},
     {"integrators", std::move(integrators)},
     {"run_state", run_state_name(state.status.state)},
+    {"preview_active", state.status.preview_active},
     {"controls",
       {{"can_run", state.controls.can_run}, {"can_finish", state.controls.can_finish}, {"can_stop", state.controls.can_stop}, {"can_restart", state.controls.can_restart}}},
     {"preparation", {{"state", static_cast<uint32_t>(state.preparation.state)}, {"phase", state.preparation.phase}, {"message", state.preparation.message},

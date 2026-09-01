@@ -465,6 +465,9 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   if (wavefront_connect_light_stage_matches_material(candidate.light_material_class) == false) {
     return;
   }
+  if (wavefront_claim_connect_light_candidate(resources.connect_light_task_buffer, storage_index) == false) {
+    return;
+  }
 
   WavefrontConnectLightPrepareInput input_value = (WavefrontConnectLightPrepareInput)0;
   if (wavefront_load_connect_light_prepare_input(dispatch_index, batch_index, false, kInvalidIndex, kInvalidIndex, input_value) == false) {
@@ -599,6 +602,7 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   }
 # endif
   wavefront_store_connect_light_task(input_value.resources.connect_light_task_buffer, input_value.storage_index, task);
+  DeviceMemoryBarrier();
   wavefront_shadow_queue_append(input_value.resources, kGPUWavefrontShadowQueueConnectLight, input_value.storage_index);
 }
 #endif

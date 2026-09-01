@@ -203,6 +203,9 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskUPBPLightPdfForwardBitsOf
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskUPBPLightPdfReverseBitsOffset = 124u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskUPBPIntersectionSeedOffset = 128u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightTaskUPBPMediumSeedOffset = 132u;
+// Material-specific resolver state shares this allocation with the final task and must remain outside the task payload.
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightResolverFlagsOffset = 136u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectLightResolverMaterialClassOffset = 140u;
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectCameraTaskStride = 160u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectCameraTaskShadowRayOffset = 0u;
@@ -282,7 +285,8 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontCameraDispatchArgsOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontLightDispatchArgsOffset = 16u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectDispatchArgsOffset = 32u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectDispatchArgsCount = 7u;
-ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialDispatchArgsOffset = kGPUWavefrontConnectDispatchArgsOffset + kGPUWavefrontConnectDispatchArgsCount * kGPUWavefrontDispatchArgsStride;
+ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialDispatchArgsOffset =
+  kGPUWavefrontConnectDispatchArgsOffset + kGPUWavefrontConnectDispatchArgsCount * kGPUWavefrontDispatchArgsStride;
 ETX_STATIC_CONST uint32_t kGPUWavefrontShadowDispatchArgsOffset = kGPUWavefrontMaterialDispatchArgsOffset + kGPUWavefrontMaterialQueueCount * kGPUWavefrontDispatchArgsStride;
 ETX_STATIC_CONST uint32_t kGPUWavefrontFixedDispatchArgsBufferSize = kGPUWavefrontShadowDispatchArgsOffset + kGPUWavefrontShadowQueueCount * kGPUWavefrontDispatchArgsStride;
 ETX_STATIC_CONST uint32_t kGPUWavefrontHeavyContinuationChunkSize = 65536u;

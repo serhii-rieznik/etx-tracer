@@ -126,6 +126,7 @@ struct RendererStatus {
   RendererMode mode = RendererMode::CPURaytracing;
   RendererStatusState state = RendererStatusState::Unavailable;
   bool output_stale = false;
+  bool preview_active = false;
   std::string message = {};
   RendererProgressKind progress_kind = RendererProgressKind::None;
   uint32_t completed_units = 0u;
@@ -191,114 +192,7 @@ struct RendererControlState {
   bool can_restart = false;
 };
 
-struct PreviewResolutionController {
-  PreviewResolutionController(uint32_t initial_pixel_size, uint32_t maximum_pixel_size)
-    : _pixel_size(initial_pixel_size > 0u ? initial_pixel_size : 1u)
-    , _initial_pixel_size(_pixel_size)
-    , _maximum_pixel_size(maximum_pixel_size > _pixel_size ? maximum_pixel_size : _pixel_size) {
-  }
-
-  void begin() {
-    _pixel_size = _initial_pixel_size;
-    _active = true;
-    reset_observations();
-  }
-
-  void end() {
-    _active = false;
-    reset_observations();
-  }
-
-  bool active() const {
-    return _active;
-  }
-
-  uint32_t pixel_size() const {
-    return _pixel_size;
-  }
-
-  bool update(double elapsed_seconds, bool output_completed) {
-    if ((_active == false) || (elapsed_seconds <= 0.0)) {
-      return false;
-    }
-
-    if (output_completed == false) {
-      _seconds_without_output += elapsed_seconds;
-      if (_seconds_without_output < kMaximumOutputLatencySeconds) {
-        return false;
-      }
-
-      reset_observations();
-      return increase_pixel_size();
-    }
-
-    _seconds_without_output = 0.0;
-    if (elapsed_seconds > kSlowOutputSeconds) {
-      _slow_output_count += 1u;
-      _fast_output_count = 0u;
-      if (_slow_output_count < kSlowOutputThreshold) {
-        return false;
-      }
-
-      reset_observations();
-      return increase_pixel_size();
-    }
-
-    if (elapsed_seconds < kFastOutputSeconds) {
-      _fast_output_count += 1u;
-      _slow_output_count = 0u;
-      if (_fast_output_count < kFastOutputThreshold) {
-        return false;
-      }
-
-      reset_observations();
-      return decrease_pixel_size();
-    }
-
-    _slow_output_count = 0u;
-    _fast_output_count = 0u;
-    return false;
-  }
-
- private:
-  bool increase_pixel_size() {
-    if (_pixel_size >= _maximum_pixel_size) {
-      return false;
-    }
-    _pixel_size = (_pixel_size > (_maximum_pixel_size / 2u)) ? _maximum_pixel_size : (_pixel_size * 2u);
-    return true;
-  }
-
-  bool decrease_pixel_size() {
-    if (_pixel_size <= 1u) {
-      return false;
-    }
-    _pixel_size = (_pixel_size + 1u) / 2u;
-    return true;
-  }
-
-  void reset_observations() {
-    _seconds_without_output = 0.0;
-    _slow_output_count = 0u;
-    _fast_output_count = 0u;
-  }
-
- private:
-  static constexpr double kTargetOutputSeconds = 1.0 / 30.0;
-  static constexpr double kSlowOutputSeconds = kTargetOutputSeconds * 1.25;
-  static constexpr double kFastOutputSeconds = kTargetOutputSeconds * 0.60;
-  static constexpr double kMaximumOutputLatencySeconds = kTargetOutputSeconds * 2.0;
-  static constexpr uint32_t kSlowOutputThreshold = 2u;
-  static constexpr uint32_t kFastOutputThreshold = 6u;
-
-  double _seconds_without_output = 0.0;
-  uint32_t _pixel_size = 1u;
-  uint32_t _initial_pixel_size = 1u;
-  uint32_t _maximum_pixel_size = 1u;
-  uint32_t _slow_output_count = 0u;
-  uint32_t _fast_output_count = 0u;
-  bool _active = false;
-};
+constexpr uint32_t kInteractionPreviewPixelSize = 4u;
 
 struct Renderer {
   struct FrameData {
@@ -318,32 +212,33 @@ struct Renderer {
     ETX_CRITICAL(_camera_controller == nullptr);
     _camera_controller.reset(new CameraController(scene.mutable_camera()));
     _camera_controller->enable_inertia = false;
-    reset_preview_state();
   }
 
-  virtual void update_camera(SceneRepresentation& scene, float dt) {
+  struct CameraUpdateResult {
+    bool changed = false;
+    bool mouse_input_active = false;
+    bool keyboard_input_active = false;
+    bool scene_resources_changed = false;
+  };
+
+  CameraUpdateResult update_camera(SceneRepresentation& scene, float dt) {
     ETX_CRITICAL(_camera_controller);
 
-    const bool camera_updated = _camera_controller->update(dt);
-    const bool camera_input_active = _camera_controller->camera_navigation_input_active();
-    if (camera_updated) {
-      const bool scene_resources_changed = scene.store_active_camera();
-      if (scene_resources_changed) {
+    CameraUpdateResult result = {
+      .changed = _camera_controller->update(dt),
+      .mouse_input_active = _camera_controller->mouse_navigation_input_active(),
+      .keyboard_input_active = _camera_controller->keyboard_navigation_input_active(),
+    };
+    if (result.changed) {
+      result.scene_resources_changed = scene.store_active_camera();
+      if (result.scene_resources_changed) {
         scene.update_medium_bounds();
-        request_scene_transform_update();
       }
-      _camera_interaction_active = true;
       if (_camera_modified_callback) {
         _camera_modified_callback();
       }
-      on_camera_changed(scene);
-      return;
     }
-
-    if (_camera_interaction_active && (camera_input_active == false)) {
-      _camera_interaction_active = false;
-      on_camera_become_steady(scene);
-    }
+    return result;
   }
 
   virtual void render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& data) {
@@ -371,15 +266,14 @@ struct Renderer {
     _camera_controller->handle_event(e);
   }
 
-  virtual void on_camera_changed(SceneRepresentation& scene) {
-  }
-
-  virtual void on_camera_become_steady(SceneRepresentation& scene) {
-  }
-
   virtual void on_scene_changed(SceneRepresentation& scene) {
     (void)scene;
     request_scene_update();
+  }
+
+  virtual void on_camera_changed(SceneRepresentation& scene) {
+    (void)scene;
+    request_camera_update();
   }
 
   virtual void on_scene_transforms_changed(SceneRepresentation& scene) {
@@ -387,20 +281,18 @@ struct Renderer {
     request_scene_transform_update();
   }
 
-  virtual void on_scene_transform_interaction_started(SceneRepresentation& scene) {
-    (void)scene;
-  }
-
-  virtual void on_scene_transform_interaction_finished(SceneRepresentation& scene) {
-    (void)scene;
-  }
-
   void request_scene_update() {
     _scene_update_scope = SceneUpdateScope::Full;
   }
 
-  void request_scene_transform_update() {
+  void request_camera_update() {
     if (_scene_update_scope == SceneUpdateScope::None) {
+      _scene_update_scope = SceneUpdateScope::Camera;
+    }
+  }
+
+  void request_scene_transform_update() {
+    if (static_cast<uint32_t>(_scene_update_scope) < static_cast<uint32_t>(SceneUpdateScope::Transforms)) {
       _scene_update_scope = SceneUpdateScope::Transforms;
     }
   }
@@ -439,10 +331,17 @@ struct Renderer {
   virtual void stop() {
   }
 
+  virtual void stop_rendering() {
+    stop();
+  }
+
   virtual void finish() {
   }
 
   virtual void restart() {
+  }
+
+  virtual void discard_render_output() {
   }
 
   virtual void cancel_preparation() {
@@ -456,28 +355,48 @@ struct Renderer {
     _camera_modified_callback = std::move(callback);
   }
 
- protected:
-  bool update_preview_active_state() {
-    const bool preview_active = _preview_camera_active || _preview_transform_active;
-    if (preview_active == _preview_active) {
-      return false;
-    }
-
-    _preview_active = preview_active;
-    if (_preview_active) {
-      _preview_resolution.begin();
-    } else {
-      _preview_resolution.end();
-    }
-    return true;
+  void set_output_pixel_size(uint32_t pixel_size) {
+    _output_pixel_size = clamp(pixel_size, 1u, 1024u);
   }
 
-  void reset_preview_state() {
-    _preview_camera_active = false;
-    _preview_transform_active = false;
-    _preview_active = false;
-    _camera_interaction_active = false;
-    _preview_resolution.end();
+  uint32_t output_pixel_size() const {
+    return _output_pixel_size;
+  }
+
+  void set_preview_pixel_size(uint32_t pixel_size) {
+    const uint32_t previous_pixel_size = _preview_pixel_size;
+    _preview_pixel_size = pixel_size == 0u ? 0u : clamp(pixel_size, 1u, 1024u);
+    if ((previous_pixel_size == 0u) != (_preview_pixel_size == 0u)) {
+      on_preview_mode_changed(_preview_pixel_size > 0u);
+    }
+  }
+
+  uint32_t preview_pixel_size() const {
+    return _preview_pixel_size;
+  }
+
+  uint32_t render_pixel_size() const {
+    return _preview_pixel_size > 0u ? _preview_pixel_size : _output_pixel_size;
+  }
+
+  uint2 scaled_output_dimensions(const uint2& dimensions) const {
+    return {
+      (dimensions.x + _output_pixel_size - 1u) / _output_pixel_size,
+      (dimensions.y + _output_pixel_size - 1u) / _output_pixel_size,
+    };
+  }
+
+  uint2 scaled_render_dimensions(const uint2& dimensions) const {
+    const uint32_t pixel_size = render_pixel_size();
+    return {
+      (dimensions.x + pixel_size - 1u) / pixel_size,
+      (dimensions.y + pixel_size - 1u) / pixel_size,
+    };
+  }
+
+ protected:
+  virtual void on_preview_mode_changed(bool active) {
+    (void)active;
   }
 
   TaskScheduler& scheduler;
@@ -485,11 +404,8 @@ struct Renderer {
   std::function<void()> _camera_modified_callback = {};
   uint2 _output_dimensions = {};
   RHITexture _output_texture = {};
-  PreviewResolutionController _preview_resolution = {4u, 4u};
-  bool _preview_camera_active = false;
-  bool _preview_transform_active = false;
-  bool _preview_active = false;
-  bool _camera_interaction_active = false;
+  uint32_t _output_pixel_size = 1u;
+  uint32_t _preview_pixel_size = 0u;
   SceneUpdateScope _scene_update_scope = SceneUpdateScope::Full;
 };
 

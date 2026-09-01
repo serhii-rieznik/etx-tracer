@@ -68,6 +68,7 @@ struct UI {
     const std::vector<std::string>& recent_files;
     const Film& film;
     uint2 output_size = {};
+    uint32_t output_pixel_size = 1u;
     float dt = 0.0f;
     bool scene_loaded = false;
   };
@@ -268,8 +269,8 @@ struct UI {
     std::function<void()> scene_settings_changed;
     std::function<void()> scene_modified;
     std::function<void()> scene_transforms_changed;
-    std::function<void()> scene_transform_interaction_started;
-    std::function<void()> scene_transform_interaction_finished;
+    std::function<void()> preview_interaction_started;
+    std::function<void()> preview_interaction_finished;
     std::function<void()> denoise_selected;
     std::function<void(uint32_t direction)> view_scene;
     std::function<void()> clear_recent_files;
@@ -369,6 +370,7 @@ struct UI {
   void build_resource_deletion_modal(SceneRepresentation& scene_rep);
   void build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& data);
   void finish_node_transform_editor_interaction();
+  void finish_camera_property_interaction();
   void build_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
 
   bool build_material_class_selector(Material& material);
@@ -515,6 +517,8 @@ struct UI {
   bool _node_transform_editor_interaction_active = false;
   bool _node_transform_editor_interaction_rendered_this_frame = false;
   int32_t _node_transform_editor_interaction_node_index = -1;
+  bool _camera_property_interaction_active = false;
+  bool _camera_property_interaction_rendered_this_frame = false;
   std::vector<uint32_t> _pending_material_changes = {};
   std::vector<uint32_t> _pending_medium_changes = {};
   uint32_t _pending_emitter_change = kInvalidIndex;

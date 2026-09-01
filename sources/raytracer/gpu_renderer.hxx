@@ -139,15 +139,12 @@ struct GPURaytracingRenderer : public Renderer {
     return RendererMode::GPURaytracing;
   }
   RHITexture output_texture() const override {
-    if (_preview_active || (_sample_index == 0u) || (_output_texture_state != RHIResourceState::ShaderReadOnly)) {
+    if ((_sample_index == 0u) || (_output_texture_state != RHIResourceState::ShaderReadOnly)) {
       return {};
     }
     return _output_texture;
   }
   RHITexture display_texture() const override {
-    if (_preview_visible && (_preview_texture_state == RHIResourceState::ShaderReadOnly)) {
-      return _preview_texture;
-    }
     if ((_display_output_valid == false) || (_output_texture_state != RHIResourceState::ShaderReadOnly)) {
       return {};
     }
@@ -162,17 +159,18 @@ struct GPURaytracingRenderer : public Renderer {
   void start() override;
   void cancel_preparation() override;
   void stop() override;
+  void stop_rendering() override;
   void finish() override;
   void restart() override;
+  void discard_render_output() override {
+    _sample_index = 0u;
+  }
 
-  void on_camera_changed(SceneRepresentation& scene) override;
-  void on_camera_become_steady(SceneRepresentation& scene) override;
   void on_scene_changed(SceneRepresentation& scene) override;
   void on_scene_transforms_changed(SceneRepresentation& scene) override;
-  void on_scene_transform_interaction_started(SceneRepresentation& scene) override;
-  void on_scene_transform_interaction_finished(SceneRepresentation& scene) override;
 
  private:
+  void start_render(bool invalidate_display_output, bool request_full_scene_update);
   static constexpr uint32_t kGPUFixedMaxBounces = 32u;
 
   enum class RunState : uint32_t {
@@ -379,9 +377,6 @@ struct GPURaytracingRenderer : public Renderer {
   void destroy_acceleration_structures(RHIContext& ctx);
   bool build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene);
   bool refit_top_level_acceleration_structure(RHIContext& ctx, const SceneData& scene_data);
-  bool update_preview_camera_buffer(RHIDevice& device, const Camera& camera, const uint2& dimensions, uint32_t frame_index, uint32_t& descriptor_index);
-  bool ensure_preview_texture(RHIContext& ctx, const uint2& dimensions);
-  void destroy_preview_resources(RHIDevice& device);
   bool upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer);
   bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
   bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t path_capacity, uint32_t active_path_capacity, bool allow_light_history_shrink);
@@ -399,10 +394,14 @@ struct GPURaytracingRenderer : public Renderer {
   void compile_pipeline_preparation(std::shared_ptr<PendingPipelinePreparation> result);
   void destroy_pipelines(RHIDevice& device);
   void reset_render_timing();
-  void reset_render_progress();
+  void reset_render_progress(bool reset_wavefront_schedule);
   void restart_render_after_change();
   void reset_wavefront_auto_tuning();
+  void reset_active_wavefront_auto_tuning();
   void update_wavefront_auto_tuning(uint32_t executed_steps, double elapsed_ms, bool budget_consumed, bool measurement_valid);
+  void on_preview_mode_changed(bool active) override;
+  void store_active_wavefront_schedule();
+  void load_active_wavefront_schedule();
   void stop_render_timing();
   void preserve_render_statistics();
   void reset_kernel_timings();
@@ -416,11 +415,6 @@ struct GPURaytracingRenderer : public Renderer {
  private:
   RHIPipeline _pipelines[static_cast<uint32_t>(PipelineStage::Count)] = {};
   uint64_t _pipeline_variant_keys[static_cast<uint32_t>(PipelineStage::Count)] = {};
-  RHITexture _preview_texture = {};
-  uint2 _preview_texture_dimensions = {};
-  RHIResourceState _preview_texture_state = RHIResourceState::Undefined;
-  RHIBindlessHandle _preview_camera_buffers[kRHIMaxFrames] = {};
-  uint64_t _preview_camera_buffer_sizes[kRHIMaxFrames] = {};
   RHIBindlessHandle _tlas = {};
   std::vector<RHIBindlessHandle> _blas;
   std::vector<RHIBindlessHandle> _blas_buffers;
@@ -583,8 +577,6 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _current_integrator_data_revision = 0u;
   uint64_t _current_camera_hash = 0;
   bool _integrator_data_revision_initialized = false;
-  bool _camera_hash_initialized = false;
-  bool _camera_hash_preview_active = false;
   uint32_t _frame_index = 0u;
   uint32_t _sample_index = 0u;
   WavefrontRenderStep _wavefront_render_step = WavefrontRenderStep::InitSample;
@@ -611,6 +603,14 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _wavefront_steps_per_render = 256u;
   double _wavefront_last_batch_ms = 0.0;
   double _wavefront_smoothed_ms_per_step = 0.0;
+  struct WavefrontSchedule {
+    uint32_t steps_per_render = 1u;
+    double last_batch_ms = 0.0;
+    double smoothed_ms_per_step = 0.0;
+  };
+  WavefrontSchedule _final_wavefront_schedule = {};
+  WavefrontSchedule _preview_wavefront_schedule = {};
+  bool _preview_wavefront_schedule_active = false;
   uint2 _wavefront_tile_base_origin = {};
   uint2 _wavefront_tile_base_size = {};
   bool _wavefront_tile_plan_valid = false;
@@ -666,7 +666,6 @@ struct GPURaytracingRenderer : public Renderer {
   bool _runtime_failed = false;
   bool _preparation_canceled = false;
   bool _pipeline_publish_logged = false;
-  bool _preview_visible = false;
   bool _display_output_valid = false;
   bool _cleanup_wait_succeeded = false;
   bool _render_timing_active = false;

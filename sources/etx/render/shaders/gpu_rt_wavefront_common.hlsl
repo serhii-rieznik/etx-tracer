@@ -34,10 +34,11 @@ struct GPUWavefrontPendingContinuationFlags {
 
 struct GPUWavefrontConnectLightTaskFlags {
   enum : uint {
-    Ready = 1u,
     CameraPrepared = 2u,
   };
 };
+
+static const uint kGPUWavefrontConnectLightTaskReadyState = 1u;
 
 #define WAVEFRONT_RW_BUFFER(descriptor_index) bindless_rw_buffers[NonUniformResourceIndex(descriptor_index)]
 #define WAVEFRONT_RO_BUFFER(descriptor_index) bindless_buffers[NonUniformResourceIndex(descriptor_index)]
@@ -592,7 +593,7 @@ void wavefront_initialize_connect_light_candidate(uint descriptor_index, uint in
   uint base_offset = index * kGPUWavefrontConnectLightTaskStride;
   buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateLightVertexIndexOffset, light_vertex_index);
   buffer.Store(base_offset + kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset, previous_light_vertex_index);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateFlagsOffset, 0u);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightResolverFlagsOffset, 0u);
 }
 
 void wavefront_load_connect_light_candidate_indices(uint descriptor_index, uint index, out uint light_vertex_index, out uint previous_light_vertex_index) {
@@ -611,9 +612,9 @@ void wavefront_store_connect_light_candidate(uint descriptor_index, uint index, 
   buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateCameraReverseDirectionPdfOffset, asuint(candidate.camera_reverse_direction_pdf));
   buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateLightVertexIndexOffset, candidate.light_vertex_index);
   buffer.Store(base_offset + kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset, candidate.previous_light_vertex_index);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateFlagsOffset, candidate.flags);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightResolverFlagsOffset, candidate.flags);
   buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateSamplerSeedOffset, candidate.sampler_seed);
-  buffer.Store(base_offset + kGPUWavefrontConnectLightCandidateLightMaterialClassOffset, candidate.light_material_class);
+  buffer.Store(base_offset + kGPUWavefrontConnectLightResolverMaterialClassOffset, candidate.light_material_class);
 }
 
 GPUWavefrontConnectLightCandidate wavefront_load_connect_light_candidate(uint descriptor_index, uint index) {
@@ -626,10 +627,26 @@ GPUWavefrontConnectLightCandidate wavefront_load_connect_light_candidate(uint de
   result_value.camera_reverse_direction_pdf = asfloat(buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateCameraReverseDirectionPdfOffset));
   result_value.light_vertex_index = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateLightVertexIndexOffset);
   result_value.previous_light_vertex_index = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidatePreviousLightVertexIndexOffset);
-  result_value.flags = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateFlagsOffset);
+  result_value.flags = buffer.Load(base_offset + kGPUWavefrontConnectLightResolverFlagsOffset);
   result_value.sampler_seed = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateSamplerSeedOffset);
-  result_value.light_material_class = buffer.Load(base_offset + kGPUWavefrontConnectLightCandidateLightMaterialClassOffset);
+  result_value.light_material_class = buffer.Load(base_offset + kGPUWavefrontConnectLightResolverMaterialClassOffset);
   return result_value;
+}
+
+bool wavefront_claim_connect_light_candidate(uint descriptor_index, uint index) {
+  RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
+  const uint byte_offset = index * kGPUWavefrontConnectLightTaskStride + kGPUWavefrontConnectLightResolverFlagsOffset;
+  uint previous_flags = 0u;
+  buffer.InterlockedCompareExchange(byte_offset, GPUWavefrontConnectLightTaskFlags::CameraPrepared, 0u, previous_flags);
+  return previous_flags == GPUWavefrontConnectLightTaskFlags::CameraPrepared;
+}
+
+bool wavefront_claim_connect_light_task(uint descriptor_index, uint index) {
+  RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
+  const uint byte_offset = index * kGPUWavefrontConnectLightTaskStride + kGPUWavefrontConnectLightResolverFlagsOffset;
+  uint previous_flags = 0u;
+  buffer.InterlockedCompareExchange(byte_offset, kGPUWavefrontConnectLightTaskReadyState, 0u, previous_flags);
+  return previous_flags == kGPUWavefrontConnectLightTaskReadyState;
 }
 
 void wavefront_store_connect_light_task(uint descriptor_index, uint index, GPUWavefrontConnectLightTask task) {
@@ -651,6 +668,8 @@ void wavefront_store_connect_light_task(uint descriptor_index, uint index, GPUWa
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPLightPdfReverseBitsOffset, task.upbp_light_pdf_reverse_bits);
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPIntersectionSeedOffset, task.upbp_intersection_seed);
   buffer.Store(base_offset + kGPUWavefrontConnectLightTaskUPBPMediumSeedOffset, task.upbp_medium_seed);
+  DeviceMemoryBarrier();
+  buffer.Store(base_offset + kGPUWavefrontConnectLightResolverFlagsOffset, kGPUWavefrontConnectLightTaskReadyState);
 }
 
 GPUWavefrontConnectLightTask wavefront_load_connect_light_task(uint descriptor_index, uint index) {

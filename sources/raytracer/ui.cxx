@@ -2009,6 +2009,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ETX_PROFILER_SCOPE();
   ImGuizmo::BeginFrame();
   _node_transform_editor_interaction_rendered_this_frame = false;
+  _camera_property_interaction_rendered_this_frame = false;
 
   BuildContext ctx = {};
   ctx.wpadding = {ImGui::GetStyle().WindowPadding.x, ImGui::GetStyle().WindowPadding.y};
@@ -2116,6 +2117,9 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   build_transform_gizmo(scene_rep, data);
   if (_node_transform_editor_interaction_active && (_node_transform_editor_interaction_rendered_this_frame == false)) {
     finish_node_transform_editor_interaction();
+  }
+  if (_camera_property_interaction_active && (_camera_property_interaction_rendered_this_frame == false)) {
+    finish_camera_property_interaction();
   }
   if ((_pending_material_changes.empty() == false) && callbacks.material_changed) {
     callbacks.material_changed(_pending_material_changes.front());
@@ -3322,6 +3326,8 @@ void UI::reset_scene_state() {
   _node_transform_editor_interaction_active = false;
   _node_transform_editor_interaction_rendered_this_frame = false;
   _node_transform_editor_interaction_node_index = -1;
+  _camera_property_interaction_active = false;
+  _camera_property_interaction_rendered_this_frame = false;
   _pending_material_changes.clear();
   _editing_material_indices = nullptr;
   _material_batch_changed_fields = 0u;
@@ -3823,8 +3829,8 @@ void UI::build_toolbar(const BuildContext& ctx) {
 void UI::build_status_bar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, ctx.text_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     const RendererStatus& status = _current_renderer_status;
-    std::string core_status = format_string("%s  |  %s", renderer_mode_status_name(status.mode), renderer_status_state_name(status.state));
-    if (status.output_stale) {
+    std::string core_status = format_string("%s  |  %s", renderer_mode_status_name(status.mode), status.preview_active ? "Preview" : renderer_status_state_name(status.state));
+    if (status.output_stale && (status.preview_active == false)) {
       core_status += "  |  Updating image";
     }
     if (_scene_dirty) {
@@ -3893,7 +3899,9 @@ void UI::build_status_bar(const BuildContext& ctx) {
     const bool performance_fits = (ImGui::CalcTextSize(primary_status.c_str()).x + reserved_width) <= available_width;
 
     std::string detailed_status = {};
-    if (status.output_stale) {
+    if (status.preview_active) {
+      detailed_status = "A low-resolution interaction preview is displayed; final rendering resumes when the interaction ends.";
+    } else if (status.output_stale) {
       detailed_status = "The displayed image is from the previous render state; a replacement is being prepared.";
     }
     if (path_progress_visible) {
@@ -5478,9 +5486,11 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
 
   bool transform_changed = false;
   bool transform_interaction_started = false;
+  bool transform_interaction_active = false;
   bool transform_interaction_finished = false;
   auto collect_transform_interaction = [&]() {
     transform_interaction_started = transform_interaction_started || ImGui::IsItemActivated();
+    transform_interaction_active = transform_interaction_active || ImGui::IsItemActive();
     transform_interaction_finished = transform_interaction_finished || ImGui::IsItemDeactivated();
   };
   const bool transform_edit_available = static_cast<bool>(callbacks.node_transform_changed);
@@ -5516,11 +5526,14 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
   }
   if (transform_interaction_started && (_node_transform_editor_interaction_active == false)) {
     _node_transform_editor_interaction_active = true;
-    _node_transform_editor_interaction_rendered_this_frame = true;
     _node_transform_editor_interaction_node_index = static_cast<int32_t>(node_index);
-    if (callbacks.scene_transform_interaction_started) {
-      callbacks.scene_transform_interaction_started();
+    if (callbacks.preview_interaction_started) {
+      callbacks.preview_interaction_started();
     }
+  }
+  if (_node_transform_editor_interaction_active && (_node_transform_editor_interaction_node_index == static_cast<int32_t>(node_index)) &&
+      (transform_interaction_started || transform_interaction_active)) {
+    _node_transform_editor_interaction_rendered_this_frame = true;
   }
   if (transform_changed && transform_edit_available) {
     const AffineTransform transform = _node_transform_editor.decomposable ? affine_from_trs(_node_transform_editor.trs) : _node_transform_editor.source_transform;
@@ -5775,16 +5788,28 @@ void UI::finish_node_transform_editor_interaction() {
   _node_transform_editor_interaction_active = false;
   _node_transform_editor_interaction_rendered_this_frame = false;
   _node_transform_editor_interaction_node_index = -1;
-  if (callbacks.scene_transform_interaction_finished) {
-    callbacks.scene_transform_interaction_finished();
+  if (callbacks.preview_interaction_finished) {
+    callbacks.preview_interaction_finished();
+  }
+}
+
+void UI::finish_camera_property_interaction() {
+  if (_camera_property_interaction_active == false) {
+    return;
+  }
+
+  _camera_property_interaction_active = false;
+  _camera_property_interaction_rendered_this_frame = false;
+  if (callbacks.preview_interaction_finished) {
+    callbacks.preview_interaction_finished();
   }
 }
 
 void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& data) {
   _gizmo_captures_mouse = false;
   auto finish_interaction = [&]() {
-    if (_gizmo_was_using && callbacks.scene_transform_interaction_finished) {
-      callbacks.scene_transform_interaction_finished();
+    if (_gizmo_was_using && callbacks.preview_interaction_finished) {
+      callbacks.preview_interaction_finished();
     }
     _gizmo_was_using = false;
   };
@@ -5880,8 +5905,8 @@ void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& 
 
   ImGuizmo::PopID();
 
-  if (interaction_started && callbacks.scene_transform_interaction_started) {
-    callbacks.scene_transform_interaction_started();
+  if (interaction_started && callbacks.preview_interaction_started) {
+    callbacks.preview_interaction_started();
   }
 
   if (transform_changed && callbacks.node_transform_changed) {
@@ -5891,8 +5916,8 @@ void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& 
   }
 
   if (interaction_finished) {
-    if (callbacks.scene_transform_interaction_finished) {
-      callbacks.scene_transform_interaction_finished();
+    if (callbacks.preview_interaction_finished) {
+      callbacks.preview_interaction_finished();
     }
   }
 }
@@ -6645,6 +6670,23 @@ void UI::build_camera_resource_properties(SceneRepresentation& scene_rep, const 
 }
 
 void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camera& camera, uint32_t camera_index, bool attachment_enabled, const FrameData& data) {
+  bool preview_interaction_finished = false;
+  auto collect_preview_interaction = [&]() {
+    const bool item_activated = ImGui::IsItemActivated();
+    if (item_activated && (_camera_property_interaction_active == false)) {
+      _camera_property_interaction_active = true;
+      if (callbacks.preview_interaction_started) {
+        callbacks.preview_interaction_started();
+      }
+    }
+    if (_camera_property_interaction_active && (item_activated || ImGui::IsItemActive())) {
+      _camera_property_interaction_rendered_this_frame = true;
+    }
+    if (ImGui::IsItemDeactivated() && _camera_property_interaction_active) {
+      preview_interaction_finished = true;
+    }
+  };
+
   bool camera_changed = false;
   bool camera_is_active = false;
   if (camera_index < scene_rep.data().cameras.size()) {
@@ -6666,7 +6708,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
 
   uint2 viewport = camera.film_size;
   float focal_len = get_camera_focal_length(camera);
-  int32_t pixel_size = std::countr_zero(data.film.pixel_size());
+  int32_t pixel_size = std::countr_zero(data.output_pixel_size);
 
   if (ImGui::CollapsingHeader("Lens & Focus", ImGuiTreeNodeFlags_Framed)) {
     static int control_mode = 0;  // 0 = Focal Length, 1 = Field of View
@@ -6683,6 +6725,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
           })) {
         camera_changed = true;
       }
+      collect_preview_interaction();
     } else {
       float current_fov_deg = focal_length_to_fov(focal_len) * 180.0f / kPi;
       static float fov_input = current_fov_deg;  // Static to maintain value between frames
@@ -6694,6 +6737,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
         focal_len = fov_to_focal_length(fov_input * kPi / 180.0f);
         camera_changed = true;
       }
+      collect_preview_interaction();
       ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 0));
       ImGui::AlignTextToFramePadding();
       ImGui::Text("Convert FOV");
@@ -6721,12 +6765,14 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
         })) {
       camera_changed = true;
     }
+    collect_preview_interaction();
 
     if (labeled_control("Lens Radius", [&]() {
           return ImGui::DragFloat("##lens_radius", &camera.lens_radius, 0.01f, 0.0f, 2.0f, "%.3f");
         })) {
       camera_changed = true;
     }
+    collect_preview_interaction();
 
     float clip_values[2] = {camera.clip_near, camera.clip_far};
     if (labeled_control("Clip Planes", [&]() {
@@ -6736,6 +6782,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
       camera.clip_far = max(camera.clip_near + 0.001f, clip_values[1]);
       camera_changed = true;
     }
+    collect_preview_interaction();
   }
 
   float pixel_filter_radius = scene_rep.data().pixel_filter.radius;
@@ -6745,12 +6792,14 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     if (ImGui::InputInt2("##outimgsize", reinterpret_cast<int32_t*>(&viewport.x))) {
       camera_changed = true;
     }
+    collect_preview_interaction();
 
     if (labeled_control("Pixel Filter Radius", [&]() {
           return ImGui::DragFloat("##pixelfiler", &pixel_filter_radius, 0.05f, 0.0f, 32.0f, "%.3fpx");
         })) {
       camera_changed = true;
     }
+    collect_preview_interaction();
 
     ImGui::TextUnformatted("Pixel Size");
     full_width_item();
@@ -6766,6 +6815,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
           })) {
         camera_changed = true;
       }
+      collect_preview_interaction();
     }
   }
 
@@ -6790,6 +6840,9 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     } else if (callbacks.scene_settings_changed) {
       callbacks.scene_settings_changed();
     }
+  }
+  if (preview_interaction_finished && (_camera_property_interaction_rendered_this_frame == false)) {
+    finish_camera_property_interaction();
   }
 }
 

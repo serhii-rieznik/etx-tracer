@@ -46,8 +46,15 @@ struct IntegratorThreadImpl {
       return;
     }
 
-    SceneHashes new_hashes = scene_representation.data().compute_hashes();
-    UpdateFlags changes = new_hashes.compare(current_scene_hashes);
+    const bool camera_only_update = pending_scope == SceneUpdateScope::Camera;
+    SceneHashes new_hashes = current_scene_hashes;
+    UpdateFlags changes = {};
+    if (camera_only_update) {
+      new_hashes.transforms_hash = scene_representation.data().compute_transforms_hash();
+    } else {
+      new_hashes = scene_representation.data().compute_hashes();
+      changes = new_hashes.compare(current_scene_hashes);
+    }
     const bool full_update_requested = pending_scope == SceneUpdateScope::Full;
     const auto& preliminary_camera = scene_representation.camera();
     const uint64_t preliminary_camera_hash = xxh64(&preliminary_camera, sizeof(preliminary_camera));
@@ -59,34 +66,36 @@ struct IntegratorThreadImpl {
       latest_state = integrator->state();
     }
 
-    bool dependencies_updated = false;
-    if (scene_representation.synchronize_render_dependencies(changes, full_update_requested, dependencies_updated) == false) {
-      log::error("Failed to synchronize derived scene state before CPU render commit");
-      request_scene_check(SceneUpdateScope::Full);
-      return;
-    }
-
-    if (dependencies_updated) {
-      new_hashes = scene_representation.data().compute_hashes();
-      changes = new_hashes.compare(current_scene_hashes);
-    }
-    bool refresh_hashes = false;
-    if (full_update_requested || changes[UpdateFlags::Images]) {
-      scene_representation.data().images.load_images(raytracing.scheduler());
-      refresh_hashes = true;
-    }
-    if (full_update_requested || changes[UpdateFlags::AnyMaterials]) {
-      if (scene_representation.ensure_energy_compensation_interfaces() == false) {
-        log::error("Failed to ensure BSDF energy-compensation interfaces before CPU render commit");
+    if (camera_only_update == false) {
+      bool dependencies_updated = false;
+      if (scene_representation.synchronize_render_dependencies(changes, full_update_requested, dependencies_updated) == false) {
+        log::error("Failed to synchronize derived scene state before CPU render commit");
         request_scene_check(SceneUpdateScope::Full);
         return;
       }
-      refresh_hashes = true;
-    }
 
-    if (refresh_hashes) {
-      new_hashes = scene_representation.data().compute_hashes();
-      changes = new_hashes.compare(current_scene_hashes);
+      if (dependencies_updated) {
+        new_hashes = scene_representation.data().compute_hashes();
+        changes = new_hashes.compare(current_scene_hashes);
+      }
+      bool refresh_hashes = false;
+      if (full_update_requested || changes[UpdateFlags::Images]) {
+        scene_representation.data().images.load_images(raytracing.scheduler());
+        refresh_hashes = true;
+      }
+      if (full_update_requested || changes[UpdateFlags::AnyMaterials]) {
+        if (scene_representation.ensure_energy_compensation_interfaces() == false) {
+          log::error("Failed to ensure BSDF energy-compensation interfaces before CPU render commit");
+          request_scene_check(SceneUpdateScope::Full);
+          return;
+        }
+        refresh_hashes = true;
+      }
+
+      if (refresh_hashes) {
+        new_hashes = scene_representation.data().compute_hashes();
+        changes = new_hashes.compare(current_scene_hashes);
+      }
     }
     current_scene_hashes = new_hashes;
 
@@ -99,7 +108,7 @@ struct IntegratorThreadImpl {
       current_camera_hash = new_camera_hash;
       scene_revision += 1u;
 
-      if ((integrator != nullptr) && (suppress_run == false)) {
+      if ((integrator != nullptr) && resume_after_commit && (suppress_run == false)) {
         integrator->run();
         latest_state = integrator->state();
       }

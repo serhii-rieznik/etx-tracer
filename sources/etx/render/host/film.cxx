@@ -437,7 +437,7 @@ void Film::clear(uint32_t options) {
     memset(_private->internal_data.data(), 0, _private->internal_data.size() * sizeof(_private->internal_data[0]));
   }
 
-  if (clear_frame) {
+  if (clear_frame && (clear_all == false)) {
     for (auto& i : _private->internal_data) {
       i.color = {};
       i.written = 0;

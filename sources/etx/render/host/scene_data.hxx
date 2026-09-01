@@ -17,8 +17,9 @@ namespace etx {
 
 enum class SceneUpdateScope : uint32_t {
   None = 0u,
-  Transforms = 1u,
-  Full = 2u,
+  Camera = 1u,
+  Transforms = 2u,
+  Full = 3u,
 };
 
 struct AtmosphereEmitterParameters {

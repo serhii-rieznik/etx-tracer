@@ -83,5 +83,16 @@
   uint pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
   float4 value = wavefront_film_load(pixel_index);
   float sample_count = float(max(1u, constants.sample_index + 1u));
-  bindless_storage_textures[NonUniformResourceIndex(constants.output_image_index)][output_pixel] = float4(max(value.xyz / sample_count, float3(0.0f, 0.0f, 0.0f)), 1.0f);
+  float4 output_value = float4(max(value.xyz / sample_count, float3(0.0f, 0.0f, 0.0f)), 1.0f);
+  RWTexture2D<float4> output_image = bindless_storage_textures[NonUniformResourceIndex(constants.output_image_index)];
+  uint2 output_size;
+  output_image.GetDimensions(output_size.x, output_size.y);
+  uint pixel_size = max(1u, constants.output_pixel_size);
+  uint2 output_origin = output_pixel * pixel_size;
+  uint2 output_end = min(output_size, output_origin + pixel_size);
+  for (uint y = output_origin.y; y < output_end.y; ++y) {
+    for (uint x = output_origin.x; x < output_end.x; ++x) {
+      output_image[uint2(x, y)] = output_value;
+    }
+  }
 }

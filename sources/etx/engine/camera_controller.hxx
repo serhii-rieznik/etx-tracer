@@ -78,6 +78,7 @@ struct CameraController {
     }
 
     float mouse_alpha = enable_inertia ? ((dt_sec > 0.0f) ? (1.0f - expf(-_movement_response * dt_sec)) : 0.0f) : 1.0f;
+    const float pointer_dt_sec = enable_inertia ? dt_sec : max(dt_raw, 0.0f);
 
     _orbit_velocity.x += (target_orbit_velocity.x - _orbit_velocity.x) * mouse_alpha;
     _orbit_velocity.y += (target_orbit_velocity.y - _orbit_velocity.y) * mouse_alpha;
@@ -101,27 +102,27 @@ struct CameraController {
 
     if (_pan_velocity.x != 0.0f || _pan_velocity.y != 0.0f) {
       ensure_pivot_initialized();
-      apply_pan(_pan_velocity.x * dt_sec, _pan_velocity.y * dt_sec);
+      apply_pan(_pan_velocity.x * pointer_dt_sec, _pan_velocity.y * pointer_dt_sec);
       camera_changed = true;
     }
     if (_dolly_velocity != 0.0f) {
       ensure_pivot_initialized();
-      apply_dolly(_dolly_velocity * dt_sec);
+      apply_dolly(_dolly_velocity * pointer_dt_sec);
       camera_changed = true;
     }
     if (_orbit_velocity.x != 0.0f || _orbit_velocity.y != 0.0f) {
       ensure_pivot_initialized();
-      apply_orbit(_orbit_velocity.x * dt_sec, _orbit_velocity.y * dt_sec);
+      apply_orbit(_orbit_velocity.x * pointer_dt_sec, _orbit_velocity.y * pointer_dt_sec);
       camera_changed = true;
     }
     if (_look_velocity.x != 0.0f || _look_velocity.y != 0.0f) {
-      apply_look(_look_velocity.x * dt_sec, _look_velocity.y * dt_sec);
+      apply_look(_look_velocity.x * pointer_dt_sec, _look_velocity.y * pointer_dt_sec);
       sync_pivot_to_view_direction();
       camera_changed = true;
     }
     if (_zoom_velocity != 0.0f) {
       ensure_pivot_initialized();
-      const float zoom_factor = expf(-_zoom_velocity * dt_sec);
+      const float zoom_factor = expf(-_zoom_velocity * pointer_dt_sec);
       _orbit_distance = clamp(_orbit_distance * zoom_factor, kMinCameraDistance, kMaxCameraDistance);
       float3 forward = normalize_safe(_orbit_pivot - _camera.position, normalize_safe(_camera.direction, kWorldForward));
       _camera.position = _orbit_pivot - forward * _orbit_distance;
@@ -198,9 +199,15 @@ struct CameraController {
   }
 
   bool camera_navigation_input_active() const {
-    const bool mouse_navigation_active = _mouse_buttons != 0u;
-    const bool keyboard_navigation_active = movement_key_pressed();
-    return (mouse_navigation_active || keyboard_navigation_active);
+    return mouse_navigation_input_active() || keyboard_navigation_input_active();
+  }
+
+  bool mouse_navigation_input_active() const {
+    return _mouse_buttons != 0u;
+  }
+
+  bool keyboard_navigation_input_active() const {
+    return movement_key_pressed();
   }
 
   void clear_input_state() {

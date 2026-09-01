@@ -602,7 +602,6 @@ struct CPUUPBPImpl {
       *state = Integrator::State::Stopped;
       return;
     }
-    release_light_storage();
     rt.film().clear(Film::ClearEverything);
     start_iteration(0u);
   }
@@ -656,11 +655,8 @@ struct CPUUPBPImpl {
       for (uint32_t medium_index = 0u; medium_index < rt.scene().mediums.count; ++medium_index) {
         prepared_mediums[medium_index] = upbp_prepare_medium(rt.scene().mediums[medium_index], iteration.spect);
       }
-      light_paths.clear();
       light_paths.resize(static_cast<size_t>(iteration.light_subpath_count));
-      light_weights.clear();
       light_weights.resize(static_cast<size_t>(iteration.light_subpath_count));
-      light_splats.clear();
       light_splats.resize(static_cast<size_t>(iteration.light_subpath_count));
     } catch (const std::bad_alloc&) {
       fail("UPBP failed to allocate fixed light-path storage");
@@ -720,6 +716,13 @@ struct CPUUPBPImpl {
     constexpr uint64_t publish_interval = 16u;
     for (uint32_t path_index = begin; running() && (path_index < end); ++path_index) {
       UPBPLightSubpathResult& light_path = light_paths[path_index];
+      UPBPRecursivePathWeights& light_path_weights = light_weights[path_index];
+      light_path_weights.arrivals.clear();
+      light_path_weights.departures.clear();
+      light_path_weights.has_departure.clear();
+      light_path_weights.failure = UPBPRecursiveWeightFailure::None;
+      light_path_weights.failure_vertex_index = 0u;
+      light_splats[path_index].clear();
       if (upbp_build_light_subpath(rt, scene, iteration.spect, scene.options.random_seed, status.current_iteration, path_index, maximum_vertices, options.maximum_boundary_count,
             options.maximum_null_events_per_interval, light_path) == false) {
         fail("UPBP light subpath failed at path " + std::to_string(path_index) + ", failure " + std::to_string(static_cast<uint32_t>(light_path.subpath.failure)) +
@@ -733,11 +736,17 @@ struct CPUUPBPImpl {
              std::to_string(light_path.subpath.terminal_ray.d.z) + ")");
         return;
       }
+      if (running() == false) {
+        return;
+      }
       if (light_path.subpath.path.vertices.size() > 1u) {
-        if (upbp_compute_recursive_path_weights(scene, light_path.subpath.path, iteration.mis, iteration.light_subpath_count, iteration.bpt_sample_count,
-              light_weights[path_index]) == false) {
+        if (upbp_compute_recursive_path_weights(scene, light_path.subpath.path, iteration.mis, iteration.light_subpath_count, iteration.bpt_sample_count, light_path_weights) ==
+            false) {
           fail("UPBP recursive light-path MIS failed at path " + std::to_string(path_index) + ", vertex " + std::to_string(light_weights[path_index].failure_vertex_index) +
                ", failure " + std::to_string(static_cast<uint32_t>(light_weights[path_index].failure)));
+          return;
+        }
+        if (running() == false) {
           return;
         }
         if (iteration.mis.enabled(UPBPTechnique::BPT) && scene.strategy_enabled(Scene::Strategy::ConnectToCamera)) {
@@ -1603,15 +1612,11 @@ void CPUUPBP::update() {
 
 void CPUUPBP::stop(const Stop stop_mode) {
   if (current_state == State::Stopped) {
-    if (stop_mode == Stop::Immediate) {
-      _private->release_light_storage();
-    }
     return;
   }
   current_state = stop_mode == Stop::Immediate ? State::Stopped : State::WaitingForCompletion;
   if (current_state == State::Stopped) {
     _private->wait_for_tasks();
-    _private->release_light_storage();
   }
 }
 

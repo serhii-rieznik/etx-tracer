@@ -25,21 +25,21 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <type_traits>
 #include "gpu_renderer_abi_static_asserts.hxx"
 
 namespace etx {
-
-static bool update_host_visible_buffer(RHIDevice& device, const void* data, uint64_t required_size, RHIBufferUsage usage, RHIBindlessHandle& buffer, uint64_t& buffer_size,
-  const char* buffer_name);
 
 namespace {
 constexpr uint32_t kInvalidDescriptorIndex = ~0u;
@@ -57,12 +57,14 @@ constexpr uint32_t kWavefrontFastLightHistoryBounces = 1u;
 constexpr uint64_t kWavefrontMaxAddressableBufferSize = static_cast<uint64_t>(std::numeric_limits<uint32_t>::max());
 constexpr uint32_t kWavefrontInitialLightHistoryBounces = 16u;
 constexpr uint32_t kWavefrontLightHistoryShrinkSampleCount = 8u;
-constexpr uint32_t kWavefrontAutoInitialSteps = 1u;
 constexpr uint32_t kWavefrontAutoMaximumSteps = 1024u;
 constexpr uint32_t kWavefrontAutoAdjustmentDivisor = 4u;
-constexpr double kWavefrontAutoTargetMs = 12.0;
-constexpr double kWavefrontAutoLowerDeadZoneMs = 8.0;
-constexpr double kWavefrontAutoUpperDeadZoneMs = 16.0;
+constexpr double kWavefrontFinalAutoTargetMs = 12.0;
+constexpr double kWavefrontFinalAutoLowerDeadZoneMs = 8.0;
+constexpr double kWavefrontFinalAutoUpperDeadZoneMs = 16.0;
+constexpr double kWavefrontPreviewAutoTargetMs = 4.0;
+constexpr double kWavefrontPreviewAutoLowerDeadZoneMs = 2.0;
+constexpr double kWavefrontPreviewAutoUpperDeadZoneMs = 6.0;
 constexpr double kWavefrontAutoSmoothingFactor = 0.25;
 constexpr uint64_t kWavefrontLightVertexCounterSize = sizeof(uint32_t);
 constexpr uint32_t kWavefrontCoarseQueueReadbackInterval = 16u;
@@ -2031,6 +2033,8 @@ bool GPURaytracingRenderer::set_render_window(const uint2& origin, const uint2& 
 void GPURaytracingRenderer::set_wavefront_steps_per_render(uint32_t value) {
   _wavefront_auto_tuning_enabled = false;
   _wavefront_steps_per_render = std::clamp(value, 1u, kWavefrontAutoMaximumSteps);
+  _final_wavefront_schedule.steps_per_render = _wavefront_steps_per_render;
+  _preview_wavefront_schedule.steps_per_render = _wavefront_steps_per_render;
 }
 
 void GPURaytracingRenderer::set_wavefront_auto_tuning(bool value) {
@@ -2470,23 +2474,28 @@ bool GPURaytracingRenderer::is_running() const {
 }
 
 void GPURaytracingRenderer::invalidate_output() {
-  _preview_visible = false;
   _display_output_valid = false;
 }
 
 void GPURaytracingRenderer::start() {
+  start_render(true, true);
+}
+
+void GPURaytracingRenderer::start_render(bool invalidate_display_output, bool request_full_scene_update) {
   if ((_initialized == false) || (_scene_valid == false) || _runtime_failed) {
     return;
   }
 
   _preparation_canceled = false;
   _preserved_timing_stats_valid = false;
-  reset_render_progress();
-  reset_preview_state();
-  _camera_hash_preview_active = false;
-  invalidate_output();
+  reset_render_progress(preview_pixel_size() == 0u);
+  if (invalidate_display_output) {
+    invalidate_output();
+  }
   _run_state = RunState::Running;
-  request_scene_update();
+  if (request_full_scene_update) {
+    request_scene_update();
+  }
 }
 
 void GPURaytracingRenderer::reset_render_timing() {
@@ -2495,7 +2504,7 @@ void GPURaytracingRenderer::reset_render_timing() {
   _render_timing_active = false;
 }
 
-void GPURaytracingRenderer::reset_render_progress() {
+void GPURaytracingRenderer::reset_render_progress(bool reset_wavefront_schedule) {
   if (_run_state != RunState::Stopped) {
     _preserved_timing_stats_valid = false;
   }
@@ -2526,7 +2535,16 @@ void GPURaytracingRenderer::reset_render_progress() {
   _wavefront_tile_base_size = {};
   _wavefront_tile_plan_valid = false;
   _wavefront_camera_phase_initialized = false;
-  reset_wavefront_auto_tuning();
+  if (static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::UPBP) {
+    _upbp.light_batch_iteration = 0u;
+    _upbp.light_batch_index = 0u;
+    _upbp.light_batch_offset = _upbp.camera_batch_offset;
+    _upbp.light_batch_count = _upbp.camera_batch_count;
+    _upbp.camera_phase_started = false;
+  }
+  if (reset_wavefront_schedule) {
+    reset_active_wavefront_auto_tuning();
+  }
 }
 
 void GPURaytracingRenderer::restart_render_after_change() {
@@ -2534,17 +2552,33 @@ void GPURaytracingRenderer::restart_render_after_change() {
     return;
   }
 
-  reset_render_progress();
+  reset_render_progress(preview_pixel_size() == 0u);
   if ((_run_state == RunState::Completed) || (_run_state == RunState::Finishing)) {
     _run_state = RunState::Running;
   }
 }
 
 void GPURaytracingRenderer::reset_wavefront_auto_tuning() {
-  _wavefront_last_batch_ms = 0.0;
-  _wavefront_smoothed_ms_per_step = 0.0;
   if (_wavefront_auto_tuning_enabled) {
-    _wavefront_steps_per_render = kWavefrontAutoInitialSteps;
+    _final_wavefront_schedule = {};
+    _preview_wavefront_schedule = {};
+    load_active_wavefront_schedule();
+  } else {
+    _wavefront_last_batch_ms = 0.0;
+    _wavefront_smoothed_ms_per_step = 0.0;
+    store_active_wavefront_schedule();
+  }
+}
+
+void GPURaytracingRenderer::reset_active_wavefront_auto_tuning() {
+  if (_wavefront_auto_tuning_enabled) {
+    WavefrontSchedule& schedule = _preview_wavefront_schedule_active ? _preview_wavefront_schedule : _final_wavefront_schedule;
+    schedule = {};
+    load_active_wavefront_schedule();
+  } else {
+    _wavefront_last_batch_ms = 0.0;
+    _wavefront_smoothed_ms_per_step = 0.0;
+    store_active_wavefront_schedule();
   }
 }
 
@@ -2554,7 +2588,11 @@ void GPURaytracingRenderer::update_wavefront_auto_tuning(uint32_t executed_steps
   }
 
   _wavefront_last_batch_ms = elapsed_ms;
-  if ((budget_consumed == false) && (elapsed_ms <= kWavefrontAutoUpperDeadZoneMs)) {
+  const double target_ms = _preview_wavefront_schedule_active ? kWavefrontPreviewAutoTargetMs : kWavefrontFinalAutoTargetMs;
+  const double lower_dead_zone_ms = _preview_wavefront_schedule_active ? kWavefrontPreviewAutoLowerDeadZoneMs : kWavefrontFinalAutoLowerDeadZoneMs;
+  const double upper_dead_zone_ms = _preview_wavefront_schedule_active ? kWavefrontPreviewAutoUpperDeadZoneMs : kWavefrontFinalAutoUpperDeadZoneMs;
+  if ((budget_consumed == false) && (elapsed_ms <= upper_dead_zone_ms)) {
+    store_active_wavefront_schedule();
     return;
   }
 
@@ -2565,23 +2603,54 @@ void GPURaytracingRenderer::update_wavefront_auto_tuning(uint32_t executed_steps
     _wavefront_smoothed_ms_per_step += kWavefrontAutoSmoothingFactor * (measured_ms_per_step - _wavefront_smoothed_ms_per_step);
   }
 
-  const uint32_t estimated_steps =
-    static_cast<uint32_t>(std::clamp(std::floor(kWavefrontAutoTargetMs / _wavefront_smoothed_ms_per_step), 1.0, static_cast<double>(kWavefrontAutoMaximumSteps)));
+  const uint32_t estimated_steps = static_cast<uint32_t>(std::clamp(std::floor(target_ms / _wavefront_smoothed_ms_per_step), 1.0, static_cast<double>(kWavefrontAutoMaximumSteps)));
   const uint32_t adjustment_limit = std::max(1u, _wavefront_steps_per_render / kWavefrontAutoAdjustmentDivisor);
-  if (elapsed_ms > kWavefrontAutoUpperDeadZoneMs) {
+  if (elapsed_ms > upper_dead_zone_ms) {
     if (_wavefront_steps_per_render > 1u) {
       const uint32_t minimum_steps = std::max(1u, _wavefront_steps_per_render - adjustment_limit);
       _wavefront_steps_per_render = std::min(_wavefront_steps_per_render - 1u, std::max(estimated_steps, minimum_steps));
     }
+    store_active_wavefront_schedule();
     return;
   }
 
-  if ((budget_consumed == false) || (elapsed_ms >= kWavefrontAutoLowerDeadZoneMs)) {
+  if ((budget_consumed == false) || (elapsed_ms >= lower_dead_zone_ms)) {
+    store_active_wavefront_schedule();
     return;
   }
 
   const uint32_t maximum_steps = std::min(kWavefrontAutoMaximumSteps, _wavefront_steps_per_render + adjustment_limit);
   _wavefront_steps_per_render = std::max(_wavefront_steps_per_render, std::min(estimated_steps, maximum_steps));
+  store_active_wavefront_schedule();
+}
+
+void GPURaytracingRenderer::on_preview_mode_changed(bool active) {
+  if (_preview_wavefront_schedule_active == active) {
+    return;
+  }
+
+  store_active_wavefront_schedule();
+  if (active && (_preview_wavefront_schedule.smoothed_ms_per_step <= 0.0) && (_final_wavefront_schedule.smoothed_ms_per_step > 0.0)) {
+    _preview_wavefront_schedule.smoothed_ms_per_step = _final_wavefront_schedule.smoothed_ms_per_step;
+    _preview_wavefront_schedule.steps_per_render = static_cast<uint32_t>(
+      std::clamp(std::floor(kWavefrontPreviewAutoTargetMs / _preview_wavefront_schedule.smoothed_ms_per_step), 1.0, static_cast<double>(kWavefrontAutoMaximumSteps)));
+  }
+  _preview_wavefront_schedule_active = active;
+  load_active_wavefront_schedule();
+}
+
+void GPURaytracingRenderer::store_active_wavefront_schedule() {
+  WavefrontSchedule& schedule = _preview_wavefront_schedule_active ? _preview_wavefront_schedule : _final_wavefront_schedule;
+  schedule.steps_per_render = _wavefront_steps_per_render;
+  schedule.last_batch_ms = _wavefront_last_batch_ms;
+  schedule.smoothed_ms_per_step = _wavefront_smoothed_ms_per_step;
+}
+
+void GPURaytracingRenderer::load_active_wavefront_schedule() {
+  const WavefrontSchedule& schedule = _preview_wavefront_schedule_active ? _preview_wavefront_schedule : _final_wavefront_schedule;
+  _wavefront_steps_per_render = schedule.steps_per_render;
+  _wavefront_last_batch_ms = schedule.last_batch_ms;
+  _wavefront_smoothed_ms_per_step = schedule.smoothed_ms_per_step;
 }
 
 void GPURaytracingRenderer::stop_render_timing() {
@@ -2632,74 +2701,6 @@ void GPURaytracingRenderer::destroy_pipelines(RHIDevice& device) {
     }
     _pipeline_variant_keys[stage_index] = 0u;
   }
-}
-
-bool GPURaytracingRenderer::ensure_preview_texture(RHIContext& ctx, const uint2& dimensions) {
-  if (_preview_texture.valid() && (_preview_texture_dimensions.x == dimensions.x) && (_preview_texture_dimensions.y == dimensions.y)) {
-    return true;
-  }
-
-  auto& device = ctx.device();
-  RHITextureDesc desc = {};
-  desc.width = dimensions.x;
-  desc.height = dimensions.y;
-  desc.format = RHITextureFormat::R16G16B16A16_FLOAT;
-  desc.usage = RHITextureUsage::Storage | RHITextureUsage::Sampled;
-  const RHICreateBindlessResult result = device.create_texture(desc);
-  if ((result.result != RHIResult::Success) || (result.handle.valid() == false)) {
-    if (result.handle.valid()) {
-      device.destroy_texture(result.handle);
-    }
-    set_runtime_failure("GPU RT failed to create its preview output texture (" + std::to_string(static_cast<uint32_t>(result.result)) + ")");
-    return false;
-  }
-
-  const RHIResult wait_result = ctx.wait_idle();
-  if (wait_result != RHIResult::Success) {
-    device.destroy_texture(result.handle);
-    set_runtime_failure("GPU RT failed to synchronize before replacing its preview output texture (" + std::to_string(static_cast<uint32_t>(wait_result)) + ")");
-    return false;
-  }
-
-  const RHITexture previous_preview_texture = _preview_texture;
-  _preview_texture = result.handle;
-  _preview_texture_dimensions = dimensions;
-  _preview_texture_state = RHIResourceState::Undefined;
-  _preview_visible = false;
-  if (previous_preview_texture.valid()) {
-    const RHIResult destroy_result = device.destroy_texture(previous_preview_texture);
-    if (destroy_result != RHIResult::Success) {
-      log::warning("GPU RT: failed to destroy the previous preview texture (%u)", static_cast<uint32_t>(destroy_result));
-    }
-  }
-  return true;
-}
-
-bool GPURaytracingRenderer::update_preview_camera_buffer(RHIDevice& device, const Camera& camera, const uint2& dimensions, uint32_t frame_index, uint32_t& descriptor_index) {
-  ETX_CRITICAL(frame_index < kRHIMaxFrames);
-  Camera preview_camera = camera;
-  build_camera(preview_camera, camera.position, camera.direction, camera.up, dimensions, get_camera_fov(camera));
-  const bool update_success = update_host_visible_buffer(device, &preview_camera, sizeof(preview_camera), RHIBufferUsage::Storage, _preview_camera_buffers[frame_index],
-    _preview_camera_buffer_sizes[frame_index], "camera");
-  if (update_success) {
-    descriptor_index = get_bindless_descriptor_index(_preview_camera_buffers[frame_index]);
-  }
-  return update_success;
-}
-
-void GPURaytracingRenderer::destroy_preview_resources(RHIDevice& device) {
-  if (_preview_texture.valid()) {
-    device.destroy_texture(_preview_texture);
-    _preview_texture = {};
-  }
-  _preview_texture_dimensions = {};
-  _preview_texture_state = RHIResourceState::Undefined;
-  for (uint32_t frame_index = 0u; frame_index < kRHIMaxFrames; ++frame_index) {
-    device.destroy_buffer(_preview_camera_buffers[frame_index]);
-    _preview_camera_buffers[frame_index] = {};
-    _preview_camera_buffer_sizes[frame_index] = 0u;
-  }
-  _preview_visible = false;
 }
 
 void GPURaytracingRenderer::release_inflight_preparation_tasks(bool wait) {
@@ -3003,7 +3004,8 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
 
   reset_runtime_failure();
   _preparation_canceled = false;
-  reset_render_progress();
+  reset_wavefront_auto_tuning();
+  reset_render_progress(true);
   if ((_integrator_mode != integrator_mode) || (_integrator_features != integrator_selection.features)) {
     _scene_options_upload_pending = true;
   }
@@ -3467,6 +3469,10 @@ void GPURaytracingRenderer::cancel_preparation() {
 
 void GPURaytracingRenderer::stop() {
   cancel_preparation();
+  stop_rendering();
+}
+
+void GPURaytracingRenderer::stop_rendering() {
   preserve_render_statistics();
   _wavefront_render_step = WavefrontRenderStep::InitSample;
   _wavefront_path_iteration = 0u;
@@ -3491,7 +3497,7 @@ void GPURaytracingRenderer::set_sample_limit(uint32_t sample_limit) {
 }
 
 void GPURaytracingRenderer::restart() {
-  start();
+  start_render(false, false);
 }
 
 void GPURaytracingRenderer::destroy_scene_buffers(RHIContext& ctx) {
@@ -3922,12 +3928,12 @@ bool GPURaytracingRenderer::ensure_upbp_buffers(RHIContext& ctx, const SceneRepr
   }
   auto& device = ctx.device();
   const bool sample_changed = _upbp.sample_index != _sample_index;
+  const bool global_path_population_changed = _upbp.global_path_count != global_path_count;
   const bool storage_layout_changed =
-    _upbp.vertex_buffer.handle.valid() && ((_upbp.global_path_count != global_path_count) || (_upbp.resident_light_path_capacity != resident_light_capacity) ||
-                                            (_upbp.resident_camera_path_capacity != resident_camera_capacity) || (_upbp.maximum_path_length != maximum_path_length) ||
-                                            (_upbp.maximum_boundary_count != options.maximum_boundary_count) || (_upbp.technique_mask != storage_technique_mask));
+    _upbp.vertex_buffer.handle.valid() &&
+    ((_upbp.maximum_path_length != maximum_path_length) || (_upbp.maximum_boundary_count != options.maximum_boundary_count) || (_upbp.technique_mask != storage_technique_mask));
   bool reclaim_destroyed_storage = false;
-  if (sample_changed && (_upbp.sample_index != ~0u)) {
+  if ((sample_changed && (_upbp.sample_index != ~0u)) || (global_path_population_changed && (_upbp.global_path_count > 0u))) {
     destroy_upbp_density_cache(device, false);
     reclaim_destroyed_storage = true;
   }
@@ -4113,7 +4119,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   bool allow_light_history_shrink) {
   ETX_PROFILER_SCOPE();
 
-  const uint2 film_size = scene.camera().film_size;
+  const uint2 film_size = scaled_render_dimensions(scene.camera().film_size);
   if ((film_size.x == 0u) || (film_size.y == 0u)) {
     return false;
   }
@@ -4277,7 +4283,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     _light_vertex_counter_readback_state = RHIResourceState::Undefined;
   }
   if (allocate_camera_path) {
-    if (ensure_storage_buffer(device, path_state_buffer_size, wavefront_usage, _camera_state_buffer, _camera_state_buffer_size, _camera_state_buffer_descriptor_index,
+    if (ensure_storage_buffer_capacity(device, path_state_buffer_size, wavefront_usage, _camera_state_buffer, _camera_state_buffer_size, _camera_state_buffer_descriptor_index,
           "wavefront_camera_state") == false) {
       return false;
     }
@@ -4285,7 +4291,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _camera_state_buffer, _camera_state_buffer_size, _camera_state_buffer_descriptor_index);
   }
   if (allocate_light_path) {
-    if (ensure_storage_buffer(device, path_state_buffer_size, wavefront_usage, _light_state_buffer, _light_state_buffer_size, _light_state_buffer_descriptor_index,
+    if (ensure_storage_buffer_capacity(device, path_state_buffer_size, wavefront_usage, _light_state_buffer, _light_state_buffer_size, _light_state_buffer_descriptor_index,
           "wavefront_light_state") == false) {
       return false;
     }
@@ -4293,23 +4299,23 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _light_state_buffer, _light_state_buffer_size, _light_state_buffer_descriptor_index);
   }
   if (allocate_camera_path) {
-    if (ensure_storage_buffer(device, hit_buffer_size, wavefront_usage, _camera_hit_buffer, _camera_hit_buffer_size, _camera_hit_buffer_descriptor_index, "wavefront_camera_hit") ==
-        false) {
+    if (ensure_storage_buffer_capacity(device, hit_buffer_size, wavefront_usage, _camera_hit_buffer, _camera_hit_buffer_size, _camera_hit_buffer_descriptor_index,
+          "wavefront_camera_hit") == false) {
       return false;
     }
   } else {
     destroy_linear_scene_buffer(device, _camera_hit_buffer, _camera_hit_buffer_size, _camera_hit_buffer_descriptor_index);
   }
   if (allocate_light_path) {
-    if (ensure_storage_buffer(device, hit_buffer_size, wavefront_usage, _light_hit_buffer, _light_hit_buffer_size, _light_hit_buffer_descriptor_index, "wavefront_light_hit") ==
-        false) {
+    if (ensure_storage_buffer_capacity(device, hit_buffer_size, wavefront_usage, _light_hit_buffer, _light_hit_buffer_size, _light_hit_buffer_descriptor_index,
+          "wavefront_light_hit") == false) {
       return false;
     }
   } else {
     destroy_linear_scene_buffer(device, _light_hit_buffer, _light_hit_buffer_size, _light_hit_buffer_descriptor_index);
   }
   if (allocate_camera_path) {
-    if (ensure_storage_buffer(device, queue_buffer_size, queue_buffer_usage, _camera_queue_a_buffer, _camera_queue_a_buffer_size, _camera_queue_a_buffer_descriptor_index,
+    if (ensure_storage_buffer_capacity(device, queue_buffer_size, queue_buffer_usage, _camera_queue_a_buffer, _camera_queue_a_buffer_size, _camera_queue_a_buffer_descriptor_index,
           "wavefront_camera_queue_a") == false) {
       return false;
     }
@@ -4317,7 +4323,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _camera_queue_a_buffer, _camera_queue_a_buffer_size, _camera_queue_a_buffer_descriptor_index);
   }
   if (allocate_camera_path) {
-    if (ensure_storage_buffer(device, queue_buffer_size, queue_buffer_usage, _camera_queue_b_buffer, _camera_queue_b_buffer_size, _camera_queue_b_buffer_descriptor_index,
+    if (ensure_storage_buffer_capacity(device, queue_buffer_size, queue_buffer_usage, _camera_queue_b_buffer, _camera_queue_b_buffer_size, _camera_queue_b_buffer_descriptor_index,
           "wavefront_camera_queue_b") == false) {
       return false;
     }
@@ -4325,7 +4331,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _camera_queue_b_buffer, _camera_queue_b_buffer_size, _camera_queue_b_buffer_descriptor_index);
   }
   if (allocate_light_path) {
-    if (ensure_storage_buffer(device, queue_buffer_size, queue_buffer_usage, _light_queue_a_buffer, _light_queue_a_buffer_size, _light_queue_a_buffer_descriptor_index,
+    if (ensure_storage_buffer_capacity(device, queue_buffer_size, queue_buffer_usage, _light_queue_a_buffer, _light_queue_a_buffer_size, _light_queue_a_buffer_descriptor_index,
           "wavefront_light_queue_a") == false) {
       return false;
     }
@@ -4333,7 +4339,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _light_queue_a_buffer, _light_queue_a_buffer_size, _light_queue_a_buffer_descriptor_index);
   }
   if (allocate_light_path) {
-    if (ensure_storage_buffer(device, queue_buffer_size, queue_buffer_usage, _light_queue_b_buffer, _light_queue_b_buffer_size, _light_queue_b_buffer_descriptor_index,
+    if (ensure_storage_buffer_capacity(device, queue_buffer_size, queue_buffer_usage, _light_queue_b_buffer, _light_queue_b_buffer_size, _light_queue_b_buffer_descriptor_index,
           "wavefront_light_queue_b") == false) {
       return false;
     }
@@ -4383,8 +4389,8 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     _light_queue_count_readback_state = RHIResourceState::Undefined;
   }
   if (allocate_camera_path) {
-    if (ensure_storage_buffer(device, camera_vertex_buffer_size, wavefront_usage, _camera_vertex_buffer, _camera_vertex_buffer_size, _camera_vertex_buffer_descriptor_index,
-          "wavefront_camera_vertex") == false) {
+    if (ensure_storage_buffer_capacity(device, camera_vertex_buffer_size, wavefront_usage, _camera_vertex_buffer, _camera_vertex_buffer_size,
+          _camera_vertex_buffer_descriptor_index, "wavefront_camera_vertex") == false) {
       return false;
     }
   } else {
@@ -4410,14 +4416,14 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _vcm_grid_next_buffer, _vcm_grid_next_buffer_size, _vcm_grid_next_buffer_descriptor_index);
   }
   if (use_fast_light_endpoints) {
-    if (ensure_storage_buffer(device, fast_light_endpoint_buffer_size, wavefront_usage, _fast_light_endpoint_buffer, _fast_light_endpoint_buffer_size,
+    if (ensure_storage_buffer_capacity(device, fast_light_endpoint_buffer_size, wavefront_usage, _fast_light_endpoint_buffer, _fast_light_endpoint_buffer_size,
           _fast_light_endpoint_buffer_descriptor_index, "wavefront_fast_light_endpoint") == false) {
       return false;
     }
   } else {
     destroy_linear_scene_buffer(device, _fast_light_endpoint_buffer, _fast_light_endpoint_buffer_size, _fast_light_endpoint_buffer_descriptor_index);
   }
-  if (ensure_storage_buffer(device, film_buffer_size, wavefront_usage, _film_buffer, _film_buffer_size, _film_buffer_descriptor_index, "wavefront_film") == false) {
+  if (ensure_storage_buffer_capacity(device, film_buffer_size, wavefront_usage, _film_buffer, _film_buffer_size, _film_buffer_descriptor_index, "wavefront_film") == false) {
     return false;
   }
   if (ensure_storage_buffer_capacity(device, path_meta_buffer_size, wavefront_usage, _path_meta_buffer, _path_meta_buffer_size, _path_meta_buffer_descriptor_index,
@@ -4458,11 +4464,11 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
       _connect_camera_task_buffer_descriptor_index = _direct_light_sample_buffer_descriptor_index;
       _connect_camera_result_buffer_descriptor_index = _direct_light_result_buffer_descriptor_index;
     } else {
-      if (ensure_storage_buffer(device, connect_camera_task_buffer_size, wavefront_usage, _connect_camera_task_buffer, _connect_camera_task_buffer_size,
+      if (ensure_storage_buffer_capacity(device, connect_camera_task_buffer_size, wavefront_usage, _connect_camera_task_buffer, _connect_camera_task_buffer_size,
             _connect_camera_task_buffer_descriptor_index, "wavefront_connect_camera_task") == false) {
         return false;
       }
-      if (ensure_storage_buffer(device, connect_camera_result_buffer_size, wavefront_usage, _connect_camera_result_buffer, _connect_camera_result_buffer_size,
+      if (ensure_storage_buffer_capacity(device, connect_camera_result_buffer_size, wavefront_usage, _connect_camera_result_buffer, _connect_camera_result_buffer_size,
             _connect_camera_result_buffer_descriptor_index, "wavefront_connect_camera_result") == false) {
         return false;
       }
@@ -4472,7 +4478,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _connect_camera_result_buffer, _connect_camera_result_buffer_size, _connect_camera_result_buffer_descriptor_index);
   }
   if (allocate_camera_path && enable_subsurface_state_buffers) {
-    if (ensure_storage_buffer(device, subsurface_state_buffer_size, wavefront_usage, _camera_subsurface_state_buffer, _camera_subsurface_state_buffer_size,
+    if (ensure_storage_buffer_capacity(device, subsurface_state_buffer_size, wavefront_usage, _camera_subsurface_state_buffer, _camera_subsurface_state_buffer_size,
           _camera_subsurface_state_buffer_descriptor_index, "wavefront_camera_subsurface_state") == false) {
       return false;
     }
@@ -4480,7 +4486,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _camera_subsurface_state_buffer, _camera_subsurface_state_buffer_size, _camera_subsurface_state_buffer_descriptor_index);
   }
   if (allocate_light_path && enable_subsurface_state_buffers) {
-    if (ensure_storage_buffer(device, subsurface_state_buffer_size, wavefront_usage, _light_subsurface_state_buffer, _light_subsurface_state_buffer_size,
+    if (ensure_storage_buffer_capacity(device, subsurface_state_buffer_size, wavefront_usage, _light_subsurface_state_buffer, _light_subsurface_state_buffer_size,
           _light_subsurface_state_buffer_descriptor_index, "wavefront_light_subsurface_state") == false) {
       return false;
     }
@@ -4716,7 +4722,6 @@ void GPURaytracingRenderer::destroy_acceleration_structures(RHIContext& ctx) {
 
 void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) {
   ETX_PROFILER_SCOPE();
-  const auto render_begin = std::chrono::steady_clock::now();
   double pipeline_refresh_ms = 0.0;
   double scene_hash_ms = 0.0;
   double full_rebuild_destroy_ms = 0.0;
@@ -4728,8 +4733,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   double blue_noise_update_ms = 0.0;
   double output_texture_ms = 0.0;
   double dispatch_submit_ms = 0.0;
-
-  update_camera(scene, frame_data.dt);
 
   if (_initialized == false)
     return;
@@ -4819,36 +4822,44 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_scene_hashes_and_changes");
     const auto scene_hash_begin = std::chrono::steady_clock::now();
-    new_hashes = scene.data().compute_hashes();
-    changes = new_hashes.compare(_current_scene_hashes);
-    const bool full_update_requested = scene_update_scope == SceneUpdateScope::Full;
-    bool dependencies_updated = false;
-    if (scene.synchronize_render_dependencies(changes, full_update_requested, dependencies_updated) == false) {
-      set_runtime_failure("Failed to synchronize derived scene state before GPU render commit");
-      request_scene_update();
-      return;
-    }
-
-    if (dependencies_updated) {
+    const bool camera_only_update = scene_update_scope == SceneUpdateScope::Camera;
+    new_hashes = _current_scene_hashes;
+    if (camera_only_update) {
+      new_hashes.transforms_hash = scene.data().compute_transforms_hash();
+    } else {
       new_hashes = scene.data().compute_hashes();
       changes = new_hashes.compare(_current_scene_hashes);
     }
-    bool refresh_hashes = false;
-    if (full_update_requested || changes[UpdateFlags::Images]) {
-      scene.data().images.load_images(scheduler);
-      refresh_hashes = true;
-    }
-    if (full_update_requested || changes[UpdateFlags::AnyMaterials]) {
-      if (scene.ensure_energy_compensation_interfaces() == false) {
-        set_runtime_failure("Failed to ensure BSDF energy-compensation interfaces before GPU render commit");
+    const bool full_update_requested = scene_update_scope == SceneUpdateScope::Full;
+    if (camera_only_update == false) {
+      bool dependencies_updated = false;
+      if (scene.synchronize_render_dependencies(changes, full_update_requested, dependencies_updated) == false) {
+        set_runtime_failure("Failed to synchronize derived scene state before GPU render commit");
         request_scene_update();
         return;
       }
-      refresh_hashes = true;
-    }
-    if (refresh_hashes) {
-      new_hashes = scene.data().compute_hashes();
-      changes = new_hashes.compare(_current_scene_hashes);
+
+      if (dependencies_updated) {
+        new_hashes = scene.data().compute_hashes();
+        changes = new_hashes.compare(_current_scene_hashes);
+      }
+      bool refresh_hashes = false;
+      if (full_update_requested || changes[UpdateFlags::Images]) {
+        scene.data().images.load_images(scheduler);
+        refresh_hashes = true;
+      }
+      if (full_update_requested || changes[UpdateFlags::AnyMaterials]) {
+        if (scene.ensure_energy_compensation_interfaces() == false) {
+          set_runtime_failure("Failed to ensure BSDF energy-compensation interfaces before GPU render commit");
+          request_scene_update();
+          return;
+        }
+        refresh_hashes = true;
+      }
+      if (refresh_hashes) {
+        new_hashes = scene.data().compute_hashes();
+        changes = new_hashes.compare(_current_scene_hashes);
+      }
     }
     scene_changed = changes.any();
     scene_update_required = scene_changed || (scene_update_scope != SceneUpdateScope::None);
@@ -4856,29 +4867,26 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     scene_hash_ms = elapsed_ms(scene_hash_begin, scene_hash_end);
   }
 
-  const auto& camera = scene.camera();
+  const Camera& scene_camera = scene.camera();
+  Camera camera = scene_camera;
+  const uint2 render_film_dimensions = scaled_render_dimensions(scene_camera.film_size);
+  build_camera(camera, scene_camera.position, scene_camera.direction, scene_camera.up, render_film_dimensions, get_camera_fov(scene_camera));
   const uint64_t new_integrator_data_revision = scene.integrator_data_revision();
   const bool integrator_settings_changed = _integrator_data_revision_initialized && (new_integrator_data_revision != _current_integrator_data_revision);
   const uint64_t new_camera_hash = xxh64(&camera, sizeof(camera));
   const bool camera_changed = (new_camera_hash != _current_camera_hash);
-  if (_camera_hash_initialized && camera_changed && (_preview_camera_active == false)) {
-    _preview_camera_active = true;
-    _camera_hash_preview_active = true;
-    update_preview_active_state();
-  } else if ((camera_changed == false) && _camera_hash_preview_active) {
-    _camera_hash_preview_active = false;
-    _preview_camera_active = false;
-    update_preview_active_state();
-  }
-  const bool render_preview_this_frame = _preview_active;
   const bool upbp_mode = static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::UPBP;
-  const bool restart_accumulation = scene_changed || integrator_settings_changed || integrator_mode_changed || integrator_features_changed || material_compile_mask_changed ||
-                                    spectral_mode_changed || camera_changed;
+  const bool wavefront_sample_in_progress_before_changes = (_wavefront_render_step != WavefrontRenderStep::InitSample) || (_wavefront_tile_index != 0u);
+  const bool non_camera_change =
+    scene_changed || integrator_settings_changed || integrator_mode_changed || integrator_features_changed || material_compile_mask_changed || spectral_mode_changed;
+  const bool defer_preview_camera_change = (preview_pixel_size() > 0u) && camera_changed && wavefront_sample_in_progress_before_changes && (non_camera_change == false);
+  const bool apply_camera_change = camera_changed && (defer_preview_camera_change == false);
+  const bool restart_accumulation = non_camera_change || apply_camera_change;
   if (restart_accumulation) {
     restart_render_after_change();
   }
 
-  const bool wavefront_sample_in_progress = _wavefront_render_step != WavefrontRenderStep::InitSample;
+  const bool wavefront_sample_in_progress = (_wavefront_render_step != WavefrontRenderStep::InitSample) || (_wavefront_tile_index != 0u);
 
   const bool geometry_structure_changed = changes[UpdateFlags::AnyGeometryStructure];
   bool needs_full_rebuild = scene_changed && geometry_structure_changed;
@@ -4953,7 +4961,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   invalidate_upbp_density_cache = invalidate_upbp_density_cache || (integrator_settings_changed && upbp_mode && (_upbp.sample_index != ~0u));
   _current_integrator_data_revision = new_integrator_data_revision;
   _integrator_data_revision_initialized = true;
-  if (camera_changed && _scene_globals_buffer.valid()) {
+  if (apply_camera_change && _scene_globals_buffer.valid()) {
     const SceneBoundingSphere transport_sphere = compute_transport_bounding_sphere(_host_transport_bounds, camera);
     const bool transport_sphere_changed =
       (_host_scene_globals.bounding_sphere_center.x != transport_sphere.center.x) || (_host_scene_globals.bounding_sphere_center.y != transport_sphere.center.y) ||
@@ -4980,8 +4988,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     }
     _last_memory_stats = device.get_memory_statistics();
   }
-  _current_camera_hash = new_camera_hash;
-  _camera_hash_initialized = true;
+  if (apply_camera_change) {
+    _current_camera_hash = new_camera_hash;
+  }
 
   if (_scene_options_upload_pending) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_runtime_update_scene_options");
@@ -5000,20 +5009,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   }
 
   const uint2 full_dim = camera.film_size;
-  const uint32_t preview_pixel_size = _preview_resolution.pixel_size();
-  const uint2 preview_dim = {
-    (full_dim.x + preview_pixel_size - 1u) / preview_pixel_size,
-    (full_dim.y + preview_pixel_size - 1u) / preview_pixel_size,
-  };
   uint32_t frame_camera_buffer_descriptor_index = _camera_buffer_descriptor_index;
-  if (render_preview_this_frame) {
-    const auto camera_upload_begin = std::chrono::steady_clock::now();
-    if (update_preview_camera_buffer(device, camera, preview_dim, ctx.get_current_frame_index(), frame_camera_buffer_descriptor_index) == false) {
-      set_runtime_failure("GPU RT failed to upload the preview camera");
-      return;
-    }
-    camera_upload_ms = elapsed_ms(camera_upload_begin, std::chrono::steady_clock::now());
-  } else if (wavefront_sample_in_progress == false) {
+  if (wavefront_sample_in_progress == false) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_camera");
     const auto camera_upload_begin = std::chrono::steady_clock::now();
     const RHIBufferUsage camera_buffer_usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferDst;
@@ -5027,7 +5024,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     }
   }
 
-  if ((wavefront_sample_in_progress == false) && (render_preview_this_frame == false)) {
+  if (wavefront_sample_in_progress == false) {
     const auto blue_noise_update_begin = std::chrono::steady_clock::now();
     if (update_blue_noise_buffer(ctx, scene) == false) {
       log::warning("GPU RT: blue noise buffer is unavailable, falling back to white noise");
@@ -5037,8 +5034,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   }
 
   const bool has_render_window = (_render_window_size.x > 0u) && (_render_window_size.y > 0u);
-  const uint2 base_render_origin = has_render_window ? _render_window_origin : uint2{};
-  const uint2 base_render_dim = has_render_window ? _render_window_size : full_dim;
+  const uint32_t render_pixel_block_size = render_pixel_size();
+  const uint2 base_render_origin = has_render_window ? uint2{_render_window_origin.x / render_pixel_block_size, _render_window_origin.y / render_pixel_block_size} : uint2{};
+  const uint2 render_window_end = has_render_window ? uint2{
+    (_render_window_origin.x + _render_window_size.x + render_pixel_block_size - 1u) / render_pixel_block_size,
+    (_render_window_origin.y + _render_window_size.y + render_pixel_block_size - 1u) / render_pixel_block_size,
+  } : full_dim;
+  const uint2 base_render_dim = has_render_window ? uint2{render_window_end.x - base_render_origin.x, render_window_end.y - base_render_origin.y} : full_dim;
   const uint32_t scene_max_path_length_for_tiling = std::max(1u, scene.data().options.max_path_length);
   const bool use_complete_light_history = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::ConnectVertices) ||
                                           gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::MergeVertices);
@@ -5051,7 +5053,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     }
   }
   // VCM's light population, normalization, and spatial grid are iteration-global.
-  const bool use_wavefront_tiling = (render_preview_this_frame == false) && (vcm_mode == false) && (use_complete_light_history || upbp_mode);
+  const bool use_wavefront_tiling = (vcm_mode == false) && (use_complete_light_history || upbp_mode);
   const uint64_t base_render_pixel_count_u64 = static_cast<uint64_t>(base_render_dim.x) * static_cast<uint64_t>(base_render_dim.y);
   if (base_render_pixel_count_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
     set_runtime_failure("GPU RT render window exceeds the addressable path capacity");
@@ -5070,11 +5072,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (use_wavefront_tiling) {
     const bool should_rebuild_tile_plan = _wavefront_tile_plan_valid == false;
     if (should_rebuild_tile_plan) {
-      if (_wavefront_resources_buffer.valid()) {
-        if (release_wavefront_storage("GPU RT failed to release the previous resident path plan") == false) {
-          return;
-        }
-      }
       bool scene_has_subsurface_material = false;
       for (const auto& material : scene.data().materials) {
         if (material.subsurface_cls != SubsurfaceMaterial::Disabled) {
@@ -5101,11 +5098,12 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         const uint32_t storage_technique_mask = upbp_effective_technique_mask(options, merge_vertices_enabled);
         const RHIMemoryStats planning_memory_stats = device.get_memory_statistics();
         const uint64_t working_set_budget = gpu_resident_working_set_budget_bytes(planning_memory_stats);
-        const uint64_t film_pixel_count = static_cast<uint64_t>(scene.camera().film_size.x) * scene.camera().film_size.y;
+        const uint64_t film_pixel_count = static_cast<uint64_t>(full_dim.x) * full_dim.y;
         const uint64_t required_film_bytes = film_pixel_count * sizeof(float4);
-        const uint64_t required_output_bytes = static_cast<uint64_t>(full_dim.x) * full_dim.y * sizeof(float4);
-        const uint64_t additional_fixed_bytes = ((_film_buffer_size == required_film_bytes) ? 0u : required_film_bytes) +
-                                                (((_output_dimensions.x == full_dim.x) && (_output_dimensions.y == full_dim.y)) ? 0u : required_output_bytes);
+        const uint2 output_dim = scene_camera.film_size;
+        const uint64_t required_output_bytes = static_cast<uint64_t>(output_dim.x) * output_dim.y * sizeof(float4);
+        const uint64_t additional_fixed_bytes = ((_film_buffer_size >= required_film_bytes) ? 0u : required_film_bytes) +
+                                                (((_output_dimensions.x == output_dim.x) && (_output_dimensions.y == output_dim.y)) ? 0u : required_output_bytes);
         const uint64_t available_path_and_cache_budget = (working_set_budget > additional_fixed_bytes) ? (working_set_budget - additional_fixed_bytes) : 0u;
         const uint64_t density_cache_reserve = upbp_density_cache_reserve_bytes(available_path_and_cache_budget, base_render_pixel_count, scene_max_path_length_for_tiling,
           storage_technique_mask, options.maximum_bb1d_light_path_count);
@@ -5158,27 +5156,16 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   WavefrontWindow active_window = use_wavefront_tiling ? wavefront_tile_window(active_base_origin, active_base_dim, tile_max_pixels, _wavefront_tile_index)
                                                        : WavefrontWindow{base_render_origin, base_render_dim};
   uint32_t active_path_offset = use_wavefront_tiling ? wavefront_tile_path_offset(active_base_origin, active_base_dim, tile_max_pixels, _wavefront_tile_index) : 0u;
-  uint2 render_dim = render_preview_this_frame ? preview_dim : active_window.size;
+  uint2 render_dim = active_window.size;
   uint32_t wavefront_path_capacity = render_dim.x * render_dim.y;
-  const uint32_t upbp_global_path_count = render_preview_this_frame ? wavefront_path_capacity : base_render_pixel_count;
-  if (render_preview_this_frame) {
-    if (upbp_mode) {
-      const bool preview_storage_layout_changed =
-        _wavefront_resources_buffer.valid() && ((_wavefront_path_capacity != wavefront_path_capacity) || (_upbp.global_path_count != upbp_global_path_count));
-      if (preview_storage_layout_changed && (release_wavefront_storage("GPU UPBP failed to release full-resolution storage for transform preview") == false)) {
-        return;
-      }
-      wavefront_buffer_path_capacity = wavefront_path_capacity;
-    } else {
-      wavefront_buffer_path_capacity = std::max(wavefront_path_capacity, _wavefront_path_capacity);
-    }
-  }
-  if (_output_dimensions.x != full_dim.x || _output_dimensions.y != full_dim.y) {
+  const uint32_t upbp_global_path_count = base_render_pixel_count;
+  const uint2 output_dim = scene_camera.film_size;
+  if ((_output_dimensions.x != output_dim.x) || (_output_dimensions.y != output_dim.y)) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_recreate_output_texture");
     const auto output_texture_begin = std::chrono::steady_clock::now();
     RHITextureDesc desc = {};
-    desc.width = full_dim.x;
-    desc.height = full_dim.y;
+    desc.width = output_dim.x;
+    desc.height = output_dim.y;
     desc.format = RHITextureFormat::R32G32B32A32_FLOAT;
     desc.usage = RHITextureUsage::Storage | RHITextureUsage::Sampled | RHITextureUsage::TransferSrc;
     const RHICreateBindlessResult output_texture_result = device.create_texture(desc);
@@ -5197,7 +5184,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     }
     const RHITexture previous_output_texture = _output_texture;
     _output_texture = output_texture_result.handle;
-    _output_dimensions = full_dim;
+    _output_dimensions = output_dim;
     _output_texture_state = RHIResourceState::Undefined;
     _display_output_valid = false;
     if (frame_data.cmd.valid()) {
@@ -5232,13 +5219,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     return;
   }
 
-  if (render_preview_this_frame) {
-    if (ensure_preview_texture(ctx, preview_dim) == false) {
-      return;
-    }
-  }
-  const RHITexture render_output_texture = render_preview_this_frame ? _preview_texture : _output_texture;
-  RHIResourceState& render_output_texture_state = render_preview_this_frame ? _preview_texture_state : _output_texture_state;
+  const RHITexture render_output_texture = _output_texture;
+  RHIResourceState& render_output_texture_state = _output_texture_state;
 
   const bool use_spectral_values = (vcm_mode || upbp_mode) && (_spectral_mode == static_cast<uint32_t>(GPUSpectralMode::Spectral));
   if (use_spectral_values) {
@@ -5259,22 +5241,22 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   GPURTConstants constants = {
     .camera_buffer_index = frame_camera_buffer_descriptor_index,
     .as_index = get_bindless_descriptor_index(_tlas),
-    .output_image_index = get_bindless_descriptor_index(render_preview_this_frame ? _preview_texture : _output_texture),
+    .output_image_index = get_bindless_descriptor_index(_output_texture),
     .frame_index = _frame_index,
     .sample_index = _sample_index,
     .blue_noise_buffer_index = scene.data().options.properties[Scene::Properties::BlueNoise] ? _blue_noise_buffer_descriptor_index : kInvalidDescriptorIndex,
     .wavefront_buffer_index = _wavefront_resources_buffer_descriptor_index,
     .path_iteration = 0u,
     .connect_light_vertex_length = 0u,
-    .render_window_origin_x = render_preview_this_frame ? 0u : active_window.origin.x,
-    .render_window_origin_y = render_preview_this_frame ? 0u : active_window.origin.y,
+    .render_window_origin_x = active_window.origin.x,
+    .render_window_origin_y = active_window.origin.y,
     .render_window_width = render_dim.x,
     .render_window_height = render_dim.y,
     .dispatch_item_offset = 0u,
     .dispatch_item_count = 0u,
     .work_queue_index = kInvalidIndex,
     .vcm_light_vertex_count = _wavefront_vcm_light_vertex_count,
-    .pad2 = 0u,
+    .output_pixel_size = render_pixel_block_size,
     .scene = _gpu_scene,
   };
   RHIDispatchDesc film_dispatch = {
@@ -5338,8 +5320,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (upbp_mode) {
     const bool rebuild_density_cache = (_upbp.sample_index != _sample_index) || (_upbp.density_cache_ready == false);
     const uint32_t resident_camera_capacity = wavefront_buffer_path_capacity;
-    const uint32_t resident_light_capacity =
-      (render_preview_this_frame == false) && rebuild_density_cache ? std::max(resident_camera_capacity, _upbp_light_path_capacity) : resident_camera_capacity;
+    const uint32_t resident_light_capacity = rebuild_density_cache ? std::max(resident_camera_capacity, _upbp_light_path_capacity) : resident_camera_capacity;
     if (ensure_upbp_buffers(ctx, scene, upbp_global_path_count, resident_light_capacity, resident_camera_capacity, _wavefront_tile_index, active_path_offset,
           wavefront_path_capacity) == false) {
       set_runtime_failure("GPU UPBP failed to allocate its resident path batch");
@@ -5898,9 +5879,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     bool finished_current_tile = false;
     bool wavefront_auto_measurement_valid = true;
     uint32_t executed_wavefront_steps = 0u;
-    const uint32_t preview_path_phase_count = phase_light_before_camera ? 2u : 1u;
-    const uint32_t preview_step_budget = scene_max_path_length * preview_path_phase_count + 4u;
-    const uint32_t wavefront_step_budget = render_preview_this_frame ? preview_step_budget : std::max(1u, _wavefront_steps_per_render);
+    const uint32_t wavefront_step_budget = std::max(1u, _wavefront_steps_per_render);
     const auto wavefront_batch_begin = std::chrono::steady_clock::now();
     for (uint32_t wavefront_step_index = 0u; (wavefront_step_index < wavefront_step_budget) && (finished_current_tile == false); ++wavefront_step_index) {
       executed_wavefront_steps += 1u;
@@ -7784,9 +7763,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     }
     const double wavefront_batch_ms = elapsed_ms(wavefront_batch_begin, std::chrono::steady_clock::now());
     const bool wavefront_budget_consumed = (executed_wavefront_steps >= wavefront_step_budget) && (finished_current_tile == false);
-    if (render_preview_this_frame == false) {
-      update_wavefront_auto_tuning(executed_wavefront_steps, wavefront_batch_ms, wavefront_budget_consumed, wavefront_auto_measurement_valid);
-    }
+    update_wavefront_auto_tuning(executed_wavefront_steps, wavefront_batch_ms, wavefront_budget_consumed, wavefront_auto_measurement_valid);
     if ((render_output_texture_state == RHIResourceState::General) && frame_data.cmd.valid()) {
       ctx.cmd_texture_barrier(frame_data.cmd, render_output_texture, RHIResourceState::General, RHIResourceState::ShaderReadOnly);
       render_output_texture_state = RHIResourceState::ShaderReadOnly;
@@ -7795,26 +7772,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
 
   _frame_index += 1u;
   if (completed_sample) {
-    if (_preview_active) {
-      _preview_visible = true;
-      const double preview_elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - render_begin).count();
-      if (_preview_resolution.update(preview_elapsed_seconds, true)) {
-        reset_render_progress();
-        return;
-      }
-
-      _sample_index += 1u;
-      if (_run_state == RunState::Finishing) {
-        preserve_render_statistics();
-        _run_state = RunState::Stopped;
-      } else if (_sample_index >= _last_target_samples) {
-        preserve_render_statistics();
-        _run_state = RunState::Completed;
-      }
-      return;
-    }
-
-    _preview_visible = false;
     _display_output_valid = true;
     _sample_index += 1u;
     const bool compact_light_history = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::LightPath) &&
@@ -7894,7 +7851,6 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
     _cleanup_wait_succeeded = true;
   }
 
-  destroy_preview_resources(device);
   destroy_pipelines(device);
 
   destroy_wavefront_buffers(ctx);
@@ -7923,8 +7879,6 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _current_integrator_data_revision = 0u;
   _current_camera_hash = 0;
   _integrator_data_revision_initialized = false;
-  _camera_hash_initialized = false;
-  _camera_hash_preview_active = false;
   _frame_index = 0u;
   _sample_index = 0u;
   reset_render_timing();
@@ -7963,37 +7917,11 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _published_pipeline_count = 0u;
   _publish_pipeline_index = 0u;
   _pipeline_publish_logged = false;
-  reset_preview_state();
   invalidate_output();
   _preparation_canceled = false;
   reset_runtime_failure();
   set_preparation_ready();
   request_scene_update();
-}
-
-void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
-  ETX_PROFILER_SCOPE();
-  (void)scene;
-  _camera_hash_preview_active = false;
-  _preview_camera_active = true;
-  update_preview_active_state();
-  restart_render_after_change();
-}
-
-void GPURaytracingRenderer::on_camera_become_steady(SceneRepresentation& scene) {
-  ETX_PROFILER_SCOPE();
-  (void)scene;
-  _preview_camera_active = false;
-  if ((_runtime_failed) || (_run_state == RunState::Stopped)) {
-    update_preview_active_state();
-    return;
-  }
-  if (update_preview_active_state() && (_preview_active == false)) {
-    reset_render_progress();
-    if ((_run_state == RunState::Completed) || (_run_state == RunState::Finishing)) {
-      _run_state = RunState::Running;
-    }
-  }
 }
 
 void GPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
@@ -8008,62 +7936,6 @@ void GPURaytracingRenderer::on_scene_transforms_changed(SceneRepresentation& sce
   _scene_valid = scene.valid();
   Renderer::on_scene_transforms_changed(scene);
   restart_render_after_change();
-}
-
-static bool update_host_visible_buffer(RHIDevice& device, const void* data, uint64_t required_size, RHIBufferUsage usage, RHIBindlessHandle& buffer, uint64_t& buffer_size,
-  const char* buffer_name) {
-  if ((data == nullptr) || (required_size == 0u)) {
-    return false;
-  }
-
-  if ((buffer.valid() == false) || (buffer_size != required_size)) {
-    if (buffer.valid()) {
-      device.destroy_buffer(buffer);
-      buffer = {};
-      buffer_size = 0u;
-    }
-
-    RHIBufferDesc desc = {};
-    desc.size = required_size;
-    desc.usage = usage;
-    desc.host_visible = true;
-    const RHICreateBindlessResult create_result = device.create_buffer(desc);
-    if ((create_result.result != RHIResult::Success) || (create_result.handle.valid() == false)) {
-      log::error("GPU RT: failed to create host-visible preview '%s' buffer (%u)", buffer_name, static_cast<uint32_t>(create_result.result));
-      return false;
-    }
-    buffer = create_result.handle;
-    buffer_size = required_size;
-  }
-
-  const RHIResult update_result = device.update_buffer(buffer, data, required_size);
-  if (update_result != RHIResult::Success) {
-    log::error("GPU RT: failed to update host-visible preview '%s' buffer (%u)", buffer_name, static_cast<uint32_t>(update_result));
-    return false;
-  }
-  return true;
-}
-
-void GPURaytracingRenderer::on_scene_transform_interaction_started(SceneRepresentation& scene) {
-  (void)scene;
-  _preview_transform_active = true;
-  update_preview_active_state();
-  restart_render_after_change();
-}
-
-void GPURaytracingRenderer::on_scene_transform_interaction_finished(SceneRepresentation& scene) {
-  (void)scene;
-  _preview_transform_active = false;
-  if ((_runtime_failed) || (_run_state == RunState::Stopped)) {
-    update_preview_active_state();
-    return;
-  }
-  if (update_preview_active_state() && (_preview_active == false)) {
-    reset_render_progress();
-    if ((_run_state == RunState::Completed) || (_run_state == RunState::Finishing)) {
-      _run_state = RunState::Running;
-    }
-  }
 }
 
 bool GPURaytracingRenderer::refit_top_level_acceleration_structure(RHIContext& ctx, const SceneData& scene_data) {
@@ -8897,11 +8769,19 @@ bool build_raytracer_shader_package(const std::filesystem::path& output_path, co
     compile_groups.push_back(&group);
   }
 
+  const uint32_t available_threads = std::max(1u, std::thread::hardware_concurrency());
+  const uint32_t worker_count = std::min<uint32_t>(static_cast<uint32_t>(compile_groups.size()), std::min(available_threads, 6u));
+  const uint32_t total_variant_count = static_cast<uint32_t>(unique_requests.size());
+  const uint32_t total_group_count = static_cast<uint32_t>(compile_groups.size());
   std::atomic<size_t> next_group_index = 0u;
   std::atomic<uint32_t> completed_variants = 0u;
+  std::atomic<uint32_t> completed_groups = 0u;
   std::atomic<bool> compilation_failed = false;
+  std::atomic<bool> compilation_finished = false;
   std::mutex package_entries_mutex = {};
   std::mutex error_mutex = {};
+  std::mutex progress_mutex = {};
+  std::condition_variable progress_condition = {};
   auto report_failure = [&](std::string message) {
     bool expected = false;
     if (compilation_failed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -8963,20 +8843,66 @@ bool build_raytracer_shader_package(const std::filesystem::path& output_path, co
       }
 
       const uint32_t group_variant_count = static_cast<uint32_t>(group_entries.size());
-      const uint32_t previous_count = completed_variants.fetch_add(group_variant_count);
-      const uint32_t completed_count = previous_count + group_variant_count;
       {
         std::lock_guard<std::mutex> entries_lock(package_entries_mutex);
         package_entries.insert(package_entries.end(), std::make_move_iterator(group_entries.begin()), std::make_move_iterator(group_entries.end()));
       }
-      if ((completed_count == unique_requests.size()) || ((previous_count / 16u) != (completed_count / 16u))) {
-        log::info("Shader package progress: %u/%zu variants", completed_count, unique_requests.size());
-      }
+      completed_variants.fetch_add(group_variant_count);
+      completed_groups.fetch_add(1u);
     }
   };
 
-  const uint32_t available_threads = std::max(1u, std::thread::hardware_concurrency());
-  const uint32_t worker_count = std::min<uint32_t>(static_cast<uint32_t>(compile_groups.size()), std::min(available_threads, 8u));
+  auto format_duration = [](const double seconds) {
+    const uint64_t rounded_seconds = static_cast<uint64_t>(std::ceil(std::max(0.0, seconds)));
+    const uint64_t hours = rounded_seconds / 3600u;
+    const uint64_t minutes = (rounded_seconds % 3600u) / 60u;
+    const uint64_t remaining_seconds = rounded_seconds % 60u;
+    char buffer[64] = {};
+    if (hours > 0u) {
+      snprintf(buffer, sizeof(buffer), "%lluh %02llum %02llus", static_cast<unsigned long long>(hours), static_cast<unsigned long long>(minutes),
+        static_cast<unsigned long long>(remaining_seconds));
+    } else if (minutes > 0u) {
+      snprintf(buffer, sizeof(buffer), "%llum %02llus", static_cast<unsigned long long>(minutes), static_cast<unsigned long long>(remaining_seconds));
+    } else {
+      snprintf(buffer, sizeof(buffer), "%llus", static_cast<unsigned long long>(remaining_seconds));
+    }
+    return std::string{buffer};
+  };
+  auto report_progress = [&]() {
+    const uint32_t completed_variant_count = completed_variants.load(std::memory_order_acquire);
+    const uint32_t completed_group_count = completed_groups.load(std::memory_order_acquire);
+    const uint32_t claimed_group_count = std::min<uint32_t>(static_cast<uint32_t>(next_group_index.load(std::memory_order_acquire)), total_group_count);
+    const uint32_t active_group_count = claimed_group_count > completed_group_count ? claimed_group_count - completed_group_count : 0u;
+    const double elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - compile_begin).count();
+    const double progress = total_variant_count > 0u ? static_cast<double>(completed_variant_count) / static_cast<double>(total_variant_count) : 1.0;
+    std::string estimated_remaining = "estimating";
+    if (compilation_finished.load(std::memory_order_acquire)) {
+      estimated_remaining = compilation_failed.load(std::memory_order_acquire) ? "unavailable" : "0s";
+    } else if (completed_variant_count > 0u) {
+      estimated_remaining = format_duration(elapsed_seconds * (1.0 - progress) / progress);
+    }
+    log::info("Shader package compile progress: %u/%u variants (%.1f%%), groups %u/%u (%u active), elapsed %s, approximate remaining %s", completed_variant_count,
+      total_variant_count, progress * 100.0, completed_group_count, total_group_count, active_group_count, format_duration(elapsed_seconds).c_str(), estimated_remaining.c_str());
+    fflush(stdout);
+  };
+
+  log::info("Shader package compilation started: backend=%s variants=%u groups=%u workers=%u; progress updates every 10 seconds", backend == RHIBackend::Metal ? "metal" : "vulkan",
+    total_variant_count, total_group_count, worker_count);
+  fflush(stdout);
+  std::thread progress_thread([&]() {
+    while (true) {
+      std::unique_lock<std::mutex> progress_lock(progress_mutex);
+      progress_condition.wait_for(progress_lock, std::chrono::seconds(10), [&]() {
+        return compilation_finished.load(std::memory_order_acquire);
+      });
+      progress_lock.unlock();
+      report_progress();
+      if (compilation_finished.load(std::memory_order_acquire)) {
+        return;
+      }
+    }
+  });
+
   std::vector<std::thread> workers = {};
   workers.reserve(worker_count);
   for (uint32_t worker_index = 0u; worker_index < worker_count; ++worker_index) {
@@ -8985,12 +8911,17 @@ bool build_raytracer_shader_package(const std::filesystem::path& output_path, co
   for (std::thread& worker : workers) {
     worker.join();
   }
+  compilation_finished.store(true, std::memory_order_release);
+  progress_condition.notify_one();
+  progress_thread.join();
   if (compilation_failed.load(std::memory_order_acquire)) {
     return false;
   }
   const auto compile_end = std::chrono::steady_clock::now();
   statistics.compile_time_ms = elapsed_ms(compile_begin, compile_end);
   compiler.log_statistics("shader-package");
+  log::info("Shader compilation complete; writing and verifying the production package");
+  fflush(stdout);
 
   ShaderPackageBuildStatistics package_statistics = {};
   const auto package_begin = std::chrono::steady_clock::now();

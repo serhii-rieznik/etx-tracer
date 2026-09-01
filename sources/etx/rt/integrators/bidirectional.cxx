@@ -282,6 +282,10 @@ struct CPUBidirectionalImpl : public Task {
         result = build_camera_path(camera_smp, spect, uv, path_data, gbuffer, pixel, status.current_iteration);
       }
 
+      if (running() == false) {
+        break;
+      }
+
       auto xyz = result.to_rgb_estimate();
       auto albedo = gbuffer.albedo.to_rgb_estimate();
       film.submit(xyz, gbuffer.normal, albedo, pixel);
@@ -681,17 +685,21 @@ struct CPUBidirectionalImpl : public Task {
       albedo = calculate_albedo(payload.spect, scattering, extinction);
     }
 
-    for (uint32_t counter = 0; counter < 1024u; ++counter) {
+    for (uint32_t counter = 0; running() && (counter < 1024u); ++counter) {
       prev = curr;
 
       SpectralResponse pdf = {};
 
       ray.max_t = 0.0f;
-      while (ray.max_t < kRayEpsilon) {
+      while (running() && (ray.max_t < kRayEpsilon)) {
         uint32_t channel = sample_spectrum_component(payload.spect, albedo, payload.throughput, smp.next(), pdf);
         float sample_t = extinction.component(channel);
         ray.max_t = (sample_t > 0.0f) ? -logf(1.0f - smp.next()) / sample_t : kMaxFloat;
         ETX_VALIDATE(ray.max_t);
+      }
+
+      if (running() == false) {
+        return StepResult::Break;
       }
 
       bool found_intersection = rt.trace_material(scene, ray, subsurface_material, intersection, smp);

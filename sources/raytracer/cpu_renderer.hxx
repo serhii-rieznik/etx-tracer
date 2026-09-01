@@ -35,7 +35,7 @@ struct CPURaytracingRenderer : public Renderer {
   RendererStatus status() const override;
   RendererControlState control_state() const override;
   RHITexture output_texture() const override {
-    if (_preview_active || (_last_uploaded_completed_iterations == 0u) || (_output_texture_state != RHIResourceState::ShaderReadOnly)) {
+    if ((_last_uploaded_completed_iterations == 0u) || (_output_texture_state != RHIResourceState::ShaderReadOnly)) {
       return {};
     }
     return _output_texture;
@@ -50,14 +50,13 @@ struct CPURaytracingRenderer : public Renderer {
   void stop() override;
   void finish() override;
   void restart() override;
+  void discard_render_output() override {
+    _last_uploaded_completed_iterations = 0u;
+  }
 
   void set_output_dimensions(RHIContext& ctx, const uint2& dim);
-  void on_camera_changed(SceneRepresentation& scene) override;
-  void on_camera_become_steady(SceneRepresentation& scene) override;
   void on_scene_changed(SceneRepresentation& scene) override;
   void on_scene_transforms_changed(SceneRepresentation& scene) override;
-  void on_scene_transform_interaction_started(SceneRepresentation& scene) override;
-  void on_scene_transform_interaction_finished(SceneRepresentation& scene) override;
 
   Integrator* current_integrator() const;
   void set_integrator(Integrator*);
@@ -77,7 +76,6 @@ struct CPURaytracingRenderer : public Renderer {
   }
 
  private:
-  void restart_render_at_pixel_size(uint32_t pixel_size);
   void start_render_timing();
   void stop_render_timing();
   void reset_render_timing();

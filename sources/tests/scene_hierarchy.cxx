@@ -27,17 +27,6 @@ struct RendererProbe : etx::Renderer {
   void initialize_camera(etx::SceneRepresentation& scene) {
     _camera_controller = std::make_unique<etx::CameraController>(scene.mutable_camera());
     _camera_controller->enable_inertia = false;
-    reset_preview_state();
-  }
-
-  void on_camera_changed(etx::SceneRepresentation& scene) override {
-    (void)scene;
-    camera_changed_count += 1u;
-  }
-
-  void on_camera_become_steady(etx::SceneRepresentation& scene) override {
-    (void)scene;
-    camera_steady_count += 1u;
   }
 
   const char* name() const override {
@@ -47,9 +36,6 @@ struct RendererProbe : etx::Renderer {
   etx::RendererMode mode() const override {
     return etx::RendererMode::CPURaytracing;
   }
-
-  uint32_t camera_changed_count = 0u;
-  uint32_t camera_steady_count = 0u;
 };
 
 bool check_condition(bool condition, const char* message) {
@@ -562,6 +548,15 @@ bool test_scene_update_scope_coalescing() {
   if (check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::Full, "renderer starts with a full scene update") == false) {
     return false;
   }
+  renderer.request_camera_update();
+  if (check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::Camera, "camera request selects the camera-only update scope") == false) {
+    return false;
+  }
+  renderer.request_camera_update();
+  renderer.request_scene_transform_update();
+  if (check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::Transforms, "transform request upgrades a pending camera update") == false) {
+    return false;
+  }
   renderer.request_scene_transform_update();
   if (check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::Transforms, "transform request selects the fast update scope") == false) {
     return false;
@@ -575,7 +570,7 @@ bool test_scene_update_scope_coalescing() {
   return check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::None, "consuming an update request clears the pending scope");
 }
 
-bool test_camera_interaction_queues_updates_until_input_released() {
+bool test_camera_update_reports_input_lifecycle() {
   etx::TaskScheduler scheduler = {};
   etx::IORDatabase ior_database = {};
   etx::SceneRepresentation scene(scheduler, ior_database);
@@ -586,20 +581,40 @@ bool test_camera_interaction_queues_updates_until_input_released() {
   etx::CameraController* controller = renderer.camera_controller();
   controller->set_mouse_button_state(etx::CameraController::MouseLeft, true);
   controller->add_mouse_delta(8.0f, 0.0f);
-  renderer.update_camera(scene, 1.0f / 60.0f);
-  if (check_condition((renderer.camera_changed_count == 1u) && (renderer.camera_steady_count == 0u), "camera motion starts one preview interaction") == false ||
-      check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::None, "camera-only motion does not queue a scene-resource update") == false) {
+  const etx::Renderer::CameraUpdateResult motion = renderer.update_camera(scene, 1.0f / 60.0f);
+  if (check_condition(motion.changed && motion.mouse_input_active && (motion.keyboard_input_active == false), "camera update reports mouse-driven motion") == false ||
+      check_condition(renderer.consume_scene_update_request() == etx::SceneUpdateScope::None, "camera-only motion does not queue a renderer-owned scene update") == false) {
     return false;
   }
 
-  renderer.update_camera(scene, 1.0f / 60.0f);
-  if (check_condition(renderer.camera_steady_count == 0u, "held navigation input keeps the preview interaction active between mouse deltas") == false) {
+  const etx::Renderer::CameraUpdateResult held = renderer.update_camera(scene, 1.0f / 60.0f);
+  if (check_condition((held.changed == false) && held.mouse_input_active, "held navigation input remains observable between mouse deltas") == false) {
     return false;
   }
 
   controller->set_mouse_button_state(etx::CameraController::MouseLeft, false);
-  renderer.update_camera(scene, 1.0f / 60.0f);
-  return check_condition(renderer.camera_steady_count == 1u, "releasing navigation input finishes the preview interaction");
+  const etx::Renderer::CameraUpdateResult released = renderer.update_camera(scene, 1.0f / 60.0f);
+  if (check_condition((released.changed == false) && (released.mouse_input_active == false), "camera update reports mouse release without an intermediate scene mutation") ==
+      false) {
+    return false;
+  }
+
+  etx::SceneRepresentation normal_frame_scene(scheduler, ior_database);
+  etx::SceneRepresentation delayed_frame_scene(scheduler, ior_database);
+  RendererProbe normal_frame_renderer(scheduler);
+  RendererProbe delayed_frame_renderer(scheduler);
+  normal_frame_renderer.initialize_camera(normal_frame_scene);
+  delayed_frame_renderer.initialize_camera(delayed_frame_scene);
+  etx::CameraController* normal_frame_controller = normal_frame_renderer.camera_controller();
+  etx::CameraController* delayed_frame_controller = delayed_frame_renderer.camera_controller();
+  normal_frame_controller->set_mouse_button_state(etx::CameraController::MouseLeft, true);
+  delayed_frame_controller->set_mouse_button_state(etx::CameraController::MouseLeft, true);
+  normal_frame_controller->add_mouse_delta(12.0f, -5.0f);
+  delayed_frame_controller->add_mouse_delta(12.0f, -5.0f);
+  normal_frame_renderer.update_camera(normal_frame_scene, 1.0f / 60.0f);
+  delayed_frame_renderer.update_camera(delayed_frame_scene, 0.25f);
+  return check_condition(nearly_equal(normal_frame_scene.camera().direction, delayed_frame_scene.camera().direction),
+    "non-inertial pointer rotation is independent of delayed frame duration");
 }
 
 bool test_environment_emitter_uses_node_rotation() {
@@ -1090,93 +1105,27 @@ bool test_embree_transform_only_commit() {
     "Embree instance-mask update hides a disabled node without rebuilding geometry");
 }
 
-bool test_preview_resolution_adapts_with_hysteresis() {
-  etx::PreviewResolutionController controller(4u, 4u);
-  controller.begin();
-  if (check_condition(controller.active() && (controller.pixel_size() == 4u), "preview adaptation starts at its retained resolution") == false ||
-      check_condition(controller.update(0.050, true) == false, "one slow output does not immediately reduce preview resolution") == false ||
-      check_condition((controller.update(0.050, true) == false) && (controller.pixel_size() == 4u), "slow output cannot exceed the maximum preview pixel block") == false) {
-    return false;
-  }
-
-  for (uint32_t sample = 0u; sample < 5u; ++sample) {
-    if (check_condition(controller.update(0.010, true) == false, "fast preview output respects refinement hysteresis") == false) {
-      return false;
-    }
-  }
-  if (check_condition(controller.update(0.010, true) && (controller.pixel_size() == 2u), "sustained fast output refines preview resolution") == false) {
-    return false;
-  }
-
-  controller.end();
-  controller.begin();
-  if (check_condition(controller.pixel_size() == 4u, "each preview interaction starts with the configured coarse pixel block") == false ||
-      check_condition(controller.update(0.050, true) == false, "one slow output at maximum keeps the preview resolution") == false ||
-      check_condition((controller.update(0.050, true) == false) && (controller.pixel_size() == 4u), "preview coarsening remains capped at a four-pixel block") == false) {
-    return false;
-  }
-
-  controller.end();
-  return check_condition((controller.active() == false) && (controller.update(1.0, false) == false) && (controller.pixel_size() == 4u), "inactive preview does not adapt");
+bool test_preview_pixel_size_is_fixed() {
+  etx::TaskScheduler scheduler = {};
+  RendererProbe renderer(scheduler);
+  renderer.set_preview_pixel_size(etx::kInteractionPreviewPixelSize);
+  return check_condition((etx::kInteractionPreviewPixelSize == 4u) && (renderer.render_pixel_size() == 4u), "interaction preview always uses a four-pixel block");
 }
 
-bool test_preview_iteration_completes_before_pending_scene_commit() {
-  struct IntegratorProbe : etx::Integrator {
-    using Integrator::Integrator;
-
-    void run() override {
-      current_state = State::Running;
-      current_status = {};
-      update_count = 0u;
-    }
-
-    void update() override {
-      if ((current_state != State::Running) || (update_count >= 2u)) {
-        return;
-      }
-      update_count += 1u;
-      if (update_count == 2u) {
-        current_status.completed_iterations = 1u;
-        current_status.last_iteration_time = 0.01;
-      }
-    }
-
-    void stop(Stop) override {
-      current_state = State::Stopped;
-    }
-
-    const Status& status() const override {
-      return current_status;
-    }
-
-    Status current_status = {};
-    uint32_t update_count = 0u;
-  };
-
+bool test_output_pixel_size_scales_final_render_dimensions() {
   etx::TaskScheduler scheduler = {};
-  etx::IORDatabase ior_database = {};
-  etx::SceneRepresentation scene(scheduler, ior_database);
-  etx::Film film(scheduler);
-  etx::Raytracing raytracing(scheduler, film);
-  IntegratorProbe integrator(raytracing);
-  etx::IntegratorThread integrator_thread(scene, raytracing);
-  integrator_thread.start(&integrator);
-  integrator_thread.run();
-
-  if (check_condition(integrator_thread.update_integrator() == false, "preview polling starts the coarse iteration without reporting an output") == false ||
-      check_condition(integrator_thread.scene_changes_pending(), "initial scene commit remains queued while the coarse iteration runs") == false) {
-    return false;
-  }
-
-  if (check_condition(integrator_thread.update_integrator(), "completed coarse iteration is observable before scene changes are committed") == false) {
-    return false;
-  }
-  if (check_condition(integrator_thread.scene_changes_pending(), "completed coarse output remains publishable while the newest scene commit stays queued") == false) {
-    return false;
-  }
-
-  integrator_thread.stop(etx::Integrator::Stop::Immediate);
-  return check_condition(integrator.state() == etx::Integrator::State::Stopped, "immediate stop is consumed without committing a queued scene update");
+  RendererProbe renderer(scheduler);
+  renderer.set_output_pixel_size(4u);
+  const uint2 final_dimensions = renderer.scaled_output_dimensions({7u, 9u});
+  renderer.set_preview_pixel_size(2u);
+  const uint2 preview_dimensions = renderer.scaled_render_dimensions({7u, 9u});
+  renderer.set_preview_pixel_size(0u);
+  const uint2 restored_dimensions = renderer.scaled_render_dimensions({7u, 9u});
+  return check_condition((renderer.output_pixel_size() == 4u) && (final_dimensions.x == 2u) && (final_dimensions.y == 3u),
+           "final output pixel size scales renderer dimensions with complete edge blocks") &&
+         check_condition((preview_dimensions.x == 4u) && (preview_dimensions.y == 5u), "preview resolution overrides the active render dimensions independently") &&
+         check_condition((restored_dimensions.x == final_dimensions.x) && (restored_dimensions.y == final_dimensions.y),
+           "ending preview restores the unchanged final output scale");
 }
 
 bool test_external_medium_change_is_detected_without_notification() {
@@ -1231,6 +1180,7 @@ bool test_external_medium_change_is_detected_without_notification() {
   scene.data().materials.push_back(material);
   integrator_thread.start(&integrator);
   integrator_thread.commit_scene_changes();
+  integrator_thread.run();
 
   const uint64_t initial_revision = integrator_thread.scene_revision();
   const uint32_t initial_run_count = integrator.run_count;
@@ -1251,7 +1201,9 @@ bool test_external_medium_change_is_detected_without_notification() {
                       check_condition(integrator.run_count == (initial_run_count + 1u), "external-medium edit restarts the active integrator without an explicit notification") &&
                       check_condition(raytracing.scene().materials[0u].ext_medium == medium_index, "external-medium edit is published in the next CPU render snapshot");
   integrator_thread.stop(etx::Integrator::Stop::Immediate);
-  return result;
+  scene.data().materials.front().ext_medium = kInvalidIndex;
+  integrator_thread.commit_scene_changes();
+  return result && check_condition(integrator.run_count == (initial_run_count + 1u), "scene commits do not restart an explicitly stopped integrator");
 }
 
 bool test_buffer_view_rejects_recycled_slot() {
@@ -1347,7 +1299,7 @@ int main() {
     {"disabled_attached_emitter_is_not_global", test_disabled_attached_emitter_is_not_global},
     {"directional_and_area_emitters_use_node_transforms", test_directional_and_area_emitters_use_node_transforms},
     {"scene_update_scope_coalescing", test_scene_update_scope_coalescing},
-    {"camera_interaction_queues_updates_until_input_released", test_camera_interaction_queues_updates_until_input_released},
+    {"camera_update_reports_input_lifecycle", test_camera_update_reports_input_lifecycle},
     {"environment_emitter_uses_node_rotation", test_environment_emitter_uses_node_rotation},
     {"active_camera_uses_node_transform", test_active_camera_uses_node_transform},
     {"hierarchy_hashes_content", test_hierarchy_hashes_content},
@@ -1360,8 +1312,8 @@ int main() {
     {"center_node_pivot_preserves_geometry_and_children", test_center_node_pivot_preserves_geometry_and_children},
     {"node_geometry_edits_reject_mixed_attachments", test_node_geometry_edits_reject_mixed_attachments},
     {"embree_transform_only_commit", test_embree_transform_only_commit},
-    {"preview_resolution_adapts_with_hysteresis", test_preview_resolution_adapts_with_hysteresis},
-    {"preview_iteration_completes_before_pending_scene_commit", test_preview_iteration_completes_before_pending_scene_commit},
+    {"preview_pixel_size_is_fixed", test_preview_pixel_size_is_fixed},
+    {"output_pixel_size_scales_final_render_dimensions", test_output_pixel_size_scales_final_render_dimensions},
     {"external_medium_change_is_detected_without_notification", test_external_medium_change_is_detected_without_notification},
     {"buffer_view_rejects_recycled_slot", test_buffer_view_rejects_recycled_slot},
     {"cpu_render_snapshot_owns_medium_density", test_cpu_render_snapshot_owns_medium_density},

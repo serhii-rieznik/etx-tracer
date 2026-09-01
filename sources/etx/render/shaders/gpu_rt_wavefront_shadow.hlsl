@@ -75,6 +75,14 @@
     return;
   }
   const uint task_index = wavefront_shadow_queue_load(resources, kGPUWavefrontShadowQueueConnectLight, queue_index);
+#if ETX_UPBP
+  if (scene_path_mode_is_upbp()) {
+    if (wavefront_claim_connect_light_task(resources.connect_light_task_buffer, task_index) == false) {
+      return;
+    }
+    DeviceMemoryBarrier();
+  }
+#endif
   GPUWavefrontConnectLightTask task = wavefront_load_connect_light_task(resources.connect_light_task_buffer, task_index);
 
   SpectralQuery spect = (SpectralQuery)0;

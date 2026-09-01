@@ -98,6 +98,10 @@ struct CPUDebugIntegratorImpl : public Task {
     thinfilm.max_thickness = 850.0f;
   }
 
+  bool running() const {
+    return state->load() != Integrator::State::Stopped;
+  }
+
   void build_options(Options& result) const {
     result.options.clear();
     result.set_integral("mode", mode, "Visualize", Option::Meta::EnumValue, {Mode(0), Mode(uint32_t(Mode::Count) - 1u)}).name_getter = mode_to_string;
@@ -161,7 +165,7 @@ struct CPUDebugIntegratorImpl : public Task {
   void execute_range(uint32_t begin, uint32_t end, uint32_t thread_id) override {
     const auto& film = rt.film();
 
-    for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
+    for (uint32_t i = begin; running() && (i < end); ++i) {
       uint2 pixel = {};
       if (film.active_pixel(i, pixel)) {
         const uint2 film_size = film.base_dimensions();
@@ -586,7 +590,7 @@ struct CPUDebugIntegratorImpl : public Task {
             float average = 0.0f;
             uint32_t distance_count = 0;
             const float3 p0 = offset_ray(intersection.pos, -intersection.nrm);
-            for (uint32_t i = 0; i < kSampleCount; ++i) {
+            for (uint32_t i = 0; running() && (i < kSampleCount); ++i) {
               float3 d = -sample_cosine_distribution(smp.next_2d(), intersection.nrm, th_factor);
               Intersection e;
               Ray tr = {p0, d};
@@ -594,6 +598,10 @@ struct CPUDebugIntegratorImpl : public Task {
               bool intersection_found = rt.trace(scene, tr, e, smp);
               average += intersection_found ? e.t : tr.max_t;
               distances[distance_count++] = intersection_found ? e.t : tr.max_t;
+            }
+
+            if (running() == false) {
+              return {};
             }
 
             if (distance_count == 0) {

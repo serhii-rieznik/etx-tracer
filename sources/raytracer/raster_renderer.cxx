@@ -16,7 +16,6 @@ void RasterizationRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
 }
 
 void RasterizationRenderer::render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& data) {
-  Renderer::update_camera(scene, data.dt);
   Renderer::render(ctx, scene, data);
 }
 

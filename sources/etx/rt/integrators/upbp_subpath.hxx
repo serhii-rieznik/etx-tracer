@@ -64,6 +64,18 @@ inline bool upbp_surface_arrival_has_positive_measure(const Scene& scene, const 
          upbp_projected_measure_valid(fabs(static_cast<double>(dot(geometric_normal, intersection.w_i))));
 }
 
+inline bool upbp_surface_arrival_has_recursive_measure(const Scene& scene, const float3& source_position, const Intersection& intersection) {
+  const float3 edge = intersection.pos - source_position;
+  const float edge_length_squared = dot(edge, edge);
+  if ((edge_length_squared <= 0.0f) || (std::isfinite(edge_length_squared) == false)) {
+    return false;
+  }
+  const Triangle& triangle = scene.triangles[intersection.triangle_index];
+  const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, triangle, intersection.instance_index);
+  const float3 edge_direction = edge / sqrtf(edge_length_squared);
+  return upbp_projected_measure_valid(fabs(static_cast<double>(dot(geometric_normal, edge_direction))));
+}
+
 inline bool upbp_surface_departure_is_valid(const Scene& scene, const Intersection& intersection, const float3& outgoing_direction, const uint32_t sample_properties) {
   const Triangle& triangle = scene.triangles[intersection.triangle_index];
   const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, triangle, intersection.instance_index);
@@ -338,7 +350,8 @@ inline bool upbp_build_subpath(const Raytracing& rt, const Scene& scene, const U
       ray.max_t = kMaxFloat;
     } else if (scene_segment.terminal == UPBPSceneSegmentTerminal::Surface) {
       const Intersection& intersection = scene_segment.intersection;
-      if (upbp_surface_arrival_has_positive_measure(scene, intersection) == false) {
+      if ((upbp_surface_arrival_has_positive_measure(scene, intersection) == false) ||
+          (upbp_surface_arrival_has_recursive_measure(scene, result.path.vertices.back().position, intersection) == false)) {
         if (result.path.append_terminal_segment(scene_segment.segment) == false) {
           result.failure = UPBPSubpathFailure::PathCapacity;
           return false;

@@ -213,7 +213,8 @@ bool RTApplication::initialized() const {
 }
 
 bool RTApplication::capture_output_png(std::vector<uint8_t>& png_data, uint32_t& width, uint32_t& height) {
-  if (_current_scene_file.empty() || (_active_renderer == nullptr) || (_active_renderer->display_texture().valid() == false)) {
+  if (_preview_active || _current_scene_file.empty() || (_active_renderer == nullptr) || (_active_renderer->output_texture().valid() == false) ||
+      (_active_renderer->display_texture().valid() == false)) {
     png_data.clear();
     width = 0u;
     height = 0u;
@@ -379,8 +380,8 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.scene_settings_changed = std::bind(&RTApplication::on_scene_settings_changed, this);
     ui.callbacks.scene_modified = std::bind(&RTApplication::mark_scene_dirty, this);
     ui.callbacks.scene_transforms_changed = std::bind(&RTApplication::on_scene_transforms_changed, this);
-    ui.callbacks.scene_transform_interaction_started = std::bind(&RTApplication::on_scene_transform_interaction_started, this);
-    ui.callbacks.scene_transform_interaction_finished = std::bind(&RTApplication::on_scene_transform_interaction_finished, this);
+    ui.callbacks.preview_interaction_started = std::bind(&RTApplication::on_preview_interaction_started, this);
+    ui.callbacks.preview_interaction_finished = std::bind(&RTApplication::on_preview_interaction_finished, this);
     ui.callbacks.denoise_selected = [this]() {
       submit_command({.type = ApplicationCommandType::Denoise});
     };
@@ -569,8 +570,11 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
     return;
   }
 
-  if (_scene_transform_interaction_active && (_scene_transform_interaction_renderer != next_renderer)) {
-    on_scene_transform_interaction_finished();
+  if ((_preview_active || (_preview_interaction_count > 0u)) && (_preview_source_renderer != next_renderer)) {
+    _preview_resume_after_end = false;
+    _preview_interaction_count = 0u;
+    finish_preview();
+    cancel_preview();
   }
 
   if (_active_renderer != nullptr) {
@@ -684,11 +688,16 @@ void RTApplication::frame() {
     .view_parameters = _view_parameters,
   };
 
+  if ((_current_scene_file.empty() == false) && (_active_renderer != nullptr)) {
+    update_camera_interaction(render_frame_data.dt);
+  }
+
   UI::FrameData ui_frame_data = {
     .ior_database = _ior_database,
     .recent_files = _recent_files,
     .film = film,
     .output_size = _active_renderer ? _active_renderer->output_size() : uint2{},
+    .output_pixel_size = _output_pixel_size,
     .dt = render_frame_data.dt,
     .scene_loaded = (_current_scene_file.empty() == false) && scene.valid(),
   };
@@ -864,9 +873,7 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     }
   }
 
-  if (_scene_transform_interaction_active) {
-    on_scene_transform_interaction_finished();
-  }
+  cancel_preview();
   if (_active_renderer != nullptr) {
     _active_renderer->stop();
   }
@@ -973,6 +980,11 @@ bool RTApplication::read_active_renderer_output(std::vector<float4>& output, uin
   output.clear();
   image_size = {};
 
+  if (_preview_active) {
+    log::warning("Cannot capture renderer output while interaction preview is active");
+    return false;
+  }
+
   if (render_context.valid() == false) {
     log::warning("Cannot capture renderer output: render context is not initialized");
     return false;
@@ -1011,8 +1023,9 @@ void RTApplication::process_pending_image_requests() {
     _pending_reference_capture_renderer = nullptr;
   }
 
-  const bool reference_output_available = _pending_current_image_reference_capture && (_active_renderer != nullptr) && _active_renderer->output_texture().valid();
-  const bool gpu_save_output_available = gpu_renderer_active && _pending_gpu_save_image && _active_renderer->output_texture().valid();
+  const bool reference_output_available =
+    (_preview_active == false) && _pending_current_image_reference_capture && (_active_renderer != nullptr) && _active_renderer->output_texture().valid();
+  const bool gpu_save_output_available = (_preview_active == false) && gpu_renderer_active && _pending_gpu_save_image && _active_renderer->output_texture().valid();
   const bool needs_renderer_capture = reference_output_available || gpu_save_output_available;
   if (needs_renderer_capture) {
     capture_attempted = true;
@@ -1074,6 +1087,15 @@ void RTApplication::on_use_image_as_reference() {
 void RTApplication::on_save_image_selected(std::string file_name, SaveImageMode mode) {
   ETX_PROFILER_SCOPE();
 
+  if (_preview_active) {
+    log::warning("Cannot save the renderer output while interaction preview is active");
+    return;
+  }
+  if ((_active_renderer == nullptr) || (_active_renderer->output_texture().valid() == false)) {
+    log::warning("Cannot save the renderer output before a final-resolution sample is available");
+    return;
+  }
+
   if ((_active_renderer != nullptr) && (_active_renderer->mode() == RendererMode::GPURaytracing)) {
     _pending_gpu_save_image_file = file_name;
     _pending_gpu_save_image_mode = mode;
@@ -1121,7 +1143,10 @@ void RTApplication::on_run_selected() {
   if (_view_parameters.view_layer == ViewLayer::Denoised) {
     _view_parameters.view_layer = ViewLayer::Result;
   }
-  if (_active_renderer != nullptr) {
+  if (_preview_active) {
+    _preview_resume_after_end = true;
+    _active_renderer->restart();
+  } else if (_active_renderer != nullptr) {
     _active_renderer->start();
   }
 }
@@ -1129,6 +1154,16 @@ void RTApplication::on_run_selected() {
 void RTApplication::on_stop_selected(bool wait_for_completion) {
   ETX_PROFILER_SCOPE();
   if (_active_renderer == nullptr) {
+    return;
+  }
+
+  if (_preview_active) {
+    _preview_resume_after_end = false;
+    if (wait_for_completion) {
+      _active_renderer->finish();
+    } else {
+      _active_renderer->stop();
+    }
     return;
   }
 
@@ -1144,7 +1179,10 @@ void RTApplication::on_restart_selected() {
   if (_view_parameters.view_layer == ViewLayer::Denoised) {
     _view_parameters.view_layer = ViewLayer::Result;
   }
-  if (_active_renderer != nullptr) {
+  if (_preview_active) {
+    _preview_resume_after_end = true;
+    _active_renderer->restart();
+  } else if (_active_renderer != nullptr) {
     _active_renderer->restart();
   }
 }
@@ -1728,15 +1766,22 @@ void RTApplication::on_camera_changed(uint2 viewport, uint32_t pixel_size) {
   ETX_PROFILER_SCOPE();
   mark_scene_dirty();
 
+  _output_pixel_size = clamp(pixel_size, 1u, 1024u);
+  if (_preview_interaction_count == 0u) {
+    film.set_pixel_size(_output_pixel_size);
+  }
+  cpu_renderer.set_output_pixel_size(_output_pixel_size);
+  gpu_renderer.set_output_pixel_size(_output_pixel_size);
+
   scene.update_active_camera();
   if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
     _active_renderer->camera_controller()->sync_from_camera();
   }
-  if ((_active_renderer == &cpu_renderer) && ((viewport != film.base_dimensions()) || (pixel_size != film.pixel_size()))) {
+  if ((_preview_interaction_count == 0u) && (_active_renderer == &cpu_renderer) && (viewport != film.base_dimensions())) {
     cpu_renderer.set_output_dimensions(render_context.get_context(), scene.camera().film_size);
   }
-  notify_scene_might_have_changed();
-  if (_active_renderer == &cpu_renderer) {
+  notify_camera_changed();
+  if ((_preview_interaction_count == 0u) && (_active_renderer == &cpu_renderer)) {
     cpu_renderer.restart();
   }
 }
@@ -1800,33 +1845,146 @@ void RTApplication::rebuild_all_atmosphere_emitters() {
   }
 }
 
-void RTApplication::on_scene_transform_interaction_started() {
-  if (_scene_transform_interaction_active) {
-    return;
+void RTApplication::on_preview_interaction_started() {
+  _preview_interaction_count += 1u;
+  if (_preview_interaction_count == 1u) {
+    update_preview_interaction(SceneUpdateScope::None);
   }
-
-  if (_active_renderer == nullptr) {
-    return;
-  }
-
-  _scene_transform_interaction_active = true;
-  _scene_transform_interaction_renderer = _active_renderer;
-  _scene_transform_interaction_renderer->on_scene_transform_interaction_started(scene);
 }
 
-void RTApplication::on_scene_transform_interaction_finished() {
-  if (_scene_transform_interaction_active == false) {
+void RTApplication::on_preview_interaction_finished() {
+  if (_preview_interaction_count == 0u) {
     return;
   }
 
-  _scene_transform_interaction_active = false;
-  Renderer* const interaction_renderer = _scene_transform_interaction_renderer;
-  _scene_transform_interaction_renderer = nullptr;
-  scene.update_medium_bounds();
-  if (interaction_renderer != nullptr) {
-    interaction_renderer->on_scene_transform_interaction_finished(scene);
+  _preview_interaction_count -= 1u;
+  if (_preview_interaction_count == 0u) {
+    finish_preview();
   }
-  notify_scene_might_have_changed();
+}
+
+void RTApplication::update_camera_interaction(float dt) {
+  if ((_active_renderer == nullptr) || (_active_renderer->camera_controller() == nullptr)) {
+    return;
+  }
+
+  const Renderer::CameraUpdateResult camera_update = _active_renderer->update_camera(scene, dt);
+  const bool camera_input_active = camera_update.mouse_input_active || camera_update.keyboard_input_active;
+  if ((_camera_preview_claim_active == false) && camera_input_active) {
+    _camera_preview_claim_active = true;
+    _camera_preview_delayed_release = camera_update.keyboard_input_active;
+    _camera_preview_idle_seconds = 0.0;
+    on_preview_interaction_started();
+  }
+  if (camera_update.changed) {
+    if (_camera_preview_claim_active == false) {
+      _camera_preview_claim_active = true;
+      on_preview_interaction_started();
+    }
+    _camera_preview_delayed_release = camera_update.keyboard_input_active;
+    _camera_preview_idle_seconds = 0.0;
+    update_preview_interaction(camera_update.scene_resources_changed ? SceneUpdateScope::Transforms : SceneUpdateScope::Camera);
+    return;
+  }
+
+  if (_camera_preview_claim_active == false) {
+    return;
+  }
+  if (camera_update.mouse_input_active || camera_update.keyboard_input_active) {
+    _camera_preview_idle_seconds = 0.0;
+    return;
+  }
+
+  if (_camera_preview_delayed_release) {
+    constexpr double kKeyboardPreviewReleaseDelaySeconds = 0.5;
+    _camera_preview_idle_seconds += dt;
+    if (_camera_preview_idle_seconds < kKeyboardPreviewReleaseDelaySeconds) {
+      return;
+    }
+  }
+
+  _camera_preview_claim_active = false;
+  _camera_preview_delayed_release = false;
+  _camera_preview_idle_seconds = 0.0;
+  on_preview_interaction_finished();
+}
+
+void RTApplication::update_preview_interaction(SceneUpdateScope scope) {
+  if ((_active_renderer == nullptr) || (_preview_interaction_count == 0u)) {
+    return;
+  }
+
+  const bool preview_started = _preview_active == false;
+  if (preview_started) {
+    _preview_source_renderer = _active_renderer;
+    _preview_resume_after_end = true;
+    _preview_source_renderer->set_preview_pixel_size(kInteractionPreviewPixelSize);
+    _preview_active = true;
+  }
+
+  if (static_cast<uint32_t>(scope) > static_cast<uint32_t>(_preview_update_scope)) {
+    _preview_update_scope = scope;
+  }
+  if (scope == SceneUpdateScope::Full) {
+    _preview_source_renderer->on_scene_changed(scene);
+  } else if (scope == SceneUpdateScope::Transforms) {
+    _preview_source_renderer->on_scene_transforms_changed(scene);
+  } else if (scope == SceneUpdateScope::Camera) {
+    _preview_source_renderer->on_camera_changed(scene);
+  }
+  if (preview_started) {
+    _preview_source_renderer->restart();
+  }
+}
+
+void RTApplication::finish_preview() {
+  if (_preview_active == false) {
+    return;
+  }
+
+  Renderer* const source_renderer = _preview_source_renderer;
+  const bool resume_after_end = _preview_resume_after_end;
+  const SceneUpdateScope update_scope = _preview_update_scope;
+  if (source_renderer != nullptr) {
+    source_renderer->stop_rendering();
+    source_renderer->set_preview_pixel_size(0u);
+    source_renderer->discard_render_output();
+  }
+  _preview_active = false;
+  _preview_source_renderer = nullptr;
+  _preview_resume_after_end = false;
+  _preview_update_scope = SceneUpdateScope::None;
+
+  if ((source_renderer == &cpu_renderer) && (scene.camera().film_size != cpu_renderer.output_size())) {
+    cpu_renderer.set_output_dimensions(render_context.get_context(), scene.camera().film_size);
+  }
+
+  if (update_scope == SceneUpdateScope::Full) {
+    notify_scene_might_have_changed();
+  } else if (update_scope == SceneUpdateScope::Transforms) {
+    notify_scene_transforms_changed();
+  } else if (update_scope == SceneUpdateScope::Camera) {
+    notify_camera_changed();
+  }
+
+  if (resume_after_end && (source_renderer != nullptr) && (source_renderer == _active_renderer) && (_current_scene_file.empty() == false) && scene.valid()) {
+    source_renderer->restart();
+  }
+}
+
+void RTApplication::cancel_preview() {
+  if (_preview_source_renderer != nullptr) {
+    _preview_source_renderer->stop_rendering();
+    _preview_source_renderer->set_preview_pixel_size(0u);
+  }
+  _preview_active = false;
+  _preview_resume_after_end = false;
+  _camera_preview_claim_active = false;
+  _camera_preview_delayed_release = false;
+  _camera_preview_idle_seconds = 0.0;
+  _preview_interaction_count = 0u;
+  _preview_update_scope = SceneUpdateScope::None;
+  _preview_source_renderer = nullptr;
 }
 
 void RTApplication::on_denoise_selected() {
@@ -1881,17 +2039,35 @@ void RTApplication::on_camera_activated(uint32_t camera_index) {
 
   scene.data().cameras[camera_index].active = true;
 
-  on_camera_changed(scene.data().cameras[camera_index].cam.film_size, film.pixel_size());
+  on_camera_changed(scene.data().cameras[camera_index].cam.film_size, _output_pixel_size);
 }
 
 void RTApplication::notify_scene_might_have_changed() {
+  if (_preview_interaction_count > 0u) {
+    update_preview_interaction(SceneUpdateScope::Full);
+    return;
+  }
   cpu_renderer.on_scene_changed(scene);
   raster_renderer.on_scene_changed(scene);
   gpu_renderer.on_scene_changed(scene);
 }
 
+void RTApplication::notify_camera_changed() {
+  if (_preview_interaction_count > 0u) {
+    update_preview_interaction(SceneUpdateScope::Camera);
+    return;
+  }
+  cpu_renderer.on_camera_changed(scene);
+  raster_renderer.on_camera_changed(scene);
+  gpu_renderer.on_camera_changed(scene);
+}
+
 void RTApplication::notify_scene_transforms_changed() {
-  if (_scene_transform_interaction_active == false) {
+  if (_preview_interaction_count > 0u) {
+    update_preview_interaction(SceneUpdateScope::Transforms);
+    return;
+  }
+  if (_preview_active == false) {
     scene.update_medium_bounds();
   }
   cpu_renderer.on_scene_transforms_changed(scene);
@@ -1901,6 +2077,23 @@ void RTApplication::notify_scene_transforms_changed() {
 
 RendererStatus RTApplication::current_renderer_status() const {
   RendererStatus status = _active_renderer ? _active_renderer->status() : RendererStatus{.mode = ui.current_renderer_mode()};
+  status.preview_active = _preview_active;
+  if (_preview_active) {
+    status.state = RendererStatusState::Idle;
+    status.output_stale = true;
+    status.message.clear();
+    status.progress_kind = RendererProgressKind::None;
+    status.completed_units = 0u;
+    status.total_units = 0u;
+    status.path_phase = RendererPathPhase::None;
+    status.completed_path_count = 0u;
+    status.total_path_count = 0u;
+    status.elapsed_seconds = 0.0;
+    status.remaining_seconds = 0.0;
+    status.elapsed_available = false;
+    status.remaining_available = false;
+    status.upbp = {};
+  }
   if (_material_render_resource_preparation_active && (_active_renderer != nullptr) && _active_renderer->display_texture().valid()) {
     status.output_stale = true;
   }
@@ -1926,7 +2119,18 @@ void RTApplication::sync_ui_renderer_state() {
   ui.set_current_renderer_preparation(preparation);
   ui.set_current_renderer_status(current_renderer_status());
   ui.set_memory_stats(render_context.get_context().device().get_memory_statistics(), _active_renderer ? _active_renderer->memory_stats() : RendererMemoryStats{});
-  ui.set_current_renderer_controls((_active_renderer && !_current_scene_file.empty()) ? _active_renderer->control_state() : RendererControlState{});
+  RendererControlState controls = (_active_renderer && !_current_scene_file.empty()) ? _active_renderer->control_state() : RendererControlState{};
+  if (_preview_active) {
+    controls = {};
+    controls.can_restart = true;
+    if (_preview_resume_after_end) {
+      controls.can_finish = true;
+      controls.can_stop = true;
+    } else {
+      controls.can_run = true;
+    }
+  }
+  ui.set_current_renderer_controls(controls);
   ui.set_gpu_kernel_timing_stats((_active_renderer == &gpu_renderer) ? gpu_renderer.kernel_timing_stats() : RendererKernelTimingStats{});
   ui.set_gpu_wavefront_schedule(gpu_renderer.wavefront_steps_per_render(), gpu_renderer.wavefront_last_batch_ms(), gpu_renderer.wavefront_auto_tuning_enabled());
 }
@@ -2016,6 +2220,14 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
         message = "A scene and output path are required";
         return false;
       }
+      if (_preview_active) {
+        message = "Renderer output cannot be saved while interaction preview is active";
+        return false;
+      }
+      if ((_active_renderer == nullptr) || (_active_renderer->output_texture().valid() == false)) {
+        message = "A final-resolution sample is required before saving renderer output";
+        return false;
+      }
       on_save_image_selected(command.path, command.save_image_mode);
       message = "Image save requested";
       return true;
@@ -2081,7 +2293,7 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
     }
 
     case ApplicationCommandType::Run:
-      if (_current_scene_file.empty() || (_active_renderer == nullptr) || (_active_renderer->control_state().can_run == false)) {
+      if (_current_scene_file.empty() || (_active_renderer == nullptr) || ((_preview_active == false) && (_active_renderer->control_state().can_run == false))) {
         message = "Renderer cannot start in its current state";
         return false;
       }
@@ -2090,7 +2302,7 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
       return true;
 
     case ApplicationCommandType::Finish:
-      if (_current_scene_file.empty() || (_active_renderer == nullptr) || (_active_renderer->control_state().can_finish == false)) {
+      if (_current_scene_file.empty() || (_active_renderer == nullptr) || ((_preview_active == false) && (_active_renderer->control_state().can_finish == false))) {
         message = "Renderer cannot finish in its current state";
         return false;
       }
@@ -2099,7 +2311,7 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
       return true;
 
     case ApplicationCommandType::Stop:
-      if (_current_scene_file.empty() || (_active_renderer == nullptr) || (_active_renderer->control_state().can_stop == false)) {
+      if (_current_scene_file.empty() || (_active_renderer == nullptr) || ((_preview_active == false) && (_active_renderer->control_state().can_stop == false))) {
         message = "Renderer cannot stop in its current state";
         return false;
       }
@@ -2108,7 +2320,7 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
       return true;
 
     case ApplicationCommandType::Restart:
-      if (_current_scene_file.empty() || (_active_renderer == nullptr) || (_active_renderer->control_state().can_restart == false)) {
+      if (_current_scene_file.empty() || (_active_renderer == nullptr) || ((_preview_active == false) && (_active_renderer->control_state().can_restart == false))) {
         message = "Renderer cannot restart in its current state";
         return false;
       }
@@ -2220,6 +2432,16 @@ void RTApplication::publish_application_state() {
   state.preparation = _active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{};
   state.status = current_renderer_status();
   state.controls = state.scene_loaded && _active_renderer ? _active_renderer->control_state() : RendererControlState{};
+  if (_preview_active) {
+    state.controls = {};
+    state.controls.can_restart = true;
+    if (_preview_resume_after_end) {
+      state.controls.can_finish = true;
+      state.controls.can_stop = true;
+    } else {
+      state.controls.can_run = true;
+    }
+  }
   state.can_denoise = state.scene_loaded && (_active_renderer == &cpu_renderer) && state.controls.can_run && (state.status.progress_kind == RendererProgressKind::Samples) &&
                       (state.status.completed_units > 0u);
   state.view = _view_parameters;
