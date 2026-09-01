@@ -1,4 +1,5 @@
 #include <etx/render/host/scene_hierarchy.hxx>
+#include <etx/render/host/buffer_pool.hxx>
 #include <etx/render/host/film.hxx>
 #include <etx/render/host/emitter_packing.hxx>
 #include <etx/render/host/scene_data.hxx>
@@ -14,6 +15,7 @@
 #include <raytracer/renderer.hxx>
 
 #include <cstdio>
+#include <limits>
 
 namespace {
 
@@ -1177,6 +1179,151 @@ bool test_preview_iteration_completes_before_pending_scene_commit() {
   return check_condition(integrator.state() == etx::Integrator::State::Stopped, "immediate stop is consumed without committing a queued scene update");
 }
 
+bool test_external_medium_change_is_detected_without_notification() {
+  struct IntegratorProbe : etx::Integrator {
+    using Integrator::Integrator;
+
+    void run() override {
+      run_count += 1u;
+      current_state = State::Running;
+      current_status = {};
+    }
+
+    void update() override {
+    }
+
+    void stop(Stop) override {
+      stop_count += 1u;
+      current_state = State::Stopped;
+    }
+
+    const Status& status() const override {
+      return current_status;
+    }
+
+    Status current_status = {};
+    uint32_t run_count = 0u;
+    uint32_t stop_count = 0u;
+  };
+
+  struct SceneGlobalGuard {
+    SceneGlobalGuard() {
+      etx::scene_global_init();
+    }
+    ~SceneGlobalGuard() {
+      etx::scene_global_deinit();
+    }
+  } scene_global_guard;
+
+  etx::TaskScheduler scheduler = {};
+  etx::IORDatabase ior_database = {};
+  etx::SceneRepresentation scene(scheduler, ior_database);
+  etx::Film film(scheduler);
+  etx::Raytracing raytracing(scheduler, film);
+  IntegratorProbe integrator(raytracing);
+  etx::IntegratorThread integrator_thread(scene, raytracing);
+
+  scene.camera().film_size = {1u, 1u};
+  const uint32_t medium_index = scene.add_medium("Regression Medium");
+  Material material = {};
+  material.cls = MaterialClass::Diffuse;
+  material.opacity = 1.0f;
+  scene.data().materials.push_back(material);
+  integrator_thread.start(&integrator);
+  integrator_thread.commit_scene_changes();
+
+  const uint64_t initial_revision = integrator_thread.scene_revision();
+  const uint32_t initial_run_count = integrator.run_count;
+  integrator_thread.commit_scene_changes();
+  if (check_condition(integrator.run_count == initial_run_count, "unchanged scene polling does not restart a running integrator") == false ||
+      check_condition(integrator.stop_count == 0u, "unchanged scene polling does not stop a running integrator") == false ||
+      check_condition(integrator_thread.scene_revision() == initial_revision, "unchanged scene polling preserves the committed revision") == false) {
+    return false;
+  }
+  scene.data().materials.front().ext_medium = medium_index;
+  if (check_condition(raytracing.scene().materials[0u].ext_medium != medium_index, "active CPU render snapshot remains immutable until the next scene commit") == false) {
+    return false;
+  }
+  integrator_thread.commit_scene_changes();
+
+  const bool result = check_condition(integrator_thread.scene_revision() == (initial_revision + 1u), "external-medium edit advances the detected scene revision") &&
+                      check_condition(integrator.stop_count == 1u, "external-medium edit stops the active integrator before replacing its render snapshot") &&
+                      check_condition(integrator.run_count == (initial_run_count + 1u), "external-medium edit restarts the active integrator without an explicit notification") &&
+                      check_condition(raytracing.scene().materials[0u].ext_medium == medium_index, "external-medium edit is published in the next CPU render snapshot");
+  integrator_thread.stop(etx::Integrator::Stop::Immediate);
+  return result;
+}
+
+bool test_buffer_view_rejects_recycled_slot() {
+  etx::BufferPool pool = {};
+  const etx::BufferHandle first_handle = pool.create();
+  const etx::BufferView stale_view = pool.allocate_elements<uint32_t>(first_handle, 1u);
+  const uint32_t first_value = 17u;
+  if (check_condition(pool.write(stale_view, &first_value, sizeof(first_value)), "initial buffer view accepts writes") == false) {
+    return false;
+  }
+
+  pool.destroy(first_handle);
+  const etx::BufferHandle second_handle = pool.create();
+  const etx::BufferView current_view = pool.allocate_elements<uint32_t>(second_handle, 1u);
+  const uint32_t second_value = 31u;
+  if (check_condition(second_handle.index == first_handle.index, "buffer pool recycles the destroyed slot") == false ||
+      check_condition(second_handle.generation != first_handle.generation, "recycled buffer slot advances its generation") == false ||
+      check_condition(pool.write(current_view, &second_value, sizeof(second_value)), "current buffer view accepts writes") == false) {
+    return false;
+  }
+
+  const uint32_t stale_value = 47u;
+  const uint32_t* current_data = pool.map<uint32_t>(current_view);
+  return check_condition(pool.map(stale_view) == nullptr, "stale buffer view cannot map a recycled slot") &&
+         check_condition(pool.write(stale_view, &stale_value, sizeof(stale_value)) == false, "stale buffer view cannot overwrite a recycled slot") &&
+         check_condition((current_data != nullptr) && (*current_data == second_value), "rejected stale access leaves the current allocation unchanged") &&
+         check_condition(pool.allocate_elements<uint64_t>(second_handle, std::numeric_limits<uint64_t>::max()).valid() == false, "overflowing element allocation is rejected");
+}
+
+bool test_cpu_render_snapshot_owns_medium_density() {
+  struct SceneGlobalGuard {
+    SceneGlobalGuard() {
+      etx::scene_global_init();
+    }
+    ~SceneGlobalGuard() {
+      etx::scene_global_deinit();
+    }
+  } scene_global_guard;
+
+  etx::TaskScheduler scheduler = {};
+  etx::IORDatabase ior_database = {};
+  etx::SceneRepresentation scene(scheduler, ior_database);
+  etx::Film film(scheduler);
+  etx::Raytracing raytracing(scheduler, film);
+  scene.camera().film_size = {1u, 1u};
+
+  const uint32_t medium_index = scene.add_medium("Density Snapshot Medium");
+  etx::Medium& medium = scene.data().mediums.get(medium_index);
+  medium.cls = etx::Medium::Heterogeneous;
+  medium.grid.dimensions = {1u, 1u, 1u};
+  medium.density_buffer = scene.data().buffer_pool.create();
+  medium.density_data = scene.data().buffer_pool.allocate_elements<float>(medium.density_buffer, 1u);
+  const float initial_density = 0.25f;
+  if (check_condition(scene.data().buffer_pool.write(medium.density_data, &initial_density, sizeof(initial_density)), "medium density payload is initialized") == false) {
+    return false;
+  }
+  medium.density_view = {scene.data().buffer_pool.map<float>(medium.density_data), 1u};
+
+  raytracing.commit(scene.data(), scene.camera(), scene.data().compute_hashes().compare({}));
+  const etx::Medium& committed_medium = raytracing.scene().mediums[medium_index];
+  if (check_condition((committed_medium.density_view.a != nullptr) && (committed_medium.density_view[0u] == initial_density), "CPU snapshot owns the committed medium density") ==
+      false) {
+    return false;
+  }
+
+  const float edited_density = 0.75f;
+  if (check_condition(scene.data().buffer_pool.write(medium.density_data, &edited_density, sizeof(edited_density)), "source medium density payload accepts an edit") == false) {
+    return false;
+  }
+  return check_condition(committed_medium.density_view[0u] == initial_density, "active CPU snapshot is unaffected by source density edits");
+}
+
 }  // namespace
 
 int main() {
@@ -1215,6 +1362,9 @@ int main() {
     {"embree_transform_only_commit", test_embree_transform_only_commit},
     {"preview_resolution_adapts_with_hysteresis", test_preview_resolution_adapts_with_hysteresis},
     {"preview_iteration_completes_before_pending_scene_commit", test_preview_iteration_completes_before_pending_scene_commit},
+    {"external_medium_change_is_detected_without_notification", test_external_medium_change_is_detected_without_notification},
+    {"buffer_view_rejects_recycled_slot", test_buffer_view_rejects_recycled_slot},
+    {"cpu_render_snapshot_owns_medium_density", test_cpu_render_snapshot_owns_medium_density},
   };
 
   uint32_t passed = 0u;

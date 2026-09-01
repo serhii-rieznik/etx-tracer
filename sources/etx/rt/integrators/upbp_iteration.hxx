@@ -70,11 +70,4 @@ inline UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& opti
   return result;
 }
 
-inline UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& options, const Scene& scene, const uint64_t path_count, const uint64_t iteration) {
-  VCMIteration spectral_iteration = {};
-  spectral_iteration.iteration = static_cast<uint32_t>(iteration);
-  return upbp_iteration_parameters(options, scene.bounding_sphere_radius, vcm_iteration_spectral_query(scene, spectral_iteration),
-    scene.strategy_enabled(Scene::Strategy::MergeVertices), path_count, iteration);
-}
-
 }  // namespace etx

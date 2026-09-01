@@ -27,6 +27,13 @@ struct AtmosphereEmitterParameters {
   SpectralDistribution env_spectrum = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
 };
 
+struct SceneBoundingSphere {
+  float3 center = {};
+  float radius = 0.0f;
+};
+
+SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transport_bounds, const Camera& camera);
+
 struct UpdateFlags {
   enum : uint32_t {
     VerticesPos,
@@ -128,8 +135,8 @@ struct SceneHashes {
                                        result[UpdateFlags::VerticesBtn] || result[UpdateFlags::VerticesTex] || result[UpdateFlags::Triangles] || result[UpdateFlags::Meshes] ||
                                        result[UpdateFlags::Hierarchy] || result[UpdateFlags::Transforms] || result[UpdateFlags::Attachments];
 
-    result[UpdateFlags::AnyGeometryStructure] =
-      result[UpdateFlags::VerticesPos] || (triangle_indices_hash != existing.triangle_indices_hash) || result[UpdateFlags::Hierarchy] || result[UpdateFlags::Attachments];
+    result[UpdateFlags::AnyGeometryStructure] = result[UpdateFlags::VerticesPos] || (triangle_indices_hash != existing.triangle_indices_hash) || result[UpdateFlags::Meshes] ||
+                                                result[UpdateFlags::Hierarchy] || result[UpdateFlags::Attachments];
 
     result[UpdateFlags::AnyGeometryAttributes] =
       result[UpdateFlags::VerticesNrm] || result[UpdateFlags::VerticesTan] || result[UpdateFlags::VerticesBtn] || result[UpdateFlags::VerticesTex];
@@ -194,6 +201,7 @@ struct SceneData {
   SceneData operator=(const SceneData&) = delete;
 
   BoundingBox compute_bounding_volumes() const;
+  BoundingBox compute_transport_bounding_volumes() const;
 
   uint64_t compute_transforms_hash() const;
   SceneHashes compute_hashes() const;

@@ -613,7 +613,10 @@ struct CPUUPBPImpl {
     reset_iteration_diagnostics();
     status.current_iteration = iteration_index;
     memory_target_bytes = static_cast<uint64_t>(options.memory_budget_mb) * 1024ull * 1024ull;
-    iteration = upbp_iteration_parameters(options, rt.scene(), rt.film().current_pixel_count(), iteration_index);
+    VCMIteration spectral_iteration = {};
+    spectral_iteration.iteration = iteration_index;
+    iteration = upbp_iteration_parameters(options, rt.geometry_bounding_sphere_radius(), vcm_iteration_spectral_query(rt.scene(), spectral_iteration),
+      rt.scene().strategy_enabled(Scene::Strategy::MergeVertices), rt.film().current_pixel_count(), iteration_index);
     prepared_bb1d = iteration.mis.enabled(UPBPTechnique::BB1D)
                       ? upbp_prepare_bb1d(options.kernel, iteration.bb1d_radius, iteration.bb1d_light_subpath_count, options.beam_selection_probability)
                       : UPBPPreparedBB1D{};
@@ -1329,11 +1332,13 @@ struct CPUUPBPImpl {
       UPBPCameraSubpathResult& camera = workspace.camera;
       if (upbp_build_camera_subpath(rt, scene, iteration.spect, film_uv, scene.options.random_seed, status.current_iteration, path_index, maximum_vertices,
             options.maximum_boundary_count, options.maximum_null_events_per_interval, camera) == false) {
+        const uint32_t terminal_vertex_class = camera.subpath.path.vertices.empty() ? kInvalidIndex : static_cast<uint32_t>(camera.subpath.path.vertices.back().cls);
         fail("UPBP camera subpath failed at pixel path " + std::to_string(path_index) + ", failure " + std::to_string(static_cast<uint32_t>(camera.subpath.failure)) +
              ", segment failure " + std::to_string(static_cast<uint32_t>(camera.subpath.segment_failure)) + ", vertices " + std::to_string(camera.subpath.path.vertices.size()) +
-             ", ray origin (" + std::to_string(camera.subpath.terminal_ray.o.x) + ", " + std::to_string(camera.subpath.terminal_ray.o.y) + ", " +
-             std::to_string(camera.subpath.terminal_ray.o.z) + "), direction (" + std::to_string(camera.subpath.terminal_ray.d.x) + ", " +
-             std::to_string(camera.subpath.terminal_ray.d.y) + ", " + std::to_string(camera.subpath.terminal_ray.d.z) + ")");
+             ", terminal vertex class " + std::to_string(terminal_vertex_class) + ", ray origin (" + std::to_string(camera.subpath.terminal_ray.o.x) + ", " +
+             std::to_string(camera.subpath.terminal_ray.o.y) + ", " + std::to_string(camera.subpath.terminal_ray.o.z) + "), direction (" +
+             std::to_string(camera.subpath.terminal_ray.d.x) + ", " + std::to_string(camera.subpath.terminal_ray.d.y) + ", " + std::to_string(camera.subpath.terminal_ray.d.z) +
+             ")");
         return;
       }
       finish_camera_phase(CameraTimingSubpath);

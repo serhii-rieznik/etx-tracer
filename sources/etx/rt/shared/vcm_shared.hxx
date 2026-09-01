@@ -95,6 +95,8 @@ struct ETX_ALIGNED VCMPathState {
     RayActionSet = 1u << 2u,
     LocalEmitter = 1u << 3u,
     Valid = 1u << 4u,
+    BoundaryCountShift = 16u,
+    BoundaryCountMask = 0xffffu << BoundaryCountShift,
   };
 
   SpectralResponse throughput = {};
@@ -147,9 +149,19 @@ struct ETX_ALIGNED VCMPathState {
     set_flags(ContinueRay, cont);
     set_flags(RayActionSet, true);
   }
+
+  ETX_SHARED_INLINE uint32_t boundary_count() const {
+    return (flags & BoundaryCountMask) >> BoundaryCountShift;
+  }
+
+  ETX_SHARED_INLINE void increment_boundary_count() {
+    const uint32_t count = boundary_count() + 1u;
+    flags = (flags & (~BoundaryCountMask)) | (count << BoundaryCountShift);
+  }
 };
 
 constexpr uint64_t kVCMPathStateSize = sizeof(VCMPathState);
+constexpr uint32_t kVCMMaximumBoundaryCount = 4096u;
 
 // Vertex merging combines light and camera subpaths before converting the
 // complete path to RGB. All paths in one VCM iteration must therefore use the
@@ -457,10 +469,17 @@ ETX_SHARED_INLINE bool vcm_handle_sampled_medium(const Scene& scene, const Mediu
   return random_continue(state.total_path_depth, scene.options.random_path_termination, state.eta, state.sampler, state.throughput);
 }
 
-ETX_SHARED_INLINE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource path_source, const Intersection& intersection, VCMPathState& state) {
+ETX_SHARED_INLINE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSource path_source, const Intersection& intersection, VCMPathState& state,
+  ETX_OUT(bool, continue_tracing)) {
   const auto& mat = scene.materials[intersection.material_index];
   if (mat.cls != MaterialClass::Boundary)
     return false;
+
+  state.increment_boundary_count();
+  if (state.boundary_count() > kVCMMaximumBoundaryCount) {
+    continue_tracing = false;
+    return true;
+  }
 
   const auto& tri = scene.triangles[intersection.triangle_index];
   const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, intersection.instance_index);
@@ -470,6 +489,7 @@ ETX_SHARED_INLINE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSo
   state.ray.o = shading_pos(scene, tri, intersection.barycentric, state.ray.d, intersection.instance_index);
   state.ray.max_t = kMaxFloat;
   state.ray.min_t = kRayEpsilon;
+  continue_tracing = true;
   return true;
 }
 
@@ -1050,9 +1070,9 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   }
 
   if (scene.materials[intersection.material_index].cls == MaterialClass::Boundary) {
-    if (vcm_handle_boundary_bsdf(scene, PathSource::Camera, intersection, state)) {
-      // TODO : infinite loop
-      return true;
+    bool continue_tracing = false;
+    if (vcm_handle_boundary_bsdf(scene, PathSource::Camera, intersection, state, continue_tracing)) {
+      return continue_tracing;
     }
   }
 
@@ -1224,8 +1244,9 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
     return result;
   }
 
-  if (vcm_handle_boundary_bsdf(scene, PathSource::Light, intersection, state)) {
-    result.continue_tracing = true;
+  bool continue_tracing = false;
+  if (vcm_handle_boundary_bsdf(scene, PathSource::Light, intersection, state, continue_tracing)) {
+    result.continue_tracing = continue_tracing;
     return result;
   }
 

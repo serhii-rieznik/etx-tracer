@@ -85,7 +85,6 @@ struct CPURaytracingRenderer : public Renderer {
 
  private:
   Raytracing& _raytracing;
-  IntegratorThread _integrator_thread;
 
   CPUDebugIntegrator _debug = {_raytracing};
   CPUBidirectional _cpu_pt = {_raytracing, BDPTMode::PathTracing, Integrator::Type::PathTracing};
@@ -100,6 +99,7 @@ struct CPURaytracingRenderer : public Renderer {
     &_cpu_vcm,    // VCM = 3
     &_cpu_upbp,   // UPBP = 4
   };
+  IntegratorThread _integrator_thread;
 
   std::chrono::steady_clock::time_point _render_started_at = {};
   double _last_render_elapsed_seconds = 0.0;

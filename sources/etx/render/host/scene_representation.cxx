@@ -710,102 +710,6 @@ NodeGeometryEditResult compute_node_surface_center(const SceneData& data, const 
   return NodeGeometryEditResult::Success;
 }
 
-bool node_geometry_storage_is_private(const SceneData& data, uint32_t node_index, const NodeGeometryEditAnalysis& analysis, std::vector<uint32_t>& vertex_indices) {
-  const auto mesh_is_selected = [&analysis](uint32_t mesh_index) {
-    return std::find(analysis.mesh_indices.begin(), analysis.mesh_indices.end(), mesh_index) != analysis.mesh_indices.end();
-  };
-  const auto mesh_ranges_overlap = [](const Mesh& first, const Mesh& second) {
-    const uint64_t first_end = static_cast<uint64_t>(first.triangle_offset) + first.triangle_count;
-    const uint64_t second_end = static_cast<uint64_t>(second.triangle_offset) + second.triangle_count;
-    return (static_cast<uint64_t>(first.triangle_offset) < second_end) && (static_cast<uint64_t>(second.triangle_offset) < first_end);
-  };
-
-  for (uint32_t candidate_index = 0u; candidate_index < data.hierarchy.nodes.size(); ++candidate_index) {
-    if (candidate_index == node_index) {
-      continue;
-    }
-    const SceneNode& candidate = data.hierarchy.nodes[candidate_index];
-    const uint64_t attachment_end = static_cast<uint64_t>(candidate.attachment_offset) + candidate.attachment_count;
-    if (attachment_end > data.hierarchy.attachments.size()) {
-      return false;
-    }
-    for (uint32_t attachment_index = candidate.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
-      const SceneAttachment& attachment = data.hierarchy.attachments[attachment_index];
-      if ((attachment.type == SceneAttachment::Type::Mesh) && mesh_is_selected(attachment.resource_index)) {
-        return false;
-      }
-    }
-  }
-
-  for (uint32_t first_index = 0u; first_index < analysis.mesh_indices.size(); ++first_index) {
-    const Mesh& first = data.meshes[analysis.mesh_indices[first_index]];
-    for (uint32_t second_index = first_index + 1u; second_index < analysis.mesh_indices.size(); ++second_index) {
-      if (mesh_ranges_overlap(first, data.meshes[analysis.mesh_indices[second_index]])) {
-        return false;
-      }
-    }
-  }
-
-  for (uint32_t mesh_index = 0u; mesh_index < data.meshes.size(); ++mesh_index) {
-    if (mesh_is_selected(mesh_index)) {
-      continue;
-    }
-    const Mesh& mesh = data.meshes[mesh_index];
-    if (mesh.triangle_count == 0u) {
-      continue;
-    }
-    const uint64_t triangle_end = static_cast<uint64_t>(mesh.triangle_offset) + mesh.triangle_count;
-    if (triangle_end > data.triangles.size()) {
-      return false;
-    }
-    for (uint32_t selected_mesh_index : analysis.mesh_indices) {
-      if (mesh_ranges_overlap(mesh, data.meshes[selected_mesh_index])) {
-        return false;
-      }
-    }
-  }
-
-  size_t maximum_vertex_count = 0u;
-  for (uint32_t mesh_index : analysis.mesh_indices) {
-    maximum_vertex_count += static_cast<size_t>(data.meshes[mesh_index].triangle_count) * 3u;
-  }
-  vertex_indices.clear();
-  vertex_indices.reserve(maximum_vertex_count);
-  for (uint32_t mesh_index : analysis.mesh_indices) {
-    const Mesh& mesh = data.meshes[mesh_index];
-    const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
-    for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
-      const Triangle& triangle = data.triangles[triangle_index];
-      vertex_indices.insert(vertex_indices.end(), std::begin(triangle.i), std::end(triangle.i));
-    }
-  }
-  std::sort(vertex_indices.begin(), vertex_indices.end());
-  vertex_indices.erase(std::unique(vertex_indices.begin(), vertex_indices.end()), vertex_indices.end());
-
-  const auto triangle_is_selected = [&data, &analysis](uint32_t triangle_index) {
-    for (uint32_t mesh_index : analysis.mesh_indices) {
-      const Mesh& mesh = data.meshes[mesh_index];
-      const uint64_t triangle_end = static_cast<uint64_t>(mesh.triangle_offset) + mesh.triangle_count;
-      if ((triangle_index >= mesh.triangle_offset) && (static_cast<uint64_t>(triangle_index) < triangle_end)) {
-        return true;
-      }
-    }
-    return false;
-  };
-  for (uint32_t triangle_index = 0u; triangle_index < data.triangles.size(); ++triangle_index) {
-    if (triangle_is_selected(triangle_index)) {
-      continue;
-    }
-    const Triangle& triangle = data.triangles[triangle_index];
-    for (uint32_t corner = 0u; corner < 3u; ++corner) {
-      if (std::binary_search(vertex_indices.begin(), vertex_indices.end(), triangle.i[corner])) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 std::string source_mesh_name(const SceneData& data, uint32_t mesh_index) {
   std::string result;
   for (const auto& [name, index] : data.mesh_mapping) {
@@ -1939,6 +1843,7 @@ struct SceneRepresentationImpl {
 
   const IORDatabase& ior_database;
   SceneRepresentation::IntegratorData integrator_data = {};
+  uint64_t integrator_data_revision = 1u;
 
   bool load_illuminant_from_identifier(const char* identifier, SpectralDistribution& spd) const {
     if ((identifier == nullptr) || (identifier[0] == 0))
@@ -2019,6 +1924,7 @@ struct SceneRepresentationImpl {
     medium_has_bounds_scratch.clear();
     medium_attachment_nodes_scratch.clear();
     integrator_data = {};
+    integrator_data_revision += 1u;
 
     active_camera = {};
     active_camera.lens_image = kInvalidIndex;
@@ -2904,6 +2810,8 @@ void SceneRepresentation::replace_loaded_scene(SceneRepresentation& source) {
   swap(_private->medium_has_bounds_scratch, source._private->medium_has_bounds_scratch);
   swap(_private->medium_attachment_nodes_scratch, source._private->medium_attachment_nodes_scratch);
   swap(_private->integrator_data, source._private->integrator_data);
+  _private->integrator_data_revision += 1u;
+  source._private->integrator_data_revision += 1u;
   swap(_private->rhi, source._private->rhi);
   swap(_private->scattering_gpu, source._private->scattering_gpu);
   swap(_private->scattering_gpu_ready, source._private->scattering_gpu_ready);
@@ -3258,6 +3166,39 @@ const std::vector<std::string>& SceneRepresentation::emitter_names() const {
 
 void SceneRepresentation::update_medium_bounds() {
   _private->update_medium_bounds();
+}
+
+bool SceneRepresentation::synchronize_render_dependencies(const UpdateFlags& changes, bool full_update, bool& state_updated) {
+  state_updated = false;
+  const bool hierarchy_update = full_update || changes[UpdateFlags::AnyGeometry] || (_private->data.hierarchy.resolved_state_current() == false);
+  if (hierarchy_update && (_private->data.resolve_hierarchy() == false)) {
+    return false;
+  }
+  state_updated = hierarchy_update;
+
+  if (full_update || changes[UpdateFlags::Materials] || changes[UpdateFlags::Meshes] || changes[UpdateFlags::Triangles]) {
+    _private->create_area_emitters_from_materials();
+    state_updated = true;
+  }
+
+  const bool medium_bounds_update = full_update || changes[UpdateFlags::Mediums] || changes[UpdateFlags::AnyMaterials] || changes[UpdateFlags::VerticesPos] ||
+                                    changes[UpdateFlags::Triangles] || changes[UpdateFlags::Meshes] || changes[UpdateFlags::Hierarchy] || changes[UpdateFlags::Transforms] ||
+                                    changes[UpdateFlags::Attachments];
+  if (medium_bounds_update && (_private->update_medium_bounds() == false)) {
+    return false;
+  }
+  state_updated = state_updated || medium_bounds_update;
+
+  if (full_update || changes[UpdateFlags::Emitters]) {
+    for (uint32_t emitter_index = 0u; emitter_index < _private->data.emitter_profiles.size(); ++emitter_index) {
+      const EmitterProfile& emitter = _private->data.emitter_profiles[emitter_index];
+      if ((emitter.cls == EmitterProfile::Class::Environment) && ((emitter.meta & EmitterProfile::Meta::Atmosphere) != 0u)) {
+        _private->rebuild_atmosphere_emitter(emitter_index);
+        state_updated = true;
+      }
+    }
+  }
+  return true;
 }
 
 void SceneRepresentation::update_active_camera() {
@@ -3762,139 +3703,6 @@ NodeGeometryEditResult SceneRepresentation::edit_node_geometry(uint32_t node_ind
                                                                                              : multiply_affine(child_compensation, candidate.local_transform));
   }
 
-  std::vector<uint32_t> private_vertex_indices;
-  if (node_geometry_storage_is_private(scene_data, node_index, analysis, private_vertex_indices)) {
-    const bool has_normals = scene_data.vertices.nrm.empty() == false;
-    const bool has_tangents = scene_data.vertices.tan.empty() == false;
-    SceneInstance bake_instance = {};
-    if (operation == NodeGeometryOperation::BakeLocalTransform) {
-      AffineTransform inverse = {};
-      double determinant = 0.0;
-      if (invert_affine(original_node_transform, inverse, determinant) == false) {
-        return NodeGeometryEditResult::SingularTransform;
-      }
-      bake_instance.object_to_world = original_node_transform;
-      bake_instance.world_to_object = inverse;
-      if (determinant < 0.0) {
-        bake_instance.flags |= SceneInstance::Mirrored;
-      }
-    }
-
-    std::vector<Vertex> original_vertices;
-    std::vector<Vertex> edited_vertices;
-    original_vertices.reserve(private_vertex_indices.size());
-    edited_vertices.reserve(private_vertex_indices.size());
-    for (uint32_t vertex_index : private_vertex_indices) {
-      Vertex original_vertex = {};
-      original_vertex.pos = scene_data.vertices.pos[vertex_index];
-      if (has_normals) {
-        original_vertex.nrm = scene_data.vertices.nrm[vertex_index];
-      }
-      if (has_tangents) {
-        original_vertex.tan = scene_data.vertices.tan[vertex_index];
-        original_vertex.btn = scene_data.vertices.btn[vertex_index];
-      }
-      Vertex edited_vertex = original_vertex;
-      if (operation == NodeGeometryOperation::CenterPivot) {
-        edited_vertex.pos -= center;
-      } else {
-        edited_vertex = scene_instance_transform_vertex(bake_instance, edited_vertex);
-      }
-      if ((finite_point(edited_vertex.pos) == false) || (has_normals && (valid_direction(edited_vertex.nrm) == false)) ||
-          (has_tangents && ((finite_point(edited_vertex.tan) == false) || (finite_point(edited_vertex.btn) == false)))) {
-        return NodeGeometryEditResult::InvalidGeometry;
-      }
-      original_vertices.push_back(original_vertex);
-      edited_vertices.push_back(edited_vertex);
-    }
-
-    size_t selected_triangle_count = 0u;
-    for (uint32_t mesh_index : analysis.mesh_indices) {
-      selected_triangle_count += scene_data.meshes[mesh_index].triangle_count;
-    }
-    std::vector<uint32_t> edited_triangle_indices;
-    std::vector<Triangle> original_triangles;
-    std::vector<Mesh> original_meshes;
-    edited_triangle_indices.reserve(selected_triangle_count);
-    original_triangles.reserve(selected_triangle_count);
-    original_meshes.reserve(analysis.mesh_indices.size());
-    for (uint32_t mesh_index : analysis.mesh_indices) {
-      const Mesh& mesh = scene_data.meshes[mesh_index];
-      original_meshes.push_back(mesh);
-      const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
-      for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
-        edited_triangle_indices.push_back(triangle_index);
-        original_triangles.push_back(scene_data.triangles[triangle_index]);
-      }
-    }
-
-    for (uint32_t vertex = 0u; vertex < private_vertex_indices.size(); ++vertex) {
-      const uint32_t vertex_index = private_vertex_indices[vertex];
-      scene_data.vertices.pos[vertex_index] = edited_vertices[vertex].pos;
-      if (has_normals) {
-        scene_data.vertices.nrm[vertex_index] = edited_vertices[vertex].nrm;
-      }
-      if (has_tangents) {
-        scene_data.vertices.tan[vertex_index] = edited_vertices[vertex].tan;
-        scene_data.vertices.btn[vertex_index] = edited_vertices[vertex].btn;
-      }
-    }
-
-    for (uint32_t mesh_index : analysis.mesh_indices) {
-      Mesh& mesh = scene_data.meshes[mesh_index];
-      mesh.bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
-      mesh.bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
-      const uint32_t triangle_end = mesh.triangle_offset + mesh.triangle_count;
-      for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
-        Triangle& triangle = scene_data.triangles[triangle_index];
-        const float3& p0 = scene_data.vertices.pos[triangle.i[0]];
-        const float3& p1 = scene_data.vertices.pos[triangle.i[1]];
-        const float3& p2 = scene_data.vertices.pos[triangle.i[2]];
-        mesh.bbox_min = min(mesh.bbox_min, min(p0, min(p1, p2)));
-        mesh.bbox_max = max(mesh.bbox_max, max(p0, max(p1, p2)));
-        const float3 geometric_normal = cross(p1 - p0, p2 - p0);
-        if (dot(geometric_normal, geometric_normal) > 0.0f) {
-          triangle.geo_n = normalize(geometric_normal);
-        }
-      }
-    }
-
-    bool hierarchy_updated = hierarchy.set_local_transform(node_index, node_transform);
-    for (uint32_t child = 0u; hierarchy_updated && (child < child_indices.size()); ++child) {
-      hierarchy_updated = hierarchy.set_local_transform(child_indices[child], edited_child_transforms[child]);
-    }
-    hierarchy_updated = hierarchy_updated && scene_data.resolve_hierarchy();
-    if (hierarchy_updated) {
-      return NodeGeometryEditResult::Success;
-    }
-
-    for (uint32_t vertex = 0u; vertex < private_vertex_indices.size(); ++vertex) {
-      const uint32_t vertex_index = private_vertex_indices[vertex];
-      scene_data.vertices.pos[vertex_index] = original_vertices[vertex].pos;
-      if (has_normals) {
-        scene_data.vertices.nrm[vertex_index] = original_vertices[vertex].nrm;
-      }
-      if (has_tangents) {
-        scene_data.vertices.tan[vertex_index] = original_vertices[vertex].tan;
-        scene_data.vertices.btn[vertex_index] = original_vertices[vertex].btn;
-      }
-    }
-    for (uint32_t triangle = 0u; triangle < edited_triangle_indices.size(); ++triangle) {
-      scene_data.triangles[edited_triangle_indices[triangle]] = original_triangles[triangle];
-    }
-    for (uint32_t mesh = 0u; mesh < analysis.mesh_indices.size(); ++mesh) {
-      scene_data.meshes[analysis.mesh_indices[mesh]] = original_meshes[mesh];
-    }
-    hierarchy.set_local_transform(node_index, original_node_transform);
-    for (uint32_t child = 0u; child < child_indices.size(); ++child) {
-      hierarchy.set_local_transform(child_indices[child], original_child_transforms[child]);
-    }
-    if (scene_data.resolve_hierarchy() == false) {
-      log::error("Failed to restore scene hierarchy after rejecting an in-place node geometry edit");
-    }
-    return NodeGeometryEditResult::HierarchyUpdateFailed;
-  }
-
   PendingNodeGeometry pending = {};
   result = build_edited_meshes(scene_data, analysis, operation, original_node_transform, center, pending);
   if (result != NodeGeometryEditResult::Success) {
@@ -3973,8 +3781,13 @@ const SceneRepresentation::IntegratorData& SceneRepresentation::integrator_data(
   return _private->integrator_data;
 }
 
+uint64_t SceneRepresentation::integrator_data_revision() const {
+  return _private->integrator_data_revision;
+}
+
 void SceneRepresentation::set_integrator_data(const IntegratorData& integrator_data) {
   _private->integrator_data = integrator_data;
+  _private->integrator_data_revision += 1u;
 }
 
 bool SceneRepresentation::valid() const {
@@ -4834,6 +4647,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
   }
 
   _private->integrator_data = *integrator_data;
+  _private->integrator_data_revision += 1u;
 
   uint32_t load_result = SceneLoadFailed;
 

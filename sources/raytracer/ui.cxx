@@ -1211,83 +1211,13 @@ void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vecto
   });
 }
 
-void UI::begin_material_interaction() {
-  if (_material_interaction_active) {
-    return;
-  }
-
-  if (_medium_interaction_active) {
-    finish_medium_interaction();
-  }
-  if (_emitter_interaction_active) {
-    finish_emitter_interaction();
-  }
-
-  _material_interaction_active = true;
-  if (callbacks.material_interaction_started) {
-    callbacks.material_interaction_started();
-  }
-}
-
-void UI::arm_material_interaction() {
-  const ImGuiContext* context = ImGui::GetCurrentContext();
-  const bool pointer_active = (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) || (ImGui::IsMouseDown(ImGuiMouseButton_Left)) || (ImGui::IsMouseReleased(ImGuiMouseButton_Left));
-  const ImGuiWindow* window = ImGui::GetCurrentWindow();
-  const ImVec2 cursor_position = ImGui::GetCursorScreenPos();
-  const ImVec2 editor_min(std::max(cursor_position.x, window->InnerClipRect.Min.x), std::max(cursor_position.y, window->InnerClipRect.Min.y));
-  const ImGuiID preceding_item_id = context != nullptr ? context->LastItemData.ID : 0u;
-  const bool pointer_in_editor = pointer_active && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
-                                 ImGui::IsMouseHoveringRect(editor_min, window->InnerClipRect.Max);
-  const bool editor_item_active = (context != nullptr) && (context->ActiveId != 0u) && (context->ActiveIdWindow == window) && (context->ActiveIdSource != ImGuiInputSource_Mouse) &&
-                                  (context->ActiveId != preceding_item_id);
-  const bool editor_item_activated = (context != nullptr) && (context->NavActivateId != 0u) && (context->NavWindow == window) && (context->NavActivateId != preceding_item_id);
-  if ((pointer_in_editor == false) && (editor_item_active == false) && (editor_item_activated == false)) {
-    return;
-  }
-  begin_material_interaction();
-}
-
 void UI::queue_material_change(uint32_t material_index) {
   if (material_index == kInvalidIndex) {
     return;
   }
 
-  if (std::find(_material_interaction_indices.begin(), _material_interaction_indices.end(), material_index) == _material_interaction_indices.end()) {
-    _material_interaction_indices.push_back(material_index);
-  }
-}
-
-void UI::finish_material_interaction() {
-  if (_material_interaction_active == false) {
-    return;
-  }
-
-  _material_interaction_active = false;
-  if (callbacks.material_interaction_finished) {
-    callbacks.material_interaction_finished(_material_interaction_indices);
-  } else if (callbacks.material_changed) {
-    for (const uint32_t material_index : _material_interaction_indices) {
-      callbacks.material_changed(material_index);
-    }
-  }
-  _material_interaction_indices.clear();
-}
-
-void UI::begin_medium_interaction() {
-  if (_medium_interaction_active) {
-    return;
-  }
-
-  if (_material_interaction_active) {
-    finish_material_interaction();
-  }
-  if (_emitter_interaction_active) {
-    finish_emitter_interaction();
-  }
-
-  _medium_interaction_active = true;
-  if (callbacks.medium_interaction_started) {
-    callbacks.medium_interaction_started();
+  if (std::find(_pending_material_changes.begin(), _pending_material_changes.end(), material_index) == _pending_material_changes.end()) {
+    _pending_material_changes.push_back(material_index);
   }
 }
 
@@ -1296,71 +1226,17 @@ void UI::queue_medium_change(uint32_t medium_index) {
     return;
   }
 
-  if (std::find(_medium_interaction_indices.begin(), _medium_interaction_indices.end(), medium_index) == _medium_interaction_indices.end()) {
-    _medium_interaction_indices.push_back(medium_index);
+  if (std::find(_pending_medium_changes.begin(), _pending_medium_changes.end(), medium_index) == _pending_medium_changes.end()) {
+    _pending_medium_changes.push_back(medium_index);
   }
-}
-
-void UI::finish_medium_interaction() {
-  if (_medium_interaction_active == false) {
-    return;
-  }
-
-  _medium_interaction_active = false;
-  if (callbacks.medium_interaction_finished) {
-    callbacks.medium_interaction_finished(_medium_interaction_indices);
-  } else if (callbacks.medium_changed) {
-    for (const uint32_t medium_index : _medium_interaction_indices) {
-      callbacks.medium_changed(medium_index);
-    }
-  }
-  _medium_interaction_indices.clear();
-}
-
-void UI::begin_emitter_interaction() {
-  if (_emitter_interaction_active) {
-    return;
-  }
-
-  if (_material_interaction_active) {
-    finish_material_interaction();
-  }
-  if (_medium_interaction_active) {
-    finish_medium_interaction();
-  }
-
-  _emitter_interaction_active = true;
-  if (callbacks.emitter_interaction_started) {
-    callbacks.emitter_interaction_started();
-  }
-}
-
-void UI::arm_emitter_interaction() {
-  const bool pointer_active = (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) || (ImGui::IsMouseDown(ImGuiMouseButton_Left)) || (ImGui::IsMouseReleased(ImGuiMouseButton_Left));
-  if ((pointer_active == false) && (ImGui::IsAnyItemActive() == false)) {
-    return;
-  }
-  begin_emitter_interaction();
 }
 
 void UI::queue_emitter_change(uint32_t emitter_index) {
-  if (emitter_index != kInvalidIndex) {
-    _emitter_interaction_index = emitter_index;
-  }
-}
-
-void UI::finish_emitter_interaction() {
-  if (_emitter_interaction_active == false) {
+  if (emitter_index == kInvalidIndex) {
     return;
   }
 
-  _emitter_interaction_active = false;
-  if (callbacks.emitter_interaction_finished) {
-    callbacks.emitter_interaction_finished(_emitter_interaction_index);
-  } else if ((_emitter_interaction_index != kInvalidIndex) && callbacks.emitter_changed) {
-    callbacks.emitter_changed(_emitter_interaction_index);
-  }
-  _emitter_interaction_index = kInvalidIndex;
+  _pending_emitter_change = emitter_index;
 }
 
 void UI::navigate_history(int32_t step) {
@@ -1677,9 +1553,7 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
   const char* unique_id = (id_suffix != nullptr) ? id_suffix : base_label;
 
   std::string color_name = std::string(base_label) + "_Color_" + unique_id;
-  char editor_key_buf[32] = {};
-  snprintf(editor_key_buf, sizeof(editor_key_buf), "%p", scene.data().spectrum_values.data() + spectrum_index);
-  std::string editor_key = std::string(editor_key_buf);
+  const std::string editor_key = std::string("emission:") + unique_id + ":" + std::to_string(spectrum_index);
   auto [state_it, inserted] = _spectrum_editors.emplace(editor_key, SpectrumEditorState{});
   SpectrumEditorState& editor_state = state_it->second;
 
@@ -1975,18 +1849,16 @@ bool UI::spectrum_picker(SceneRepresentation& scene, const char* widget_id, uint
     return false;
   }
   SpectralDistribution& spd = scene.data().spectrum_values[spd_index];
+  const std::string editor_key = std::string("spectrum:") + std::to_string(spd_index) + ":" + widget_id;
   ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-  bool result = spectrum_picker(widget_id, spd, linear, scale, show_color, show_scale);
+  const bool result = spectrum_picker(widget_id, editor_key, spd, linear, scale, show_color, show_scale);
   ImGui::PopItemWidth();
   return result;
 }
 
-bool UI::spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color, bool show_scale) {
+bool UI::spectrum_picker(const char* widget_id, const std::string& editor_key, SpectralDistribution& spd, bool linear, bool scale, bool show_color, bool show_scale) {
   scale = scale && linear;
 
-  char unique_key_buf[32] = {};
-  snprintf(unique_key_buf, sizeof(unique_key_buf), "%p", (void*)&spd);
-  std::string editor_key = std::string(unique_key_buf);
   auto [state_it, state_inserted] = _spectrum_editors.emplace(editor_key, SpectrumEditorState{});
   SpectrumEditorState& editor_state = state_it->second;
 
@@ -2137,9 +2009,6 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ETX_PROFILER_SCOPE();
   ImGuizmo::BeginFrame();
   _node_transform_editor_interaction_rendered_this_frame = false;
-  _material_editor_rendered_this_frame = false;
-  _medium_editor_rendered_this_frame = false;
-  _emitter_editor_rendered_this_frame = false;
 
   BuildContext ctx = {};
   ctx.wpadding = {ImGui::GetStyle().WindowPadding.x, ImGui::GetStyle().WindowPadding.y};
@@ -2248,15 +2117,18 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   if (_node_transform_editor_interaction_active && (_node_transform_editor_interaction_rendered_this_frame == false)) {
     finish_node_transform_editor_interaction();
   }
-  if (_material_interaction_active && ((_material_editor_rendered_this_frame == false) || (ImGui::IsAnyItemActive() == false))) {
-    finish_material_interaction();
+  if ((_pending_material_changes.empty() == false) && callbacks.material_changed) {
+    callbacks.material_changed(_pending_material_changes.front());
   }
-  if (_medium_interaction_active && ((_medium_editor_rendered_this_frame == false) || (ImGui::IsAnyItemActive() == false))) {
-    finish_medium_interaction();
+  _pending_material_changes.clear();
+  if ((_pending_medium_changes.empty() == false) && callbacks.medium_changed) {
+    callbacks.medium_changed(_pending_medium_changes.front());
   }
-  if (_emitter_interaction_active && ((_emitter_editor_rendered_this_frame == false) || (ImGui::IsAnyItemActive() == false))) {
-    finish_emitter_interaction();
+  _pending_medium_changes.clear();
+  if ((_pending_emitter_change != kInvalidIndex) && callbacks.emitter_changed) {
+    callbacks.emitter_changed(_pending_emitter_change);
   }
+  _pending_emitter_change = kInvalidIndex;
   build_unsaved_changes_modal();
   build_renderer_preparation_modal();
 }
@@ -2634,8 +2506,6 @@ void UI::load_image() const {
 }
 
 bool UI::build_material(SceneRepresentation& scene_rep, Material& material, const FrameData& data) {
-  _material_editor_rendered_this_frame = true;
-  arm_material_interaction();
   auto material_values_mixed = [&](auto getter) -> bool {
     if ((_editing_material_indices == nullptr) || (_editing_material_indices->size() <= 1u)) {
       return false;
@@ -2866,9 +2736,12 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           float& rough_u = material.roughness.value.x;
           float& rough_v = material.roughness.value.y;
 
-          char material_key_buf[32] = {};
-          snprintf(material_key_buf, sizeof(material_key_buf), "%p", (void*)&material);
-          std::string material_key(material_key_buf);
+          std::string material_key = "material";
+          if (_editing_material_indices != nullptr) {
+            for (const uint32_t material_index : *_editing_material_indices) {
+              material_key += ":" + std::to_string(material_index);
+            }
+          }
 
           auto aniso_insert = _material_anisotropy.emplace(material_key, std::fabs(rough_u - rough_v) > 1.0e-4f);
           auto aniso_entry = aniso_insert.first;
@@ -3292,7 +3165,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   return changed;
 }
 
-bool UI::build_medium(Medium& m, SpectralDistribution* absorption, SpectralDistribution* scattering) {
+bool UI::build_medium(uint32_t medium_index, Medium& m, SpectralDistribution* absorption, SpectralDistribution* scattering) {
   bool changed = false;
 
   ImGui::Text("Medium Type");
@@ -3312,13 +3185,15 @@ bool UI::build_medium(Medium& m, SpectralDistribution* absorption, SpectralDistr
 
   ImGui::Text("Absorption");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if ((absorption != nullptr) && spectrum_picker("Absorption##medium_absorption", *absorption, true, true)) {
+  const std::string absorption_editor_key = "medium:" + std::to_string(medium_index) + ":absorption";
+  if ((absorption != nullptr) && spectrum_picker("Absorption##medium_absorption", absorption_editor_key, *absorption, true, true)) {
     changed = true;
   }
 
   ImGui::Text("Scattering");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if ((scattering != nullptr) && spectrum_picker("Scattering##medium_scattering", *scattering, true, true)) {
+  const std::string scattering_editor_key = "medium:" + std::to_string(medium_index) + ":scattering";
+  if ((scattering != nullptr) && spectrum_picker("Scattering##medium_scattering", scattering_editor_key, *scattering, true, true)) {
     changed = true;
   }
 
@@ -3447,17 +3322,11 @@ void UI::reset_scene_state() {
   _node_transform_editor_interaction_active = false;
   _node_transform_editor_interaction_rendered_this_frame = false;
   _node_transform_editor_interaction_node_index = -1;
-  _material_interaction_active = false;
-  _material_editor_rendered_this_frame = false;
-  _material_interaction_indices.clear();
+  _pending_material_changes.clear();
   _editing_material_indices = nullptr;
   _material_batch_changed_fields = 0u;
-  _medium_interaction_active = false;
-  _medium_editor_rendered_this_frame = false;
-  _medium_interaction_indices.clear();
-  _emitter_interaction_active = false;
-  _emitter_editor_rendered_this_frame = false;
-  _emitter_interaction_index = kInvalidIndex;
+  _pending_medium_changes.clear();
+  _pending_emitter_change = kInvalidIndex;
   _auto_open_emission_section = false;
   _scene_tree_open_subtree_ends.clear();
   _viewport_geometry = {};
@@ -3955,6 +3824,9 @@ void UI::build_status_bar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, ctx.text_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     const RendererStatus& status = _current_renderer_status;
     std::string core_status = format_string("%s  |  %s", renderer_mode_status_name(status.mode), renderer_status_state_name(status.state));
+    if (status.output_stale) {
+      core_status += "  |  Updating image";
+    }
     if (_scene_dirty) {
       core_status += "  |  Modified";
     }
@@ -4021,8 +3893,14 @@ void UI::build_status_bar(const BuildContext& ctx) {
     const bool performance_fits = (ImGui::CalcTextSize(primary_status.c_str()).x + reserved_width) <= available_width;
 
     std::string detailed_status = {};
+    if (status.output_stale) {
+      detailed_status = "The displayed image is from the previous render state; a replacement is being prepared.";
+    }
     if (path_progress_visible) {
-      detailed_status = format_string("%s: %llu / %llu (%.1f%%)", renderer_path_phase_name(status.path_phase), static_cast<unsigned long long>(status.completed_path_count),
+      if (detailed_status.empty() == false) {
+        detailed_status += "\n";
+      }
+      detailed_status += format_string("%s: %llu / %llu (%.1f%%)", renderer_path_phase_name(status.path_phase), static_cast<unsigned long long>(status.completed_path_count),
         static_cast<unsigned long long>(status.total_path_count), 100.0 * path_progress);
     }
     if (status.upbp.active()) {
@@ -6117,7 +5995,7 @@ void UI::build_material_selection_properties(SceneRepresentation& scene_rep, con
       commit_name_edit(true);
     }
     build_resource_edit_feedback(SelectionKind::Material);
-    bool changed = build_material(scene_rep, material, data);
+    const bool changed = build_material(scene_rep, material, data, material_indices);
     if (changed) {
       queue_material_change(material_index);
     }
@@ -6288,7 +6166,6 @@ void UI::build_medium_resource_properties(SceneRepresentation& scene_rep, uint32
     ImGui::TextColored(kErrorTextColor, "Invalid medium");
     return;
   }
-  _medium_editor_rendered_this_frame = true;
   Medium& medium = scene_rep.data().mediums.get(medium_index);
   Medium edited_medium = medium;
   SpectralDistribution* absorption = nullptr;
@@ -6303,10 +6180,9 @@ void UI::build_medium_resource_properties(SceneRepresentation& scene_rep, uint32
     edited_scattering = scene_rep.data().spectrum_values[medium.scattering_index];
     scattering = &edited_scattering;
   }
-  const bool changed = build_medium(edited_medium, absorption, scattering);
+  const bool changed = build_medium(medium_index, edited_medium, absorption, scattering);
   if (changed) {
     const bool representation_changed = (edited_medium.cls != medium.cls) || (edited_medium.grid_type_enum() != medium.grid_type_enum());
-    begin_medium_interaction();
     queue_medium_change(medium_index);
     medium = edited_medium;
     if (representation_changed) {
@@ -6386,14 +6262,6 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     draw_item_tooltip("This area emitter has no material reference.", ImGuiHoveredFlags_DelayNormal);
     return;
   }
-  if (emitter.cls == EmitterProfile::Class::Area) {
-    _material_editor_rendered_this_frame = true;
-    arm_material_interaction();
-  } else {
-    _emitter_editor_rendered_this_frame = true;
-    arm_emitter_interaction();
-  }
-
   bool common_changed = false;
   if (emitter.cls == EmitterProfile::Class::Area) {
     auto& material = scene_rep.data().materials[material_index];
@@ -6708,7 +6576,8 @@ void UI::build_node_appearance_properties(SceneRepresentation& scene_rep, const 
         ImGui::Spacing();
         ImGui::PushID("inline_material_editor");
         Material& material = scene_rep.data().materials[material_index];
-        if (build_material(scene_rep, material, data)) {
+        const std::vector<uint32_t> inline_material_indices = {material_index};
+        if (build_material(scene_rep, material, data, inline_material_indices)) {
           queue_material_change(material_index);
         }
         ImGui::PopID();

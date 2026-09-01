@@ -6,8 +6,10 @@
 #include "render_context.hxx"
 #include <etx/engine/camera_controller.hxx>
 
+#include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct sapp_event;
@@ -123,6 +125,7 @@ struct RendererUPBPStatus {
 struct RendererStatus {
   RendererMode mode = RendererMode::CPURaytracing;
   RendererStatusState state = RendererStatusState::Unavailable;
+  bool output_stale = false;
   std::string message = {};
   RendererProgressKind progress_kind = RendererProgressKind::None;
   uint32_t completed_units = 0u;
@@ -330,6 +333,9 @@ struct Renderer {
         request_scene_transform_update();
       }
       _camera_interaction_active = true;
+      if (_camera_modified_callback) {
+        _camera_modified_callback();
+      }
       on_camera_changed(scene);
       return;
     }
@@ -446,6 +452,10 @@ struct Renderer {
     return _camera_controller.get();
   }
 
+  void set_camera_modified_callback(std::function<void()> callback) {
+    _camera_modified_callback = std::move(callback);
+  }
+
  protected:
   bool update_preview_active_state() {
     const bool preview_active = _preview_camera_active || _preview_transform_active;
@@ -472,6 +482,7 @@ struct Renderer {
 
   TaskScheduler& scheduler;
   std::unique_ptr<CameraController> _camera_controller = nullptr;
+  std::function<void()> _camera_modified_callback = {};
   uint2 _output_dimensions = {};
   RHITexture _output_texture = {};
   PreviewResolutionController _preview_resolution = {4u, 4u};

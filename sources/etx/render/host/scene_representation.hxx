@@ -176,6 +176,7 @@ struct SceneRepresentation {
   NodeGeometryEditResult validate_node_geometry_edit(uint32_t node_index, NodeGeometryOperation operation) const;
   NodeGeometryEditResult edit_node_geometry(uint32_t node_index, NodeGeometryOperation operation);
   void update_medium_bounds();
+  bool synchronize_render_dependencies(const UpdateFlags& changes, bool full_update, bool& state_updated);
   void update_active_camera();
   bool store_active_camera();
 
@@ -195,6 +196,7 @@ struct SceneRepresentation {
   Camera& camera();
   const Camera& camera() const;
   const IntegratorData& integrator_data() const;
+  uint64_t integrator_data_revision() const;
   void set_integrator_data(const IntegratorData&);
 
   bool valid() const;

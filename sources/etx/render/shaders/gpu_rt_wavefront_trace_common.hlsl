@@ -985,7 +985,15 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, RayDesc ray, 
     if ((segment_distance <= 0.0f) || (isfinite(segment_distance) == false)) {
 #if ETX_UPBP
       if (record_upbp) {
-        upbp_mark_failed_path(upbp_resources, from_camera, path_index, GPUUPBPPathFailure::InvalidSegmentDistance);
+        if (upbp_mark_failed_path(upbp_resources, from_camera, path_index, GPUUPBPPathFailure::InvalidSegmentDistance)) {
+          SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
+          const float3 sphere_offset = current_origin - globals_data.bounding_sphere_center;
+          RWByteAddressBuffer counters = WAVEFRONT_RW_BUFFER(upbp_resources.counter_buffer);
+          counters.Store(GPUUPBPCounterIndex::FirstFailureDetail0 * 4u, upbp_path_state.path_length);
+          counters.Store(GPUUPBPCounterIndex::FirstFailureDetail1 * 4u, asuint(length(sphere_offset)));
+          counters.Store(GPUUPBPCounterIndex::FirstFailureDetail2 * 4u, asuint(globals_data.bounding_sphere_radius));
+          counters.Store(GPUUPBPCounterIndex::FirstFailureDetail3 * 4u, asuint(dot(ray.Direction, sphere_offset)));
+        }
       }
 #endif
       result.transmittance = spectral_response_make(spect, 0.0f);

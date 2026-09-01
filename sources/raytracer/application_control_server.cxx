@@ -891,8 +891,8 @@ Json state_json(const ApplicationStateSnapshot& state) {
       {{"can_run", state.controls.can_run}, {"can_finish", state.controls.can_finish}, {"can_stop", state.controls.can_stop}, {"can_restart", state.controls.can_restart}}},
     {"preparation", {{"state", static_cast<uint32_t>(state.preparation.state)}, {"phase", state.preparation.phase}, {"message", state.preparation.message},
                       {"completed_steps", state.preparation.completed_steps}, {"total_steps", state.preparation.total_steps}}},
-    {"runtime", {{"valid", runtime_valid}, {"completed_samples", completed_samples}, {"target_samples", target_samples}, {"elapsed_seconds", elapsed_seconds},
-                  {"estimated_remaining_seconds", estimated_remaining_seconds}, {"failure_reason", state.status.message}}},
+    {"runtime", {{"valid", runtime_valid}, {"image_stale", state.status.output_stale}, {"completed_samples", completed_samples}, {"target_samples", target_samples},
+                  {"elapsed_seconds", elapsed_seconds}, {"estimated_remaining_seconds", estimated_remaining_seconds}, {"failure_reason", state.status.message}}},
     {"view", {{"exposure", state.view.exposure}, {"view_layer", state.view.view_layer}, {"output_view", state.view.view_image}, {"display_transform", state.view.view_option}}},
   };
 }

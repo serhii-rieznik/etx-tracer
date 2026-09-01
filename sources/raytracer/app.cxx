@@ -277,6 +277,12 @@ void RTApplication::init(const ApplicationConfig& config) {
     ETX_PROFILER_NAMED_SCOPE("app_init_renderers");
     ui.set_integrator_list(cpu_renderer.integrator_list(), cpu_renderer.integrator_count());
 
+    const auto camera_modified = [this]() {
+      mark_scene_dirty();
+    };
+    cpu_renderer.set_camera_modified_callback(camera_modified);
+    raster_renderer.set_camera_modified_callback(camera_modified);
+    gpu_renderer.set_camera_modified_callback(camera_modified);
     cpu_renderer.init(render_context.get_context(), scene);
     raster_renderer.init(render_context.get_context(), scene);
   }
@@ -342,20 +348,14 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.material_deleted = std::bind(&RTApplication::on_material_deleted, this, std::placeholders::_1);
     ui.callbacks.material_renamed = std::bind(&RTApplication::on_material_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
-    ui.callbacks.material_interaction_started = std::bind(&RTApplication::on_material_interaction_started, this);
-    ui.callbacks.material_interaction_finished = std::bind(&RTApplication::on_material_interaction_finished, this, std::placeholders::_1);
     ui.callbacks.medium_added = std::bind(&RTApplication::on_medium_added, this);
     ui.callbacks.medium_duplicated = std::bind(&RTApplication::on_medium_duplicated, this, std::placeholders::_1);
     ui.callbacks.medium_deleted = std::bind(&RTApplication::on_medium_deleted, this, std::placeholders::_1);
     ui.callbacks.medium_renamed = std::bind(&RTApplication::on_medium_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
-    ui.callbacks.medium_interaction_started = std::bind(&RTApplication::on_medium_interaction_started, this);
-    ui.callbacks.medium_interaction_finished = std::bind(&RTApplication::on_medium_interaction_finished, this, std::placeholders::_1);
     ui.callbacks.mesh_material_changed = std::bind(&RTApplication::on_mesh_material_changed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.mesh_material_made_unique = std::bind(&RTApplication::on_make_mesh_material_unique, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
-    ui.callbacks.emitter_interaction_started = std::bind(&RTApplication::on_emitter_interaction_started, this);
-    ui.callbacks.emitter_interaction_finished = std::bind(&RTApplication::on_emitter_interaction_finished, this, std::placeholders::_1);
     ui.callbacks.emitter_added = std::bind(&RTApplication::on_emitter_added, this, std::placeholders::_1);
     ui.callbacks.emitter_duplicated = std::bind(&RTApplication::on_emitter_duplicated, this, std::placeholders::_1);
     ui.callbacks.emitter_deleted = std::bind(&RTApplication::on_emitter_deleted, this, std::placeholders::_1);
@@ -813,13 +813,6 @@ void RTApplication::process_event(const sapp_event* e) {
 
   if ((_active_renderer != nullptr) && !_current_scene_file.empty()) {
     ETX_PROFILER_NAMED_SCOPE("app_process_event_renderer");
-    const bool pointer_camera_input = (e->type == SAPP_EVENTTYPE_MOUSE_DOWN) || (e->type == SAPP_EVENTTYPE_MOUSE_SCROLL);
-    const bool keyboard_camera_input =
-      (e->type == SAPP_EVENTTYPE_KEY_DOWN) && ((e->key_code == SAPP_KEYCODE_W) || (e->key_code == SAPP_KEYCODE_A) || (e->key_code == SAPP_KEYCODE_S) ||
-                                                (e->key_code == SAPP_KEYCODE_D) || (e->key_code == SAPP_KEYCODE_Q) || (e->key_code == SAPP_KEYCODE_E));
-    if (pointer_camera_input || keyboard_camera_input) {
-      mark_scene_dirty();
-    }
     _active_renderer->process_event(e);
   }
 }
@@ -882,12 +875,6 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     _active_renderer->camera_controller()->sync_from_camera();
   }
   ui.reset_scene_state();
-  _material_interaction_active = false;
-  _material_interaction_cpu_was_running = false;
-  _medium_interaction_active = false;
-  _medium_interaction_cpu_was_active = false;
-  _emitter_interaction_active = false;
-  _emitter_interaction_cpu_was_running = false;
   _material_render_resource_preparation_active = false;
   _restart_cpu_after_material_resource_preparation = false;
   _restart_gpu_after_material_resource_preparation = false;
@@ -1274,39 +1261,6 @@ void RTApplication::on_material_changed(uint32_t index) {
   finish_material_render_resource_preparation(true);
 }
 
-void RTApplication::on_material_interaction_started() {
-  if (_material_interaction_active) {
-    return;
-  }
-
-  _material_interaction_active = true;
-  _material_interaction_cpu_was_running = cpu_renderer.is_running();
-  if (_material_interaction_cpu_was_running) {
-    cpu_renderer.stop();
-  }
-}
-
-void RTApplication::on_material_interaction_finished(const std::vector<uint32_t>& material_indices) {
-  if (_material_interaction_active == false) {
-    return;
-  }
-
-  _material_interaction_active = false;
-  const bool cpu_was_running = _material_interaction_cpu_was_running;
-  _material_interaction_cpu_was_running = false;
-  if (material_indices.empty()) {
-    _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
-    if (_restart_cpu_after_material_resource_preparation && (_material_render_resource_preparation_active == false)) {
-      cpu_renderer.restart();
-      _restart_cpu_after_material_resource_preparation = false;
-    }
-    return;
-  }
-
-  _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
-  on_material_changed(material_indices.front());
-}
-
 SceneResourceEditResult RTApplication::on_medium_added() {
   const bool cpu_was_running = cpu_renderer.is_running();
   if (cpu_was_running) {
@@ -1381,34 +1335,6 @@ void RTApplication::on_medium_changed(uint32_t index) {
   mark_scene_dirty();
   scene.update_medium_bounds();
   notify_scene_might_have_changed();
-}
-
-void RTApplication::on_medium_interaction_started() {
-  if (_medium_interaction_active) {
-    return;
-  }
-
-  _medium_interaction_active = true;
-  _medium_interaction_cpu_was_active = cpu_renderer.control_state().can_stop;
-  if (_medium_interaction_cpu_was_active) {
-    cpu_renderer.stop();
-  }
-}
-
-void RTApplication::on_medium_interaction_finished(const std::vector<uint32_t>& medium_indices) {
-  if (_medium_interaction_active == false) {
-    return;
-  }
-
-  _medium_interaction_active = false;
-  const bool cpu_was_active = _medium_interaction_cpu_was_active;
-  _medium_interaction_cpu_was_active = false;
-  if (medium_indices.empty() == false) {
-    on_medium_changed(medium_indices.front());
-  }
-  if (cpu_was_active) {
-    cpu_renderer.restart();
-  }
 }
 
 void RTApplication::on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index) {
@@ -1500,34 +1426,6 @@ void RTApplication::on_emitter_changed(uint32_t index) {
 
   notify_scene_might_have_changed();
   if (atmosphere_related && cpu_was_running) {
-    cpu_renderer.restart();
-  }
-}
-
-void RTApplication::on_emitter_interaction_started() {
-  if (_emitter_interaction_active) {
-    return;
-  }
-
-  _emitter_interaction_active = true;
-  _emitter_interaction_cpu_was_running = cpu_renderer.is_running();
-  if (_emitter_interaction_cpu_was_running) {
-    cpu_renderer.stop();
-  }
-}
-
-void RTApplication::on_emitter_interaction_finished(uint32_t index) {
-  if (_emitter_interaction_active == false) {
-    return;
-  }
-
-  _emitter_interaction_active = false;
-  const bool cpu_was_running = _emitter_interaction_cpu_was_running;
-  _emitter_interaction_cpu_was_running = false;
-  if (index != kInvalidIndex) {
-    on_emitter_changed(index);
-  }
-  if (cpu_was_running) {
     cpu_renderer.restart();
   }
 }
@@ -1984,9 +1882,6 @@ void RTApplication::on_camera_activated(uint32_t camera_index) {
   scene.data().cameras[camera_index].active = true;
 
   on_camera_changed(scene.data().cameras[camera_index].cam.film_size, film.pixel_size());
-  if (_active_renderer != nullptr) {
-    _active_renderer->on_camera_changed(scene);
-  }
 }
 
 void RTApplication::notify_scene_might_have_changed() {
@@ -2002,6 +1897,14 @@ void RTApplication::notify_scene_transforms_changed() {
   cpu_renderer.on_scene_transforms_changed(scene);
   raster_renderer.on_scene_transforms_changed(scene);
   gpu_renderer.on_scene_transforms_changed(scene);
+}
+
+RendererStatus RTApplication::current_renderer_status() const {
+  RendererStatus status = _active_renderer ? _active_renderer->status() : RendererStatus{.mode = ui.current_renderer_mode()};
+  if (_material_render_resource_preparation_active && (_active_renderer != nullptr) && _active_renderer->display_texture().valid()) {
+    status.output_stale = true;
+  }
+  return status;
 }
 
 void RTApplication::sync_ui_renderer_state() {
@@ -2021,7 +1924,7 @@ void RTApplication::sync_ui_renderer_state() {
     };
   }
   ui.set_current_renderer_preparation(preparation);
-  ui.set_current_renderer_status(_active_renderer ? _active_renderer->status() : RendererStatus{.mode = ui.current_renderer_mode()});
+  ui.set_current_renderer_status(current_renderer_status());
   ui.set_memory_stats(render_context.get_context().device().get_memory_statistics(), _active_renderer ? _active_renderer->memory_stats() : RendererMemoryStats{});
   ui.set_current_renderer_controls((_active_renderer && !_current_scene_file.empty()) ? _active_renderer->control_state() : RendererControlState{});
   ui.set_gpu_kernel_timing_stats((_active_renderer == &gpu_renderer) ? gpu_renderer.kernel_timing_stats() : RendererKernelTimingStats{});
@@ -2315,7 +2218,7 @@ void RTApplication::publish_application_state() {
   state.renderer_mode = _active_renderer ? _active_renderer->mode() : RendererMode::CPURaytracing;
   state.renderer_name = _active_renderer ? _active_renderer->name() : "None";
   state.preparation = _active_renderer ? _active_renderer->preparation_status() : RendererPreparationStatus{};
-  state.status = _active_renderer ? _active_renderer->status() : RendererStatus{.mode = state.renderer_mode};
+  state.status = current_renderer_status();
   state.controls = state.scene_loaded && _active_renderer ? _active_renderer->control_state() : RendererControlState{};
   state.can_denoise = state.scene_loaded && (_active_renderer == &cpu_renderer) && state.controls.can_run && (state.status.progress_kind == RendererProgressKind::Samples) &&
                       (state.status.completed_units > 0u);
@@ -2391,11 +2294,11 @@ void RTApplication::finish_material_render_resource_preparation(bool resources_r
     return;
   }
   notify_scene_might_have_changed();
-  if (_restart_cpu_after_material_resource_preparation && (_material_interaction_active == false)) {
+  if (_restart_cpu_after_material_resource_preparation) {
     cpu_renderer.restart();
     _restart_cpu_after_material_resource_preparation = false;
   }
-  if (_restart_gpu_after_material_resource_preparation && (_material_interaction_active == false)) {
+  if (_restart_gpu_after_material_resource_preparation) {
     gpu_renderer.restart();
     _restart_gpu_after_material_resource_preparation = false;
   }

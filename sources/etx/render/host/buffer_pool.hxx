@@ -3,6 +3,7 @@
 #include <etx/render/shared/buffer_view.hxx>
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,9 @@ struct BufferPool {
 
   template <typename T>
   BufferView allocate_elements(BufferHandle handle, uint64_t count, uint64_t alignment = alignof(T)) {
+    if (count > (std::numeric_limits<uint64_t>::max() / sizeof(T))) {
+      return {};
+    }
     return allocate(handle, count * sizeof(T), alignment);
   }
 
@@ -70,8 +74,6 @@ struct BufferPool {
 
   Slot* resolve(BufferHandle handle);
   const Slot* resolve(BufferHandle handle) const;
-  Slot* resolve(uint32_t index);
-  const Slot* resolve(uint32_t index) const;
 
   static uint64_t align_up(uint64_t value, uint64_t alignment);
   static uint64_t next_capacity(uint64_t required, uint64_t current);

@@ -84,6 +84,43 @@ uint64_t hash_hierarchy_attachments(const SceneHierarchy& hierarchy) {
 
 }  // namespace
 
+SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transport_bounds, const Camera& camera) {
+  float3 camera_extent = {};
+  if ((camera.cls == Camera::Class::Perspective) && (camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
+    camera_extent = camera.lens_radius * float3{
+                                           fabsf(camera.side.x) + fabsf(camera.up.x),
+                                           fabsf(camera.side.y) + fabsf(camera.up.y),
+                                           fabsf(camera.side.z) + fabsf(camera.up.z),
+                                         };
+  }
+
+  float3 bounds_min = min(transport_bounds.p_min, camera.position - camera_extent);
+  float3 bounds_max = max(transport_bounds.p_max, camera.position + camera_extent);
+  // A finite primary ray can scatter in a medium anywhere up to its clipping plane. Those vertices must remain inside the domain used to terminate subsequent unbounded segments.
+  if ((camera.cls == Camera::Class::Perspective) && (camera.clip_far > 0.0f)) {
+    const float far_horizontal_scale = camera.clip_far * camera.tan_half_fov;
+    const float far_vertical_scale = far_horizontal_scale / camera.aspect;
+    float3 far_extent = {
+      fabsf(camera.side.x * far_horizontal_scale) + fabsf(camera.up.x * far_vertical_scale),
+      fabsf(camera.side.y * far_horizontal_scale) + fabsf(camera.up.y * far_vertical_scale),
+      fabsf(camera.side.z * far_horizontal_scale) + fabsf(camera.up.z * far_vertical_scale),
+    };
+    if ((camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
+      far_extent += camera_extent * fabsf(1.0f - camera.clip_far / camera.focal_distance);
+    }
+    const float3 far_center = camera.position + camera.direction * camera.clip_far;
+    bounds_min = min(bounds_min, far_center - far_extent);
+    bounds_max = max(bounds_max, far_center + far_extent);
+  }
+
+  const float3 center = 0.5f * (bounds_min + bounds_max);
+  const float radius = length(bounds_max - center);
+  const float coordinate_scale =
+    max(1.0f, max(max(max(fabsf(bounds_min.x), fabsf(bounds_min.y)), fabsf(bounds_min.z)), max(max(fabsf(bounds_max.x), fabsf(bounds_max.y)), fabsf(bounds_max.z))));
+  const float padding = max(kRayEpsilon, coordinate_scale * kRayEpsilon);
+  return {center, radius + padding};
+}
+
 SceneData::SceneData(TaskScheduler& s)
   : images(images_vector, buffer_pool)
   , mediums(mediums_vector, buffer_pool, images)
@@ -143,6 +180,15 @@ BoundingBox SceneData::compute_bounding_volumes() const {
     bbox.p_max = {1.0f, 1.0f, 1.0f};
   }
 
+  return bbox;
+}
+
+BoundingBox SceneData::compute_transport_bounding_volumes() const {
+  BoundingBox bbox = compute_bounding_volumes();
+  for (const Medium& medium : mediums_vector) {
+    bbox.p_min = min(bbox.p_min, medium.bounds.p_min);
+    bbox.p_max = max(bbox.p_max, medium.bounds.p_max);
+  }
   return bbox;
 }
 

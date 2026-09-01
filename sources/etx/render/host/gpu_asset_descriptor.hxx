@@ -3,6 +3,8 @@
 #include <etx/render/shared/image.hxx>
 #include <etx/render/shared/medium.hxx>
 
+#include <cstring>
+
 namespace etx {
 
 struct PackedPayloadLocation {
@@ -28,7 +30,8 @@ ETX_SHARED_INLINE uint32_t gpu_image_pixel_stride(const Image& image) {
 
 ETX_SHARED_INLINE ::Image make_gpu_image_descriptor(const Image& image, PackedPayloadLocation pixel_payload = {}, PackedPayloadLocation x_distribution_payload = {},
   PackedPayloadLocation y_distribution_payload = {}) {
-  ::Image result = {};
+  ::Image result;
+  std::memset(&result, 0, sizeof(result));
   result.fsize = image.fsize;
   result.offset = image.offset;
   result.scale = image.scale;
@@ -52,7 +55,8 @@ ETX_SHARED_INLINE ::Image make_gpu_image_descriptor(const Image& image, PackedPa
 }
 
 ETX_SHARED_INLINE ::Medium make_gpu_medium_descriptor(const Medium& medium, PackedPayloadLocation density_payload = {}) {
-  ::Medium result = {};
+  ::Medium result;
+  std::memset(&result, 0, sizeof(result));
   result.grid.dimensions = medium.grid.dimensions;
   result.grid.type = medium.grid.type;
   result.grid.noise_type = medium.grid.noise_type;

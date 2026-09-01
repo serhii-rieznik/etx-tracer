@@ -162,6 +162,7 @@ struct IntegratorThread {
   void request_scene_check(SceneUpdateScope scope);
   void suppress_next_scene_commit_run();
   bool scene_changes_pending() const;
+  uint64_t scene_revision() const;
 
  private:
   ETX_DECLARE_PIMPL(IntegratorThread, 1024);

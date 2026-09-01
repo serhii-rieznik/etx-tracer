@@ -694,7 +694,7 @@ uint32_t VKBindlessManager::get_max_samplers() const {
 }
 
 uint32_t VKBindlessManager::get_max_acceleration_structures() const {
-  return kDefaultMaxAccelerationStructures;
+  return _impl ? _impl->max_acceleration_structures : _stored_max_acceleration_structures;
 }
 
 uint32_t VKBindlessManager::get_buffer_count() const {

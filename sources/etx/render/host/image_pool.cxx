@@ -92,6 +92,7 @@ struct ImagePoolImpl {
         dst_dist.values_buffer = image.distribution_buffer;
         dst_dist.values_storage = {
           .buffer_index = image.x_distributions_storage.buffer_index,
+          .buffer_generation = image.x_distributions_storage.buffer_generation,
           .byte_offset = image.x_distributions_storage.byte_offset + x_entry_offset * sizeof(Distribution::Entry),
           .byte_size = (src_dist.values.count + 1u) * sizeof(Distribution::Entry),
         };
@@ -618,6 +619,7 @@ struct ImagePoolImpl {
       dist.values_buffer = img.distribution_buffer;
       dist.values_storage = {
         .buffer_index = img.x_distributions_storage.buffer_index,
+        .buffer_generation = img.x_distributions_storage.buffer_generation,
         .byte_offset = img.x_distributions_storage.byte_offset + static_cast<uint64_t>(y) * x_entries_per_row * sizeof(Distribution::Entry),
         .byte_size = static_cast<uint64_t>(x_entries_per_row) * sizeof(Distribution::Entry),
       };

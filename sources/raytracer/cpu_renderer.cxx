@@ -22,6 +22,7 @@ void CPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
 
 void CPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) {
   Renderer::update_camera(scene, frame_data.dt);
+  const uint64_t previous_scene_revision = _integrator_thread.scene_revision();
   const SceneUpdateScope scene_update_scope = consume_scene_update_request();
   if (scene_update_scope != SceneUpdateScope::None) {
     _integrator_thread.request_scene_check(scene_update_scope);
@@ -33,6 +34,10 @@ void CPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const bool preview_iteration_completed = _preview_active ? _integrator_thread.update_integrator() : false;
   if (_preview_active == false) {
     _integrator_thread.update();
+  }
+  if (_integrator_thread.scene_revision() != previous_scene_revision) {
+    _last_uploaded_completed_iterations = 0u;
+    start_render_timing();
   }
   const Integrator::Status& status = _integrator_thread.status();
   const uint32_t view_layer = frame_data.view_parameters.view_layer;
@@ -105,6 +110,7 @@ RendererStatus CPURaytracingRenderer::status() const {
   RendererStatus result = {
     .mode = RendererMode::CPURaytracing,
   };
+  result.output_stale = display_texture().valid() && (_last_uploaded_completed_iterations == 0u);
   const Integrator* integrator = current_integrator();
   if ((integrator == nullptr) || (integrator->can_run() == false)) {
     if (_runtime_failure_reason.empty() == false) {

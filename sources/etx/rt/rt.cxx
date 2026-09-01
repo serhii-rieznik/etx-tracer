@@ -43,14 +43,39 @@ struct RaytracingImpl {
   std::vector<RTCGeometry> instance_geometries = {};
 
   struct InternalSceneData {
+    struct ImageStorage {
+      std::vector<float4> pixels_f32 = {};
+      std::vector<float> pixels_r32 = {};
+      std::vector<ubyte4> pixels_u8 = {};
+      std::vector<uint8_t> pixels_compressed = {};
+      std::vector<Distribution> x_distributions = {};
+      std::vector<std::vector<Distribution::Entry>> x_distribution_entries = {};
+      std::vector<Distribution::Entry> y_distribution_entries = {};
+    };
+
     Camera camera = {};
     Distribution emitters_distribution = {};
     std::vector<Distribution::Entry> emitters_distribution_storage = {};
+    std::vector<float3> vertex_positions = {};
+    std::vector<float3> vertex_normals = {};
+    std::vector<float3> vertex_tangents = {};
+    std::vector<float3> vertex_bitangents = {};
+    std::vector<float2> vertex_texcoords = {};
+    std::vector<Mesh> meshes = {};
+    std::vector<Material> materials = {};
+    std::vector<Image> images = {};
+    std::vector<ImageStorage> image_storage = {};
+    std::vector<Medium> mediums = {};
+    std::vector<std::vector<float>> medium_density_storage = {};
+    std::vector<SpectralDistribution> spectrums = {};
+    std::vector<Scene::EnergyCompensationInterface> energy_compensation_interfaces = {};
     std::vector<EmitterProfile> emitter_profiles = {};
     std::vector<Emitter> emitter_instances = {};
     std::vector<Triangle> triangles = {};
     std::vector<SceneInstance> instances = {};
     PackedEmitterTopology emitter_topology = {};
+    BoundingBox transport_bounds = {};
+    float geometry_bounding_sphere_radius = 0.0f;
   } internal_data;
 
   RaytracingImpl(TaskScheduler& s, Film& f)
@@ -78,7 +103,8 @@ struct RaytracingImpl {
     internal_data.camera = camera;
 
     if (update_flags[UpdateFlags::AnyGeometry] || update_flags[UpdateFlags::AnyMaterials] || update_flags[UpdateFlags::Emitters] || update_flags[UpdateFlags::Images] ||
-        update_flags[UpdateFlags::Mediums]) {
+        update_flags[UpdateFlags::Mediums] || update_flags[UpdateFlags::EnergyCompensationInterfaces] || update_flags[UpdateFlags::PixelFilter] ||
+        update_flags[UpdateFlags::Defaults]) {
       update_scene_data(scene_data, update_flags);
     }
 
@@ -92,6 +118,9 @@ struct RaytracingImpl {
     } else if (update_flags[UpdateFlags::Transforms]) {
       update_host_scene_transforms(scene);
     }
+    const SceneBoundingSphere transport_sphere = compute_transport_bounding_sphere(internal_data.transport_bounds, camera);
+    scene.bounding_sphere_center = transport_sphere.center;
+    scene.bounding_sphere_radius = transport_sphere.radius;
     film.allocate(internal_data.camera.film_size);
     scene.options.properties[Scene::Properties::Committed] = true;
     scene_global_publish(this, &scene);
@@ -101,8 +130,10 @@ struct RaytracingImpl {
     auto bbox = scene_data.compute_bounding_volumes();
     scene.bounding_box_min = bbox.p_min;
     scene.bounding_box_max = bbox.p_max;
-    scene.bounding_sphere_center = 0.5f * (scene.bounding_box_min + scene.bounding_box_max);
-    scene.bounding_sphere_radius = length(scene.bounding_box_max - scene.bounding_sphere_center);
+    const float3 geometry_center = 0.5f * (scene.bounding_box_min + scene.bounding_box_max);
+    // Keep density-kernel scale independent of the camera-dependent transport domain.
+    internal_data.geometry_bounding_sphere_radius = length(scene.bounding_box_max - geometry_center);
+    internal_data.transport_bounds = scene_data.compute_transport_bounding_volumes();
   }
 
   void update_scene_options(const SceneData& scene_data) {
@@ -110,19 +141,19 @@ struct RaytracingImpl {
   }
 
   void update_all_scene_views(const SceneData& scene_data) {
-    scene.spectrums = {scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
-    scene.images = {scene_data.images.as_array(), scene_data.images.array_size()};
-    scene.vertices.pos = {scene_data.vertices.pos.data(), scene_data.vertices.pos.size()};
-    scene.vertices.nrm = {scene_data.vertices.nrm.data(), scene_data.vertices.nrm.size()};
-    scene.vertices.tan = {scene_data.vertices.tan.data(), scene_data.vertices.tan.size()};
-    scene.vertices.btn = {scene_data.vertices.btn.data(), scene_data.vertices.btn.size()};
-    scene.vertices.tex = {scene_data.vertices.tex.data(), scene_data.vertices.tex.size()};
+    scene.spectrums = {internal_data.spectrums.data(), internal_data.spectrums.size()};
+    scene.images = {internal_data.images.data(), internal_data.images.size()};
+    scene.vertices.pos = {internal_data.vertex_positions.data(), internal_data.vertex_positions.size()};
+    scene.vertices.nrm = {internal_data.vertex_normals.data(), internal_data.vertex_normals.size()};
+    scene.vertices.tan = {internal_data.vertex_tangents.data(), internal_data.vertex_tangents.size()};
+    scene.vertices.btn = {internal_data.vertex_bitangents.data(), internal_data.vertex_bitangents.size()};
+    scene.vertices.tex = {internal_data.vertex_texcoords.data(), internal_data.vertex_texcoords.size()};
     scene.triangles = {internal_data.triangles.data(), internal_data.triangles.size()};
-    scene.meshes = {scene_data.meshes.data(), scene_data.meshes.size()};
+    scene.meshes = {internal_data.meshes.data(), internal_data.meshes.size()};
     scene.instances = {internal_data.instances.data(), internal_data.instances.size()};
-    scene.materials = {scene_data.materials.data(), scene_data.materials.size()};
-    scene.mediums = {scene_data.mediums.as_array(), scene_data.mediums.array_size()};
-    scene.energy_compensation_interfaces = {scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
+    scene.materials = {internal_data.materials.data(), internal_data.materials.size()};
+    scene.mediums = {internal_data.mediums.data(), internal_data.mediums.size()};
+    scene.energy_compensation_interfaces = {internal_data.energy_compensation_interfaces.data(), internal_data.energy_compensation_interfaces.size()};
     scene.emitter_profiles = {internal_data.emitter_profiles.data(), internal_data.emitter_profiles.size()};
     scene.emitter_instances = {internal_data.emitter_instances.data(), internal_data.emitter_instances.size()};
     scene.pixel_sampler = scene_data.pixel_filter;
@@ -131,6 +162,117 @@ struct RaytracingImpl {
 
   void update_scene_data(const SceneData& scene_data, const UpdateFlags& update_flags) {
     ETX_PROFILER_SCOPE();
+    if (update_flags[UpdateFlags::VerticesPos]) {
+      internal_data.vertex_positions = scene_data.vertices.pos;
+    }
+    if (update_flags[UpdateFlags::VerticesNrm]) {
+      internal_data.vertex_normals = scene_data.vertices.nrm;
+    }
+    if (update_flags[UpdateFlags::VerticesTan]) {
+      internal_data.vertex_tangents = scene_data.vertices.tan;
+    }
+    if (update_flags[UpdateFlags::VerticesBtn]) {
+      internal_data.vertex_bitangents = scene_data.vertices.btn;
+    }
+    if (update_flags[UpdateFlags::VerticesTex]) {
+      internal_data.vertex_texcoords = scene_data.vertices.tex;
+    }
+    if (update_flags[UpdateFlags::Meshes]) {
+      internal_data.meshes = scene_data.meshes;
+    }
+    if (update_flags[UpdateFlags::Materials]) {
+      internal_data.materials = scene_data.materials;
+    }
+    if (update_flags[UpdateFlags::Spectra]) {
+      internal_data.spectrums = scene_data.spectrum_values;
+    }
+    if (update_flags[UpdateFlags::Images]) {
+      const Image* images = scene_data.images.as_array();
+      const uint64_t image_count = scene_data.images.array_size();
+      if (image_count > 0u) {
+        internal_data.images.assign(images, images + image_count);
+        internal_data.image_storage.clear();
+        internal_data.image_storage.resize(image_count);
+        for (uint64_t image_index = 0u; image_index < image_count; ++image_index) {
+          Image& image = internal_data.images[image_index];
+          InternalSceneData::ImageStorage& storage = internal_data.image_storage[image_index];
+          if ((image.format == Image::Format::RGBA32F) && (image.pixels.f32.a != nullptr) && (image.pixels.f32.count > 0u)) {
+            storage.pixels_f32.assign(image.pixels.f32.a, image.pixels.f32.a + image.pixels.f32.count);
+            image.pixels.f32 = {storage.pixels_f32.data(), storage.pixels_f32.size()};
+          } else if ((image.format == Image::Format::R32F) && (image.pixels.r32.a != nullptr) && (image.pixels.r32.count > 0u)) {
+            storage.pixels_r32.assign(image.pixels.r32.a, image.pixels.r32.a + image.pixels.r32.count);
+            image.pixels.r32 = {storage.pixels_r32.data(), storage.pixels_r32.size()};
+          } else if ((image.format == Image::Format::RGBA8) && (image.pixels.u8.a != nullptr) && (image.pixels.u8.count > 0u)) {
+            storage.pixels_u8.assign(image.pixels.u8.a, image.pixels.u8.a + image.pixels.u8.count);
+            image.pixels.u8 = {storage.pixels_u8.data(), storage.pixels_u8.size()};
+          } else if ((image.pixels.compressed.a != nullptr) && (image.pixels.compressed.count > 0u)) {
+            storage.pixels_compressed.assign(image.pixels.compressed.a, image.pixels.compressed.a + image.pixels.compressed.count);
+            image.pixels.compressed = {storage.pixels_compressed.data(), storage.pixels_compressed.size()};
+          } else {
+            image.pixels = {};
+          }
+
+          storage.x_distributions.resize(image.x_distributions.count);
+          storage.x_distribution_entries.resize(image.x_distributions.count);
+          for (uint64_t distribution_index = 0u; distribution_index < image.x_distributions.count; ++distribution_index) {
+            const Distribution& source = image.x_distributions[distribution_index];
+            Distribution& destination = storage.x_distributions[distribution_index];
+            destination.total_weight = source.total_weight;
+            if ((source.values.a != nullptr) && (source.values.count > 0u)) {
+              std::vector<Distribution::Entry>& entries = storage.x_distribution_entries[distribution_index];
+              entries.assign(source.values.a, source.values.a + source.values.count + 1u);
+              destination.values = {entries.data(), source.values.count};
+            }
+          }
+          image.x_distributions = {storage.x_distributions.data(), storage.x_distributions.size()};
+          image.y_distribution.total_weight = images[image_index].y_distribution.total_weight;
+          const ArrayView<Distribution::Entry> source_y_values = images[image_index].y_distribution.values;
+          if ((source_y_values.a != nullptr) && (source_y_values.count > 0u)) {
+            storage.y_distribution_entries.assign(source_y_values.a, source_y_values.a + source_y_values.count + 1u);
+            image.y_distribution.values = {storage.y_distribution_entries.data(), source_y_values.count};
+          } else {
+            image.y_distribution.values = {};
+          }
+          image.pixel_buffer = {};
+          image.distribution_buffer = {};
+          image.data = {};
+          image.x_distributions_storage = {};
+          image.y_distribution_storage = {};
+          image.x_distributions_buffer = {};
+        }
+      } else {
+        internal_data.images.clear();
+        internal_data.image_storage.clear();
+      }
+    }
+    if (update_flags[UpdateFlags::Mediums]) {
+      const Medium* mediums = scene_data.mediums.as_array();
+      const uint64_t medium_count = scene_data.mediums.array_size();
+      if (medium_count > 0u) {
+        internal_data.mediums.assign(mediums, mediums + medium_count);
+        internal_data.medium_density_storage.clear();
+        internal_data.medium_density_storage.resize(medium_count);
+        for (uint64_t medium_index = 0u; medium_index < medium_count; ++medium_index) {
+          Medium& medium = internal_data.mediums[medium_index];
+          if ((medium.density_view.a != nullptr) && (medium.density_view.count > 0u)) {
+            std::vector<float>& density = internal_data.medium_density_storage[medium_index];
+            density.assign(medium.density_view.a, medium.density_view.a + medium.density_view.count);
+            medium.density_view = {density.data(), density.size()};
+          } else {
+            medium.density_view = {};
+          }
+          medium.density_buffer = {};
+          medium.density_data = {};
+        }
+      } else {
+        internal_data.mediums.clear();
+        internal_data.medium_density_storage.clear();
+      }
+    }
+    if (update_flags[UpdateFlags::EnergyCompensationInterfaces]) {
+      internal_data.energy_compensation_interfaces = scene_data.energy_compensation_interfaces;
+    }
+
     const bool packed_emitters_changed = update_flags[UpdateFlags::VerticesPos] || update_flags[UpdateFlags::Triangles] || update_flags[UpdateFlags::Meshes] ||
                                          update_flags[UpdateFlags::Hierarchy] || update_flags[UpdateFlags::Transforms] || update_flags[UpdateFlags::Attachments] ||
                                          update_flags[UpdateFlags::Materials] || update_flags[UpdateFlags::Spectra] || update_flags[UpdateFlags::Emitters];
@@ -146,7 +288,11 @@ struct RaytracingImpl {
       internal_data.emitter_profiles = std::move(packed_emitters.emitter_profiles);
       internal_data.emitter_instances = std::move(packed_emitters.emitter_instances);
       if (transform_only == false) {
-        internal_data.triangles = std::move(packed_emitters.triangles);
+        if (internal_data.triangles.size() == packed_emitters.triangles.size()) {
+          std::copy(packed_emitters.triangles.begin(), packed_emitters.triangles.end(), internal_data.triangles.begin());
+        } else {
+          internal_data.triangles = std::move(packed_emitters.triangles);
+        }
       }
       internal_data.instances = std::move(packed_emitters.instances);
       scene.environment_emitters = packed_emitters.environment_emitters;
@@ -160,8 +306,8 @@ struct RaytracingImpl {
       scene.emitters_distribution = internal_data.emitters_distribution;
     }
 
-    if (update_flags[UpdateFlags::VerticesPos] || update_flags[UpdateFlags::Triangles] || update_flags[UpdateFlags::Transforms] || update_flags[UpdateFlags::Hierarchy] ||
-        update_flags[UpdateFlags::Attachments] || scene.bounding_sphere_radius == 0.0f) {
+    if (update_flags[UpdateFlags::VerticesPos] || update_flags[UpdateFlags::Triangles] || update_flags[UpdateFlags::Meshes] || update_flags[UpdateFlags::Transforms] ||
+        update_flags[UpdateFlags::Hierarchy] || update_flags[UpdateFlags::Attachments] || update_flags[UpdateFlags::Mediums] || scene.bounding_sphere_radius == 0.0f) {
       compute_scene_bounding_volumes(scene_data);
     }
 
@@ -311,6 +457,10 @@ const Camera& Raytracing::camera() const {
 
 const Scene& Raytracing::scene() const {
   return _private->scene;
+}
+
+float Raytracing::geometry_bounding_sphere_radius() const {
+  return _private->internal_data.geometry_bounding_sphere_radius;
 }
 
 uint32_t Raytracing::sample_limit() const {

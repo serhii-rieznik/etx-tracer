@@ -54,6 +54,9 @@ BufferView BufferPool::allocate(BufferHandle handle, uint64_t byte_size, uint64_
   }
 
   const uint64_t aligned_offset = align_up(slot->used, alignment);
+  if (aligned_offset < slot->used) {
+    return {};
+  }
   const uint64_t required_size = aligned_offset + byte_size;
   if (required_size < aligned_offset) {
     return {};
@@ -67,13 +70,14 @@ BufferView BufferPool::allocate(BufferHandle handle, uint64_t byte_size, uint64_
   slot->used = required_size;
   return {
     .buffer_index = handle.index,
+    .buffer_generation = handle.generation,
     .byte_offset = aligned_offset,
     .byte_size = byte_size,
   };
 }
 
 bool BufferPool::write(BufferView view, const void* src, uint64_t byte_size, uint64_t write_offset) {
-  Slot* slot = resolve(view.buffer_index);
+  Slot* slot = resolve(view.handle());
   if ((slot == nullptr) || (src == nullptr)) {
     return false;
   }
@@ -93,13 +97,13 @@ bool BufferPool::write(BufferView view, const void* src, uint64_t byte_size, uin
 }
 
 void* BufferPool::map(BufferView view) {
-  Slot* slot = resolve(view.buffer_index);
+  Slot* slot = resolve(view.handle());
   if (slot == nullptr) {
     return nullptr;
   }
 
-  const uint64_t end = view.byte_offset + view.byte_size;
-  if ((view.byte_size == 0u) || (end > slot->bytes.size()) || (end > slot->used)) {
+  if ((view.byte_size == 0u) || (view.byte_offset > slot->used) || (view.byte_size > (slot->used - view.byte_offset)) || (view.byte_offset > slot->bytes.size()) ||
+      (view.byte_size > (slot->bytes.size() - view.byte_offset))) {
     return nullptr;
   }
 
@@ -107,13 +111,13 @@ void* BufferPool::map(BufferView view) {
 }
 
 const void* BufferPool::map(BufferView view) const {
-  const Slot* slot = resolve(view.buffer_index);
+  const Slot* slot = resolve(view.handle());
   if (slot == nullptr) {
     return nullptr;
   }
 
-  const uint64_t end = view.byte_offset + view.byte_size;
-  if ((view.byte_size == 0u) || (end > slot->bytes.size()) || (end > slot->used)) {
+  if ((view.byte_size == 0u) || (view.byte_offset > slot->used) || (view.byte_size > (slot->used - view.byte_offset)) || (view.byte_offset > slot->bytes.size()) ||
+      (view.byte_size > (slot->bytes.size() - view.byte_offset))) {
     return nullptr;
   }
 
@@ -188,26 +192,11 @@ const BufferPool::Slot* BufferPool::resolve(BufferHandle handle) const {
   return &slot;
 }
 
-BufferPool::Slot* BufferPool::resolve(uint32_t index) {
-  if ((index == kInvalidIndex) || (index >= _slots.size())) {
-    return nullptr;
-  }
-
-  Slot& slot = _slots[index];
-  return slot.alive ? &slot : nullptr;
-}
-
-const BufferPool::Slot* BufferPool::resolve(uint32_t index) const {
-  if ((index == kInvalidIndex) || (index >= _slots.size())) {
-    return nullptr;
-  }
-
-  const Slot& slot = _slots[index];
-  return slot.alive ? &slot : nullptr;
-}
-
 uint64_t BufferPool::align_up(uint64_t value, uint64_t alignment) {
   const uint64_t a = (alignment == 0u) ? 1u : alignment;
+  if (value > (std::numeric_limits<uint64_t>::max() - (a - 1u))) {
+    return 0u;
+  }
   return ((value + a - 1u) / a) * a;
 }
 

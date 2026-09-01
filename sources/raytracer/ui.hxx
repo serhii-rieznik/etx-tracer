@@ -237,20 +237,14 @@ struct UI {
     std::function<SceneResourceEditResult(uint32_t)> material_deleted;
     std::function<std::string(uint32_t, const std::string&)> material_renamed;
     std::function<void(uint32_t)> material_changed;
-    std::function<void()> material_interaction_started;
-    std::function<void(const std::vector<uint32_t>&)> material_interaction_finished;
     std::function<SceneResourceEditResult()> medium_added;
     std::function<SceneResourceEditResult(uint32_t)> medium_duplicated;
     std::function<SceneResourceEditResult(uint32_t)> medium_deleted;
     std::function<std::string(uint32_t, const std::string&)> medium_renamed;
     std::function<void(uint32_t)> medium_changed;
-    std::function<void()> medium_interaction_started;
-    std::function<void(const std::vector<uint32_t>&)> medium_interaction_finished;
     std::function<void(uint32_t, uint32_t)> mesh_material_changed;          // mesh_index, new_material_index
     std::function<uint32_t(uint32_t, uint32_t)> mesh_material_made_unique;  // mesh_index, source_material_index
     std::function<void(uint32_t)> emitter_changed;
-    std::function<void()> emitter_interaction_started;
-    std::function<void(uint32_t)> emitter_interaction_finished;
     std::function<SceneResourceEditResult(uint32_t)> emitter_added;  // 0=environment, 1=directional, 2=atmosphere
     std::function<SceneResourceEditResult(uint32_t)> emitter_duplicated;
     std::function<SceneResourceEditResult(uint32_t)> emitter_deleted;
@@ -313,8 +307,8 @@ struct UI {
   void load_image() const;
   bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&);
   bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&, const std::vector<uint32_t>& material_indices);
-  bool build_medium(Medium& medium, SpectralDistribution* absorption, SpectralDistribution* scattering);
-  bool spectrum_picker(const char* widget_id, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
+  bool build_medium(uint32_t medium_index, Medium& medium, SpectralDistribution* absorption, SpectralDistribution* scattering);
+  bool spectrum_picker(const char* widget_id, const std::string& editor_key, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool spectrum_picker(SceneRepresentation& scene_rep, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
   bool image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options);
   bool sampled_image_picker(SceneRepresentation& scene_rep, const char* label, SampledImage& image, uint32_t image_options);
@@ -342,17 +336,9 @@ struct UI {
   void set_material_selection_range(int32_t index);
   std::vector<uint32_t> selected_material_indices(SceneRepresentation& scene_rep) const;
   void apply_material_changes(SceneRepresentation& scene_rep, const std::vector<uint32_t>& material_indices, const Material& before, const Material& after) const;
-  void begin_material_interaction();
-  void arm_material_interaction();
   void queue_material_change(uint32_t material_index);
-  void finish_material_interaction();
-  void begin_medium_interaction();
   void queue_medium_change(uint32_t medium_index);
-  void finish_medium_interaction();
-  void begin_emitter_interaction();
-  void arm_emitter_interaction();
   void queue_emitter_change(uint32_t emitter_index);
-  void finish_emitter_interaction();
   void reload_geometry();
   void reload_scene();
   void set_selection(SelectionKind kind, int32_t index, bool track_history = true);
@@ -529,15 +515,9 @@ struct UI {
   bool _node_transform_editor_interaction_active = false;
   bool _node_transform_editor_interaction_rendered_this_frame = false;
   int32_t _node_transform_editor_interaction_node_index = -1;
-  bool _material_interaction_active = false;
-  bool _material_editor_rendered_this_frame = false;
-  std::vector<uint32_t> _material_interaction_indices = {};
-  bool _medium_interaction_active = false;
-  bool _medium_editor_rendered_this_frame = false;
-  std::vector<uint32_t> _medium_interaction_indices = {};
-  bool _emitter_interaction_active = false;
-  bool _emitter_editor_rendered_this_frame = false;
-  uint32_t _emitter_interaction_index = kInvalidIndex;
+  std::vector<uint32_t> _pending_material_changes = {};
+  std::vector<uint32_t> _pending_medium_changes = {};
+  uint32_t _pending_emitter_change = kInvalidIndex;
 
   MappingRepresentation _material_mapping;
   MappingRepresentation _medium_mapping;

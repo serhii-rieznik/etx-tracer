@@ -93,7 +93,7 @@ struct CPUVCMImpl {
     if (used_radius == 0.0f) {
       uint2 current_dim = rt.film().current_dimensions() * rt.film().pixel_size();
       uint32_t max_dim = max(current_dim.x, current_dim.y);
-      used_radius = 5.0f * rt.scene().bounding_sphere_radius / float(max_dim);
+      used_radius = 5.0f * rt.geometry_bounding_sphere_radius() / float(max_dim);
     }
 
     float radius_scale = 1.0f / (1.0f + float(vcm_iteration.iteration) / float(vcm_options.radius_decay));

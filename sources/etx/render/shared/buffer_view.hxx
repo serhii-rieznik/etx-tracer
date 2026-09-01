@@ -15,11 +15,16 @@ struct BufferHandle {
 
 struct BufferView {
   uint32_t buffer_index = kInvalidIndex;
+  uint32_t buffer_generation = 0u;
   uint64_t byte_offset = 0u;
   uint64_t byte_size = 0u;
 
   ETX_SHARED_INLINE bool valid() const {
     return (buffer_index != kInvalidIndex) && (byte_size > 0u);
+  }
+
+  ETX_SHARED_INLINE BufferHandle handle() const {
+    return {buffer_index, buffer_generation};
   }
 };
 
