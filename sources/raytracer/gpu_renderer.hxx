@@ -358,6 +358,7 @@ struct GPURaytracingRenderer : public Renderer {
     uint32_t sample_index = ~0u;
     bool density_cache_ready = false;
     bool camera_phase_started = false;
+    bool render_reset_pending = false;
     RHIResourceState counter_readback_state = RHIResourceState::Undefined;
     RHIResourceState bpt_light_vertex_state = RHIResourceState::Undefined;
     RHIResourceState bpt_light_path_state_state = RHIResourceState::Undefined;

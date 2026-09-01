@@ -46,6 +46,7 @@ struct UpdateFlags {
     Meshes,
     Hierarchy,
     Transforms,
+    InstanceTransforms,
     Attachments,
     Materials,
     Spectra,
@@ -98,6 +99,7 @@ struct SceneHashes {
   uint64_t meshes_hash = 0;
   uint64_t hierarchy_hash = 0;
   uint64_t transforms_hash = 0;
+  uint64_t instance_transforms_hash = 0;
   uint64_t attachments_hash = 0;
   uint64_t materials_hash = 0;
   uint64_t spectra_hash = 0;
@@ -121,6 +123,7 @@ struct SceneHashes {
     result[UpdateFlags::Meshes] = (meshes_hash != existing.meshes_hash);
     result[UpdateFlags::Hierarchy] = (hierarchy_hash != existing.hierarchy_hash);
     result[UpdateFlags::Transforms] = (transforms_hash != existing.transforms_hash);
+    result[UpdateFlags::InstanceTransforms] = (instance_transforms_hash != existing.instance_transforms_hash);
     result[UpdateFlags::Attachments] = (attachments_hash != existing.attachments_hash);
     result[UpdateFlags::Materials] = (materials_hash != existing.materials_hash);
     result[UpdateFlags::Spectra] = (spectra_hash != existing.spectra_hash);
@@ -144,7 +147,7 @@ struct SceneHashes {
 
     result[UpdateFlags::AnyMaterials] = result[UpdateFlags::Materials] || result[UpdateFlags::Spectra];
 
-    result[UpdateFlags::EmbreeScene] = result[UpdateFlags::AnyGeometryStructure] || result[UpdateFlags::Transforms];
+    result[UpdateFlags::EmbreeScene] = result[UpdateFlags::AnyGeometryStructure] || result[UpdateFlags::InstanceTransforms];
 
     return result;
   }
@@ -205,6 +208,7 @@ struct SceneData {
   BoundingBox compute_transport_bounding_volumes() const;
 
   uint64_t compute_transforms_hash() const;
+  uint64_t compute_instance_transforms_hash() const;
   SceneHashes compute_hashes() const;
 
   void clear(TaskScheduler& scheduler);

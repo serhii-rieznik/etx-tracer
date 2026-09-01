@@ -47,10 +47,16 @@ struct IntegratorThreadImpl {
     }
 
     const bool camera_only_update = pending_scope == SceneUpdateScope::Camera;
+    const bool transform_only_update = pending_scope == SceneUpdateScope::Transforms;
+    const bool scoped_transform_update = camera_only_update || transform_only_update;
     SceneHashes new_hashes = current_scene_hashes;
     UpdateFlags changes = {};
-    if (camera_only_update) {
+    if (scoped_transform_update) {
       new_hashes.transforms_hash = scene_representation.data().compute_transforms_hash();
+      if (transform_only_update) {
+        new_hashes.instance_transforms_hash = scene_representation.data().compute_instance_transforms_hash();
+        changes = new_hashes.compare(current_scene_hashes);
+      }
     } else {
       new_hashes = scene_representation.data().compute_hashes();
       changes = new_hashes.compare(current_scene_hashes);
@@ -66,7 +72,7 @@ struct IntegratorThreadImpl {
       latest_state = integrator->state();
     }
 
-    if (camera_only_update == false) {
+    if (scoped_transform_update == false) {
       bool dependencies_updated = false;
       if (scene_representation.synchronize_render_dependencies(changes, full_update_requested, dependencies_updated) == false) {
         log::error("Failed to synchronize derived scene state before CPU render commit");

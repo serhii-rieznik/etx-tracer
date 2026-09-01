@@ -2294,7 +2294,7 @@ bool validate_delta_dielectric_transmission_sample(const char* label, const etx:
       return false;
     }
 
-    const float expected_weight = data.path_source == etx::PathSource::Light ? 1.0f : sample.eta * sample.eta;
+    const float expected_weight = data.path_source == etx::PathSource::Light ? 1.0f / (sample.eta * sample.eta) : 1.0f;
     const float weight = sample.weight.monochromatic();
     const float tolerance = max(1.0e-4f, 5.0e-4f * expected_weight);
     if (fabsf(weight - expected_weight) > tolerance) {

@@ -71,6 +71,17 @@ uint64_t hash_hierarchy_transforms(const SceneHierarchy& hierarchy) {
   return result;
 }
 
+uint64_t hash_instance_transforms(const SceneHierarchy& hierarchy) {
+  const size_t instance_count = hierarchy.mesh_instances.size();
+  uint64_t result = etx_hash64_continue(&instance_count, sizeof(instance_count), 0u);
+  for (const ResolvedMeshInstance& instance : hierarchy.mesh_instances) {
+    result = etx_hash64_continue(&instance.object_to_world, sizeof(instance.object_to_world), result);
+    result = etx_hash64_continue(&instance.mesh_index, sizeof(instance.mesh_index), result);
+    result = etx_hash64_continue(&instance.flags, sizeof(instance.flags), result);
+  }
+  return result;
+}
+
 uint64_t hash_hierarchy_attachments(const SceneHierarchy& hierarchy) {
   const size_t attachment_count = hierarchy.attachments.size();
   uint64_t result = etx_hash64_continue(&attachment_count, sizeof(attachment_count), 0u);
@@ -204,6 +215,7 @@ SceneHashes SceneData::compute_hashes() const {
   result.meshes_hash = xxh64(meshes.data(), meshes.size() * sizeof(Mesh));
   result.hierarchy_hash = hash_hierarchy_structure(hierarchy);
   result.transforms_hash = compute_transforms_hash();
+  result.instance_transforms_hash = compute_instance_transforms_hash();
   result.attachments_hash = hash_hierarchy_attachments(hierarchy);
   result.materials_hash = xxh64(materials.data(), materials.size() * sizeof(Material));
   result.spectra_hash = xxh64(spectrum_values.data(), spectrum_values.size() * sizeof(SpectralDistribution));
@@ -222,6 +234,11 @@ SceneHashes SceneData::compute_hashes() const {
 uint64_t SceneData::compute_transforms_hash() const {
   ETX_PROFILER_SCOPE();
   return hash_hierarchy_transforms(hierarchy);
+}
+
+uint64_t SceneData::compute_instance_transforms_hash() const {
+  ETX_PROFILER_SCOPE();
+  return hash_instance_transforms(hierarchy);
 }
 
 void SceneData::clear(TaskScheduler& scheduler) {

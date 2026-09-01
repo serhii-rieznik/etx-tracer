@@ -763,8 +763,10 @@ bool test_enabled_state_is_an_instance_update() {
   }
   etx::SceneHashes disabled_hashes = enabled_hashes;
   disabled_hashes.transforms_hash = data.compute_transforms_hash();
+  disabled_hashes.instance_transforms_hash = data.compute_instance_transforms_hash();
   const etx::UpdateFlags changes = disabled_hashes.compare(enabled_hashes);
-  return check_condition(changes[etx::UpdateFlags::Transforms] && (changes[etx::UpdateFlags::AnyGeometryStructure] == false) && changes[etx::UpdateFlags::EmbreeScene],
+  return check_condition(changes[etx::UpdateFlags::Transforms] && changes[etx::UpdateFlags::InstanceTransforms] && (changes[etx::UpdateFlags::AnyGeometryStructure] == false) &&
+                           changes[etx::UpdateFlags::EmbreeScene],
     "enabled-state changes update instance masks without rebuilding geometry structure");
 }
 
@@ -1068,8 +1070,10 @@ bool test_embree_transform_only_commit() {
   }
   etx::SceneHashes transformed_hashes = initial_hashes;
   transformed_hashes.transforms_hash = scene_data.compute_transforms_hash();
+  transformed_hashes.instance_transforms_hash = scene_data.compute_instance_transforms_hash();
   const etx::UpdateFlags transform_changes = transformed_hashes.compare(initial_hashes);
-  if (check_condition(transform_changes[etx::UpdateFlags::Transforms] && (transform_changes[etx::UpdateFlags::AnyGeometryStructure] == false),
+  if (check_condition(transform_changes[etx::UpdateFlags::Transforms] && transform_changes[etx::UpdateFlags::InstanceTransforms] &&
+                        (transform_changes[etx::UpdateFlags::AnyGeometryStructure] == false),
         "transform-only update classified for refit") == false) {
     return false;
   }
@@ -1093,8 +1097,10 @@ bool test_embree_transform_only_commit() {
   }
   etx::SceneHashes disabled_hashes = transformed_hashes;
   disabled_hashes.transforms_hash = scene_data.compute_transforms_hash();
+  disabled_hashes.instance_transforms_hash = scene_data.compute_instance_transforms_hash();
   const etx::UpdateFlags visibility_changes = disabled_hashes.compare(transformed_hashes);
-  if (check_condition(visibility_changes[etx::UpdateFlags::Transforms] && (visibility_changes[etx::UpdateFlags::AnyGeometryStructure] == false),
+  if (check_condition(visibility_changes[etx::UpdateFlags::Transforms] && visibility_changes[etx::UpdateFlags::InstanceTransforms] &&
+                        (visibility_changes[etx::UpdateFlags::AnyGeometryStructure] == false),
         "visibility-only Embree update is classified as an instance refit") == false) {
     return false;
   }

@@ -115,7 +115,7 @@ struct RaytracingImpl {
     if (update_flags[UpdateFlags::AnyGeometryStructure]) {
       release_host_scene();
       build_host_scene(scene);
-    } else if (update_flags[UpdateFlags::Transforms]) {
+    } else if (update_flags[UpdateFlags::InstanceTransforms]) {
       update_host_scene_transforms(scene);
     }
     const SceneBoundingSphere transport_sphere = compute_transport_bounding_sphere(internal_data.transport_bounds, camera);

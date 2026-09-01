@@ -92,7 +92,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_delta_sample(ETX_IN(BSDFResourceCon
   const float3 local_w_o = direction_scale * normalize(bsdf_external_refract(w_i, float3(0.0f, 0.0f, 1.0f), eta));
   const float pdf = max(kEpsilon, 1.0f - fresnel_probability);
   const SpectralResponse one_minus_fresnel = spectral_response_sub(spectral_response_make(data.spectrum_sample, 1.0f), fresnel);
-  const float eta_factor = data.path_source == PathSource::Light ? 1.0f : eta * eta;
+  const float eta_factor = data.path_source == PathSource::Light ? 1.0f / (eta * eta) : 1.0f;
   result.w_o = normalize(local_frame_from_local(frame, local_w_o));
   result.pdf = pdf;
   result.weight = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex),
