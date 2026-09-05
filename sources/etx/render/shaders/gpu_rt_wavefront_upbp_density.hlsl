@@ -633,7 +633,22 @@ bool upbp_medium_pre_collision_throughput(GPUUPBPVertex vertex, SpectralResponse
   return upbp_medium_pre_collision_throughput_with_scattering(vertex, throughput, scattering, result);
 }
 
-void upbp_evaluate_point_vertex(GPUUPBPResources resources, GPUUPBPVertex camera_vertex, GPUUPBPVertex light_vertex, uint selected_technique, float radius,
+#if defined(ETX_UPBP_SURFACE_VARIANT)
+UPBPSurfacePreparedQuery upbp_prepare_surface_vertex(GPUUPBPVertex camera_vertex) {
+  Material material = (Material)0;
+  if ((camera_vertex.material_index == kInvalidIndex) || (try_load_material_full(camera_vertex.material_index, material) == false)) {
+    return (UPBPSurfacePreparedQuery)0;
+  }
+  const BSDFData data = bsdf_data_make(upbp_surface_vertex(camera_vertex), spectral_response_as_query(upbp_unpack_spectral_response(camera_vertex.throughput)),
+    camera_vertex.incident_medium_index, PathSource::Camera, camera_vertex.w_i);
+  return upbp_surface_prepare_query(make_scene_bsdf_resource_gpu_context(), material, data);
+}
+#endif
+
+void upbp_evaluate_point_vertex_prepared(GPUUPBPResources resources, GPUUPBPVertex camera_vertex, GPUUPBPVertex light_vertex, uint selected_technique, float radius,
+#if defined(ETX_UPBP_SURFACE_VARIANT)
+  UPBPSurfacePreparedQuery prepared_query,
+#endif
   inout SpectralResponse accumulated) {
   if (camera_vertex.path_length == 0u) {
     return;
@@ -676,20 +691,14 @@ void upbp_evaluate_point_vertex(GPUUPBPResources resources, GPUUPBPVertex camera
   uint seed = upbp_pair_seed(resources.iteration, camera_vertex, light_vertex);
   if (surface) {
 #if defined(ETX_UPBP_SURFACE_VARIANT)
-    Material material = (Material)0;
-    if ((camera_vertex.material_index == kInvalidIndex) || (try_load_material_full(camera_vertex.material_index, material) == false) ||
-        (upbp_surface_stage_matches_material(material.cls) == false)) {
+    if (prepared_query.valid == false) {
       return;
     }
-    const Vertex vertex = upbp_surface_vertex(camera_vertex);
-    BSDFData data = bsdf_data_make(vertex, spectral_response_as_query(camera_throughput), camera_vertex.incident_medium_index, PathSource::Camera, camera_vertex.w_i);
     Sampler sampler = make_bsdf_sampler(seed);
-    const BSDFResourceContext context = make_scene_bsdf_resource_gpu_context();
-    const BSDFEval evaluation = upbp_surface_stage_bsdf_eval(context, data, outgoing_direction, material, sampler);
+    const BSDFEval evaluation = upbp_surface_evaluate_prepared(prepared_query, outgoing_direction, sampler, pdf_reverse);
     // Photon density already contains the incoming surface projection.
     scattering_value = evaluation.func;
     pdf_forward = evaluation.pdf;
-    pdf_reverse = upbp_surface_stage_reverse_pdf(context, data, outgoing_direction, material, sampler);
 #else
     return;
 #endif
@@ -732,6 +741,15 @@ void upbp_evaluate_point_vertex(GPUUPBPResources resources, GPUUPBPVertex camera
   const SpectralResponse contribution =
     spectral_response_mul(spectral_response_mul(light_throughput, camera_throughput), spectral_response_mul(scattering_value, estimator_scale * mis_weight));
   accumulated = spectral_response_add(accumulated, contribution);
+}
+
+void upbp_evaluate_point_vertex(GPUUPBPResources resources, GPUUPBPVertex camera_vertex, GPUUPBPVertex light_vertex, uint selected_technique, float radius,
+  inout SpectralResponse accumulated) {
+  upbp_evaluate_point_vertex_prepared(resources, camera_vertex, light_vertex, selected_technique, radius,
+#if defined(ETX_UPBP_SURFACE_VARIANT)
+    upbp_prepare_surface_vertex(camera_vertex),
+#endif
+    accumulated);
 }
 
 #if defined(ETX_UPBP_SURFACE_VARIANT)
@@ -867,6 +885,7 @@ void upbp_evaluate_surface_point_merge_group(uint dispatch_index, uint group_thr
     return;
   }
 
+  const UPBPSurfacePreparedQuery prepared_query = upbp_prepare_surface_vertex(upbp_surface_camera_vertex);
   SpectralResponse accumulated = spectral_response_zero(spectral_response_as_query(upbp_unpack_spectral_response(upbp_surface_camera_vertex.throughput)));
   RayDesc ray = (RayDesc)0;
   ray.Origin = upbp_surface_camera_vertex.position;
@@ -902,7 +921,8 @@ void upbp_evaluate_surface_point_merge_group(uint dispatch_index, uint group_thr
     if (partition_item_index < upbp_surface_partition_counts[partition_index]) {
       const GPUUPBPVertex light_vertex =
         upbp_unpack_density_point(upbp_load_density_point(resources.density_output_surface_point_buffer, upbp_surface_point_indices[group_thread_index]));
-      upbp_evaluate_point_vertex(resources, upbp_surface_camera_vertex, light_vertex, GPUUPBPTechnique::Surface, resources.iteration.surface_radius, accumulated);
+      upbp_evaluate_point_vertex_prepared(resources, upbp_surface_camera_vertex, light_vertex, GPUUPBPTechnique::Surface, resources.iteration.surface_radius, prepared_query,
+        accumulated);
     }
     GroupMemoryBarrierWithGroupSync();
     uint exhausted_partition_count = 0u;

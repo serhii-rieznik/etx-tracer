@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu_rt_wavefront_common.hlsl"
+#include "gpu_rt_wavefront_connect_light_queues.hlsl"
 #include <interop/image_filter_shared.hxx>
 #include <access/bsdf_resource_gpu.hxx>
 #include <interop/bsdf_dispatch_shared.hxx>
@@ -356,21 +357,28 @@ void wavefront_initialize_connect_light_prepare_candidate(uint dispatch_index, u
   if (scene_path_mode_is_upbp()) {
     GPUUPBPResources upbp_resources = upbp_load_resources(resources);
     const GPUUPBPPathState light_path = upbp_load_bpt_light_path_state(upbp_resources.bpt_light_path_state_buffer, path_index);
-    uint current_index = light_path.last_vertex_index;
+    uint current_index = ((constants.dispatch_item_offset & 1u) != 0u) ? light_path.last_vertex_index : vertex_index;
+    uint next_cursor = current_index;
     while (current_index != kInvalidIndex) {
       const GPUUPBPVertex current = upbp_load_bpt_light_vertex(upbp_resources, current_index);
       if (current.path_length <= light_vertex_length) {
         if (current.path_length == light_vertex_length) {
           light_vertex_index = current_index;
           previous_light_vertex_index = current.previous_vertex_index;
+          next_cursor = current.previous_vertex_index;
         }
         break;
       }
       current_index = current.previous_vertex_index;
+      next_cursor = current_index;
     }
     wavefront_initialize_connect_light_candidate(resources.connect_light_task_buffer, task_index, light_vertex_index, previous_light_vertex_index);
     initialized_light_vertex_index = light_vertex_index;
     initialized_previous_light_vertex_index = previous_light_vertex_index;
+    if ((batch_index + 1u) == constants.dispatch_item_count) {
+      const uint output_cursor_offset = cursor_base_offset + ((output_cursor_slot * resources.path_capacity + dispatch_index) * sizeof(uint));
+      WAVEFRONT_RW_BUFFER(resources.connect_light_task_buffer).Store(output_cursor_offset, next_cursor);
+    }
     return;
   }
 # endif

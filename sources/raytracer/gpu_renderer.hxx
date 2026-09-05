@@ -10,6 +10,7 @@
 #include <interop/gpu_wavefront_shared.hxx>
 #include <array>
 #include <atomic>
+#include <bitset>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
@@ -84,7 +85,11 @@ struct GPURaytracingRenderer : public Renderer {
     UPBPValidate = 60u,
     UPBPBeamInstances = 61u,
     UPBPBeamGridBuild = 62u,
-    Count = 63u,
+    VCMGridPrefix = 63u,
+    VCMGridScatter = 64u,
+    CameraConnectLightClassify = 65u,
+    CameraConnectLightCompact = 66u,
+    Count = 67u,
   };
 
   GPURaytracingRenderer(TaskScheduler&);
@@ -209,7 +214,7 @@ struct GPURaytracingRenderer : public Renderer {
     uint32_t integrator_features = 0u;
     uint32_t material_compile_mask = 0u;
     uint32_t spectral_mode = 0u;
-    uint64_t requested_stage_mask = 0u;
+    std::bitset<static_cast<size_t>(PipelineStage::Count)> requested_stages = {};
     std::string compile_stage_filter = {};
     uint32_t total_steps = 0u;
     uint32_t total_compile_groups = 0u;

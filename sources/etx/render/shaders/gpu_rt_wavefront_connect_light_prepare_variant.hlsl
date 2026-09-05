@@ -167,15 +167,21 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
 #include "gpu_rt_wavefront_connect_light_prepare_common.hlsl"
 
 [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 dtid : SV_DispatchThreadID) {
-  const uint dispatch_index = dtid.x;
-  const uint batch_index = dtid.y;
-
-  const bool initialize_candidate = (constants.dispatch_item_offset & 2u) != 0u;
+  uint dispatch_index = dtid.x;
+  uint batch_index = dtid.y;
   uint initialized_light_vertex_index = kInvalidIndex;
   uint initialized_previous_light_vertex_index = kInvalidIndex;
+#if ETX_ENABLE_WORK_QUEUES
+  const bool initialize_candidate = false;
+  if (wavefront_connect_queue_load(wavefront_load_resources(), ETX_BSDF_KIND - 1u, dtid.x + dtid.y * (65535u * 64u), dispatch_index, batch_index) == false) {
+    return;
+  }
+#else
+  const bool initialize_candidate = (constants.dispatch_item_offset & 2u) != 0u;
   if (initialize_candidate) {
     wavefront_initialize_connect_light_prepare_candidate(dispatch_index, batch_index, initialized_light_vertex_index, initialized_previous_light_vertex_index);
   }
+#endif
 
   WavefrontConnectLightPrepareInput input_value = (WavefrontConnectLightPrepareInput)0;
   if (wavefront_load_connect_light_prepare_input(dispatch_index, batch_index, initialize_candidate, initialized_light_vertex_index, initialized_previous_light_vertex_index,
@@ -218,4 +224,36 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
     return;
   }
   wavefront_store_connect_light_camera_task(input_value, bsdf_eval, (WavefrontConnectLightStagePrepared)0, camera_reverse_seed);
+}
+
+  [numthreads(64, 1, 1)] void wavefront_connect_light_classify_main(uint3 dtid : SV_DispatchThreadID) {
+  const GPUWavefrontResources resources = wavefront_load_resources();
+  if (dtid.x >= wavefront_queue_count(wavefront_queue_current_descriptor(true))) {
+    return;
+  }
+  const uint task_index = dtid.y * resources.path_capacity + dtid.x;
+  if ((constants.dispatch_item_offset & 2u) == 0u) {
+    wavefront_connect_queue_scatter(resources, task_index);
+    return;
+  }
+  WAVEFRONT_RW_BUFFER(resources.connect_light_task_buffer)
+    .Store2(task_index * kGPUWavefrontConnectLightTaskStride + kGPUWavefrontConnectQueueClassOffset, uint2(kInvalidIndex, kInvalidIndex));
+  uint light_vertex_index = kInvalidIndex;
+  uint previous_light_vertex_index = kInvalidIndex;
+  wavefront_initialize_connect_light_prepare_candidate(dtid.x, dtid.y, light_vertex_index, previous_light_vertex_index);
+  WavefrontConnectLightPrepareInput input_value = (WavefrontConnectLightPrepareInput)0;
+  if (wavefront_load_connect_light_prepare_input(dtid.x, dtid.y, true, light_vertex_index, previous_light_vertex_index, input_value) == false) {
+    return;
+  }
+  const uint camera_family = wavefront_connect_material_family(input_value.camera_vertex, input_value.camera_material.cls);
+  const uint light_family = wavefront_connect_material_family(input_value.light_vertex, input_value.light_material.cls);
+  if ((camera_family < kGPUWavefrontConnectQueueFamilyCount) && (light_family < kGPUWavefrontConnectQueueFamilyCount)) {
+    wavefront_connect_queue_count(resources, task_index, camera_family, light_family);
+  }
+}
+
+[numthreads(64, 1, 1)] void wavefront_connect_light_compact_main(uint3 dtid : SV_DispatchThreadID) {
+  if (dtid.x == 0u) {
+    wavefront_connect_queue_prepare(wavefront_load_resources(), constants.dispatch_item_offset == 0u);
+  }
 }

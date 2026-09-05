@@ -157,6 +157,74 @@ bool upbp_surface_stage_matches_material(uint material_class) {
 #endif
 }
 
+struct UPBPSurfacePreparedQuery {
+  Material material;
+  BSDFData data;
+  BSDFResourceContext context;
+  bool valid;
+#if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)) && (ETX_SPECTRAL_MODE != ETX_SPECTRAL_MODE_RUNTIME)
+  bool use_prepared_material;
+  BSDFEnergyCompensatedPreparedMaterial prepared_material;
+# if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR
+  bool use_prepared_conductor;
+  LocalFrame frame;
+  float3 local_w_i;
+  SpectralResponse reflectance;
+  BSDFEnergyCompensatedConductorIncident incident;
+# endif
+#endif
+};
+
+UPBPSurfacePreparedQuery upbp_surface_prepare_query(BSDFResourceContext context, Material material, BSDFData data) {
+  UPBPSurfacePreparedQuery result = (UPBPSurfacePreparedQuery)0;
+  result.material = material;
+  result.data = data;
+  result.context = context;
+  result.valid = upbp_surface_stage_matches_material(material.cls);
+#if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)) && (ETX_SPECTRAL_MODE != ETX_SPECTRAL_MODE_RUNTIME)
+  result.use_prepared_material = (material.cls == MaterialClass::Conductor) || (material.cls == MaterialClass::Dielectric);
+  if (result.use_prepared_material) {
+    Sampler sampler = (Sampler)0;
+    result.prepared_material = bsdf_energy_compensated_prepare_material(result.context, data.spectrum_sample, material, data.tex, sampler);
+# if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR
+    result.frame = bsdf_data_get_normal_frame(data, material);
+    result.local_w_i = local_frame_to_local(result.frame, -data.w_i);
+    result.use_prepared_conductor = (result.prepared_material.conductor_delta == false) && (result.local_w_i.z > kEpsilon) &&
+                                    bsdf_energy_compensated_material_interface_valid(result.context, material, MaterialClass::Conductor);
+    if (result.use_prepared_conductor) {
+      result.reflectance = bsdf_resource_apply_image(result.context, data.spectrum_sample, material.reflectance, data.tex);
+      result.incident = bsdf_energy_compensated_conductor_prepare_incident(result.context, data.spectrum_sample, material, result.local_w_i.z, result.prepared_material);
+    }
+# endif
+  }
+#endif
+  return result;
+}
+
+BSDFEval upbp_surface_evaluate_prepared(UPBPSurfacePreparedQuery query, float3 outgoing_direction, inout Sampler sampler, out float reverse_pdf) {
+  BSDFData reverse_data = query.data;
+  reverse_data.w_i = -outgoing_direction;
+  reverse_data.path_source = PathSource::Light;
+#if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)) && (ETX_SPECTRAL_MODE != ETX_SPECTRAL_MODE_RUNTIME)
+  if (query.use_prepared_material) {
+# if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR
+    reverse_pdf = bsdf_conductor_energy_compensated_pdf_prepared(query.context, reverse_data, -query.data.w_i, query.material, query.prepared_material);
+    if (query.use_prepared_conductor) {
+      return bsdf_conductor_energy_compensated_evaluate_prepared_local(query.context, query.data, query.material, query.local_w_i,
+        local_frame_to_local(query.frame, outgoing_direction), query.prepared_material, query.reflectance, query.incident);
+    }
+    return bsdf_conductor_energy_compensated_evaluate_prepared(query.context, query.data, outgoing_direction, query.material, query.prepared_material);
+# else
+    reverse_pdf = bsdf_dielectric_energy_compensated_pdf_prepared(query.context, reverse_data, -query.data.w_i, query.material, query.prepared_material);
+    return bsdf_dielectric_energy_compensated_evaluate_prepared(query.context, query.data, outgoing_direction, query.material, query.prepared_material);
+# endif
+  }
+#endif
+  const BSDFEval evaluation = upbp_surface_stage_bsdf_eval(query.context, query.data, outgoing_direction, query.material, sampler);
+  reverse_pdf = upbp_surface_stage_reverse_pdf(query.context, query.data, outgoing_direction, query.material, sampler);
+  return evaluation;
+}
+
 #define ETX_UPBP_SURFACE_VARIANT 1
 #include "gpu_rt_wavefront_upbp_density.hlsl"
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu_rt_wavefront_common.hlsl"
+#include "gpu_rt_wavefront_vcm_grid_shared.hlsl"
 #include <interop/image_filter_shared.hxx>
 #include <access/bsdf_resource_gpu.hxx>
 #include <access/material_access_gpu.hxx>
@@ -244,10 +245,6 @@ float3 wavefront_vcm_merge_evaluate(WavefrontVCMMergeQuery query, uint light_ind
 }
 
 #if ETX_VCM_COOPERATIVE_MERGE
-groupshared uint vcm_merge_candidate_indices[64];
-groupshared float vcm_merge_candidate_distances[64];
-groupshared uint vcm_merge_candidate_counts[8];
-groupshared uint vcm_merge_exhausted[8];
 groupshared float3 vcm_merge_contributions[64];
 
 void wavefront_vcm_merge_group(uint dispatch_index, uint lane_index) {
@@ -255,55 +252,24 @@ void wavefront_vcm_merge_group(uint dispatch_index, uint lane_index) {
   if (wavefront_vcm_merge_prepare(dispatch_index, query) == false) {
     return;
   }
-  uint light_index = kInvalidIndex;
-  uint visited = 0u;
-  if (lane_index < 8u) {
-    const uint cell_hash = wavefront_vcm_merge_cell_hash(query.camera_vertex.position, lane_index);
-    bool duplicate_hash = false;
-    [unroll] for (uint previous = 0u; previous < 8u; ++previous) {
-      if (previous < lane_index) {
-        duplicate_hash = duplicate_hash || (wavefront_vcm_merge_cell_hash(query.camera_vertex.position, previous) == cell_hash);
-      }
-    }
-    if (duplicate_hash == false) {
-      light_index = WAVEFRONT_RO_BUFFER(query.resources.vcm_grid_heads_buffer).Load(cell_hash * 4u);
+  const uint cell_index = lane_index / 8u;
+  const uint cell_hash = wavefront_vcm_merge_cell_hash(query.camera_vertex.position, cell_index);
+  bool duplicate_hash = false;
+  [unroll] for (uint previous = 0u; previous < 8u; ++previous) {
+    if (previous < cell_index) {
+      duplicate_hash = duplicate_hash || (wavefront_vcm_merge_cell_hash(query.camera_vertex.position, previous) == cell_hash);
     }
   }
+  const uint count = duplicate_hash ? 0u : wavefront_vcm_grid_range_count(query.resources, cell_hash);
+  const uint begin = count > 0u ? wavefront_vcm_grid_range_start(query.resources, cell_hash) : 0u;
   Sampler sampler = (Sampler)0;
   sampler.seed = query.sampler_seed;
   float3 merged = float3(0.0f, 0.0f, 0.0f);
-  // Eight cell chains feed batches of eight photons each; every chain is exhausted.
-  while (true) {
-    if (lane_index < 8u) {
-      uint count = 0u;
-      while ((count < 8u) && (light_index != kInvalidIndex) && (light_index < constants.vcm_light_vertex_count) && (visited < query.resources.light_vertex_capacity)) {
-        const uint candidate_index = light_index;
-        light_index = WAVEFRONT_RO_BUFFER(query.resources.vcm_grid_next_buffer).Load(light_index * 4u);
-        visited += 1u;
-        float distance_squared = 0.0f;
-        if (wavefront_vcm_merge_candidate_matches(query, candidate_index, distance_squared)) {
-          const uint slot = lane_index * 8u + count;
-          vcm_merge_candidate_indices[slot] = candidate_index;
-          vcm_merge_candidate_distances[slot] = distance_squared;
-          count += 1u;
-        }
-      }
-      vcm_merge_candidate_counts[lane_index] = count;
-      vcm_merge_exhausted[lane_index] =
-        ((light_index == kInvalidIndex) || (light_index >= constants.vcm_light_vertex_count) || (visited >= query.resources.light_vertex_capacity)) ? 1u : 0u;
-    }
-    GroupMemoryBarrierWithGroupSync();
-    if ((lane_index % 8u) < vcm_merge_candidate_counts[lane_index / 8u]) {
-      merged += wavefront_vcm_merge_evaluate(query, vcm_merge_candidate_indices[lane_index], vcm_merge_candidate_distances[lane_index], sampler);
-    }
-    GroupMemoryBarrierWithGroupSync();
-    uint exhausted_count = 0u;
-    [unroll] for (uint cell_index = 0u; cell_index < 8u; ++cell_index) {
-      exhausted_count += vcm_merge_exhausted[cell_index];
-    }
-    GroupMemoryBarrierWithGroupSync();
-    if (exhausted_count == 8u) {
-      break;
+  for (uint local_index = lane_index % 8u; local_index < count; local_index += 8u) {
+    const uint light_index = WAVEFRONT_RO_BUFFER(query.resources.vcm_grid_next_buffer).Load((begin + local_index) * sizeof(uint));
+    float distance_squared = 0.0f;
+    if (wavefront_vcm_merge_candidate_matches(query, light_index, distance_squared)) {
+      merged += wavefront_vcm_merge_evaluate(query, light_index, distance_squared, sampler);
     }
   }
   vcm_merge_contributions[lane_index] = merged;
@@ -338,16 +304,14 @@ void wavefront_vcm_merge(uint dispatch_index) {
     if (duplicate_hash) {
       continue;
     }
-    uint light_index = WAVEFRONT_RO_BUFFER(query.resources.vcm_grid_heads_buffer).Load(cell_hash * 4u);
-    uint visited = 0u;
-    while ((light_index != kInvalidIndex) && (light_index < constants.vcm_light_vertex_count) && (visited < query.resources.light_vertex_capacity)) {
-      const uint next_index = WAVEFRONT_RO_BUFFER(query.resources.vcm_grid_next_buffer).Load(light_index * 4u);
-      visited += 1u;
+    const uint count = wavefront_vcm_grid_range_count(query.resources, cell_hash);
+    const uint begin = count > 0u ? wavefront_vcm_grid_range_start(query.resources, cell_hash) : 0u;
+    for (uint local_index = 0u; local_index < count; ++local_index) {
+      const uint light_index = WAVEFRONT_RO_BUFFER(query.resources.vcm_grid_next_buffer).Load((begin + local_index) * sizeof(uint));
       float distance_squared = 0.0f;
       if (wavefront_vcm_merge_candidate_matches(query, light_index, distance_squared)) {
         merged += wavefront_vcm_merge_evaluate(query, light_index, distance_squared, sampler);
       }
-      light_index = next_index;
     }
   }
   if (all(isfinite(merged)) && any(merged != float3(0.0f, 0.0f, 0.0f))) {

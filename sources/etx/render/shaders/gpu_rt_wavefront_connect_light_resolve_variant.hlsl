@@ -167,5 +167,14 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
 #include "gpu_rt_wavefront_connect_light_prepare_common.hlsl"
 
 [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 dtid : SV_DispatchThreadID) {
+#if ETX_ENABLE_WORK_QUEUES
+  uint dispatch_index = 0u;
+  uint batch_index = 0u;
+  if (wavefront_connect_queue_load(wavefront_load_resources(), kGPUWavefrontConnectQueueFamilyCount + ETX_BSDF_KIND - 1u, dtid.x + dtid.y * (65535u * 64u), dispatch_index,
+        batch_index)) {
+    wavefront_resolve_connect_light_prepare_task(dispatch_index, batch_index);
+  }
+#else
   wavefront_resolve_connect_light_prepare_task(dtid.x, dtid.y);
+#endif
 }

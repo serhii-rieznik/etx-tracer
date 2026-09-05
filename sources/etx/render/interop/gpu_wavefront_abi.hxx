@@ -285,8 +285,13 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontCameraDispatchArgsOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontLightDispatchArgsOffset = 16u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectDispatchArgsOffset = 32u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectDispatchArgsCount = 7u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectQueueFamilyCount = 4u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectQueueCount = 2u * kGPUWavefrontConnectQueueFamilyCount;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectQueueHeaderSize = 3u * kGPUWavefrontConnectQueueCount * sizeof(uint32_t);
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectQueueClassOffset = 64u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialDispatchArgsOffset =
   kGPUWavefrontConnectDispatchArgsOffset + kGPUWavefrontConnectDispatchArgsCount * kGPUWavefrontDispatchArgsStride;
 ETX_STATIC_CONST uint32_t kGPUWavefrontShadowDispatchArgsOffset = kGPUWavefrontMaterialDispatchArgsOffset + kGPUWavefrontMaterialQueueCount * kGPUWavefrontDispatchArgsStride;
-ETX_STATIC_CONST uint32_t kGPUWavefrontFixedDispatchArgsBufferSize = kGPUWavefrontShadowDispatchArgsOffset + kGPUWavefrontShadowQueueCount * kGPUWavefrontDispatchArgsStride;
+ETX_STATIC_CONST uint32_t kGPUWavefrontConnectQueueDispatchArgsOffset = kGPUWavefrontShadowDispatchArgsOffset + kGPUWavefrontShadowQueueCount * kGPUWavefrontDispatchArgsStride;
+ETX_STATIC_CONST uint32_t kGPUWavefrontFixedDispatchArgsBufferSize = kGPUWavefrontConnectQueueDispatchArgsOffset + kGPUWavefrontConnectQueueCount * kGPUWavefrontDispatchArgsStride;
 ETX_STATIC_CONST uint32_t kGPUWavefrontHeavyContinuationChunkSize = 65536u;
