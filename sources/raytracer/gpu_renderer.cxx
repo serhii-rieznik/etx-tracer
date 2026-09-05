@@ -19,6 +19,7 @@
 #include <etx/rt/integrators/upbp_iteration.hxx>
 #include <etx/rt/integrators/upbp_options.hxx>
 #include <etx/rt/shared/bdpt_mode.hxx>
+#include <etx/rt/shared/vcm_radius.hxx>
 #include <bluenoise.hxx>
 #include <algorithm>
 #include <array>
@@ -74,7 +75,7 @@ constexpr uint64_t kVulkanPipelineWorkerMemoryReserve = 4ull * 1024ull * 1024ull
 constexpr uint64_t kWavefrontFallbackMemoryBudget = 512ull * 1024ull * 1024ull;
 constexpr uint32_t kUPBPInitialTrackingEventsPerInterval = 2u;
 constexpr uint32_t kUPBPDensityQueryDispatchChunkSize = 65535u;
-constexpr uint32_t kUPBPDensityQueryGroupDispatchChunkSize = 4096u;
+constexpr uint32_t kDensityQueryGroupDispatchChunkSize = 4096u;
 constexpr uint32_t kUPBPDensityLinearDispatchChunkSize = kUPBPDensityQueryDispatchChunkSize * 64u;
 constexpr uint32_t kUPBPBP2DTargetPartitionInstances = 16384u;
 constexpr uint32_t kUPBPBeamGridMaximumResolution = 32u;
@@ -827,21 +828,13 @@ GPUVCMIterationParameters gpu_vcm_iteration_parameters(const SceneRepresentation
   uint32_t light_path_count, bool merging_enabled) {
   GPUVCMIterationParameters result = {};
   float initial_radius = 0.0f;
-  uint32_t radius_decay = 256u;
   auto settings_it = scene.integrator_data().settings.find(Integrator::Type::VCM);
   if (settings_it != scene.integrator_data().settings.end()) {
     initial_radius = settings_it->second.get_float("vcm-initial_radius", initial_radius);
-    radius_decay = settings_it->second.get_integral("vcm-radius_decay", radius_decay);
     result.kernel = settings_it->second.get_integral("vcm-kernel", result.kernel);
   }
 
-  if (initial_radius == 0.0f) {
-    const uint32_t max_dimension = std::max(1u, std::max(render_dimensions.x, render_dimensions.y));
-    initial_radius = 5.0f * bounding_sphere_radius / static_cast<float>(max_dimension);
-  }
-
-  radius_decay = std::max(1u, radius_decay);
-  result.radius = initial_radius / (1.0f + static_cast<float>(sample_index) / static_cast<float>(radius_decay));
+  result.radius = vcm_iteration_radius(initial_radius, bounding_sphere_radius, std::max(render_dimensions.x, render_dimensions.y), sample_index);
   const float eta = kPi * result.radius * result.radius * static_cast<float>(std::max(1u, light_path_count));
   result.vc_weight = 1.0f / eta;
   result.vm_weight = merging_enabled ? eta : 0.0f;
@@ -4070,7 +4063,7 @@ bool GPURaytracingRenderer::update_upbp_iteration_resources(RHIDevice& device, c
   const SceneData& scene_data = scene.data();
   const SpectralQuery spect =
     scene_data.options.properties[Scene::Properties::Spectral] ? SpectralQuery::progressive_sample(_sample_index, scene_data.options.random_seed) : SpectralQuery::sample();
-  const UPBPIterationParameters parameters = upbp_iteration_parameters(options, _scene_bounding_sphere_radius, spect,
+  const UPBPIterationParameters parameters = upbp_iteration_parameters(options, _scene_bounding_sphere_radius, scene.camera().film_size, spect,
     (scene_data.options.strategy_flags & Scene::Strategy::MergeVertices) != 0u, global_path_count, _sample_index);
   GPUUPBPIteration& iteration = _upbp.resources.iteration;
   iteration = {};
@@ -5488,8 +5481,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       ctx.cmd_dispatch(cmd, {.group_count_x = divide_round_up(item_count, 64u), .group_count_y = 1u, .group_count_z = 1u});
       end_kernel_timing(cmd, timing_end_query);
     };
-    const auto dispatch_stage_query_groups = [&](RHICommandBuffer cmd, PipelineStage stage, uint32_t item_offset, uint32_t item_count, uint32_t work_queue_index) {
+    const auto dispatch_stage_query_groups = [&](RHICommandBuffer cmd, PipelineStage stage, uint32_t item_offset, uint32_t item_count, uint32_t path_iteration,
+                                               uint32_t work_queue_index) {
       GPURTConstants stage_constants = constants;
+      stage_constants.path_iteration = path_iteration;
       stage_constants.dispatch_item_offset = item_offset;
       stage_constants.dispatch_item_count = item_count;
       stage_constants.work_queue_index = work_queue_index;
@@ -5690,11 +5685,11 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       }
     };
     const auto submit_upbp_density_query_groups = [&](PipelineStage stage, uint32_t item_count, uint32_t work_queue_index) {
-      for (uint32_t item_offset = 0u; item_offset < item_count; item_offset += kUPBPDensityQueryGroupDispatchChunkSize) {
-        const uint32_t chunk_count = std::min(kUPBPDensityQueryGroupDispatchChunkSize, item_count - item_offset);
+      for (uint32_t item_offset = 0u; item_offset < item_count; item_offset += kDensityQueryGroupDispatchChunkSize) {
+        const uint32_t chunk_count = std::min(kDensityQueryGroupDispatchChunkSize, item_count - item_offset);
         record_and_submit([&](RHICommandBuffer cmd) {
           barrier_wavefront_buffers(cmd);
-          dispatch_stage_query_groups(cmd, stage, item_offset, chunk_count, work_queue_index);
+          dispatch_stage_query_groups(cmd, stage, item_offset, chunk_count, constants.path_iteration, work_queue_index);
           barrier_wavefront_buffers(cmd);
         });
       }
@@ -5729,9 +5724,15 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       dispatch_stage_indirect(cmd, stage, from_camera ? kGPUWavefrontCameraDispatchArgsOffset : kGPUWavefrontLightDispatchArgsOffset, path_iteration);
     };
     const auto dispatch_vcm_merge_material = [&](RHICommandBuffer cmd, PipelineStage stage, uint32_t material_queue_index, uint32_t path_iteration) {
-      for (uint32_t item_offset = 0u; item_offset < _wavefront_camera_queue_count; item_offset += kGPUWavefrontHeavyContinuationChunkSize) {
-        const uint32_t item_count = std::min(kGPUWavefrontHeavyContinuationChunkSize, _wavefront_camera_queue_count - item_offset);
-        dispatch_stage_range(cmd, stage, item_offset, item_count, path_iteration, material_queue_index);
+      const bool cooperative = (stage == PipelineStage::VCMMergeConductor) || (stage == PipelineStage::VCMMergeDielectric);
+      const uint32_t chunk_size = cooperative ? kDensityQueryGroupDispatchChunkSize : kGPUWavefrontHeavyContinuationChunkSize;
+      for (uint32_t item_offset = 0u; item_offset < _wavefront_camera_queue_count; item_offset += chunk_size) {
+        const uint32_t item_count = std::min(chunk_size, _wavefront_camera_queue_count - item_offset);
+        if (cooperative) {
+          dispatch_stage_query_groups(cmd, stage, item_offset, item_count, path_iteration, material_queue_index);
+        } else {
+          dispatch_stage_range(cmd, stage, item_offset, item_count, path_iteration, material_queue_index);
+        }
         barrier_wavefront_buffers(cmd);
       }
     };
@@ -7547,7 +7548,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               const uint32_t chunk_count = std::min(kUPBPDensityQueryDispatchChunkSize, query_count - item_offset);
               record_and_submit([&](RHICommandBuffer cmd) {
                 barrier_wavefront_buffers(cmd);
-                dispatch_stage_query_groups(cmd, stage, item_offset, chunk_count, query_mode);
+                dispatch_stage_query_groups(cmd, stage, item_offset, chunk_count, constants.path_iteration, query_mode);
                 barrier_wavefront_buffers(cmd);
               });
             }

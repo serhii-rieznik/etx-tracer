@@ -76,7 +76,7 @@ bool validate_progressive_radii() {
   options.technique_mask = static_cast<uint32_t>(etx::UPBPTechnique::BB1D);
   options.initial_bb1d_radius = 0.25f;
   options.maximum_bb1d_light_path_count = 4000u;
-  const etx::UPBPIterationParameters parameters = etx::upbp_iteration_parameters(options, 1.0f, {}, true, 16000u, 255u);
+  const etx::UPBPIterationParameters parameters = etx::upbp_iteration_parameters(options, 1.0f, {128u, 128u}, {}, true, 16000u, 255u);
   valid = close_value(parameters.bb1d_radius, 0.25 * pow(64.75, -0.25), 1.0e-14, "capped BB1D iteration radius") && valid;
 
   constexpr uint64_t light_path_count = 4096u;
@@ -149,7 +149,8 @@ bool validate_population_radius_scale() {
 
 bool validate_automatic_initial_radius() {
   bool valid = true;
-  valid = close_value(etx::upbp_automatic_initial_radius(12.0, 4096u, 4096u, 2u, etx::kUPBPAutomaticSurfaceRadiusScale), 0.018, 1.0e-14, "automatic surface radius") && valid;
+  const etx::UPBPIterationParameters parameters = etx::upbp_iteration_parameters({}, 12.0f, {512u, 256u}, {}, true, 4096u, 0u);
+  valid = close_value(parameters.surface_radius, 0.046875, 1.0e-14, "automatic surface radius") && valid;
   valid =
     close_value(etx::upbp_automatic_initial_radius(12.0, 4096u, 1024u, 3u, etx::kUPBPAutomaticVolumeRadiusScale), 0.012 * std::cbrt(4.0), 1.0e-14, "automatic volume radius") &&
     valid;

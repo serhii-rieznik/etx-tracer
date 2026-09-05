@@ -141,10 +141,17 @@ bool wavefront_vcm_merge_stage_matches_material(uint material_class) {
 # endif
 }
 
+# define ETX_VCM_COOPERATIVE_MERGE ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC))
 # include "gpu_rt_wavefront_vcm_merge_common.hlsl"
 
+# if ETX_VCM_COOPERATIVE_MERGE
+[numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 group_id : SV_GroupID, uint lane_index : SV_GroupIndex) {
+  wavefront_vcm_merge_group(group_id.x, lane_index);
+}
+# else
 [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 dtid : SV_DispatchThreadID) {
   wavefront_vcm_merge(dtid.x);
 }
+# endif
 
 #endif

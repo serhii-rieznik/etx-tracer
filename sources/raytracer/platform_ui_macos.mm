@@ -2,9 +2,9 @@
 
 #include "ui.hxx"
 
-#import <AppKit/AppKit.h>
+#include <etx/core/core.hxx>
 
-#include <filesystem>
+#import <AppKit/AppKit.h>
 
 using etx::MenuCommand;
 using etx::UI;
@@ -73,8 +73,7 @@ static void rebuild_recent_menu(const std::vector<std::string>& recent_files) {
   [g_recent_menu removeAllItems];
 
   for (auto it = recent_files.rbegin(); it != recent_files.rend(); ++it) {
-    const std::filesystem::path path(*it);
-    const std::string display_name = path.filename().empty() ? *it : path.filename().string();
+    const std::string display_name = etx::utf8_file_name(*it);
     NSMenuItem* item = add_command_item(g_recent_menu, ns_string(display_name.c_str()), MenuCommand::OpenRecentScene);
     item.representedObject = ns_string(it->c_str());
     item.toolTip = ns_string(it->c_str());

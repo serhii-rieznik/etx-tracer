@@ -20,7 +20,7 @@
 - On Windows, build `raytracer`; production Release validation must also build `raytracer_shader_package`. On macOS, build `raytracer_app`, which depends on the shader package.
 - Debug and RelWithDebInfo development builds compile the copied runtime shader sources. After shader changes, rebuild and restart the application. Release builds consume `shaders.etxpack`; missing, corrupt, or incomplete packages are errors.
 - Run the narrowest relevant maintained validation target, then build the affected application target. Renderer, mode-switch, asynchronous preparation, presentation, and UI changes also require a representative runtime smoke test; successful compilation alone is not runtime validation.
-- Use `docs/APPLICATION_CONTROL.md` for supported desktop, headless, window-only, fixed-frame, and browser-control behavior. Keep renderer and scene mutations on the application command path described there.
+- Use `docs/APPLICATION_CONTROL.md` for supported desktop, offline-render, and browser-control behavior. Keep renderer and scene mutations on the application command path described there.
 
 # Project Coding Rules
 

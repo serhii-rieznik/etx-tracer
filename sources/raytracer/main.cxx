@@ -91,9 +91,9 @@ extern "C" int main(int argc, char* argv[]) {
     fprintf(stderr, "%s", runtime_options.message.c_str());
     return 1;
   }
-  if (runtime_options.command == ApplicationRuntimeCommand::Headless) {
+  if (runtime_options.command == ApplicationRuntimeCommand::ControlServer) {
     ApplicationRuntime runtime(std::move(runtime_options));
-    return runtime.run_headless();
+    return runtime.run_control_server();
   }
 
   if (runtime_options.command == ApplicationRuntimeCommand::None) {

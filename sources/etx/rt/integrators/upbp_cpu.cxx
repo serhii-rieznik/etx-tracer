@@ -614,7 +614,7 @@ struct CPUUPBPImpl {
     memory_target_bytes = static_cast<uint64_t>(options.memory_budget_mb) * 1024ull * 1024ull;
     VCMIteration spectral_iteration = {};
     spectral_iteration.iteration = iteration_index;
-    iteration = upbp_iteration_parameters(options, rt.geometry_bounding_sphere_radius(), vcm_iteration_spectral_query(rt.scene(), spectral_iteration),
+    iteration = upbp_iteration_parameters(options, rt.geometry_bounding_sphere_radius(), rt.film().base_dimensions(), vcm_iteration_spectral_query(rt.scene(), spectral_iteration),
       rt.scene().strategy_enabled(Scene::Strategy::MergeVertices), rt.film().current_pixel_count(), iteration_index);
     prepared_bb1d = iteration.mis.enabled(UPBPTechnique::BB1D)
                       ? upbp_prepare_bb1d(options.kernel, iteration.bb1d_radius, iteration.bb1d_light_subpath_count, options.beam_selection_probability)
@@ -1337,7 +1337,12 @@ struct CPUUPBPImpl {
       };
       begin_camera_phase();
       Sampler film_sampler{upbp_sampler_seed(scene.options.random_seed, status.current_iteration, path_index, 0u, 0u, UPBPRandomDomain::FilmSample)};
-      const float2 film_uv = film.sample(status.current_iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, pixel, film_sampler.next_2d());
+      float2 film_sample = film_sampler.next_2d();
+      if (scene.blue_noise() && (status.current_iteration < kSamplerBlueNoiseSampleCount)) {
+        const uint2 sample_pixel = sampler_blue_noise_pixel(pixel, scene.options.random_seed);
+        film_sample = sample_blue_noise_at_translated_pixel(sample_pixel, scene.options.samples, status.current_iteration, sampler_stream_dimension_base(kSamplerStreamOther));
+      }
+      const float2 film_uv = film.sample(status.current_iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, pixel, film_sample);
       UPBPCameraSubpathResult& camera = workspace.camera;
       if (upbp_build_camera_subpath(rt, scene, iteration.spect, film_uv, scene.options.random_seed, status.current_iteration, path_index, maximum_vertices,
             options.maximum_boundary_count, options.maximum_null_events_per_interval, camera) == false) {

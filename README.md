@@ -95,7 +95,7 @@ Offline CPU/GPU comparison workflow, command-line options, outputs, and report f
 
 ## UI-independent control
 
-Headless, window-only, and browser-controlled launch modes are documented in [docs/APPLICATION_CONTROL.md](docs/APPLICATION_CONTROL.md).
+Offline-render and browser-controlled workflows are documented in [docs/APPLICATION_CONTROL.md](docs/APPLICATION_CONTROL.md).
 
 ## Sponsors
 

@@ -24,7 +24,7 @@ enum class UPBPKernel : uint32_t {
   Epanechnikov,
 };
 
-constexpr double kUPBPAutomaticSurfaceRadiusScale = 0.0015;
+constexpr double kUPBPAutomaticSurfaceRadiusScale = 2.0;
 constexpr double kUPBPAutomaticVolumeRadiusScale = 0.001;
 
 enum class UPBPRandomDomain : uint32_t {

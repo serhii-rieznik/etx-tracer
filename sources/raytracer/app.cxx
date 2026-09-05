@@ -254,13 +254,13 @@ void RTApplication::init(const ApplicationConfig& config) {
       .mode = config.runtime_mode,
       .width = config.width,
       .height = config.height,
-      .enable_imgui = config.enable_imgui,
+      .enable_imgui = config.runtime_mode == RuntimeMode::Desktop,
     });
     if (render_context.valid() == false) {
       log::error("Failed to initialize rendering context");
       return;
     }
-    if (config.enable_platform_ui) {
+    if (config.runtime_mode == RuntimeMode::Desktop) {
       sync_platform_color_scheme();
     }
     scene.set_scattering_rhi(render_context.get_context());
@@ -475,7 +475,7 @@ void RTApplication::init(const ApplicationConfig& config) {
 
   save_options();
 
-  if (config.enable_platform_ui) {
+  if (config.runtime_mode == RuntimeMode::Desktop) {
     platform_ui().setup(ui);
     platform_ui().update(ui, _recent_files);
   }
@@ -525,6 +525,11 @@ bool RTApplication::ensure_gpu_renderer_initialized() {
 }
 
 void RTApplication::set_renderer_mode(RendererMode mode) {
+  const bool resume_rendering = (_active_renderer != nullptr) && _active_renderer->is_running();
+  set_renderer_mode(mode, resume_rendering);
+}
+
+void RTApplication::set_renderer_mode(RendererMode mode, bool resume_rendering) {
   ETX_PROFILER_SCOPE();
 
   if ((mode == RendererMode::GPURaytracing) && (_gpu_renderer_supported == false)) {
@@ -591,7 +596,7 @@ void RTApplication::set_renderer_mode(RendererMode mode) {
     cpu_renderer.set_output_dimensions(render_context.get_context(), scene.camera().film_size);
   }
 
-  if ((_active_renderer != nullptr) && !_current_scene_file.empty() && scene.valid()) {
+  if (resume_rendering && (_active_renderer != nullptr) && (_current_scene_file.empty() == false) && scene.valid()) {
     _active_renderer->start();
   }
 
@@ -621,6 +626,7 @@ bool RTApplication::set_render_configuration(RendererMode mode, Integrator::Type
   Renderer* const target_renderer = (mode == RendererMode::GPURaytracing) ? static_cast<Renderer*>(&gpu_renderer) : static_cast<Renderer*>(&cpu_renderer);
   const bool renderer_changes = _active_renderer != target_renderer;
   const bool integrator_changes = cpu_renderer.current_integrator() != integrator;
+  const bool resume_rendering = (_active_renderer != nullptr) && _active_renderer->is_running();
   if (integrator_changes && (renderer_changes == false)) {
     on_integrator_selected(integrator_type);
   } else if (integrator_changes) {
@@ -628,11 +634,12 @@ bool RTApplication::set_render_configuration(RendererMode mode, Integrator::Type
     ui.set_current_integrator(integrator);
     sync_scene_integrator_data_from_current_integrator();
     _options.set_string("integrator", integrator->name(), "Integrator");
+    mark_scene_dirty();
     notify_scene_might_have_changed();
   }
 
   if (renderer_changes) {
-    set_renderer_mode(mode);
+    set_renderer_mode(mode, resume_rendering);
   } else {
     sync_ui_renderer_state();
   }
@@ -641,7 +648,7 @@ bool RTApplication::set_render_configuration(RendererMode mode, Integrator::Type
 }
 
 void RTApplication::sync_platform_color_scheme() {
-  if (!_application_config.enable_platform_ui || !render_context.valid() || !render_context.rhi_ui().initialized()) {
+  if ((_application_config.runtime_mode != RuntimeMode::Desktop) || (render_context.valid() == false) || (render_context.rhi_ui().initialized() == false)) {
     return;
   }
 
@@ -664,7 +671,7 @@ void RTApplication::frame() {
       return;
     }
     init();
-    if (_application_config.enable_platform_ui) {
+    if (_application_config.runtime_mode == RuntimeMode::Desktop) {
       platform_ui().finish_startup(_initialized);
     }
   }
@@ -710,7 +717,7 @@ void RTApplication::frame() {
     render_context.start_frame(frame_renderer, scene, render_frame_data);
   }
   sync_ui_renderer_state();
-  if (_application_config.enable_platform_ui) {
+  if (_application_config.runtime_mode == RuntimeMode::Desktop) {
     platform_ui().update(ui, _recent_files);
   }
   if (render_context.valid() && render_context.rhi_ui().initialized()) {
@@ -753,7 +760,7 @@ void RTApplication::cleanup() {
     save_options();
   }
 
-  if (_application_config.enable_platform_ui) {
+  if (_application_config.runtime_mode == RuntimeMode::Desktop) {
     platform_ui().shutdown();
   }
 
@@ -813,7 +820,7 @@ void RTApplication::process_event(const sapp_event* e) {
     }
   }
 
-  if (_application_config.enable_imgui || _application_config.enable_platform_ui) {
+  if (_application_config.runtime_mode == RuntimeMode::Desktop) {
     ETX_PROFILER_NAMED_SCOPE("app_process_event_ui");
     if (ui.handle_event(e)) {
       return;
@@ -1119,7 +1126,11 @@ void RTApplication::on_integrator_selected(Integrator::Type itype) {
   if (i == nullptr) {
     return;
   }
+  if (cpu_renderer.current_integrator() == i) {
+    return;
+  }
 
+  const bool resume_rendering = (_active_renderer != nullptr) && _active_renderer->is_running();
   cpu_renderer.set_integrator(i);
   ui.set_current_integrator(i);
   if (_active_renderer == &gpu_renderer) {
@@ -1129,11 +1140,14 @@ void RTApplication::on_integrator_selected(Integrator::Type itype) {
   _options.set_string("integrator", i->name(), "Integrator");
   save_options();
 
+  mark_scene_dirty();
   notify_scene_might_have_changed();
 
-  if ((_active_renderer == &cpu_renderer) && !_current_scene_file.empty() && scene.valid()) {
+  if ((_active_renderer == &cpu_renderer) && (_current_scene_file.empty() == false) && scene.valid()) {
     cpu_renderer.film().clear(Film::ClearEverything);
-    cpu_renderer.start();
+    if (resume_rendering) {
+      cpu_renderer.start();
+    }
   }
 }
 

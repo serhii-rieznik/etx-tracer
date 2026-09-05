@@ -686,7 +686,8 @@ void upbp_evaluate_point_vertex(GPUUPBPResources resources, GPUUPBPVertex camera
     Sampler sampler = make_bsdf_sampler(seed);
     const BSDFResourceContext context = make_scene_bsdf_resource_gpu_context();
     const BSDFEval evaluation = upbp_surface_stage_bsdf_eval(context, data, outgoing_direction, material, sampler);
-    scattering_value = evaluation.bsdf;
+    // Photon density already contains the incoming surface projection.
+    scattering_value = evaluation.func;
     pdf_forward = evaluation.pdf;
     pdf_reverse = upbp_surface_stage_reverse_pdf(context, data, outgoing_direction, material, sampler);
 #else

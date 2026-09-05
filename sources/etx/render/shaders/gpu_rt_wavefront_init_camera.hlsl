@@ -40,7 +40,7 @@
   if (scene_path_mode_is_upbp() == false) {
     seed = film_seed;
   }
-  if ((scene_path_mode_is_upbp() == false) && sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamOther)) {
+  if (sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamOther)) {
     uint film_dimension = sampler_stream_dimension_base(kSamplerStreamOther);
     uint2 sample_pixel = sample_blue_noise_translated_pixel(camera_space_pixel);
     uv_sample = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, film_dimension + 0u),

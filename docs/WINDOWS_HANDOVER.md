@@ -119,22 +119,20 @@ Normal desktop behavior remains:
 raytracer.exe
 ```
 
-The UI-independent parser activates only when one of its mode flags is present. Existing batch-render and comparison command lines continue through the previous batch parser.
+The control-server parser activates only when its mode flag is present. Existing batch-render and comparison command lines continue through the batch parser.
 
-| Mode | Window | ImGui/native controls | HTTP server | Automatic render |
+| Workflow | Window | ImGui/native controls | HTTP server | Lifetime |
 | --- | --- | --- | --- | --- |
-| Normal desktop | Yes | Yes | No | Existing behavior |
-| `--window-only` | Yes | No | Yes | No |
-| `--control-server` | No | No | Yes | No |
-| `--headless --frames N` | No | No | No | Yes, when a scene was supplied |
+| Normal desktop | Yes | Yes | No | User-controlled |
+| `--control-server` | No | No | Yes | API Quit or process signal |
+| `--render` | No | No | No | Render target reached, output saved, then exit |
 
 Examples:
 
 ```text
 raytracer.exe --control-server
 raytracer.exe --control-server --bind 192.168.1.20 --port 1654
-raytracer.exe --window-only --window-size 1600x900
-raytracer.exe --headless --frames 10 --scene C:\scenes\room.etx.json --renderer cpu
+raytracer.exe --render --scene C:\scenes\room.etx.json --output C:\renders\room.exr --samples 64 --renderer cpu
 ```
 
 Relevant rules:
@@ -143,12 +141,8 @@ Relevant rules:
 - The default bind address is `127.0.0.1`.
 - `--browser-control` is accepted as a compatibility alias for `--control-server` but is not the preferred public spelling.
 - `--bind` accepts a numeric IPv4 address; host names and IPv6 are not implemented.
-- `--window-size` applies only to `--window-only`.
-- `--frames` applies only to fixed-frame headless mode and cannot be combined with the control server.
-- `--headless` and `--window-only` are mutually exclusive.
 - A control-server session does not start rendering after scene load; the client must send `run`.
-- Fixed-frame headless mode starts automatically after the supplied scene becomes ready.
-- UI-independent modes do not persist renderer selections into desktop preferences.
+- Offline rendering and control-server sessions do not persist renderer selections into desktop preferences.
 - The persistent native desktop restores its last valid scene from `options.json`.
 - UI-independent modes do not restore or persist that scene; they require an explicit scene command or `--scene` option.
 
@@ -307,7 +301,7 @@ Do not expose this server directly to the internet. Remote commands include read
 3. Build at least the `raytracer` target in Debug and Release.
 4. Confirm `ws2_32.lib` is present in the final link and all new files appear in the generated project.
 5. Run the validation matrix below before making Windows-specific UI changes.
-6. Keep the normal Windows desktop path on ImGui. `ApplicationConfig::enable_imgui` is disabled only for `--window-only` and headless modes.
+6. Keep the normal Windows desktop path on ImGui. Offline rendering and control-server execution use headless runtime output.
 7. If Windows fixes are needed, keep them in the platform socket/RHI/runtime boundary. Do not fork the command schema or duplicate application action logic.
 
 ## Validation matrix
@@ -375,33 +369,24 @@ From a second computer on the trusted LAN:
 - load a second uploaded scene and verify the first temporary scene is removed;
 - cancel an in-progress upload and verify it can be restarted.
 
-### 5. Window-only mode
+### 5. Offline rendering
 
 Run:
 
 ```text
-raytracer.exe --window-only --window-size 1600x900
+raytracer.exe --render --scene C:\scenes\room.etx.json --output C:\renders\room.exr --samples 64 --renderer cpu
 ```
 
 Confirm:
 
-- the render window exists;
-- no ImGui menu or toolbar is drawn;
-- the browser server is available on port 1654;
-- browser commands control the visible render output;
-- mouse/window events do not depend on ImGui being initialized.
+- no window or server is opened;
+- the requested sample target is completed;
+- the output file is written and valid;
+- the process exits with a successful status.
 
-### 6. Fixed-frame headless mode
+Repeat with GPU if the Windows RHI supports the selected scene.
 
-Run:
-
-```text
-raytracer.exe --headless --frames 10 --scene C:\scenes\room.etx.json --renderer cpu
-```
-
-Confirm the scene is loaded, rendering starts automatically, exactly the requested application frames execute, no server is opened, and the process exits cleanly. Repeat with GPU if the Windows RHI supports the selected scene.
-
-### 7. Failure and security cases
+### 6. Failure and security cases
 
 - invalid bind address and occupied port;
 - missing scene path and unsupported renderer/integrator;

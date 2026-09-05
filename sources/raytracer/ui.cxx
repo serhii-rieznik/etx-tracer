@@ -35,7 +35,6 @@
 #include <cstdarg>
 #include <cctype>
 #include <cstdio>
-#include <filesystem>
 
 namespace etx {
 
@@ -655,8 +654,8 @@ bool UI::validated_int_control(const char* label, int32_t& value, int32_t min_va
   return changed;
 }
 
-const char* UI::format_string(const char* format, ...) {
-  static char buffer[1024];
+std::string UI::format_string(const char* format, ...) {
+  char buffer[1024];
   va_list args;
   va_start(args, format);
   vsnprintf(buffer, sizeof(buffer), format, args);
@@ -1347,8 +1346,8 @@ bool UI::build_options(Options& options) {
         auto& data = option.as<Option::Class::Float3>();
         ImGui::TextUnformatted(option.description.c_str());
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        const char* buffer_name = format_string("##%s", option.description.c_str());
-        changed = ImGui::DragFloat3(buffer_name, &data.value.x, 0.1f, data.bounds.minimum.x, data.bounds.maximum.x, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        const std::string buffer_name = format_string("##%s", option.description.c_str());
+        changed = ImGui::DragFloat3(buffer_name.c_str(), &data.value.x, 0.1f, data.bounds.minimum.x, data.bounds.maximum.x, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         break;
       }
       default:
@@ -1457,15 +1456,15 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
     tooltip_class = matched_definition.cls;
   }
   std::string button_label = std::string(preview_text) + "##ior_" + name;
-  const char* popup_id = format_string("ior_popup##%s", name);
+  const std::string popup_id = format_string("ior_popup##%s", name);
 
   if (ImGui::Button(button_label.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
-    ImGui::OpenPopup(popup_id);
+    ImGui::OpenPopup(popup_id.c_str());
   }
   draw_ior_tooltip(name, tooltip_title, tooltip_class, eta_rgb, k_rgb);
 
   ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 32.0f, 0.0f), ImGuiCond_Always);
-  if (ImGui::BeginPopup(popup_id)) {
+  if (ImGui::BeginPopup(popup_id.c_str())) {
     if (data.ior_database.definitions.empty() == false) {
       struct ColumnInfo {
         SpectralDistribution::Class cls;
@@ -1599,10 +1598,10 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
       scene.data().spectrum_values[spectrum_index] = temp_spd;
       changed = true;
     }
-    const char* temperature_label = format_string("##emission_temp_%s", unique_id);
+    const std::string temperature_label = format_string("##emission_temp_%s", unique_id);
     float temperature = editor_state.temperature;
     full_width_item();
-    if (ImGui::InputFloat(temperature_label, &temperature, 100.0f, 1000.0f, "%.0f K")) {
+    if (ImGui::InputFloat(temperature_label.c_str(), &temperature, 100.0f, 1000.0f, "%.0f K")) {
       temperature = std::clamp(temperature, 1000.0f, 40000.0f);
       editor_state.temperature = temperature;
       SpectralDistribution temp_spd = SpectralDistribution::from_normalized_black_body(temperature, editor_state.scale);
@@ -1628,17 +1627,17 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
     preview_text = "Select Preset";
   }
 
-  const char* popup_id = format_string("emission_popup##%s", unique_id);
+  const std::string popup_id = format_string("emission_popup##%s", unique_id);
 
   if (editor_state.mode == SpectrumEditorState::Mode::Preset) {
     std::string button_label = std::string(preview_text) + "##emission_" + unique_id;
     if (ImGui::Button(button_label.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
-      ImGui::OpenPopup(popup_id);
+      ImGui::OpenPopup(popup_id.c_str());
     }
   }
 
   ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 28.0f, 0.0f), ImGuiCond_Always);
-  if (ImGui::BeginPopup(popup_id)) {
+  if (ImGui::BeginPopup(popup_id.c_str())) {
     if (ImGui::Selectable("None", false)) {
       scene.data().spectrum_values[spectrum_index] = SpectralDistribution::constant(0.0f);
       matched_index = -1;
@@ -1762,7 +1761,7 @@ bool UI::image_picker(SceneRepresentation& scene_rep, const char* label, uint32_
     std::string path = scene_rep.data().images.path(index);
     std::string name = {};
     if ((path.empty() == false) && (path.starts_with("##") == false)) {
-      name = std::filesystem::path(path).filename().string();
+      name = utf8_file_name(path);
     }
     if (name.empty()) {
       name = "Image " + std::to_string(index);
@@ -1894,9 +1893,9 @@ bool UI::spectrum_picker(const char* widget_id, const std::string& editor_key, S
     editor_state.scale = default_scale;
   }
 
-  const char* name_buffer = format_string("##color_%s", widget_id);
+  const std::string name_buffer = format_string("##color_%s", widget_id);
 
-  const char* scale_label = nullptr;
+  std::string scale_label = {};
   if (scale && show_scale) {
     scale_label = format_string("##scale_%s", widget_id);
   }
@@ -1967,7 +1966,7 @@ bool UI::spectrum_picker(const char* widget_id, const std::string& editor_key, S
   bool color_edited = false;
   bool color_deactivated_after_edit = false;
   if (show_color) {
-    ImGui::ColorEdit3(name_buffer, &editor_state.color.x, color_flags);
+    ImGui::ColorEdit3(name_buffer.c_str(), &editor_state.color.x, color_flags);
     color_active = ImGui::IsItemActive();
     color_edited = ImGui::IsItemEdited();
     color_deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
@@ -1994,7 +1993,7 @@ bool UI::spectrum_picker(const char* widget_id, const std::string& editor_key, S
     full_width_item();
     float drag_speed = max(0.01f, max(editor_state.scale, 1.0f) * 0.01f);
     float scale_value = editor_state.scale;
-    scale_changed = ImGui::DragFloat(scale_label, &scale_value, drag_speed, show_color ? 1.0f : 0.01f, 1000.0f, "%.2f", ImGuiSliderFlags_NoRoundToFormat);
+    scale_changed = ImGui::DragFloat(scale_label.c_str(), &scale_value, drag_speed, show_color ? 1.0f : 0.01f, 1000.0f, "%.2f", ImGuiSliderFlags_NoRoundToFormat);
     scale_active = ImGui::IsItemActive();
     scale_deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
     if (scale_changed) {
@@ -3412,7 +3411,7 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
         if (ImGui::BeginMenu("Recent Files")) {
           for (uint64_t i = recent_files.size(); i > 0; --i) {
             const std::string& entry = recent_files[i - 1u];
-            std::string display_name = std::filesystem::path(entry).filename().string();
+            std::string display_name = utf8_file_name(entry);
             if (display_name.empty()) {
               display_name = entry;
             }
@@ -3540,9 +3539,9 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
         uint32_t k = 0;
         for (; (k < 8) && (flag != (1u << k)); ++k) {
         }
-        const char* buffer = format_string("F%u", k + 1u);
+        const std::string buffer = format_string("F%u", k + 1u);
         bool ui_integrator = (_ui_setup & flag) == flag;
-        if (ImGui::MenuItem(label, buffer, ui_integrator, true)) {
+        if (ImGui::MenuItem(label, buffer.c_str(), ui_integrator, true)) {
           execute_menu_command(command);
         }
       };
@@ -4234,7 +4233,7 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
       const size_t recent_count = std::min<size_t>(3u, data.recent_files.size());
       for (size_t recent_index = 0u; recent_index < recent_count; ++recent_index) {
         const std::string& path = data.recent_files[data.recent_files.size() - recent_index - 1u];
-        const std::string display_name = std::filesystem::path(path).filename().string();
+        const std::string display_name = utf8_file_name(path);
         ImGui::PushID(static_cast<int>(recent_index));
         const bool open_recent_scene = ImGui::Button("##recent_scene", ImVec2(content_width, ImGui::GetFrameHeight()));
         const ImVec2 button_min = ImGui::GetItemRectMin();
@@ -5130,8 +5129,8 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
             } else if (contains_active_camera) {
               ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
             }
-            const char* node_name = (node_index < hierarchy.node_names.size() && hierarchy.node_names[node_index].empty() == false) ? hierarchy.node_names[node_index].c_str()
-                                                                                                                                    : format_string("Node %u", node_index);
+            const std::string node_name = (node_index < hierarchy.node_names.size() && hierarchy.node_names[node_index].empty() == false) ? hierarchy.node_names[node_index]
+                                                                                                                                          : format_string("Node %u", node_index);
             std::string node_label;
             if (has_camera_attachment && has_emitter_attachment) {
               node_label = "Camera + Light · ";
@@ -5156,7 +5155,7 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
             }
             if (ImGui::BeginDragDropSource()) {
               ImGui::SetDragDropPayload(node_payload_type, &node_index, sizeof(node_index));
-              ImGui::Text("Move %s", node_name);
+              ImGui::Text("Move %s", node_name.c_str());
               ImGui::EndDragDropSource();
             }
             if (ImGui::BeginDragDropTarget()) {
@@ -6059,8 +6058,8 @@ bool UI::build_material_class_selector(Material& material, bool mixed) {
 
   const char* material_name = mixed ? "mixed" : material_class_display_name(material.cls);
   ImVec2 button_size = ImVec2(ImGui::GetContentRegionAvail().x, 0.0f);
-  const char* button_label = format_string("%s##material_class", material_name);
-  if (ImGui::Button(button_label, button_size)) {
+  const std::string button_label = format_string("%s##material_class", material_name);
+  if (ImGui::Button(button_label.c_str(), button_size)) {
     ImGui::OpenPopup("material_class_popup");
   }
 
@@ -6080,9 +6079,9 @@ bool UI::build_material_class_selector(Material& material, bool mixed) {
       ImGui::PopStyleColor();
       for (auto cls : entries) {
         const char* material_name = material_class_display_name(cls);
-        const char* selectable_label = format_string("%s##cls_%u", material_name, static_cast<uint32_t>(cls));
+        const std::string selectable_label = format_string("%s##cls_%u", material_name, static_cast<uint32_t>(cls));
         const bool is_selected = (material.cls == cls);
-        if (ImGui::Selectable(selectable_label, is_selected)) {
+        if (ImGui::Selectable(selectable_label.c_str(), is_selected)) {
           if (material.cls != cls) {
             material.cls = cls;
             changed = true;
@@ -6457,8 +6456,8 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
         common_changed = true;
       }
     } else {
-      const char* medium_id = format_string("##emitter_medium_%u", emitter_index);
-      if (medium_dropdown(medium_id, emitter.medium_index)) {
+      const std::string medium_id = format_string("##emitter_medium_%u", emitter_index);
+      if (medium_dropdown(medium_id.c_str(), emitter.medium_index)) {
         common_changed = true;
       }
     }
@@ -6855,37 +6854,26 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
       }
       collect_preview_interaction();
     } else {
-      float current_fov_deg = focal_length_to_fov(focal_len) * 180.0f / kPi;
-      static float fov_input = current_fov_deg;  // Static to maintain value between frames
-      fov_input = current_fov_deg;               // Sync with current camera FOV
+      int32_t fov_convention = _camera_fov_vertical ? 1 : 0;
+      if (labeled_control("FOV Convention", [&]() {
+            return ImGui::Combo("##fov_convention", &fov_convention, "Horizontal\0Vertical\0");
+          })) {
+        _camera_fov_vertical = fov_convention == 1;
+      }
 
-      if (labeled_control("Horizontal FOV", [&]() {
+      float horizontal_fov_rad = focal_length_to_fov(focal_len);
+      float displayed_fov_rad = _camera_fov_vertical ? horizontal_fov_to_vertical_fov(horizontal_fov_rad) : horizontal_fov_rad;
+      float fov_input = displayed_fov_rad * 180.0f / kPi;
+      const char* fov_label = _camera_fov_vertical ? "Vertical FOV" : "Horizontal FOV";
+      if (labeled_control(fov_label, [&]() {
             return ImGui::InputFloat("##fov_input", &fov_input, 0.1f, 1.0f, "%.1f°");
           })) {
-        focal_len = fov_to_focal_length(fov_input * kPi / 180.0f);
+        displayed_fov_rad = fov_input * kPi / 180.0f;
+        horizontal_fov_rad = _camera_fov_vertical ? vertical_fov_to_horizontal_fov(displayed_fov_rad) : displayed_fov_rad;
+        focal_len = fov_to_focal_length(horizontal_fov_rad);
         camera_changed = true;
       }
       collect_preview_interaction();
-      ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 0));
-      ImGui::AlignTextToFramePadding();
-      ImGui::Text("Convert FOV");
-      ImGui::SameLine();
-      if (ImGui::Button("H -> V")) {
-        float horizontal_fov_rad = fov_input * kPi / 180.0f;
-        float vertical_fov_rad = horizontal_fov_to_vertical_fov(horizontal_fov_rad);
-        fov_input = vertical_fov_rad * 180.0f / kPi;
-        focal_len = fov_to_focal_length(horizontal_fov_rad);
-        camera_changed = true;
-      }
-      ImGui::SameLine();
-      if (ImGui::Button("V -> H")) {
-        float vertical_fov_rad = fov_input * kPi / 180.0f;
-        float horizontal_fov_rad = vertical_fov_to_horizontal_fov(vertical_fov_rad);
-        fov_input = horizontal_fov_rad * 180.0f / kPi;
-        focal_len = fov_to_focal_length(horizontal_fov_rad);
-        camera_changed = true;
-      }
-      ImGui::PopStyleVar();
     }
 
     if (labeled_control("Focus Distance", [&]() {

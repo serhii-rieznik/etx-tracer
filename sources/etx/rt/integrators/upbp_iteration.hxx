@@ -28,7 +28,7 @@ inline double upbp_initial_radius(const float configured_radius, const float bou
   return upbp_automatic_initial_radius(bounding_sphere_radius, camera_subpath_count, light_subpath_count, dimension, relative_radius_scale);
 }
 
-inline UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& options, const float bounding_sphere_radius, const SpectralQuery& spect,
+inline UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& options, const float bounding_sphere_radius, const uint2& film_dimensions, const SpectralQuery& spect,
   const bool merge_vertices_enabled, const uint64_t path_count, const uint64_t iteration) {
   UPBPIterationParameters result = {};
   result.camera_subpath_count = path_count;
@@ -40,8 +40,9 @@ inline UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& opti
     result.bb1d_light_subpath_count = options.maximum_bb1d_light_path_count > 0u ? min(path_count, static_cast<uint64_t>(options.maximum_bb1d_light_path_count)) : path_count;
   }
 
+  const double surface_radius_scale = kUPBPAutomaticSurfaceRadiusScale / static_cast<double>(max(film_dimensions.x, film_dimensions.y));
   result.surface_radius = upbp_progressive_radius(
-    upbp_initial_radius(options.initial_surface_radius, bounding_sphere_radius, result.camera_subpath_count, result.light_subpath_count, 2u, kUPBPAutomaticSurfaceRadiusScale),
+    upbp_initial_radius(options.initial_surface_radius, bounding_sphere_radius, result.camera_subpath_count, result.light_subpath_count, 2u, surface_radius_scale),
     options.radius_alpha, 2u, iteration);
   result.pp3d_radius = upbp_progressive_radius(
     upbp_initial_radius(options.initial_pp3d_radius, bounding_sphere_radius, result.camera_subpath_count, result.light_subpath_count, 3u, kUPBPAutomaticVolumeRadiusScale),

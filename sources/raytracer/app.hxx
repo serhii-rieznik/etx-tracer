@@ -40,8 +40,6 @@ struct ApplicationConfig {
   RuntimeMode runtime_mode = RuntimeMode::Desktop;
   uint32_t width = 1600u;
   uint32_t height = 900u;
-  bool enable_imgui = true;
-  bool enable_platform_ui = true;
   bool persist_options = true;
   bool override_renderer = false;
   RendererMode renderer = RendererMode::CPURaytracing;
@@ -149,6 +147,7 @@ struct RTApplication {
   bool rebuild_material_render_resources();
   void poll_material_render_resource_preparation();
   void finish_material_render_resource_preparation(bool resources_ready);
+  void set_renderer_mode(RendererMode mode, bool resume_rendering);
   void mark_scene_dirty();
 
  private:

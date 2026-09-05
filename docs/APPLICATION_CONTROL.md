@@ -21,21 +21,13 @@ raytracer --control-server
 Open `http://127.0.0.1:1654`. The server binds only to the loopback interface unless another IPv4 address is explicitly supplied with `--bind`.
 The server has no authentication. Only use a non-loopback bind address on a trusted network, because control commands can read and write files with the renderer process's permissions.
 
-Run a fixed number of frames without any UI or server:
+Run an offline render without any UI or server:
 
 ```text
-raytracer --headless --frames 10 --scene /path/to/scene.etx.json --renderer cpu
+raytracer --render --scene /path/to/scene.etx.json --output /path/to/output.exr --samples 64 --renderer cpu
 ```
 
-When a scene is supplied in this fixed-frame mode, rendering starts automatically as soon as the selected renderer is ready. Control-server modes leave the renderer stopped until a `run` command is sent.
-
-Keep a native rendering window but omit native and ImGui controls:
-
-```text
-raytracer --window-only --window-size 1600x900 --scene /path/to/scene.etx.json
-```
-
-`--window-only` starts the same control server automatically. Runtime selections in these UI-independent modes do not overwrite the saved desktop preferences.
+Offline rendering runs to its configured sample or time target, saves the requested output, and exits. Control-server mode leaves the renderer stopped until a `run` command is sent. Neither workflow overwrites saved desktop preferences.
 Headless output has no independent presentation size. `GET /api/image` follows the active renderer's scene/film dimensions. The built-in browser client polls state and command results without overlapping requests. It refreshes the PNG blob when rendering or view state changes, once per second while rendering, and every five seconds while idle; its Refresh button remains available for an explicit update.
 
 ## HTTP API

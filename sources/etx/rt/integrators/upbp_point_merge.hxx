@@ -189,7 +189,17 @@ inline bool upbp_evaluate_point_merge(const Scene& scene, const SpectralQuery sp
   }
 
   const float3 outgoing_direction = -light_vertex.intersection.w_i;
-  result.scattering = upbp_evaluate_vertex_scattering(scene, spect, camera_vertex, outgoing_direction, sampler);
+  if (surface) {
+    const Material& material = scene.materials[camera_vertex.intersection.material_index];
+    const BSDFData data = {spect, camera_vertex.incident_medium_index, PathSource::Camera, camera_vertex.intersection, camera_vertex.intersection.w_i};
+    const BSDFEval evaluation = bsdf::evaluate(data, outgoing_direction, material, sampler);
+    // Photon density already contains the incoming surface projection.
+    result.scattering.value = evaluation.func;
+    result.scattering.pdf_forward = evaluation.pdf;
+    result.scattering.pdf_reverse = bsdf::reverse_pdf(data, outgoing_direction, material, sampler);
+  } else {
+    result.scattering = upbp_evaluate_vertex_scattering(scene, spect, camera_vertex, outgoing_direction, sampler);
+  }
   if (result.scattering.valid() == false) {
     return true;
   }

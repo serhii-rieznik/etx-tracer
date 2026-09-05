@@ -4,6 +4,8 @@
 
 #include <nfd.h>
 
+#include <filesystem>
+
 namespace etx {
 
 uint32_t atomic_inc(int32_t* ptr) {
@@ -119,6 +121,14 @@ std::string save_file(const char* filters, void* parent_window) {
   std::string path = copy_selected_path(selected_path, result);
   NFD_Quit();
   return path;
+}
+
+std::string utf8_file_name(const std::string& path) {
+  const std::u8string file_name = std::filesystem::u8path(path).filename().u8string();
+  if (file_name.empty()) {
+    return path;
+  }
+  return {reinterpret_cast<const char*>(file_name.data()), file_name.size()};
 }
 
 }  // namespace etx

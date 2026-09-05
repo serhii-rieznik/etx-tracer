@@ -287,7 +287,7 @@ struct UI {
   bool labeled_control(const char* label, std::function<bool()>&& control_func);
   bool validated_float_control(const char* label, float& value, float min_val, float max_val, const char* format = "%.3f");
   bool validated_int_control(const char* label, int32_t& value, int32_t min_val, int32_t max_val);
-  const char* format_string(const char* format, ...);
+  std::string format_string(const char* format, ...);
 
   enum class SelectionKind : uint32_t {
     None,
@@ -551,6 +551,7 @@ struct UI {
   uint64_t _medium_mapping_hash = 0ull;
   uint64_t _mesh_mapping_hash = 0ull;
   bool _auto_open_emission_section = false;
+  bool _camera_fov_vertical = false;
   ViewportGeometry _viewport_geometry = {};
   uint32_t _viewport_zoom_option = 4u;
   float _explorer_width = 300.0f;

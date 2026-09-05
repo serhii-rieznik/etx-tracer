@@ -16,7 +16,6 @@ struct ETX_ALIGNED VCMOptions {
   };
 
   uint32_t options ETX_EMPTY_INIT;
-  uint32_t radius_decay ETX_EMPTY_INIT;
   uint32_t kernel ETX_INIT_WITH(Epanechnikov);
   float initial_radius ETX_EMPTY_INIT;
   bool blue_noise ETX_INIT_WITH(true);

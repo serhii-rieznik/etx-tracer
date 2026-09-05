@@ -9,7 +9,6 @@ namespace etx {
 VCMOptions VCMOptions::default_values() {
   VCMOptions options = {};
   options.options = DefaultOptions;
-  options.radius_decay = 256u;
   options.initial_radius = 0.0f;
   options.kernel = VCMOptions::Epanechnikov;
   return options;
@@ -17,7 +16,6 @@ VCMOptions VCMOptions::default_values() {
 
 void VCMOptions::load(const Options& opt, const Scene& scene) {
   initial_radius = opt.get_float("vcm-initial_radius", initial_radius);
-  radius_decay = opt.get_integral("vcm-radius_decay", radius_decay);
   kernel = opt.get_integral("vcm-kernel", kernel);
 
   blue_noise = scene.blue_noise();
@@ -38,7 +36,6 @@ void VCMOptions::store(Options& opt) const {
   opt.set_bool("vcm-merging", enable_merging(), "Enable Merging");
   opt.set_bool("vcm-kernel", smooth_kernel(), "Smooth Merging Kernel");
   opt.set_float("vcm-initial_radius", initial_radius, "Initial Radius", {0.0f, 10.0f});
-  opt.set_integral("vcm-radius_decay", radius_decay, "Radius Decay", 0, {1u, 65536u});
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {

@@ -47,6 +47,7 @@ set(RAYTRACER_SHARED_SOURCES
   gpu_renderer.hxx
   gpu_renderer.cxx
   shader_packager.hxx
+  BuildReleaseShaderPackage.cmake
   raster_renderer.cxx
   raster_renderer.hxx
   cpu_renderer.hxx
@@ -245,6 +246,22 @@ if(MSVC)
 endif()
 
 set_property(TARGET raytracer PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${root_folder}/bin")
+
+if(WIN32)
+  add_custom_command(TARGET raytracer POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+      -DBUILD_CONFIG=$<CONFIG>
+      -DRAYTRACER_EXECUTABLE=$<TARGET_FILE:raytracer>
+      -DSHADER_PACKAGE=${ETX_RAYTRACER_SHADER_PACKAGE}
+      -DSHADER_PACKAGE_DIRECTORY=${ETX_RAYTRACER_SHADER_PACKAGE_DIRECTORY}
+      -DSHADER_BACKEND=${ETX_RAYTRACER_SHADER_BACKEND}
+      -DSHADER_SOURCE_ROOT=${CMAKE_SOURCE_DIR}/sources/etx/render
+      -DRAYTRACER_WORKING_DIRECTORY=${root_folder}/bin
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/BuildReleaseShaderPackage.cmake"
+    COMMENT "Ensuring the production shader package exists for Release"
+    VERBATIM
+  )
+endif()
 
 # Runtime shader compilation must not depend on the process working directory.
 # Keep the complete shader include tree next to the executable.
