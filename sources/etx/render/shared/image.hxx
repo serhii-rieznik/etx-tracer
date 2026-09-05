@@ -474,32 +474,11 @@ struct Image {
   }
 
   ETX_SHARED_INLINE float2 sample(const float2& rnd, float& image_pdf, uint2& location, float4& eval) const {
-    float y_pdf = 0.0f;
-    location.y = y_distribution.sample(rnd.y, y_pdf);
-
-    float x_pdf = 0.0f;
-    const auto& x_distribution = x_distributions[location.y];
-    location.x = x_distribution.sample(rnd.x, x_pdf);
-
-    const auto& x0 = x_distribution.values[location.x];
-    const auto& x1 = x_distribution.values[min(location.x + 1u, uint32_t(x_distribution.values.count) - 1u)];
-    float dx = (rnd.x - x0.cdf);
-    if ((x1.cdf - x0.cdf) > 0.0f) {
-      dx /= (x1.cdf - x0.cdf);
+    float2 uv = {};
+    if (image_sample_distribution_cpu(*this, rnd, image_pdf, location, uv) == false) {
+      eval = {};
+      return uv;
     }
-
-    const auto& y0 = y_distribution.values[location.y];
-    const auto& y1 = y_distribution.values[min(location.y + 1u, uint32_t(y_distribution.values.count) - 1u)];
-    float dy = (rnd.y - y0.cdf);
-    if ((y1.cdf - y0.cdf) > 0.0f) {
-      dy /= (y1.cdf - y0.cdf);
-    }
-
-    float2 uv = {
-      (float(location.x) + dx) / fsize.x,
-      (float(location.y) + dy) / fsize.y,
-    };
-
     eval = evaluate(uv, &image_pdf);
     return uv;
   }

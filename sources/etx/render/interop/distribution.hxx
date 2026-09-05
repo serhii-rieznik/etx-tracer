@@ -30,7 +30,7 @@ ETX_SHARED_INLINE uint32_t distribution_search_middle(ETX_IN(DistributionSearchR
 }
 
 ETX_SHARED_INLINE void distribution_search_update(ETX_INOUT(DistributionSearchRange, range), uint32_t middle, float middle_cdf, float rnd) {
-  if (middle_cdf >= rnd) {
+  if (middle_cdf > rnd) {
     range.end = middle;
   } else {
     range.begin = middle;

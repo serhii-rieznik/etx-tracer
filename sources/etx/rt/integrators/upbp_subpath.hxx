@@ -516,6 +516,18 @@ inline bool upbp_build_light_subpath(const Raytracing& rt, const Scene& scene, c
   result.emitter_sample = {};
   Sampler path_sampler{upbp_sampler_seed(render_seed, iteration, path_index, 0u, 0u, UPBPRandomDomain::LightPath)};
   result.emitter_sample = sample_emission(spect, path_sampler);
+  const SpectralResponse& emission = result.emitter_sample.value;
+  const bool zero_emission =
+    emission.spectral() ? (emission.value == 0.0f) : ((emission.integrated.x == 0.0f) && (emission.integrated.y == 0.0f) && (emission.integrated.z == 0.0f));
+  if ((result.emitter_sample.pdf_sample > 0.0f) && (result.emitter_sample.emitter_index < scene.emitter_instances.count) && zero_emission) {
+    // A sampled black emitter contributes zero but still counts in the emitted-path population.
+    if (result.subpath.path.append_endpoint(upbp_make_emitter_endpoint(scene, spect, result.emitter_sample)) == false) {
+      result.subpath.failure = UPBPSubpathFailure::InvalidInput;
+      return false;
+    }
+    result.subpath.terminal = UPBPSceneSegmentTerminal::Absorb;
+    return true;
+  }
   if ((result.emitter_sample.pdf_area <= 0.0f) || (result.emitter_sample.pdf_dir <= 0.0f) || (result.emitter_sample.pdf_sample <= 0.0f)) {
     result.subpath.failure = UPBPSubpathFailure::InvalidInput;
     return false;
