@@ -4116,7 +4116,6 @@ bool GPURaytracingRenderer::update_upbp_iteration_resources(RHIDevice& device, c
   iteration.pb2d_radius = static_cast<float>(parameters.pb2d_radius);
   iteration.bp2d_radius = static_cast<float>(parameters.bp2d_radius);
   iteration.bb1d_radius = static_cast<float>(parameters.bb1d_radius);
-  iteration.beam_selection_probability = options.beam_selection_probability;
   iteration.bpt_sample_count = static_cast<float>(parameters.bpt_sample_count);
   iteration.maximum_boundary_count = options.maximum_boundary_count;
   for (uint32_t index = 0u; index < 6u; ++index) {
@@ -5600,13 +5599,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       .group_count_y = 1u,
       .group_count_z = 1u,
     };
-    const uint32_t heavy_continuation_chunk_count = 1u + ((wavefront_buffer_path_capacity - 1u) / kGPUWavefrontHeavyContinuationChunkSize);
-    const RHIDispatchDesc build_dispatch_args_dispatch = {
-      .group_count_x = (heavy_continuation_chunk_count + 63u) / 64u,
-      .group_count_y = 1u,
-      .group_count_z = 1u,
-    };
     const auto rebuild_dispatch_args = [&](RHICommandBuffer cmd, uint32_t path_iteration) {
+      const uint32_t chunk_count = divide_round_up(_wavefront_resources.path_capacity, kGPUWavefrontHeavyContinuationChunkSize);
+      const RHIDispatchDesc build_dispatch_args_dispatch = {
+        .group_count_x = divide_round_up(chunk_count, 64u),
+        .group_count_y = 1u,
+        .group_count_z = 1u,
+      };
       barrier_wavefront_buffers(cmd);
       ctx.cmd_buffer_barrier(cmd, _wavefront_dispatch_args_buffer, _wavefront_dispatch_args_buffer_state, RHIResourceState::General);
       _wavefront_dispatch_args_buffer_state = RHIResourceState::General;
@@ -5698,8 +5697,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       submitted_commands.push_back(std::move(submitted_command));
     };
     const auto submit_stage_chunked = [&](PipelineStage stage, uint32_t item_count, uint32_t path_iteration, bool from_camera) {
+      const uint32_t chunk_count_per_path_type = divide_round_up(_wavefront_resources.path_capacity, kGPUWavefrontHeavyContinuationChunkSize);
       const uint64_t argument_base_offset =
-        kGPUWavefrontFixedDispatchArgsBufferSize + static_cast<uint64_t>(from_camera ? 0u : heavy_continuation_chunk_count) * kGPUWavefrontDispatchArgsStride;
+        kGPUWavefrontFixedDispatchArgsBufferSize + static_cast<uint64_t>(from_camera ? 0u : chunk_count_per_path_type) * kGPUWavefrontDispatchArgsStride;
       for (uint32_t item_offset = 0u; item_offset < item_count; item_offset += kGPUWavefrontHeavyContinuationChunkSize) {
         const uint32_t chunk_count = std::min(kGPUWavefrontHeavyContinuationChunkSize, item_count - item_offset);
         const uint64_t argument_buffer_offset =
@@ -7815,7 +7815,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                 wavefront_tile_count_value);
             }
           }
-          if (ensure_wavefront_buffers(ctx, scene, camera_resident_capacity, wavefront_path_capacity, false) == false) {
+          if (ensure_wavefront_buffers(ctx, scene, camera_resident_capacity, camera_resident_capacity, false) == false) {
             set_runtime_failure("GPU UPBP failed to allocate camera-wavefront storage after density-cache construction");
             return;
           }

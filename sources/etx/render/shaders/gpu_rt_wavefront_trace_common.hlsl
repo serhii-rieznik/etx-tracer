@@ -831,12 +831,13 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
     uint terminal_type = kUPBPMediumFailure;
     bool tracking_valid = false;
     if (subsurface_state.medium_index != kInvalidIndex) {
-      tracking_valid = upbp_track_interval(upbp_resources, from_camera, path_index, subsurface_state.medium_index, ray.Origin, ray.Direction, surface_hit.hit_t, spect, medium_seed,
-        upbp_path_state, medium_sample, terminal_type);
+      tracking_valid = upbp_track_interval(upbp_resources, from_camera, path_index, subsurface_state.medium_index, ray.Origin, ray.Direction, surface_hit.hit_t,
+        surface_hit.surface_point.vertex.pos, surface_hit.surface_point.geo_normal, spect, medium_seed, upbp_path_state, medium_sample, terminal_type);
     } else {
       const SpectralResponse absorption = spectral_response_sub(subsurface_state.extinction, subsurface_state.scattering);
       tracking_valid = upbp_track_homogeneous_interval(upbp_resources, from_camera, path_index, subsurface_state.material_index, subsurface_state.scattering, absorption,
-        ray.Origin, ray.Direction, surface_hit.hit_t, spect, medium_seed, upbp_path_state, medium_sample, terminal_type);
+        ray.Origin, ray.Direction, surface_hit.hit_t, surface_hit.surface_point.vertex.pos, surface_hit.surface_point.geo_normal, spect, medium_seed, upbp_path_state,
+        medium_sample, terminal_type);
     }
     if (tracking_valid == false) {
       upbp_mark_failed_path(upbp_resources, from_camera, path_index, GPUUPBPPathFailure::SubsurfaceTracking);
@@ -1004,8 +1005,9 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, RayDesc ray, 
 #if ETX_UPBP
     uint upbp_terminal_type = kUPBPMediumEscape;
     if (record_upbp) {
-      if (upbp_track_interval(upbp_resources, from_camera, path_index, ray_medium_index, current_origin, ray.Direction, segment_distance, spect, upbp_medium_seed, upbp_path_state,
-            medium_sample, upbp_terminal_type) == false) {
+      const float3 terminal_normal = found_hit ? segment_hit.surface_point.geo_normal : float3(0.0f, 0.0f, 0.0f);
+      if (upbp_track_interval(upbp_resources, from_camera, path_index, ray_medium_index, current_origin, ray.Direction, segment_distance, segment_hit.surface_point.vertex.pos,
+            terminal_normal, spect, upbp_medium_seed, upbp_path_state, medium_sample, upbp_terminal_type) == false) {
         upbp_mark_failed_path(upbp_resources, from_camera, path_index, GPUUPBPPathFailure::TrackInterval);
         result.transmittance = spectral_response_make(spect, 0.0f);
         return false;
@@ -1112,7 +1114,7 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
   GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;
   uint subsurface_state_buffer = wavefront_subsurface_state_buffer(resources, from_camera);
   bool subsurface_active = wavefront_subsurface_state_active(resources, from_camera, path_index, subsurface_state);
-  ray.TMin = (subsurface_active && scene_path_mode_is_upbp()) ? max(0.0f, state.ray.min_t) : max(kRayEpsilon, state.ray.min_t);
+  ray.TMin = scene_path_mode_is_upbp() ? max(0.0f, state.ray.min_t) : max(kRayEpsilon, state.ray.min_t);
   ray.TMax = max(ray.TMin + kRayEpsilon, state.ray.max_t);
 
   uint medium_index = state.medium_index;

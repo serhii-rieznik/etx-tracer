@@ -185,10 +185,9 @@ ETX_STATIC_CONST uint32_t kGPUUPBPIterationPP3DRadiusOffset = 52u;
 ETX_STATIC_CONST uint32_t kGPUUPBPIterationPB2DRadiusOffset = 56u;
 ETX_STATIC_CONST uint32_t kGPUUPBPIterationBP2DRadiusOffset = 60u;
 ETX_STATIC_CONST uint32_t kGPUUPBPIterationBB1DRadiusOffset = 64u;
-ETX_STATIC_CONST uint32_t kGPUUPBPIterationBeamSelectionProbabilityOffset = 68u;
-ETX_STATIC_CONST uint32_t kGPUUPBPIterationBPTSampleCountOffset = 72u;
-ETX_STATIC_CONST uint32_t kGPUUPBPIterationMaximumBoundaryCountOffset = 76u;
-ETX_STATIC_CONST uint32_t kGPUUPBPIterationTechniqueFactorsOffset = 80u;
+ETX_STATIC_CONST uint32_t kGPUUPBPIterationBPTSampleCountOffset = 68u;
+ETX_STATIC_CONST uint32_t kGPUUPBPIterationMaximumBoundaryCountOffset = 72u;
+ETX_STATIC_CONST uint32_t kGPUUPBPIterationTechniqueFactorsOffset = 76u;
 
 ETX_STATIC_CONST uint32_t kGPUUPBPResourcesIterationOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUUPBPResourcesVertexBufferOffset = 112u;

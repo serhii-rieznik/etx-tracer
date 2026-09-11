@@ -1,5 +1,7 @@
 #pragma once
 
+#include <interop/medium_position_shared.hxx>
+
 static const uint kUPBPMediumEscape = 0u;
 static const uint kUPBPMediumScatter = 1u;
 static const uint kUPBPMediumAbsorb = 2u;
@@ -31,11 +33,7 @@ bool upbp_append_light_beam(GPUUPBPResources resources, GPUUPBPPathState path_st
     return true;
   }
   const bool collect_bp2d = (resources.iteration.technique_mask & GPUUPBPTechnique::BP2D) != 0u;
-  bool selected_bb1d = false;
-  if (((resources.iteration.technique_mask & GPUUPBPTechnique::BB1D) != 0u) && (path_state.global_path_index < resources.iteration.bb1d_light_path_count)) {
-    uint selection_seed = upbp_deterministic_seed(path_state.global_path_index, path_state.path_length, transport_interval_index, kUPBPRandomDomainBB1D);
-    selected_bb1d = rnd01(selection_seed) < resources.iteration.beam_selection_probability;
-  }
+  const bool selected_bb1d = ((resources.iteration.technique_mask & GPUUPBPTechnique::BB1D) != 0u) && (path_state.global_path_index < resources.iteration.bb1d_light_path_count);
   if ((collect_bp2d == false) && (selected_bb1d == false)) {
     return true;
   }
@@ -354,7 +352,7 @@ bool upbp_finish_interval(GPUUPBPResources resources, bool from_camera, uint pat
 }
 
 bool upbp_track_interval(GPUUPBPResources resources, bool from_camera, uint path_index, uint medium_index, float3 origin, float3 direction, float maximum_distance,
-  SpectralQuery spect, inout uint seed, inout GPUUPBPPathState path_state, out MediumSample medium_sample, out uint terminal_type) {
+  float3 surface_position, float3 surface_normal, SpectralQuery spect, inout uint seed, inout GPUUPBPPathState path_state, out MediumSample medium_sample, out uint terminal_type) {
   medium_sample = (MediumSample)0;
   medium_sample.weight = spectral_response_make(spect, 1.0f);
   medium_sample.pos = origin + direction * maximum_distance;
@@ -490,8 +488,11 @@ bool upbp_track_interval(GPUUPBPResources resources, bool from_camera, uint path
       interval.distance = traveled_distance;
       const bool scatter = upbp_spectral_average(scattering) > 0.0f;
       interval.flags |= scatter ? GPUUPBPIntervalFlags::Scatter : GPUUPBPIntervalFlags::Absorb;
+      if (scatter) {
+        interval.end_position = medium_position_before_surface(event_position, surface_position, surface_normal, direction);
+      }
       medium_sample.weight = interval_weight;
-      medium_sample.pos = event_position;
+      medium_sample.pos = interval.end_position;
       medium_sample.sampled_medium_t = traveled_distance;
       terminal_type = scatter ? kUPBPMediumScatter : kUPBPMediumAbsorb;
       return upbp_finish_interval(resources, from_camera, path_index, path_state, interval);
@@ -508,8 +509,8 @@ bool upbp_track_interval(GPUUPBPResources resources, bool from_camera, uint path
 }
 
 bool upbp_track_homogeneous_interval(GPUUPBPResources resources, bool from_camera, uint path_index, uint material_index, SpectralResponse scattering, SpectralResponse absorption,
-  float3 origin, float3 direction, float maximum_distance, SpectralQuery spect, inout uint seed, inout GPUUPBPPathState path_state, out MediumSample medium_sample,
-  out uint terminal_type) {
+  float3 origin, float3 direction, float maximum_distance, float3 surface_position, float3 surface_normal, SpectralQuery spect, inout uint seed, inout GPUUPBPPathState path_state,
+  out MediumSample medium_sample, out uint terminal_type) {
   medium_sample = (MediumSample)0;
   medium_sample.weight = spectral_response_make(spect, 1.0f);
   medium_sample.pos = origin + direction * maximum_distance;
@@ -615,8 +616,11 @@ bool upbp_track_homogeneous_interval(GPUUPBPResources resources, bool from_camer
       interval.distance = traveled_distance;
       const bool scatter = upbp_spectral_average(scattering) > 0.0f;
       interval.flags |= scatter ? GPUUPBPIntervalFlags::Scatter : GPUUPBPIntervalFlags::Absorb;
+      if (scatter) {
+        interval.end_position = medium_position_before_surface(event_position, surface_position, surface_normal, direction);
+      }
       medium_sample.weight = interval_weight;
-      medium_sample.pos = event_position;
+      medium_sample.pos = interval.end_position;
       medium_sample.sampled_medium_t = traveled_distance;
       terminal_type = scatter ? kUPBPMediumScatter : kUPBPMediumAbsorb;
       return upbp_finish_interval(resources, from_camera, path_index, path_state, interval);

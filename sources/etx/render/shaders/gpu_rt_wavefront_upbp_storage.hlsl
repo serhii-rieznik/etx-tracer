@@ -104,7 +104,6 @@ GPUUPBPIteration upbp_load_iteration(ByteAddressBuffer buffer, uint byte_offset)
   result.pb2d_radius = asfloat(buffer.Load(byte_offset + kGPUUPBPIterationPB2DRadiusOffset));
   result.bp2d_radius = asfloat(buffer.Load(byte_offset + kGPUUPBPIterationBP2DRadiusOffset));
   result.bb1d_radius = asfloat(buffer.Load(byte_offset + kGPUUPBPIterationBB1DRadiusOffset));
-  result.beam_selection_probability = asfloat(buffer.Load(byte_offset + kGPUUPBPIterationBeamSelectionProbabilityOffset));
   result.bpt_sample_count = asfloat(buffer.Load(byte_offset + kGPUUPBPIterationBPTSampleCountOffset));
   result.maximum_boundary_count = buffer.Load(byte_offset + kGPUUPBPIterationMaximumBoundaryCountOffset);
   [unroll] for (uint index = 0u; index < 6u; ++index) {

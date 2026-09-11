@@ -175,6 +175,11 @@ inline bool upbp_walk_subsurface_segment(const Raytracing& rt, const Scene& scen
     result.failure = UPBPSceneSegmentFailure::MediumTracking;
     return false;
   }
+  if (interval.terminal_event == MediumTrackingEventType::Scatter) {
+    const Triangle& triangle = scene.triangles[exit_intersection.triangle_index];
+    const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, triangle, exit_intersection.instance_index);
+    interval.end_position = medium_position_before_surface(interval.end_position, exit_intersection.pos, geometric_normal, ray.d);
+  }
   if (result.segment.append(interval) == false) {
     result.failure = UPBPSceneSegmentFailure::MediumTracking;
     return false;

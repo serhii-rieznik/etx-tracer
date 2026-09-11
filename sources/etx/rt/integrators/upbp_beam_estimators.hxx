@@ -311,17 +311,16 @@ ETX_UPBP_FORCE_INLINE float upbp_prepared_medium_density(const Medium& medium, c
   return medium_density_shared_apply_shape(value, medium.grid.noise_power, medium.grid.noise_sharpness);
 }
 
-inline UPBPPreparedBB1D upbp_prepare_bb1d(const UPBPKernel kernel, const double radius, const uint64_t light_subpath_count, const double beam_selection_probability) {
+inline UPBPPreparedBB1D upbp_prepare_bb1d(const UPBPKernel kernel, const double radius, const uint64_t light_subpath_count) {
   UPBPPreparedBB1D result = {};
   result.kernel = kernel;
-  if (((kernel != UPBPKernel::TopHat) && (kernel != UPBPKernel::Epanechnikov)) || (radius <= 0.0) || (std::isfinite(radius) == false) || (light_subpath_count == 0u) ||
-      (beam_selection_probability <= 0.0) || (beam_selection_probability > 1.0)) {
+  if (((kernel != UPBPKernel::TopHat) && (kernel != UPBPKernel::Epanechnikov)) || (radius <= 0.0) || (std::isfinite(radius) == false) || (light_subpath_count == 0u)) {
     return result;
   }
   result.radius_squared = radius * radius;
   result.inverse_radius_squared = 1.0 / result.radius_squared;
   result.kernel_normalization = kernel == UPBPKernel::TopHat ? 1.0 / (2.0 * radius) : 3.0 / (4.0 * radius);
-  result.estimator_normalization = 1.0 / (static_cast<double>(light_subpath_count) * beam_selection_probability);
+  result.estimator_normalization = 1.0 / static_cast<double>(light_subpath_count);
   result.valid = (result.radius_squared > 0.0) && std::isfinite(result.radius_squared) && std::isfinite(result.inverse_radius_squared) &&
                  std::isfinite(result.kernel_normalization) && std::isfinite(result.estimator_normalization);
   return result;

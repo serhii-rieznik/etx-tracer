@@ -2,6 +2,7 @@
 
 #include <etx/rt/integrators/upbp_core.hxx>
 #include <etx/rt/rt.hxx>
+#include <etx/render/interop/medium_position_shared.hxx>
 
 namespace etx {
 
@@ -137,6 +138,11 @@ inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, co
       interval = upbp_vacuum_interval(spect, ray.o, ray.d, interval_distance);
     }
 
+    if (found_intersection && (interval.terminal_event == MediumTrackingEventType::Scatter)) {
+      const Triangle& triangle = scene.triangles[intersection.triangle_index];
+      const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, triangle, intersection.instance_index);
+      interval.end_position = medium_position_before_surface(interval.end_position, intersection.pos, geometric_normal, ray.d);
+    }
     if (result.segment.append(interval) == false) {
       result.failure = UPBPSceneSegmentFailure::MediumTracking;
       result.medium_failure = result.segment.failure;

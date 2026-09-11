@@ -1043,11 +1043,10 @@ void upbp_evaluate_bb1d_prepared_candidate(GPUUPBPResources resources, GPUUPBPBe
   const float kernel_value = upbp_kernel_value(resources.iteration.kernel, 1u, resources.iteration.bb1d_radius, intersection.distance_squared) / intersection.sin_theta;
   const float mis_weight =
     upbp_point_merge_mis_weight(resources.iteration, GPUUPBPTechnique::BB1D, partial_light.weights, partial_camera.weights, context_vertex, phase, phase, intersection.sin_theta);
-  if ((phase <= 0.0f) || (kernel_value <= 0.0f) || (mis_weight <= 0.0f) || (resources.iteration.bb1d_light_path_count == 0u) ||
-      (resources.iteration.beam_selection_probability <= 0.0f)) {
+  if ((phase <= 0.0f) || (kernel_value <= 0.0f) || (mis_weight <= 0.0f) || (resources.iteration.bb1d_light_path_count == 0u)) {
     return;
   }
-  const float estimator_normalization = rcp(float(resources.iteration.bb1d_light_path_count) * resources.iteration.beam_selection_probability);
+  const float estimator_normalization = rcp(float(resources.iteration.bb1d_light_path_count));
   const float scale = phase * kernel_value * estimator_normalization * mis_weight;
   accumulated =
     spectral_response_add(accumulated, spectral_response_mul(spectral_response_mul(partial_light.throughput, partial_camera.throughput), spectral_response_mul(scattering, scale)));

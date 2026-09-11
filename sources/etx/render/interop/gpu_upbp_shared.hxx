@@ -550,11 +550,10 @@ struct ETX_ALIGNED GPUUPBPIteration {
   float pb2d_radius ETX_INIT(0.0f);
   float bp2d_radius ETX_INIT(0.0f);
   float bb1d_radius ETX_INIT(0.0f);
-  float beam_selection_probability ETX_INIT(1.0f);
   float bpt_sample_count ETX_INIT(0.0f);
   uint32_t maximum_boundary_count ETX_INIT(0u);
   float technique_factors[6u] ETX_INIT({});
-  float reserved1[2u] ETX_INIT({});
+  float reserved1[3u] ETX_INIT({});
 };
 
 struct ETX_ALIGNED GPUUPBPResources {

@@ -161,7 +161,6 @@ struct CPUUPBPImpl {
     DebugBB1DLightPaths,
     DebugBB1DLightBeams,
     DebugLightStorage,
-    DebugLightBudget,
     DebugIterationSetupTime,
     DebugLightPathTime,
     DebugStorageValidationTime,
@@ -240,7 +239,6 @@ struct CPUUPBPImpl {
   std::atomic<bool> failed = false;
   std::mutex failure_lock = {};
   std::string failure_reason = {};
-  uint64_t memory_target_bytes = 0u;
   std::atomic<uint64_t> evaluated_light_path_count = 0u;
   std::atomic<uint64_t> evaluated_camera_path_count = 0u;
   std::array<std::atomic<uint64_t>, SpatialStatisticCount> spatial_query_counts = {};
@@ -273,7 +271,6 @@ struct CPUUPBPImpl {
     debug_info[DebugBB1DLightPaths].title = "BB1D light paths";
     debug_info[DebugBB1DLightBeams].title = "BB1D light beams";
     debug_info[DebugLightStorage].title = "Light storage (MiB)";
-    debug_info[DebugLightBudget].title = "Light target (MiB)";
     debug_info[DebugIterationSetupTime].title = "Iteration setup (ms)";
     debug_info[DebugLightPathTime].title = "Light paths (ms)";
     debug_info[DebugStorageValidationTime].title = "Storage accounting (ms)";
@@ -387,7 +384,6 @@ struct CPUUPBPImpl {
     for (Integrator::Status::DebugInfo& info : debug_info) {
       info.value = 0.0f;
     }
-    debug_info[DebugLightBudget].value = static_cast<float>(options.memory_budget_mb);
   }
 
   void refresh_live_diagnostics() {
@@ -547,7 +543,6 @@ struct CPUUPBPImpl {
     for (Integrator::Status::DebugInfo& info : debug_info) {
       info.value = 0.0f;
     }
-    debug_info[DebugLightBudget].value = static_cast<float>(options.memory_budget_mb);
   }
 
   void release_failed_storage() {
@@ -611,14 +606,11 @@ struct CPUUPBPImpl {
     iteration_time = {};
     reset_iteration_diagnostics();
     status.current_iteration = iteration_index;
-    memory_target_bytes = static_cast<uint64_t>(options.memory_budget_mb) * 1024ull * 1024ull;
     VCMIteration spectral_iteration = {};
     spectral_iteration.iteration = iteration_index;
     iteration = upbp_iteration_parameters(options, rt.geometry_bounding_sphere_radius(), rt.film().base_dimensions(), vcm_iteration_spectral_query(rt.scene(), spectral_iteration),
       rt.scene().strategy_enabled(Scene::Strategy::MergeVertices), rt.film().current_pixel_count(), iteration_index);
-    prepared_bb1d = iteration.mis.enabled(UPBPTechnique::BB1D)
-                      ? upbp_prepare_bb1d(options.kernel, iteration.bb1d_radius, iteration.bb1d_light_subpath_count, options.beam_selection_probability)
-                      : UPBPPreparedBB1D{};
+    prepared_bb1d = iteration.mis.enabled(UPBPTechnique::BB1D) ? upbp_prepare_bb1d(options.kernel, iteration.bb1d_radius, iteration.bb1d_light_subpath_count) : UPBPPreparedBB1D{};
     auto radius_valid = [this](const UPBPTechnique technique, const double radius) {
       return (iteration.mis.enabled(technique) == false) || ((radius > 0.0) && std::isfinite(radius));
     };
@@ -632,9 +624,8 @@ struct CPUUPBPImpl {
     }
     if (status.current_iteration == 0u) {
       log::info("UPBP surface merging: initial radius %.9g", iteration.surface_radius);
-      log::info("UPBP selected %llu light paths for %llu camera paths; advisory memory target %u MiB; %llu assigned to BB1D",
-        static_cast<unsigned long long>(iteration.light_subpath_count), static_cast<unsigned long long>(iteration.camera_subpath_count), options.memory_budget_mb,
-        static_cast<unsigned long long>(iteration.bb1d_light_subpath_count));
+      log::info("UPBP selected %llu light paths for %llu camera paths; %llu assigned to BB1D", static_cast<unsigned long long>(iteration.light_subpath_count),
+        static_cast<unsigned long long>(iteration.camera_subpath_count), static_cast<unsigned long long>(iteration.bb1d_light_subpath_count));
     }
     constexpr uint32_t density_technique_mask = static_cast<uint32_t>(UPBPTechnique::Surface) | static_cast<uint32_t>(UPBPTechnique::PP3D) |
                                                 static_cast<uint32_t>(UPBPTechnique::PB2D) | static_cast<uint32_t>(UPBPTechnique::BP2D) |
@@ -822,7 +813,7 @@ struct CPUUPBPImpl {
         continue;
       }
       auto count_segment = [this, path_index, collect_bp2d_beams, collect_bb1d_beams, &light_beam_count, &selected_beam_count, &increment](
-                             const UPBPTransportSegmentRecord& segment, const uint32_t transport_segment_index) {
+                             const UPBPTransportSegmentRecord& segment) {
         for (uint32_t transport_interval_index = 0u; transport_interval_index < segment.intervals.size(); ++transport_interval_index) {
           const UPBPSegmentRecord& interval = segment.intervals[transport_interval_index];
           if (interval.medium_index == kInvalidIndex) {
@@ -841,9 +832,7 @@ struct CPUUPBPImpl {
             return false;
           }
           if (collect_bb1d_beams && (path_index < iteration.bb1d_light_subpath_count)) {
-            Sampler selection_sampler{
-              upbp_sampler_seed(rt.scene().options.random_seed, status.current_iteration, path_index, transport_segment_index, transport_interval_index, UPBPRandomDomain::BB1D)};
-            if ((selection_sampler.next() < options.beam_selection_probability) && (increment(selected_beam_count, "selected BB1D beam") == false)) {
+            if (increment(selected_beam_count, "selected BB1D beam") == false) {
               return false;
             }
           }
@@ -851,11 +840,11 @@ struct CPUUPBPImpl {
         return true;
       };
       for (uint32_t segment_index = 0u; segment_index < path.segments.size(); ++segment_index) {
-        if (count_segment(path.segments[segment_index], segment_index) == false) {
+        if (count_segment(path.segments[segment_index]) == false) {
           return false;
         }
       }
-      if (path.has_terminal_segment && (count_segment(path.terminal_segment, static_cast<uint32_t>(path.segments.size())) == false)) {
+      if (path.has_terminal_segment && (count_segment(path.terminal_segment) == false)) {
         return false;
       }
     }
@@ -947,20 +936,16 @@ struct CPUUPBPImpl {
             prepared_bp2d_beams.emplace_back(prepared_beam);
           }
           if (collect_bb1d_beams && (path_index < iteration.bb1d_light_subpath_count)) {
-            Sampler selection_sampler{upbp_sampler_seed(rt.scene().options.random_seed, status.current_iteration, path_index, beam.transport_segment_index,
-              beam.transport_interval_index, UPBPRandomDomain::BB1D)};
-            if (selection_sampler.next() < options.beam_selection_probability) {
-              if (collect_bp2d_beams == false) {
-                beam_prepared = upbp_prepare_beam(path, light_weights[path_index], beam, iteration.mis, prepared_beam);
-              }
-              if (spectral_query_compatible(beam.throughput_at_origin.as_query(), iteration.spect) == false) {
-                fail("UPBP light-beam spectrum is inconsistent at path " + std::to_string(path_index));
-                return false;
-              }
-              selected_bb1d_beams.emplace_back(beam);
-              prepared_bb1d_validity.emplace_back(static_cast<uint8_t>(beam_prepared));
-              prepared_bb1d_beams.emplace_back(prepared_beam);
+            if (collect_bp2d_beams == false) {
+              beam_prepared = upbp_prepare_beam(path, light_weights[path_index], beam, iteration.mis, prepared_beam);
             }
+            if (spectral_query_compatible(beam.throughput_at_origin.as_query(), iteration.spect) == false) {
+              fail("UPBP light-beam spectrum is inconsistent at path " + std::to_string(path_index));
+              return false;
+            }
+            selected_bb1d_beams.emplace_back(beam);
+            prepared_bb1d_validity.emplace_back(static_cast<uint8_t>(beam_prepared));
+            prepared_bb1d_beams.emplace_back(prepared_beam);
           }
         }
       }
@@ -1509,13 +1494,8 @@ struct CPUUPBPImpl {
     debug_info[DebugLightStorage].value = static_cast<float>(light_storage_bytes) / (1024.0f * 1024.0f);
     refresh_live_diagnostics();
     if (status.current_iteration == 0u) {
-      if (light_storage_bytes > memory_target_bytes) {
-        log::warning("UPBP retained %.1f MiB for %llu light paths, exceeding the advisory %u MiB CPU memory target; rendering continues",
-          static_cast<double>(debug_info[DebugLightStorage].value), static_cast<unsigned long long>(iteration.light_subpath_count), options.memory_budget_mb);
-      } else {
-        log::info("UPBP retained %.1f MiB for %llu light paths; advisory CPU memory target %u MiB", static_cast<double>(debug_info[DebugLightStorage].value),
-          static_cast<unsigned long long>(iteration.light_subpath_count), options.memory_budget_mb);
-      }
+      log::info("UPBP retained %.1f MiB for %llu light paths", static_cast<double>(debug_info[DebugLightStorage].value),
+        static_cast<unsigned long long>(iteration.light_subpath_count));
     }
     stage = Stage::Camera;
     stage_time.reset();

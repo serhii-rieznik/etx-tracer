@@ -6,7 +6,6 @@ static const uint kUPBPRandomDomainLightPath = 0x2eb7193u;
 static const uint kUPBPRandomDomainCameraMediumTracking = 0x43ca905u;
 static const uint kUPBPRandomDomainLightMediumTracking = 0x4d2c6dfu;
 static const uint kUPBPRandomDomainConnectionTransmittance = 0x59d03b7u;
-static const uint kUPBPRandomDomainBB1D = 0x8ad753du;
 static const uint kUPBPRandomDomainEmitterConnection = 0x91f02a5u;
 static const uint kUPBPRandomDomainScatteringEvaluation = 0xa70c3d9u;
 static const uint kUPBPRandomDomainIntersectionTraversal = 0xb86e14fu;

@@ -15,8 +15,6 @@ struct UPBPOptions {
   static constexpr uint32_t kMaximumBoundaryCount = 4096u;
   static constexpr uint32_t kMaximumNullEventsPerInterval = 1048576u;
   static constexpr uint32_t kMaximumLightPathCount = 16777216u;
-  static constexpr uint32_t kMinimumMemoryBudgetMiB = 64u;
-  static constexpr uint32_t kMaximumMemoryBudgetMiB = 65536u;
 
   uint32_t technique_mask = static_cast<uint32_t>(UPBPTechnique::BPT) | static_cast<uint32_t>(UPBPTechnique::Surface) | static_cast<uint32_t>(UPBPTechnique::PP3D) |
                             static_cast<uint32_t>(UPBPTechnique::PB2D) | static_cast<uint32_t>(UPBPTechnique::BP2D) | static_cast<uint32_t>(UPBPTechnique::BB1D);
@@ -27,11 +25,9 @@ struct UPBPOptions {
   float initial_bp2d_radius = 0.0f;
   float initial_bb1d_radius = 0.0f;
   float radius_alpha = 0.75f;
-  float beam_selection_probability = 1.0f;
   uint32_t maximum_boundary_count = 64u;
   uint32_t maximum_null_events_per_interval = 1024u;
-  uint32_t maximum_bb1d_light_path_count = 4000u;
-  uint32_t memory_budget_mb = 2048u;
+  uint32_t maximum_bb1d_light_path_count = 0u;
 
   bool enabled(const UPBPTechnique technique) const {
     return (technique_mask & static_cast<uint32_t>(technique)) != 0u;
@@ -59,11 +55,9 @@ struct UPBPOptions {
     initial_bp2d_radius = options.get_float("upbp-bp2d-radius", initial_bp2d_radius);
     initial_bb1d_radius = options.get_float("upbp-bb1d-radius", initial_bb1d_radius);
     radius_alpha = options.get_float("upbp-radius-alpha", radius_alpha);
-    beam_selection_probability = options.get_float("upbp-beam-selection-probability", beam_selection_probability);
     maximum_boundary_count = options.get_integral("upbp-maximum-boundaries", maximum_boundary_count);
     maximum_null_events_per_interval = options.get_integral("upbp-maximum-null-events", maximum_null_events_per_interval);
     maximum_bb1d_light_path_count = options.get_integral("upbp-bb1d-light-path-count", maximum_bb1d_light_path_count);
-    memory_budget_mb = options.get_integral("upbp-memory-budget-mb", memory_budget_mb);
   }
 
   void store(Options& options) const {
@@ -84,12 +78,10 @@ struct UPBPOptions {
     options.set_float("upbp-bp2d-radius", initial_bp2d_radius, "Initial BP2D radius", {0.0f, 1000.0f});
     options.set_float("upbp-bb1d-radius", initial_bb1d_radius, "Initial BB1D radius", {0.0f, 1000.0f});
     options.set_float("upbp-radius-alpha", radius_alpha, "Radius alpha", {0.01f, 1.0f});
-    options.set_float("upbp-beam-selection-probability", beam_selection_probability, "BB1D light-beam selection probability", {0.001f, 1.0f});
     options.set_integral("upbp-maximum-boundaries", maximum_boundary_count, "Maximum boundaries per path", 0u, {1u, kMaximumBoundaryCount});
     options.set_integral("upbp-maximum-null-events", maximum_null_events_per_interval, "Maximum null events per medium interval", 0u, {1u, kMaximumNullEventsPerInterval});
     options.set_integral("upbp-bb1d-light-path-count", maximum_bb1d_light_path_count, "Light paths assigned to BB1D per iteration (0 = all retained light paths)", 0u,
       {0u, kMaximumLightPathCount});
-    options.set_integral("upbp-memory-budget-mb", memory_budget_mb, "CPU light-storage advisory target (MiB)", 0u, {kMinimumMemoryBudgetMiB, kMaximumMemoryBudgetMiB});
   }
 };
 
@@ -123,10 +115,6 @@ inline bool upbp_options_valid(const UPBPOptions& options, std::string& reason) 
     reason = "UPBP radius alpha must be finite and in (0, 1]";
     return false;
   }
-  if ((options.beam_selection_probability <= 0.0f) || (options.beam_selection_probability > 1.0f) || (std::isfinite(options.beam_selection_probability) == false)) {
-    reason = "UPBP beam-selection probability must be finite and in (0, 1]";
-    return false;
-  }
   if ((options.maximum_boundary_count == 0u) || (options.maximum_boundary_count > UPBPOptions::kMaximumBoundaryCount)) {
     reason = "UPBP maximum boundary count is outside the supported range";
     return false;
@@ -137,10 +125,6 @@ inline bool upbp_options_valid(const UPBPOptions& options, std::string& reason) 
   }
   if (options.maximum_bb1d_light_path_count > UPBPOptions::kMaximumLightPathCount) {
     reason = "UPBP maximum BB1D light-path count is outside the supported range";
-    return false;
-  }
-  if ((options.memory_budget_mb < UPBPOptions::kMinimumMemoryBudgetMiB) || (options.memory_budget_mb > UPBPOptions::kMaximumMemoryBudgetMiB)) {
-    reason = "UPBP CPU light-storage advisory target is outside the supported range";
     return false;
   }
   reason.clear();

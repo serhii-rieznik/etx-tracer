@@ -81,13 +81,13 @@ bool validate_progressive_radii() {
 
   constexpr uint64_t light_path_count = 4096u;
   constexpr double radius = 0.1;
-  valid = close_value(etx::upbp_density_mis_factor(etx::UPBPTechnique::Surface, light_path_count, radius, 1.0),
+  valid = close_value(etx::upbp_density_mis_factor(etx::UPBPTechnique::Surface, light_path_count, radius),
             static_cast<double>(kPi) * radius * radius * static_cast<double>(light_path_count), 1.0e-12, "surface MIS factor") &&
           valid;
-  valid = close_value(etx::upbp_density_mis_factor(etx::UPBPTechnique::PP3D, light_path_count, radius, 1.0),
+  valid = close_value(etx::upbp_density_mis_factor(etx::UPBPTechnique::PP3D, light_path_count, radius),
             (4.0 / 3.0) * static_cast<double>(kPi) * radius * radius * radius * static_cast<double>(light_path_count), 1.0e-12, "PP3D MIS factor") &&
           valid;
-  valid = close_value(etx::upbp_density_mis_factor(etx::UPBPTechnique::BB1D, light_path_count, radius, 0.5), 0.5 * radius * static_cast<double>(light_path_count) * 0.5, 1.0e-12,
+  valid = close_value(etx::upbp_density_mis_factor(etx::UPBPTechnique::BB1D, light_path_count, radius), 0.5 * radius * static_cast<double>(light_path_count), 1.0e-12,
             "BB1D MIS factor") &&
           valid;
   std::printf("progressive radii %s\n", valid ? "valid" : "failed");
@@ -247,10 +247,10 @@ bool validate_density_technique_factors() {
   constexpr double forward_ray_factor = 2.0;
   constexpr double reverse_ray_factor = 3.0;
   constexpr double sin_theta = 0.5;
-  const double pp_factor = etx::upbp_density_mis_factor(etx::UPBPTechnique::PP3D, light_path_count, radius, 1.0);
-  const double pb_factor = etx::upbp_density_mis_factor(etx::UPBPTechnique::PB2D, light_path_count, radius, 1.0);
-  const double bp_factor = etx::upbp_density_mis_factor(etx::UPBPTechnique::BP2D, light_path_count, radius, 1.0);
-  const double bb_factor = etx::upbp_density_mis_factor(etx::UPBPTechnique::BB1D, light_path_count, radius, 0.25);
+  const double pp_factor = etx::upbp_density_mis_factor(etx::UPBPTechnique::PP3D, light_path_count, radius);
+  const double pb_factor = etx::upbp_density_mis_factor(etx::UPBPTechnique::PB2D, light_path_count, radius);
+  const double bp_factor = etx::upbp_density_mis_factor(etx::UPBPTechnique::BP2D, light_path_count, radius);
+  const double bb_factor = etx::upbp_density_mis_factor(etx::UPBPTechnique::BB1D, light_path_count, radius);
 
   bool valid = true;
   valid =
@@ -280,12 +280,12 @@ bool validate_density_technique_factors() {
   const double bb_kernel = etx::upbp_bb1d_kernel_value(etx::UPBPKernel::Epanechnikov, radius, 0.25 * radius * radius, sin_theta);
   const double expected_bb_kernel = 3.0 / (4.0 * radius * sin_theta) * 0.75;
   valid = close_value(bb_kernel, expected_bb_kernel, 1.0e-14, "BB1D Epanechnikov kernel") && valid;
-  valid = close_value(etx::upbp_density_estimator_scale(etx::UPBPTechnique::BB1D, etx::UPBPKernel::Epanechnikov, light_path_count, radius, 0.25 * radius * radius, sin_theta, 0.25),
-            expected_bb_kernel / (static_cast<double>(light_path_count) * 0.25), 1.0e-14, "BB1D estimator scale") &&
+  valid = close_value(etx::upbp_density_estimator_scale(etx::UPBPTechnique::BB1D, etx::UPBPKernel::Epanechnikov, light_path_count, radius, 0.25 * radius * radius, sin_theta),
+            expected_bb_kernel / static_cast<double>(light_path_count), 1.0e-14, "BB1D estimator scale") &&
           valid;
-  const etx::UPBPPreparedBB1D prepared_bb1d = etx::upbp_prepare_bb1d(etx::UPBPKernel::Epanechnikov, radius, light_path_count, 0.25);
+  const etx::UPBPPreparedBB1D prepared_bb1d = etx::upbp_prepare_bb1d(etx::UPBPKernel::Epanechnikov, radius, light_path_count);
   valid = prepared_bb1d.valid && valid;
-  valid = close_value(prepared_bb1d.estimator_normalization, 1.0 / (static_cast<double>(light_path_count) * 0.25), 1.0e-14, "prepared BB1D estimator normalization") && valid;
+  valid = close_value(prepared_bb1d.estimator_normalization, 1.0 / static_cast<double>(light_path_count), 1.0e-14, "prepared BB1D estimator normalization") && valid;
   valid = close_value(etx::upbp_evaluate_prepared_bb1d_kernel(prepared_bb1d, 0.25 * radius * radius, sin_theta), expected_bb_kernel, 1.0e-14, "prepared BB1D kernel") && valid;
   std::printf("density technique factors %s\n", valid ? "valid" : "failed");
   return valid;
@@ -1105,7 +1105,7 @@ bool validate_bpt_strategy_recurrence() {
 }
 
 bool validate_sampling_domains() {
-  constexpr std::array<etx::UPBPRandomDomain, 17u> domains = {
+  constexpr std::array<etx::UPBPRandomDomain, 16u> domains = {
     etx::UPBPRandomDomain::FilmSample,
     etx::UPBPRandomDomain::CameraPath,
     etx::UPBPRandomDomain::LightPath,
@@ -1114,7 +1114,6 @@ bool validate_sampling_domains() {
     etx::UPBPRandomDomain::ConnectionTransmittance,
     etx::UPBPRandomDomain::PB2D,
     etx::UPBPRandomDomain::BP2D,
-    etx::UPBPRandomDomain::BB1D,
     etx::UPBPRandomDomain::EmitterConnection,
     etx::UPBPRandomDomain::ScatteringEvaluation,
     etx::UPBPRandomDomain::IntersectionTraversal,

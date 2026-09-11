@@ -54,18 +54,17 @@ inline UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& opti
     upbp_initial_radius(options.initial_bp2d_radius, bounding_sphere_radius, result.camera_subpath_count, result.light_subpath_count, 2u, kUPBPAutomaticVolumeRadiusScale),
     options.radius_alpha, 2u, iteration);
   const double bb1d_sample_fraction =
-    result.light_subpath_count > 0u ? static_cast<double>(result.bb1d_light_subpath_count) * options.beam_selection_probability / static_cast<double>(result.light_subpath_count)
-                                    : 0.0;
+    result.light_subpath_count > 0u ? static_cast<double>(result.bb1d_light_subpath_count) / static_cast<double>(result.light_subpath_count) : 0.0;
   result.bb1d_radius = upbp_progressive_radius_for_sample_fraction(
     upbp_initial_radius(options.initial_bb1d_radius, bounding_sphere_radius, result.camera_subpath_count, result.light_subpath_count, 1u, kUPBPAutomaticVolumeRadiusScale),
     options.radius_alpha, 1u, iteration, bb1d_sample_fraction);
 
   result.mis.technique_factors[0u] = result.bpt_sample_count;
-  result.mis.technique_factors[1u] = upbp_density_mis_factor(UPBPTechnique::Surface, result.light_subpath_count, result.surface_radius, 1.0);
-  result.mis.technique_factors[2u] = upbp_density_mis_factor(UPBPTechnique::PP3D, result.light_subpath_count, result.pp3d_radius, 1.0);
-  result.mis.technique_factors[3u] = upbp_density_mis_factor(UPBPTechnique::PB2D, result.light_subpath_count, result.pb2d_radius, 1.0);
-  result.mis.technique_factors[4u] = upbp_density_mis_factor(UPBPTechnique::BP2D, result.light_subpath_count, result.bp2d_radius, 1.0);
-  result.mis.technique_factors[5u] = upbp_density_mis_factor(UPBPTechnique::BB1D, result.bb1d_light_subpath_count, result.bb1d_radius, options.beam_selection_probability);
+  result.mis.technique_factors[1u] = upbp_density_mis_factor(UPBPTechnique::Surface, result.light_subpath_count, result.surface_radius);
+  result.mis.technique_factors[2u] = upbp_density_mis_factor(UPBPTechnique::PP3D, result.light_subpath_count, result.pp3d_radius);
+  result.mis.technique_factors[3u] = upbp_density_mis_factor(UPBPTechnique::PB2D, result.light_subpath_count, result.pb2d_radius);
+  result.mis.technique_factors[4u] = upbp_density_mis_factor(UPBPTechnique::BP2D, result.light_subpath_count, result.bp2d_radius);
+  result.mis.technique_factors[5u] = upbp_density_mis_factor(UPBPTechnique::BB1D, result.bb1d_light_subpath_count, result.bb1d_radius);
   result.mis.photon_beams_long = false;
   result.mis.camera_beams_long = true;
   return result;

@@ -37,7 +37,6 @@ enum class UPBPRandomDomain : uint32_t {
   ConnectionTransmittance = 0x59d03b7u,
   PB2D = 0x6f14ae9u,
   BP2D = 0x748e2cbu,
-  BB1D = 0x8ad753du,
   EmitterConnection = 0x91f02a5u,
   ScatteringEvaluation = 0xa70c3d9u,
   IntersectionTraversal = 0xb86e14fu,
@@ -760,14 +759,14 @@ ETX_SHARED_INLINE double upbp_progressive_radius_for_sample_fraction(const doubl
   return initial_radius * std::pow(effective_iteration + 1.0, exponent);
 }
 
-ETX_SHARED_INLINE double upbp_density_mis_factor(const UPBPTechnique technique, const uint64_t light_subpath_count, const double radius, const double beam_selection_probability) {
-  if ((light_subpath_count == 0u) || (radius <= 0.0) || (beam_selection_probability <= 0.0) || (beam_selection_probability > 1.0)) {
+ETX_SHARED_INLINE double upbp_density_mis_factor(const UPBPTechnique technique, const uint64_t light_subpath_count, const double radius) {
+  if ((light_subpath_count == 0u) || (radius <= 0.0)) {
     return 0.0;
   }
 
   const double path_count = static_cast<double>(light_subpath_count);
   if (technique == UPBPTechnique::BB1D) {
-    return 0.5 * radius * path_count * beam_selection_probability;
+    return 0.5 * radius * path_count;
   }
 
   const uint32_t dimension = upbp_kernel_dimension(technique);
@@ -821,14 +820,14 @@ ETX_SHARED_INLINE double upbp_bb1d_kernel_value(const UPBPKernel kernel, const d
 }
 
 ETX_SHARED_INLINE double upbp_density_estimator_scale(const UPBPTechnique technique, const UPBPKernel kernel, const uint64_t light_subpath_count, const double radius,
-  const double distance_squared, const double sin_theta, const double beam_selection_probability) {
-  if ((light_subpath_count == 0u) || (beam_selection_probability <= 0.0) || (beam_selection_probability > 1.0)) {
+  const double distance_squared, const double sin_theta) {
+  if (light_subpath_count == 0u) {
     return 0.0;
   }
 
   const double kernel_value = technique == UPBPTechnique::BB1D ? upbp_bb1d_kernel_value(kernel, radius, distance_squared, sin_theta)
                                                                : upbp_kernel_value(kernel, upbp_kernel_dimension(technique), radius, distance_squared);
-  return kernel_value / (static_cast<double>(light_subpath_count) * beam_selection_probability);
+  return kernel_value / static_cast<double>(light_subpath_count);
 }
 
 ETX_SHARED_INLINE double upbp_balance_weight(const UPBPTechniqueProbability* probabilities, const uint32_t probability_count, const uint32_t selected_index) {
