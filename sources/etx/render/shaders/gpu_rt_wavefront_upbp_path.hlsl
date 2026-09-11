@@ -35,6 +35,7 @@ GPUWavefrontPathVertex upbp_make_wavefront_path_vertex(GPUUPBPVertex vertex, boo
 }
 
 bool upbp_append_vertex(GPUUPBPResources resources, bool from_camera, GPUUPBPVertex vertex, out uint vertex_index) {
+  vertex.flags = (vertex.flags & ~GPUUPBPVertexFlags::FromLight) | (from_camera ? 0u : GPUUPBPVertexFlags::FromLight);
   if (upbp_append_partitioned_index(resources, from_camera, GPUUPBPCounterIndex::LightVertex, GPUUPBPCounterIndex::CameraVertex, resources.light_vertex_capacity,
         resources.camera_vertex_capacity, GPUUPBPOverflowFlags::Vertex, vertex_index) == false) {
     return false;
@@ -157,13 +158,14 @@ bool upbp_finalize_physical_vertex(GPUUPBPResources resources, bool from_camera,
     }
     vertex.flags |= GPUUPBPVertexFlags::HasDeparture;
     vertex.departure_state = path_state.recursive_state;
-    if (((path_state.flags & GPUUPBPPathStateFlags::Light) != 0u) && (upbp_append_light_point(resources, path_state.last_vertex_index, vertex) == false)) {
-      path_state.recursive_state.failure = GPUUPBPRecursiveFailure::InvalidPath;
-      path_state.recursive_state.failure_vertex_index = 4u;
-      return false;
-    }
   } else {
     vertex.flags &= ~GPUUPBPVertexFlags::HasDeparture;
+  }
+  // Merging uses the arrival; survival of the following roulette decision is independent.
+  if (((path_state.flags & GPUUPBPPathStateFlags::Light) != 0u) && (upbp_append_light_point(resources, path_state.last_vertex_index, vertex) == false)) {
+    path_state.recursive_state.failure = GPUUPBPRecursiveFailure::InvalidPath;
+    path_state.recursive_state.failure_vertex_index = 4u;
+    return false;
   }
   upbp_store_vertex(resources.vertex_buffer, path_state.last_vertex_index, vertex);
   upbp_store_path_state(resources.path_state_buffer, upbp_path_state_index(resources, from_camera, path_index), path_state);

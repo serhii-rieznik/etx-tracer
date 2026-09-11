@@ -9,14 +9,8 @@ struct TaskScheduler;
 
 struct FilmImpl;
 struct Film {
-  enum class NoiseEstimationSchedule : uint32_t {
-    EveryOtherIteration,
-    PowerOfTwoSampleCount,
-  };
-
   struct MemoryStats {
     uint64_t accumulation_bytes = 0u;
-    uint64_t adaptive_bytes = 0u;
     uint64_t normals_bytes = 0u;
     uint64_t albedo_bytes = 0u;
     uint64_t denoised_bytes = 0u;
@@ -52,12 +46,12 @@ struct Film {
   void reset_render_window();
   bool set_render_window(const uint2& origin, const uint2& size);
 
-  float2 sample(const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const;
+  float2 sample(const PixelFilter& sampler, const uint2& pixel, const float2& pixel_rnd, const float2& filter_rnd) const;
 
   void submit(const float3& value, const float2& ndc_coord);
   void submit(const float3& value, const float3& normal, const float3& albedo, const uint2& pixel);
-  void commit_iteration(uint32_t sample_index, uint32_t total_samples, float noise_threshold, float radiance_clamp);
-  void commit_iteration(uint32_t sample_index, uint32_t total_samples, float noise_threshold, float radiance_clamp, NoiseEstimationSchedule noise_estimation_schedule);
+
+  void commit_iteration(float radiance_clamp);
 
   void clear(uint32_t clear_options);
 
@@ -71,17 +65,11 @@ struct Film {
   uint32_t pixel_size() const;
   void set_pixel_size(uint32_t size);
 
-  /*
-   * Adaptive sampling
-   */
   uint32_t total_pixel_count() const;
   uint32_t current_pixel_count() const;
-  uint32_t active_pixel_count() const;
   MemoryStats memory_stats() const;
 
-  bool active_pixel(uint32_t linear_index, uint2& location) const;
-  void estimate_noise_levels(uint32_t sample_index, uint32_t total_samples, float threshold);
-  float noise_level() const;
+  uint2 pixel_location(uint32_t linear_index) const;
 
   static void generate_filter_image(uint32_t filter, std::vector<float4>&);
 

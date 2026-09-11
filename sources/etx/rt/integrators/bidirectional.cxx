@@ -252,9 +252,7 @@ struct CPUBidirectionalImpl : public Task {
     auto& scene = rt.scene();
 
     for (uint32_t i = begin; (state->load() != Integrator::State::Stopped) && (i < end); ++i) {
-      uint2 pixel = {};
-      if (film.active_pixel(i, pixel) == false)
-        continue;
+      const uint2 pixel = film.pixel_location(i);
 
       const uint2 film_size = film.base_dimensions();
       const uint32_t pixel_index = pixel.x + pixel.y * film_size.x;
@@ -278,7 +276,8 @@ struct CPUBidirectionalImpl : public Task {
       SpectralResponse result = {spect, 0.0f};
 
       if (mode != Mode::LightTracing) {
-        float2 uv = film.sample(status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, camera_smp.next_2d());
+        const float2 pixel_sample = camera_smp.next_2d();
+        float2 uv = film.sample(rt.scene().pixel_sampler, pixel, pixel_sample, camera_smp.next_2d());
         result = build_camera_path(camera_smp, spect, uv, path_data, gbuffer, pixel, status.current_iteration);
       }
 
@@ -315,6 +314,8 @@ struct CPUBidirectionalImpl : public Task {
     const uint32_t camera_path_length = path_data.camera_path_length();
     for (uint32_t light_s = 1, light_s_e = static_cast<uint32_t>(path_data.emitter_path.size()); running() && (light_s < light_s_e); ++light_s) {
       const uint32_t target_path_length = camera_path_length + light_s + 1;
+      if (target_path_length > scene.options.max_path_length)
+        break;
       if (target_path_length < scene.options.min_path_length)
         continue;
 
@@ -963,7 +964,7 @@ struct CPUBidirectionalImpl : public Task {
 
     const auto& scene = rt.scene();
 
-    float curr_from_camera = film_pdf_out(rt.camera(), y_curr.intersection.pos);
+    float curr_from_camera = film_pdf_out(rt.camera(), sampled_camera_vertex.intersection.pos, y_curr.intersection.pos);
     curr_from_camera = PathVertex::convert_solid_angle_pdf_to_area(curr_from_camera, sampled_camera_vertex, y_curr);
 
     float reverse_pdf = 0.0f;
@@ -1154,8 +1155,8 @@ struct CPUBidirectionalImpl : public Task {
   SpectralResponse connect_camera_to_light(const PathVertex& z_curr, const PathVertex& z_prev, Sampler& smp, PathData& path_data, SpectralQuery spect) const {
     const auto& scene = rt.scene();
 
-    uint32_t connection_len = path_data.camera_path_length() + 1u;
-    bool invalid_path_length = connection_len < scene.options.min_path_length;
+    const uint32_t connection_len = path_data.camera_path_length() + 1u;
+    const bool invalid_path_length = (connection_len < scene.options.min_path_length) || (connection_len > scene.options.max_path_length);
     if (invalid_path_length || (enable_connect_to_light == false) || (mode == Mode::LightTracing))
       return {spect, 0.0f};
 
@@ -1214,12 +1215,17 @@ struct CPUBidirectionalImpl : public Task {
     const auto& scene = rt.scene();
 
     const uint32_t target_path_length = path_data.emitter_path_length() + 1u;
-    if ((mode == Mode::PathTracing) || (enable_connect_to_camera == false) || (target_path_length < scene.options.min_path_length))
+    if ((mode == Mode::PathTracing) || (enable_connect_to_camera == false) || (target_path_length < scene.options.min_path_length) ||
+        (target_path_length > scene.options.max_path_length))
       return {spect, 0.0f};
 
     const auto& camera = rt.camera();
     camera_sample = sample_film(smp, camera, y_curr.intersection.pos);
     if (camera_sample.valid() == false) {
+      return {spect, 0.0f};
+    }
+    const float2 splat_uv = pixel_filter_splat_uv(camera_sample.uv, camera.film_size, sample_pixel_filter_offset(scene.pixel_sampler, smp.next_2d()));
+    if (pixel_filter_contains_uv(splat_uv) == false) {
       return {spect, 0.0f};
     }
 
@@ -1256,6 +1262,7 @@ struct CPUBidirectionalImpl : public Task {
       splat *= local_transmittance(spect, smp, y_curr, clip_pos);
     }
 
+    camera_sample.uv = splat_uv;
     return splat;
   }
 
@@ -1344,7 +1351,7 @@ void CPUBidirectional::update() {
 
   rt.scheduler().wait_task(_private->current_task);
   const auto& scene = rt.scene();
-  rt.film().commit_iteration(_private->status.current_iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp);
+  rt.film().commit_iteration(scene.options.radiance_clamp);
   _private->completed();
 
   if (current_state == State::WaitingForCompletion) {

@@ -166,15 +166,14 @@ struct CPUDebugIntegratorImpl : public Task {
     const auto& film = rt.film();
 
     for (uint32_t i = begin; running() && (i < end); ++i) {
-      uint2 pixel = {};
-      if (film.active_pixel(i, pixel)) {
-        const uint2 film_size = film.base_dimensions();
-        const uint32_t pixel_index = pixel.x + pixel.y * film_size.x;
-        auto smp = Sampler(rt.scene().sampler_seed(pixel_index, status.current_iteration));
-        float2 uv = film.sample(status.current_iteration == 0u ? PixelFilter::empty() : rt.scene().pixel_sampler, pixel, smp.next_2d());
-        float3 xyz = preview_pixel(smp, uv, pixel, pixel_index);
-        rt.film().submit(xyz, {}, {}, pixel);
-      }
+      const uint2 pixel = film.pixel_location(i);
+      const uint2 film_size = film.base_dimensions();
+      const uint32_t pixel_index = pixel.x + pixel.y * film_size.x;
+      auto smp = Sampler(rt.scene().sampler_seed(pixel_index, status.current_iteration));
+      const float2 pixel_sample = smp.next_2d();
+      float2 uv = film.sample(rt.scene().pixel_sampler, pixel, pixel_sample, smp.next_2d());
+      float3 xyz = preview_pixel(smp, uv, pixel, pixel_index);
+      rt.film().submit(xyz, {}, {}, pixel);
     }
   }
 
@@ -685,7 +684,7 @@ void CPUDebugIntegrator::update() {
   _private->status.total_time += _private->status.last_iteration_time;
   _private->status.completed_iterations += 1u;
   const auto& scene = rt.scene();
-  rt.film().commit_iteration(_private->status.current_iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp);
+  rt.film().commit_iteration(scene.options.radiance_clamp);
 
   if (current_state == State::WaitingForCompletion) {
     rt.scheduler().release(_private->current_task);

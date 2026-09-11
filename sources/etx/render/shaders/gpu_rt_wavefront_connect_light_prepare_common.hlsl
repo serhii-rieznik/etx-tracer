@@ -347,7 +347,7 @@ void wavefront_initialize_connect_light_prepare_candidate(uint dispatch_index, u
   const uint cursor_base_offset = resources.path_capacity * kGPUWavefrontConnectDispatchArgsCount * kGPUWavefrontConnectLightTaskStride;
   const uint input_cursor_offset = cursor_base_offset + (((output_cursor_slot ^ 1u) * resources.path_capacity + dispatch_index) * 4u);
   uint vertex_index = ((constants.dispatch_item_offset & 1u) != 0u) ? meta.reserved0 : WAVEFRONT_RO_BUFFER(resources.connect_light_task_buffer).Load(input_cursor_offset);
-  uint vertex_path_length = min(meta.light_path_length, constants.connect_light_vertex_length);
+  uint vertex_path_length = ((constants.dispatch_item_offset & 1u) != 0u) ? meta.light_path_length : min(meta.light_path_length, constants.connect_light_vertex_length);
   const uint light_vertex_length = constants.connect_light_vertex_length - batch_index;
   const uint task_index = batch_index * resources.path_capacity + dispatch_index;
   uint light_vertex_index = kInvalidIndex;
@@ -559,12 +559,13 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   float weight = 1.0f;
   if (scene_multiple_importance_sampling_enabled() && (scene_path_mode_is_upbp() == false)) {
     if (scene_path_mode_is_vcm() || scene_path_mode_is_bdpt_full()) {
+      const float surface_factor = wavefront_vcm_surface_factor();
       float vm_pair =
         scene_path_mode_is_vcm() && (wavefront_path_vertex_is_medium(input_value.camera_vertex) == false) && (wavefront_path_vertex_is_medium(input_value.light_vertex) == false)
-          ? constants.vcm_vm_weight
+          ? surface_factor
           : 0.0f;
-      float w_light = y_curr_pdf * (vm_pair + input_value.light_vertex.forward_pdf + input_value.light_vertex.reverse_pdf * y_prev_pdf_dir);
-      float w_camera = z_curr_pdf * (vm_pair + input_value.camera_vertex.forward_pdf + input_value.camera_vertex.reverse_pdf * z_prev_pdf_dir);
+      float w_light = y_curr_pdf * (vm_pair + input_value.light_vertex.forward_pdf + wavefront_connection_mis(input_value.light_vertex, surface_factor) * y_prev_pdf_dir);
+      float w_camera = z_curr_pdf * (vm_pair + input_value.camera_vertex.forward_pdf + wavefront_connection_mis(input_value.camera_vertex) * z_prev_pdf_dir);
       weight = 1.0f / (1.0f + w_light + w_camera);
     } else {
       weight = wavefront_connect_light_weight(input_value, z_curr_pdf, z_prev_pdf, y_curr_pdf, y_prev_pdf);

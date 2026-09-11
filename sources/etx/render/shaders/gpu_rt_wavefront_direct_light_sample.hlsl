@@ -101,7 +101,7 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
   if (scene_path_mode_uses_bdpt_fast() && (path_meta.camera_path_length != 1u)) {
     adjacent_connection = 0.0f;
   }
-  float w_camera = wavefront_safe_div(adjacent_connection + current_vertex.reverse_pdf * reverse_phase_pdf, density_ratio);
+  float w_camera = wavefront_safe_div(adjacent_connection + wavefront_connection_mis(current_vertex) * reverse_phase_pdf, density_ratio);
   return 1.0f / (1.0f + w_light + w_camera);
 }
 

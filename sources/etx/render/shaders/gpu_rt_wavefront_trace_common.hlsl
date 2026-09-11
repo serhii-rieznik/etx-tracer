@@ -15,7 +15,7 @@ float wavefront_surface_shading_pdf_environment(float3 direction, bool target_is
   for (uint i = 0u; i < environment_count; ++i) {
     uint emitter_index = kInvalidIndex;
     if (emitter_access_try_load_environment_emitter(context, i, emitter_index)) {
-      pdf_dir += emitter_discrete_pdf(emitter_index);
+      pdf_dir += emitter_discrete_pdf(emitter_index) * gpu_distant_emission_area_pdf(emitter_index);
     }
   }
 
@@ -23,9 +23,8 @@ float wavefront_surface_shading_pdf_environment(float3 direction, bool target_is
     return 0.0f;
   }
 
-  SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
   float normal_factor = target_is_surface ? abs(dot(target_geo_normal, direction)) : 1.0f;
-  return (normal_factor / (kPi * globals_data.bounding_sphere_radius * globals_data.bounding_sphere_radius)) * (pdf_dir / float(environment_count));
+  return normal_factor * (pdf_dir / float(environment_count));
 }
 
 bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inout uint medium_index, inout uint seed, out TraceSurfaceResult result);

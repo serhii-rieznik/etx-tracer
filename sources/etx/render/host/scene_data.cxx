@@ -95,7 +95,7 @@ uint64_t hash_hierarchy_attachments(const SceneHierarchy& hierarchy) {
 
 }  // namespace
 
-SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transport_bounds, const Camera& camera) {
+SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transport_bounds, const Camera& camera, const bool has_media) {
   float3 camera_extent = {};
   if ((camera.cls == Camera::Class::Perspective) && (camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
     camera_extent = camera.lens_radius * float3{
@@ -107,8 +107,9 @@ SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transpo
 
   float3 bounds_min = min(transport_bounds.p_min, camera.position - camera_extent);
   float3 bounds_max = max(transport_bounds.p_max, camera.position + camera_extent);
-  // A finite primary ray can scatter in a medium anywhere up to its clipping plane. Those vertices must remain inside the domain used to terminate subsequent unbounded segments.
-  if ((camera.cls == Camera::Class::Perspective) && (camera.clip_far > 0.0f)) {
+  // Only media can create primary scattering vertices beyond the geometry and camera bounds.
+  // Keep those vertices inside the domain used to terminate subsequent unbounded segments.
+  if (has_media && (camera.cls == Camera::Class::Perspective) && (camera.clip_far > 0.0f)) {
     const float far_horizontal_scale = camera.clip_far * camera.tan_half_fov;
     const float far_vertical_scale = far_horizontal_scale / camera.aspect;
     float3 far_extent = {
@@ -129,7 +130,10 @@ SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transpo
   const float coordinate_scale =
     max(1.0f, max(max(max(fabsf(bounds_min.x), fabsf(bounds_min.y)), fabsf(bounds_min.z)), max(max(fabsf(bounds_max.x), fabsf(bounds_max.y)), fabsf(bounds_max.z))));
   const float padding = max(kRayEpsilon, coordinate_scale * kRayEpsilon);
-  return {center, radius + padding};
+  const float padded_radius = radius + padding;
+  // Medium transport can occupy the full termination sphere, beyond surface bounds.
+  const float3 emission_half_extent = has_media ? float3{padded_radius, padded_radius, padded_radius} : bounds_max - center + float3{padding, padding, padding};
+  return {center, padded_radius, emission_half_extent};
 }
 
 SceneData::SceneData(TaskScheduler& s)

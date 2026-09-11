@@ -3,7 +3,7 @@
 #include "gpu_abi_constants.hxx"
 #include "gpu_upbp_shared.hxx"
 
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsStride = 32u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsStride = 36u;
 ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateStride = 64u;
 ETX_STATIC_CONST uint32_t kGPUUPBPVertexStride = 336u;
 ETX_STATIC_CONST uint32_t kGPUUPBPPathStateStride = 96u;
@@ -28,20 +28,20 @@ ETX_STATIC_CONST uint32_t kGPUUPBPResourcesStride = 768u;
 ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsDSharedOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsDBPTOffset = 4u;
 ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsDPDEOffset = 8u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsRaySampleForwardPdfInverseOffset = 12u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsRaySampleReversePdfInverseOffset = 16u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsRaySampleForwardRatioOffset = 20u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsRaySampleReverseRatioOffset = 24u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsFlagsOffset = 28u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsRaySampleForwardPdfInverseOffset = 16u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsRaySampleReversePdfInverseOffset = 20u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsRaySampleForwardRatioOffset = 24u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsRaySampleReverseRatioOffset = 28u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsFlagsOffset = 32u;
 
 ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateWeightsOffset = 0u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateLastSinThetaOffset = 32u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateDBPTAOffset = 36u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateDBPTBOffset = 40u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateDPDEAOffset = 44u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateDPDEBOffset = 48u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateFailureOffset = 52u;
-ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateFailureVertexIndexOffset = 56u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateLastSinThetaOffset = 36u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateDBPTAOffset = 40u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateDBPTBOffset = 44u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateDSurfaceBOffset = 48u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateDPDEBOffset = 52u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateFailureOffset = 56u;
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateFailureVertexIndexOffset = 60u;
 
 ETX_STATIC_CONST uint32_t kGPUUPBPVertexThroughputOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUUPBPVertexOutgoingThroughputOffset = 16u;
@@ -67,16 +67,16 @@ ETX_STATIC_CONST uint32_t kGPUUPBPVertexLogMediumEventDensityOffset = 148u;
 ETX_STATIC_CONST uint32_t kGPUUPBPVertexEtaOffset = 152u;
 ETX_STATIC_CONST uint32_t kGPUUPBPVertexSamplePropertiesOffset = 156u;
 ETX_STATIC_CONST uint32_t kGPUUPBPVertexArrivalWeightsOffset = 160u;
-ETX_STATIC_CONST uint32_t kGPUUPBPVertexDepartureStateOffset = 192u;
-ETX_STATIC_CONST uint32_t kGPUUPBPVertexPreviousVertexIndexOffset = 256u;
-ETX_STATIC_CONST uint32_t kGPUUPBPVertexIncomingSegmentIndexOffset = 260u;
-ETX_STATIC_CONST uint32_t kGPUUPBPVertexPathLengthOffset = 264u;
-ETX_STATIC_CONST uint32_t kGPUUPBPVertexGlobalPathIndexOffset = 268u;
-ETX_STATIC_CONST uint32_t kGPUUPBPVertexBarycentricOffset = 272u;
-ETX_STATIC_CONST uint32_t kGPUUPBPVertexEmitterIndexOffset = 284u;
-ETX_STATIC_CONST uint32_t kGPUUPBPVertexInlineScatteringOffset = 288u;
-ETX_STATIC_CONST uint32_t kGPUUPBPVertexInlineExtinctionOffset = 304u;
-ETX_STATIC_CONST uint32_t kGPUUPBPVertexInlinePhaseFunctionGOffset = 320u;
+ETX_STATIC_CONST uint32_t kGPUUPBPVertexDepartureStateOffset = 208u;
+ETX_STATIC_CONST uint32_t kGPUUPBPVertexPreviousVertexIndexOffset = 196u;
+ETX_STATIC_CONST uint32_t kGPUUPBPVertexIncomingSegmentIndexOffset = 200u;
+ETX_STATIC_CONST uint32_t kGPUUPBPVertexPathLengthOffset = 204u;
+ETX_STATIC_CONST uint32_t kGPUUPBPVertexGlobalPathIndexOffset = 272u;
+ETX_STATIC_CONST uint32_t kGPUUPBPVertexBarycentricOffset = 276u;
+ETX_STATIC_CONST uint32_t kGPUUPBPVertexEmitterIndexOffset = 288u;
+ETX_STATIC_CONST uint32_t kGPUUPBPVertexInlineScatteringOffset = 304u;
+ETX_STATIC_CONST uint32_t kGPUUPBPVertexInlineExtinctionOffset = 320u;
+ETX_STATIC_CONST uint32_t kGPUUPBPVertexInlinePhaseFunctionGOffset = 292u;
 
 ETX_STATIC_CONST uint32_t kGPUUPBPPathStateRecursiveStateOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUUPBPPathStateFirstVertexIndexOffset = 64u;
@@ -101,12 +101,12 @@ ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexTexcoordOffset = 80u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexTriangleIndexOffset = 88u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexInstanceIndexOffset = 92u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexArrivalWeightsOffset = 96u;
-ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexPreviousVertexIndexOffset = 128u;
-ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexPathLengthOffset = 132u;
-ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexGlobalPathIndexOffset = 136u;
-ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexEmitterIndexOffset = 140u;
-ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexBarycentricOffset = 144u;
-ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexScatterPdfForwardOffset = 152u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexPreviousVertexIndexOffset = 132u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexPathLengthOffset = 136u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexGlobalPathIndexOffset = 140u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexEmitterIndexOffset = 144u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexBarycentricOffset = 148u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexScatterPdfForwardOffset = 156u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexInlineExtinctionOffset = 160u;
 
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTPathStateLastVertexIndexOffset = 0u;
@@ -273,9 +273,9 @@ ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointMediumIndexOffset = 44u;
 ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointGeoNormalOffset = 48u;
 ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointPathLengthOffset = 60u;
 ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointArrivalWeightsOffset = 64u;
-ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointGlobalPathIndexOffset = 96u;
-ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointLogMediumEventDensityOffset = 100u;
-ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointInlinePhaseFunctionGOffset = 104u;
+ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointGlobalPathIndexOffset = 100u;
+ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointLogMediumEventDensityOffset = 104u;
+ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointInlinePhaseFunctionGOffset = 108u;
 ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointInlineScatteringOffset = 112u;
 ETX_STATIC_CONST uint32_t kGPUUPBPDensityPointInlineExtinctionOffset = 128u;
 
@@ -309,3 +309,7 @@ ETX_STATIC_CONST uint32_t kGPUUPBPBeamReferenceLengthOffset = 12u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBeamReferenceDirectionOffset = 16u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBeamReferencePathLengthOffset = 28u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBeamReferenceMediumIndexOffset = 32u;
+
+ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsDSurfaceOffset = 12u;
+
+ETX_STATIC_CONST uint32_t kGPUUPBPDensityBeamDSurfaceConstantOffset = 252u;

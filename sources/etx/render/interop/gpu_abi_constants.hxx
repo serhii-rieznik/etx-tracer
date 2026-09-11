@@ -208,13 +208,12 @@ ETX_STATIC_CONST uint32_t kSceneOptionsMinPathLengthOffset = 0u;
 ETX_STATIC_CONST uint32_t kSceneOptionsMaxPathLengthOffset = 4u;
 ETX_STATIC_CONST uint32_t kSceneOptionsSamplesOffset = 8u;
 ETX_STATIC_CONST uint32_t kSceneOptionsRandomPathTerminationOffset = 12u;
-ETX_STATIC_CONST uint32_t kSceneOptionsNoiseThresholdOffset = 16u;
-ETX_STATIC_CONST uint32_t kSceneOptionsRadianceClampOffset = 20u;
-ETX_STATIC_CONST uint32_t kSceneOptionsStrategyFlagsOffset = 24u;
-ETX_STATIC_CONST uint32_t kSceneOptionsLightSamplingOffset = 28u;
-ETX_STATIC_CONST uint32_t kSceneOptionsPropertiesFlagsOffset = 32u;
-ETX_STATIC_CONST uint32_t kSceneOptionsPathModeOffset = 36u;
-ETX_STATIC_CONST uint32_t kSceneOptionsRandomSeedOffset = 40u;
+ETX_STATIC_CONST uint32_t kSceneOptionsRadianceClampOffset = 16u;
+ETX_STATIC_CONST uint32_t kSceneOptionsStrategyFlagsOffset = 20u;
+ETX_STATIC_CONST uint32_t kSceneOptionsLightSamplingOffset = 24u;
+ETX_STATIC_CONST uint32_t kSceneOptionsPropertiesFlagsOffset = 28u;
+ETX_STATIC_CONST uint32_t kSceneOptionsPathModeOffset = 32u;
+ETX_STATIC_CONST uint32_t kSceneOptionsRandomSeedOffset = 36u;
 
 ETX_STATIC_CONST uint32_t kSceneGlobalsVertexCountOffset = 0u;
 ETX_STATIC_CONST uint32_t kSceneGlobalsTriangleCountOffset = 4u;
@@ -234,6 +233,7 @@ ETX_STATIC_CONST uint32_t kSceneGlobalsDefaultConductorEtaOffset = 372u;
 ETX_STATIC_CONST uint32_t kSceneGlobalsDefaultConductorKOffset = 376u;
 ETX_STATIC_CONST uint32_t kSceneGlobalsPixelFilterImageIndexOffset = 384u;
 ETX_STATIC_CONST uint32_t kSceneGlobalsPixelFilterRadiusOffset = 388u;
+ETX_STATIC_CONST uint32_t kSceneGlobalsEmissionHalfExtentOffset = 400u;
 
 ETX_STATIC_CONST uint32_t kGPUSpectralValuesRGBEstimateScaleOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUSpectralValuesDataOffset = 16u;

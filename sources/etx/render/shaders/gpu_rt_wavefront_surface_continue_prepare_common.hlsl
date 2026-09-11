@@ -58,21 +58,21 @@ bool wavefront_subsurface_random_walk_applicable(Material material, BSDFSample b
 uint wavefront_load_path_vertex_flags_only(uint descriptor_index, uint vertex_index) {
   ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
   if (wavefront_path_vertex_descriptor_is_light(descriptor_index)) {
-    const uint packed_path_and_flags = buffer.Load(vertex_index * kGPUWavefrontLightPathVertexStride + kGPUWavefrontLightPathVertexPackedPathAndFlagsOffset);
+    const uint packed_path_and_flags = buffer.Load(vertex_index * wavefront_light_path_vertex_stride() + kGPUWavefrontLightPathVertexPackedPathAndFlagsOffset);
     return wavefront_unpack_light_path_vertex_flags(packed_path_and_flags);
   }
 
-  return buffer.Load(vertex_index * kGPUWavefrontPathVertexStride + kGPUWavefrontPathVertexFlagsOffset);
+  return buffer.Load(vertex_index * wavefront_path_vertex_stride() + kGPUWavefrontPathVertexFlagsOffset);
 }
 
 void wavefront_store_path_vertex_pdf_from_next_only(uint descriptor_index, uint vertex_index, float pdf_from_next) {
   RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
   if (wavefront_path_vertex_descriptor_is_light(descriptor_index)) {
-    buffer.Store(vertex_index * kGPUWavefrontLightPathVertexStride + kGPUWavefrontLightPathVertexPdfFromNextOffset, asuint(pdf_from_next));
+    buffer.Store(vertex_index * wavefront_light_path_vertex_stride() + kGPUWavefrontLightPathVertexPdfFromNextOffset, asuint(pdf_from_next));
     return;
   }
 
-  buffer.Store(vertex_index * kGPUWavefrontPathVertexStride + kGPUWavefrontPathVertexPdfFromNextOffset, asuint(pdf_from_next));
+  buffer.Store(vertex_index * wavefront_path_vertex_stride() + kGPUWavefrontPathVertexPdfFromNextOffset, asuint(pdf_from_next));
 }
 
 void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispatch_index) {
@@ -289,6 +289,7 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   float current_d_vcm = current_vertex.forward_pdf;
   float current_d_vc = current_vertex.reverse_pdf;
   float current_d_vm = current_vertex.d_vm;
+  float current_d_surface = current_vertex.d_surface;
 
   if (subsurface_medium_walk) {
     current_vertex.material_index = hit.material_index;
@@ -420,17 +421,16 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
       state.forward_pdf = 0.0f;
       state.reverse_pdf = current_d_vc * cos_theta_bsdf;
       state.d_vm = scene_path_mode_is_vcm() ? (current_d_vm * cos_theta_bsdf) : 0.0f;
+      state.d_surface = scene_path_mode_is_vcm() ? (current_d_surface * cos_theta_bsdf) : 0.0f;
     } else {
       state.forward_pdf = wavefront_safe_div(1.0f, selected_sample_pdf);
-      float vcm_connection_term = scene_path_mode_is_vcm() ? constants.vcm_vm_weight : 0.0f;
-      float connection_source = current_d_vcm + vcm_connection_term;
+      float connection_source = current_d_vcm;
       if (scene_path_mode_uses_bdpt_fast()) {
         connection_source = (state.path_length == 1u) ? current_d_vcm : 0.0f;
       }
       state.reverse_pdf = wavefront_safe_div(cos_theta_bsdf * ((current_d_vc * reverse_bsdf_pdf) + connection_source), selected_sample_pdf);
-      state.d_vm = scene_path_mode_is_vcm()
-                     ? wavefront_safe_div(cos_theta_bsdf * ((current_d_vm * reverse_bsdf_pdf) + (current_d_vcm * constants.vcm_vc_weight) + 1.0f), selected_sample_pdf)
-                     : 0.0f;
+      state.d_vm = scene_path_mode_is_vcm() ? wavefront_safe_div(cos_theta_bsdf * ((current_d_vm * reverse_bsdf_pdf) + current_d_vcm), selected_sample_pdf) : 0.0f;
+      state.d_surface = scene_path_mode_is_vcm() ? wavefront_safe_div(cos_theta_bsdf * ((current_d_surface * reverse_bsdf_pdf) + 1.0f), selected_sample_pdf) : 0.0f;
     }
     SpectralResponse next_throughput = spectral_response_mul(state.throughput, bsdf_sample.weight);
     if (from_camera == false) {

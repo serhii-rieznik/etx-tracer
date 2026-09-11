@@ -31,8 +31,9 @@ static_assert(sizeof(GPUUPBPBeamGridMetadata) == kGPUUPBPBeamGridMetadataStride,
 static_assert(sizeof(GPUUPBPBeamGridResources) == kGPUUPBPBeamGridResourcesStride, "GPUUPBPBeamGridResources size changed; update GPU UPBP ABI");
 #define ETX_ASSERT_GPU_UPBP_OFFSET(type, field, offset) static_assert(offsetof(type, field) == offset, #type "::" #field " offset changed; update GPU UPBP ABI")
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveWeights, log_d_shared, kGPUUPBPRecursiveWeightsDSharedOffset);
-ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveWeights, log_d_bpt, kGPUUPBPRecursiveWeightsDBPTOffset);
-ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveWeights, log_d_pde, kGPUUPBPRecursiveWeightsDPDEOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveWeights, log_d_bpt_base, kGPUUPBPRecursiveWeightsDBPTOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveWeights, log_d_pde_base, kGPUUPBPRecursiveWeightsDPDEOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveWeights, log_d_surface, kGPUUPBPRecursiveWeightsDSurfaceOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveWeights, log_ray_sample_forward_pdf_inverse, kGPUUPBPRecursiveWeightsRaySampleForwardPdfInverseOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveWeights, log_ray_sample_reverse_pdf_inverse, kGPUUPBPRecursiveWeightsRaySampleReversePdfInverseOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveWeights, log_ray_sample_forward_ratio, kGPUUPBPRecursiveWeightsRaySampleForwardRatioOffset);
@@ -42,7 +43,7 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveState, weights, kGPUUPBPRecursiveStat
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveState, last_sin_theta, kGPUUPBPRecursiveStateLastSinThetaOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveState, log_d_bpt_a, kGPUUPBPRecursiveStateDBPTAOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveState, log_d_bpt_b, kGPUUPBPRecursiveStateDBPTBOffset);
-ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveState, log_d_pde_a, kGPUUPBPRecursiveStateDPDEAOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveState, log_d_surface_b, kGPUUPBPRecursiveStateDSurfaceBOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveState, log_d_pde_b, kGPUUPBPRecursiveStateDPDEBOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveState, failure, kGPUUPBPRecursiveStateFailureOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPRecursiveState, failure_vertex_index, kGPUUPBPRecursiveStateFailureVertexIndexOffset);
@@ -278,6 +279,7 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, transport_distance, kGPUUPBPDensi
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, log_d_shared, kGPUUPBPDensityBeamDSharedOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, log_d_pde_reverse_coefficient, kGPUUPBPDensityBeamDPDEReverseCoefficientOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, log_d_pde_constant, kGPUUPBPDensityBeamDPDEConstantOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, log_d_surface_constant, kGPUUPBPDensityBeamDSurfaceConstantOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, source_event_log_density, kGPUUPBPDensityBeamSourceEventLogDensityOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, interval_distance, kGPUUPBPDensityBeamIntervalDistanceOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, flags, kGPUUPBPDensityBeamFlagsOffset);
@@ -359,7 +361,7 @@ static_assert(offsetof(GPUWavefrontHit, instance_index) == kGPUWavefrontHitInsta
 
 static_assert(std::is_standard_layout_v<GPUWavefrontPathVertex>, "GPUWavefrontPathVertex must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontPathVertex>, "GPUWavefrontPathVertex must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontPathVertex) == kGPUWavefrontPathVertexStride, "GPUWavefrontPathVertex size changed; update GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontPathVertex) == kGPUWavefrontPathVertexVCMStride, "GPUWavefrontPathVertex size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, throughput) == kGPUWavefrontPathVertexThroughputOffset,
   "GPUWavefrontPathVertex::throughput offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, position) == kGPUWavefrontPathVertexPositionOffset, "GPUWavefrontPathVertex::position offset changed; update GPU wavefront ABI");
@@ -403,6 +405,7 @@ static_assert(offsetof(GPUWavefrontPathVertex, instance_index) == kGPUWavefrontP
   "GPUWavefrontPathVertex::instance_index offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, reserved0) == kGPUWavefrontPathVertexReserved0Offset, "GPUWavefrontPathVertex::reserved0 offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, d_vm) == kGPUWavefrontPathVertexDVmOffset, "GPUWavefrontPathVertex::d_vm offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathVertex, d_surface) == kGPUWavefrontPathVertexDSurfaceOffset, "GPUWavefrontPathVertex::d_surface offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontCompactSpectralResponse>, "GPUWavefrontCompactSpectralResponse must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontCompactSpectralResponse>, "GPUWavefrontCompactSpectralResponse must stay trivially copyable for GPU wavefront ABI");
@@ -411,7 +414,7 @@ static_assert(sizeof(GPUWavefrontCompactSpectralResponse) == kGPUWavefrontCompac
 
 static_assert(std::is_standard_layout_v<GPUWavefrontLightPathVertex>, "GPUWavefrontLightPathVertex must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontLightPathVertex>, "GPUWavefrontLightPathVertex must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontLightPathVertex) == kGPUWavefrontLightPathVertexStride, "GPUWavefrontLightPathVertex size changed; update GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontLightPathVertex) == kGPUWavefrontLightPathVertexVCMStride, "GPUWavefrontLightPathVertex size changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontLightPathVertex, throughput) == kGPUWavefrontLightPathVertexThroughputOffset,
   "GPUWavefrontLightPathVertex::throughput offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontLightPathVertex, inline_medium_extinction) == kGPUWavefrontLightPathVertexInlineMediumExtinctionOffset,
@@ -458,6 +461,8 @@ static_assert(offsetof(GPUWavefrontLightPathVertex, previous_vertex_index) == kG
 static_assert(offsetof(GPUWavefrontLightPathVertex, instance_index) == kGPUWavefrontLightPathVertexInstanceIndexOffset,
   "GPUWavefrontLightPathVertex::instance_index offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontLightPathVertex, d_vm) == kGPUWavefrontLightPathVertexDVmOffset, "GPUWavefrontLightPathVertex::d_vm offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontLightPathVertex, d_surface) == kGPUWavefrontLightPathVertexDSurfaceOffset,
+  "GPUWavefrontLightPathVertex::d_surface offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontFastLightEndpoint>, "GPUWavefrontFastLightEndpoint must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontFastLightEndpoint>, "GPUWavefrontFastLightEndpoint must stay trivially copyable for GPU wavefront ABI");
@@ -832,6 +837,8 @@ static_assert(offsetof(SpectralDistribution, integrated_value) == kSpectralDistr
   "SpectralDistribution::integrated_value offset changed; update GPU shader decode");
 
 static_assert(offsetof(GPUSceneGlobals, vertex_count) == kSceneGlobalsVertexCountOffset, "GPUSceneGlobals::vertex_count offset changed; update GPU shader decode");
+static_assert(offsetof(GPUSceneGlobals, emission_half_extent) == kSceneGlobalsEmissionHalfExtentOffset,
+  "GPUSceneGlobals::emission_half_extent offset changed; update GPU shader decode");
 static_assert(offsetof(GPUSceneGlobals, triangle_count) == kSceneGlobalsTriangleCountOffset, "GPUSceneGlobals::triangle_count offset changed; update GPU shader decode");
 static_assert(offsetof(GPUSceneGlobals, environment_emitter_count) == kSceneGlobalsEnvironmentEmitterCountOffset,
   "GPUSceneGlobals::environment_emitter_count offset changed; update GPU shader decode");
@@ -854,7 +861,6 @@ static_assert(offsetof(GPUSceneOptions, max_path_length) == kSceneOptionsMaxPath
 static_assert(offsetof(GPUSceneOptions, samples) == kSceneOptionsSamplesOffset, "GPUSceneOptions::samples offset changed; update GPU shader decode");
 static_assert(offsetof(GPUSceneOptions, random_path_termination) == kSceneOptionsRandomPathTerminationOffset,
   "GPUSceneOptions::random_path_termination offset changed; update GPU shader decode");
-static_assert(offsetof(GPUSceneOptions, noise_threshold) == kSceneOptionsNoiseThresholdOffset, "GPUSceneOptions::noise_threshold offset changed; update GPU shader decode");
 static_assert(offsetof(GPUSceneOptions, radiance_clamp) == kSceneOptionsRadianceClampOffset, "GPUSceneOptions::radiance_clamp offset changed; update GPU shader decode");
 static_assert(offsetof(GPUSceneOptions, strategy_flags) == kSceneOptionsStrategyFlagsOffset, "GPUSceneOptions::strategy_flags offset changed; update GPU shader decode");
 static_assert(offsetof(GPUSceneOptions, light_sampling) == kSceneOptionsLightSamplingOffset, "GPUSceneOptions::light_sampling offset changed; update GPU shader decode");

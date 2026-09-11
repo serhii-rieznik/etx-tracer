@@ -3768,6 +3768,9 @@ void UI::build_toolbar(const BuildContext& ctx) {
         full_width_item();
         if (ImGui::BeginCombo("##toolbar_view_layer", Film::layer_name(_view_options.view_layer))) {
           for (uint32_t i = 0u; i < ViewLayer::Count; ++i) {
+            if (Film::layer_name(i) == nullptr) {
+              continue;
+            }
             const bool selected = i == _view_options.view_layer;
             if (ImGui::Selectable(Film::layer_name(i), selected)) {
               _view_options.view_layer = i;
@@ -3857,6 +3860,9 @@ void UI::build_toolbar(const BuildContext& ctx) {
         }
         if (ImGui::BeginMenu("View layer")) {
           for (uint32_t i = 0u; i < ViewLayer::Count; ++i) {
+            if (Film::layer_name(i) == nullptr) {
+              continue;
+            }
             const bool selected = i == _view_options.view_layer;
             if (ImGui::MenuItem(Film::layer_name(i), nullptr, selected)) {
               _view_options.view_layer = i;
@@ -4601,8 +4607,8 @@ void UI::build_memory_diagnostics_content(SceneRepresentation& scene_rep, const 
       scene_data.images_vector.capacity() * sizeof(Image) + scene_data.mediums_vector.capacity() * sizeof(Medium) + scene_data.cameras.capacity() * sizeof(SceneData::CameraInfo);
     const BufferPool::Stats pool_stats = scene_data.buffer_pool.stats();
     const Film::MemoryStats film_stats = film.memory_stats();
-    const uint64_t film_bytes = film_stats.accumulation_bytes + film_stats.adaptive_bytes + film_stats.normals_bytes + film_stats.albedo_bytes + film_stats.denoised_bytes +
-                                film_stats.output_bytes + film_stats.internal_bytes;
+    const uint64_t film_bytes =
+      film_stats.accumulation_bytes + film_stats.normals_bytes + film_stats.albedo_bytes + film_stats.denoised_bytes + film_stats.output_bytes + film_stats.internal_bytes;
     const uint64_t tracked_cpu_bytes = geometry_bytes + shading_bytes + descriptor_bytes + pool_stats.capacity_bytes + film_bytes;
     const uint64_t untracked_working_set = (_rhi_memory_stats.cpu_used_bytes > tracked_cpu_bytes) ? (_rhi_memory_stats.cpu_used_bytes - tracked_cpu_bytes) : 0u;
 
@@ -4614,7 +4620,6 @@ void UI::build_memory_diagnostics_content(SceneRepresentation& scene_rep, const 
                                                         {"Scene payload used", pool_stats.used_bytes},
                                                         {"Scene payload reserved but unused", pool_stats.capacity_bytes - pool_stats.used_bytes},
                                                         {"Film accumulation", film_stats.accumulation_bytes},
-                                                        {"Film adaptive accumulation", film_stats.adaptive_bytes},
                                                         {"Film normals", film_stats.normals_bytes},
                                                         {"Film albedo", film_stats.albedo_bytes},
                                                         {"Film denoised layer", film_stats.denoised_bytes},
@@ -6970,20 +6975,6 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
     if (validated_int_control("Samples Per Pixel", reinterpret_cast<int32_t&>(scene_rep.data().options.samples), 1, 1000000)) {
       scene_settings_changed = true;
     }
-
-    const bool noise_threshold_changed = labeled_control("Noise Threshold", [&]() {
-      return ImGui::InputFloat("##noise_thresh", &scene_rep.data().options.noise_threshold, 0.0001f, 0.01f, "%0.5f");
-    });
-    draw_item_tooltip("Experimental adaptive-sampling threshold.", ImGuiHoveredFlags_DelayNormal);
-    if (noise_threshold_changed) {
-      scene_rep.data().options.noise_threshold = std::clamp(scene_rep.data().options.noise_threshold, 0.0f, 1.0f);
-      scene_settings_changed = true;
-    }
-    if (scene_rep.data().options.noise_threshold > 0.0f) {
-      const uint32_t current_pixel_count = data.film.current_pixel_count();
-      const double active_pixel_percentage = (current_pixel_count > 0u) ? (double(data.film.active_pixel_count()) / double(current_pixel_count) * 100.0) : 0.0;
-      ImGui::Text("Active pixels: %.2f%%", active_pixel_percentage);
-    }
   }
 
   ImGui::Spacing();
@@ -7108,6 +7099,9 @@ void UI::build_rendering_properties(SceneRepresentation& scene_rep, const BuildC
       full_width_item();
       if (ImGui::BeginCombo("##view_layer", Film::layer_name(_view_options.view_layer))) {
         for (uint32_t i = 0; i < ViewLayer::Count; ++i) {
+          if (Film::layer_name(i) == nullptr) {
+            continue;
+          }
           const bool selected = i == _view_options.view_layer;
           if (ImGui::Selectable(Film::layer_name(i), selected)) {
             _view_options.view_layer = i;

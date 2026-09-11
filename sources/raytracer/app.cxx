@@ -2394,7 +2394,7 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
       return true;
 
     case ApplicationCommandType::SetViewLayer:
-      if (command.unsigned_value >= ViewLayer::Count) {
+      if (Film::layer_name(command.unsigned_value) == nullptr) {
         message = "Invalid view layer";
         return false;
       }

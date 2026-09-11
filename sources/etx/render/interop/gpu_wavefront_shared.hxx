@@ -103,7 +103,7 @@ struct ETX_ALIGNED GPUWavefrontPathState {
   uint32_t last_vertex_index ETX_INIT(kInvalidIndex);
   float d_vm ETX_INIT(0.0f);
   uint32_t reserved0 ETX_INIT(0u);
-  uint32_t reserved1 ETX_INIT(0u);
+  float d_surface ETX_INIT(0.0f);
   uint32_t reserved2 ETX_INIT(0u);
 };
 
@@ -150,6 +150,7 @@ struct ETX_ALIGNED GPUWavefrontPathVertex {
   uint32_t instance_index ETX_INIT(kInvalidIndex);
   uint32_t reserved0 ETX_INIT(0u);
   float d_vm ETX_INIT(0.0f);
+  float d_surface ETX_INIT(0.0f);
 };
 
 struct ETX_ALIGNED GPUWavefrontCompactSpectralResponse {
@@ -181,6 +182,7 @@ struct ETX_ALIGNED GPUWavefrontLightPathVertex {
   uint32_t previous_vertex_index ETX_INIT(kInvalidIndex);
   uint32_t instance_index ETX_INIT(kInvalidIndex);
   float d_vm ETX_INIT(0.0f);
+  float d_surface ETX_INIT(0.0f);
 };
 
 struct ETX_ALIGNED GPUWavefrontFastLightEndpoint {
@@ -364,5 +366,4 @@ struct ETX_ALIGNED GPUWavefrontResources {
   uint32_t vcm_grid_heads_buffer ETX_INIT(kInvalidIndex);
   uint32_t vcm_grid_next_buffer ETX_INIT(kInvalidIndex);
   uint32_t upbp_resources_buffer ETX_INIT(kInvalidIndex);
-  uint32_t reserved1 ETX_INIT(0u);
 };

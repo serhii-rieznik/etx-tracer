@@ -142,7 +142,7 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
     sample_value.normal = -normalize(access.emitter_direction);
     sample_value.origin =
       from_point + sample_value.direction * distance_to_sphere(from_point, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
-    sample_value.pdf_area = 1.0f / (kPi * globals_data.bounding_sphere_radius * globals_data.bounding_sphere_radius);
+    sample_value.pdf_area = 1.0f / gpu_directional_emission_domain(access.emitter_direction, emitter_profile.emitter_angular_size_cosine).area;
     sample_value.pdf_dir = 1.0f;
     sample_value.pdf_dir_out = sample_value.pdf_area;
     sample_value.image_uv = disk_sample * 0.5f + 0.5f;
@@ -254,17 +254,17 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
       equivalent_disk_size = 2.0f * (sin_half_angle / emitter_profile.emitter_angular_size_cosine);
     }
 
-    float2 position_sample = sample_disk(float2(rnd01(seed), rnd01(seed)));
+    const DirectionalEmissionDomain domain = gpu_directional_emission_domain(access.emitter_direction, emitter_profile.emitter_angular_size_cosine);
+    const float3 launch_offset = directional_emission_position(domain, float2(rnd01(seed), rnd01(seed)));
     float2 direction_sample = sample_disk(float2(rnd01(seed), rnd01(seed)));
     sample_value.direction =
       normalize(direction_to_scene + basis.u * direction_sample.x * (0.5f * equivalent_disk_size) + basis.v * direction_sample.y * (0.5f * equivalent_disk_size));
     sample_value.normal = direction_to_scene;
-    sample_value.origin =
-      globals_data.bounding_sphere_center + globals_data.bounding_sphere_radius * (position_sample.x * basis.u + position_sample.y * basis.v - direction_to_scene);
+    sample_value.origin = globals_data.bounding_sphere_center + launch_offset - globals_data.bounding_sphere_radius * direction_to_scene;
     sample_value.origin +=
       sample_value.direction * distance_to_sphere(sample_value.origin, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
     sample_value.pdf_dir = 1.0f;
-    sample_value.pdf_area = 1.0f / (kPi * globals_data.bounding_sphere_radius * globals_data.bounding_sphere_radius);
+    sample_value.pdf_area = 1.0f / domain.area;
     sample_value.pdf_dir_out = sample_value.pdf_area;
     sample_value.value = evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, direction_sample * 0.5f + 0.5f, spect);
     sample_value.is_delta = 1u;

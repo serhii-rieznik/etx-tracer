@@ -37,6 +37,7 @@
   }
 #endif
   float2 uv_sample = float2(rnd01(film_seed), rnd01(film_seed));
+  const float2 filter_sample = float2(rnd01(film_seed), rnd01(film_seed));
   if (scene_path_mode_is_upbp() == false) {
     seed = film_seed;
   }
@@ -46,7 +47,7 @@
     uv_sample = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, film_dimension + 0u),
       sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, film_dimension + 1u));
   }
-  float2 uv = camera_sample_film_uv(output_pixel, camera.film_size, uv_sample);
+  float2 uv = camera_sample_film_uv(output_pixel, camera.film_size, uv_sample, filter_sample);
   float2 lens_rnd = float2(rnd01(seed), rnd01(seed));
   GPUWavefrontPathState state = (GPUWavefrontPathState)0;
   state.ray = camera_generate_primary_ray(camera, uv, lens_rnd);

@@ -31,9 +31,10 @@ struct AtmosphereEmitterParameters {
 struct SceneBoundingSphere {
   float3 center = {};
   float radius = 0.0f;
+  float3 emission_half_extent = {};
 };
 
-SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transport_bounds, const Camera& camera);
+SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transport_bounds, const Camera& camera, bool has_media);
 
 struct UpdateFlags {
   enum : uint32_t {

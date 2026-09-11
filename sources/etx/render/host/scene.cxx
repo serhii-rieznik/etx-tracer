@@ -3,12 +3,18 @@
 #include <etx/render/host/scene_global.hxx>
 #include <etx/render/access/emitter_access_shared.hxx>
 #include <etx/render/shared/scene.hxx>
+#include <etx/render/interop/directional_emission_shared.hxx>
 
 namespace etx {
 
 #include <etx/render/access/image_sample_cpu.hxx>
 
 namespace {
+
+DirectionalEmissionDomain directional_domain(const EmitterProfile& emitter) {
+  const auto& scene = scene_global_get();
+  return directional_emission_domain(-emitter.directional.direction, emitter.directional.angular_size_cosine, scene.emission_half_extent, scene.bounding_sphere_radius);
+}
 
 float emitter_discrete_pdf_from_distribution(const Emitter& emitter, const Distribution& dist) {
   if (dist.total_weight == 0.0f) {
@@ -256,6 +262,7 @@ SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, const Spectra
   switch (em_inst.cls) {
     case EmitterProfile::Class::Directional: {
       pdf_dir = 1.0f;
+      pdf_area = 1.0f / directional_domain(em).area;
       float2 uv = disk_uv(em.directional.direction, in_direction, em.directional.equivalent_disk_size, em.directional.angular_size_cosine);
       return apply_image(spect, em.emission, uv);
     }
@@ -295,7 +302,7 @@ SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuer
       }
 
       pdf_dir = 1.0f;
-      pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+      pdf_area = 1.0f / directional_domain(em).area;
       pdf_dir_out = pdf_dir * pdf_area;
       float2 uv = disk_uv(em.directional.direction, query.direction, em.directional.equivalent_disk_size, em.directional.angular_size_cosine);
       SpectralResponse direct_scale = 1.0f / (scene.spectrums[em.emission.spectrum_index](spect) * kDoublePi * (1.0f - em.directional.angular_size_cosine));
@@ -408,13 +415,19 @@ float2 emitter_environment_pdf(ETX_IN(float3, in_direction), bool target_is_surf
   }
 
   float pdf_dir = 0.0f;
+  float pdf_joint = 0.0f;
   for (uint32_t ie = 0; ie < environment_emitter_count; ++ie) {
     uint32_t emitter_index = kInvalidIndex;
     if (environment_emitter_shared_try_load_index(ie, emitter_index) == false) {
       continue;
     }
 
-    pdf_dir += emitter_sample_pdf(scene.emitter_instances[emitter_index], in_direction);
+    const Emitter& emitter = scene.emitter_instances[emitter_index];
+    const float direction_pdf = emitter_sample_pdf(emitter, in_direction);
+    const float area =
+      emitter.cls == EmitterProfile::Class::Directional ? directional_domain(scene.emitter_profiles[emitter.profile]).area : kPi * sqr(scene.bounding_sphere_radius);
+    pdf_dir += direction_pdf;
+    pdf_joint += direction_pdf / area;
   }
 
   float w_o_dot_n = 1.0f;
@@ -427,7 +440,8 @@ float2 emitter_environment_pdf(ETX_IN(float3, in_direction), bool target_is_surf
     w_o_dot_n = fabsf(dot(scene_triangle_world_geometric_normal(scene, triangle, target_instance_index), in_direction));
   }
 
-  float pdf_area = w_o_dot_n / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+  // Conditional area density of the distant-emitter mixture.
+  const float pdf_area = pdf_dir > 0.0f ? w_o_dot_n * pdf_joint / pdf_dir : 0.0f;
   pdf_dir = pdf_dir / float(environment_emitter_count);
   return {pdf_area, pdf_dir};
 }
@@ -500,7 +514,7 @@ EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spec
       } else {
         result.direction = em.directional.direction;
       }
-      result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+      result.pdf_area = 1.0f / directional_domain(em).area;
       result.pdf_dir = 1.0f;
       result.pdf_dir_out = result.pdf_dir * result.pdf_area;
       result.origin = from_point + result.direction * distance_to_sphere(from_point, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
@@ -572,15 +586,16 @@ EmitterSample sample_emission_from_emitter(const Emitter& em_inst, const Spectra
       }
 
       auto basis = orthonormal_basis(direction_to_scene);
-      auto pos_sample = sample_disk(smp.next_2d());
+      const auto domain = directional_domain(em);
+      const float3 launch_offset = directional_emission_position(domain, smp.next_2d());
       auto dir_sample = sample_disk(smp.next_2d());
       result.direction = normalize(direction_to_scene + basis.u * dir_sample.x * (0.5f * equivalent_disk_size) + basis.v * dir_sample.y * (0.5f * equivalent_disk_size));
       result.triangle_index = kInvalidIndex;
       result.pdf_dir = 1.0f;
-      result.pdf_area = 1.0f / (kPi * scene.bounding_sphere_radius * scene.bounding_sphere_radius);
+      result.pdf_area = 1.0f / domain.area;
       result.pdf_dir_out = result.pdf_dir * result.pdf_area;
       result.normal = direction_to_scene;
-      result.origin = scene.bounding_sphere_center + scene.bounding_sphere_radius * (pos_sample.x * basis.u + pos_sample.y * basis.v - direction_to_scene);
+      result.origin = scene.bounding_sphere_center + launch_offset - scene.bounding_sphere_radius * direction_to_scene;
       result.origin += result.direction * distance_to_sphere(result.origin, result.direction, scene.bounding_sphere_center, scene.bounding_sphere_radius);
       result.value = apply_image(spect, em.emission, dir_sample * 0.5f + 0.5f);
       break;

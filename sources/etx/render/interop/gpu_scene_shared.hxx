@@ -48,6 +48,8 @@ struct ETX_ALIGNED GPUSceneGlobals {
   float pixel_filter_radius;
   uint32_t pixel_filter_pad0;
   uint32_t pixel_filter_pad1;
+  float3 emission_half_extent;
+  float emission_pad;
 };
 
 struct ETX_ALIGNED GPUSceneOptions {
@@ -56,7 +58,6 @@ struct ETX_ALIGNED GPUSceneOptions {
   uint32_t samples;
   uint32_t random_path_termination;
 
-  float noise_threshold;
   float radiance_clamp;
   uint32_t strategy_flags;
   uint32_t light_sampling;

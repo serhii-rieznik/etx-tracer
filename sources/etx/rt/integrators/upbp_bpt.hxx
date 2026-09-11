@@ -125,13 +125,14 @@ inline bool upbp_evaluate_light_splats(const Raytracing& rt, const Scene& scene,
         failure_vertex_count = light_vertex_count;
         return false;
       }
+      const UPBPDensityMISConfiguration& measurement = configuration;
       const double recursive_weight = upbp_bpt_light_tracing_cross_technique_weight({
         &scene,
         &light_path.vertices[light_vertex_index],
         &contribution.transmittance.segment,
         light_weights.arrivals[light_vertex_index],
         contribution.light_scattering,
-        configuration,
+        measurement,
         contribution.camera_sample,
         light_subpath_count,
       });
@@ -140,7 +141,7 @@ inline bool upbp_evaluate_light_splats(const Raytracing& rt, const Scene& scene,
         light_path.vertices[light_vertex_index].throughput * contribution.light_scattering.value * contribution.transmittance.weight *
         (contribution.camera_sample.weight * static_cast<float>(mis_weight * upbp_light_splat_iteration_scale(camera_subpath_count, light_subpath_count)));
       if (mis_weight > 0.0) {
-        result.emplace_back(UPBPLightSplat{value, contribution.camera_sample.uv});
+        result.emplace_back(UPBPLightSplat{value, contribution.splat_uv});
       }
     }
   }
@@ -189,7 +190,7 @@ inline bool upbp_evaluate_bpt_camera_path(const Raytracing& rt, const Scene& sce
         const SpectralResponse radiance = emitter_get_radiance(emitter, spect, query, pdf_area, pdf_dir, pdf_dir_out);
         const bool bpt_enabled = configuration.enabled(UPBPTechnique::BPT);
         const double recursive_weight = upbp_bpt_direct_hit_cross_technique_weight(camera_path, emitter_vertex_index, camera_weights.arrivals[emitter_vertex_index],
-          emitter_discrete_pdf(emitter), pdf_area, pdf_dir_out, bpt_enabled);
+          emitter_discrete_pdf(emitter), pdf_area, pdf_dir_out, configuration);
         const double mis_weight =
           bpt_enabled ? upbp_selected_bpt_weight(scene, recursive_weight, direct_hit.mis_weight) : (upbp_camera_prefix_is_specular(camera_path, emitter_vertex_index) ? 1.0 : 0.0);
         if (mis_weight > 0.0) {
@@ -336,7 +337,7 @@ inline bool upbp_evaluate_bpt_camera_path(const Raytracing& rt, const Scene& sce
       const uint32_t endpoint_index = static_cast<uint32_t>(endpoint_path.vertices.size() - 1u);
       const bool bpt_enabled = configuration.enabled(UPBPTechnique::BPT);
       const double recursive_weight = upbp_bpt_direct_hit_cross_technique_weight(endpoint_path, endpoint_index, endpoint_weights.arrivals[endpoint_index],
-        emitter_discrete_pdf(emitter), pdf_area, pdf_dir_out, bpt_enabled);
+        emitter_discrete_pdf(emitter), pdf_area, pdf_dir_out, configuration);
       double exhaustive_weight = 1.0;
       if (evaluate_exhaustive_weight) {
         UPBPJoinedPath joined_path = {};

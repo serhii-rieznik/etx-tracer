@@ -5,6 +5,7 @@
 
 [[vk::push_constant]] GPURTConstants constants;
 #include "gpu_rt_shared.hlsl"
+#include "gpu_rt_wavefront_vcm_mis.hlsl"
 
 #define WAVEFRONT_RW_BUFFER(descriptor_index) bindless_rw_buffers[NonUniformResourceIndex(descriptor_index)]
 #define WAVEFRONT_RO_BUFFER(descriptor_index) bindless_buffers[NonUniformResourceIndex(descriptor_index)]
@@ -173,7 +174,7 @@ GPUWavefrontPathState wavefront_load_path_state(uint descriptor_index, uint inde
   result.last_vertex_index = buffer.Load(base_offset + kGPUWavefrontPathStateLastVertexIndexOffset);
   result.d_vm = asfloat(buffer.Load(base_offset + kGPUWavefrontPathStateDVmOffset));
   result.reserved0 = buffer.Load(base_offset + kGPUWavefrontPathStateReserved0Offset);
-  result.reserved1 = buffer.Load(base_offset + kGPUWavefrontPathStateReserved1Offset);
+  result.d_surface = asfloat(buffer.Load(base_offset + kGPUWavefrontPathStateDSurfaceOffset));
   result.reserved2 = buffer.Load(base_offset + kGPUWavefrontPathStateReserved2Offset);
   return result;
 }
@@ -208,7 +209,7 @@ GPUWavefrontPathVertex wavefront_load_path_vertex(uint descriptor_index, uint in
   ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
   GPUWavefrontPathVertex result = (GPUWavefrontPathVertex)0;
   if (wavefront_path_vertex_descriptor_is_light(descriptor_index)) {
-    uint base_offset = index * kGPUWavefrontLightPathVertexStride;
+    uint base_offset = index * wavefront_light_path_vertex_stride();
     const uint packed_path_and_flags = buffer.Load(base_offset + kGPUWavefrontLightPathVertexPackedPathAndFlagsOffset);
     result.throughput = wavefront_load_compact_spectral_response(buffer, base_offset + kGPUWavefrontLightPathVertexThroughputOffset);
     result.inline_medium_extinction = wavefront_load_compact_spectral_response(buffer, base_offset + kGPUWavefrontLightPathVertexInlineMediumExtinctionOffset);
@@ -238,10 +239,13 @@ GPUWavefrontPathVertex wavefront_load_path_vertex(uint descriptor_index, uint in
     result.instance_index = buffer.Load(base_offset + kGPUWavefrontLightPathVertexInstanceIndexOffset);
     result.inline_medium_flags = wavefront_unpack_light_path_vertex_inline_medium_flags(packed_path_and_flags);
     result.d_vm = asfloat(buffer.Load(base_offset + kGPUWavefrontLightPathVertexDVmOffset));
+    if (scene_path_mode_is_vcm()) {
+      result.d_surface = asfloat(buffer.Load(base_offset + kGPUWavefrontLightPathVertexDSurfaceOffset));
+    }
     return result;
   }
 
-  uint base_offset = index * kGPUWavefrontPathVertexStride;
+  uint base_offset = index * wavefront_path_vertex_stride();
   result.throughput = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontPathVertexThroughputOffset);
   result.inline_medium_extinction = wavefront_load_spectral_response(buffer, base_offset + kGPUWavefrontPathVertexInlineMediumExtinctionOffset);
   result.position = wavefront_load_float3(buffer, base_offset + kGPUWavefrontPathVertexPositionOffset);
@@ -270,13 +274,16 @@ GPUWavefrontPathVertex wavefront_load_path_vertex(uint descriptor_index, uint in
   result.instance_index = buffer.Load(base_offset + kGPUWavefrontPathVertexInstanceIndexOffset);
   result.reserved0 = buffer.Load(base_offset + kGPUWavefrontPathVertexReserved0Offset);
   result.d_vm = asfloat(buffer.Load(base_offset + kGPUWavefrontPathVertexDVmOffset));
+  if (scene_path_mode_is_vcm()) {
+    result.d_surface = asfloat(buffer.Load(base_offset + kGPUWavefrontPathVertexDSurfaceOffset));
+  }
   return result;
 }
 
 void wavefront_store_path_vertex(uint descriptor_index, uint index, GPUWavefrontPathVertex vertex) {
   RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
   if (wavefront_path_vertex_descriptor_is_light(descriptor_index)) {
-    uint base_offset = index * kGPUWavefrontLightPathVertexStride;
+    uint base_offset = index * wavefront_light_path_vertex_stride();
     const uint packed_path_and_flags = wavefront_pack_light_path_vertex_path_and_flags(vertex.path_length, vertex.flags, vertex.inline_medium_flags);
     wavefront_store_compact_spectral_response(buffer, base_offset + kGPUWavefrontLightPathVertexThroughputOffset, vertex.throughput);
     wavefront_store_compact_spectral_response(buffer, base_offset + kGPUWavefrontLightPathVertexInlineMediumExtinctionOffset, vertex.inline_medium_extinction);
@@ -302,10 +309,13 @@ void wavefront_store_path_vertex(uint descriptor_index, uint index, GPUWavefront
     buffer.Store(base_offset + kGPUWavefrontLightPathVertexPreviousVertexIndexOffset, vertex.reserved0);
     buffer.Store(base_offset + kGPUWavefrontLightPathVertexInstanceIndexOffset, vertex.instance_index);
     buffer.Store(base_offset + kGPUWavefrontLightPathVertexDVmOffset, asuint(vertex.d_vm));
+    if (scene_path_mode_is_vcm()) {
+      buffer.Store(base_offset + kGPUWavefrontLightPathVertexDSurfaceOffset, asuint(vertex.d_surface));
+    }
     return;
   }
 
-  uint base_offset = index * kGPUWavefrontPathVertexStride;
+  uint base_offset = index * wavefront_path_vertex_stride();
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontPathVertexThroughputOffset, vertex.throughput);
   wavefront_store_spectral_response(buffer, base_offset + kGPUWavefrontPathVertexInlineMediumExtinctionOffset, vertex.inline_medium_extinction);
   wavefront_store_float3(buffer, base_offset + kGPUWavefrontPathVertexPositionOffset, vertex.position);
@@ -334,6 +344,9 @@ void wavefront_store_path_vertex(uint descriptor_index, uint index, GPUWavefront
   buffer.Store(base_offset + kGPUWavefrontPathVertexInstanceIndexOffset, vertex.instance_index);
   buffer.Store(base_offset + kGPUWavefrontPathVertexReserved0Offset, vertex.reserved0);
   buffer.Store(base_offset + kGPUWavefrontPathVertexDVmOffset, asuint(vertex.d_vm));
+  if (scene_path_mode_is_vcm()) {
+    buffer.Store(base_offset + kGPUWavefrontPathVertexDSurfaceOffset, asuint(vertex.d_surface));
+  }
 }
 
 GPUWavefrontPathMeta wavefront_load_path_meta(uint descriptor_index, uint index) {
@@ -616,7 +629,7 @@ uint wavefront_camera_vertex_slot(uint path_index, uint path_length) {
 
 uint wavefront_light_previous_vertex_index(GPUWavefrontResources resources, uint vertex_index) {
   ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(resources.light_vertex_buffer);
-  return buffer.Load(vertex_index * kGPUWavefrontLightPathVertexStride + kGPUWavefrontLightPathVertexPreviousVertexIndexOffset);
+  return buffer.Load(vertex_index * wavefront_light_path_vertex_stride() + kGPUWavefrontLightPathVertexPreviousVertexIndexOffset);
 }
 
 uint wavefront_light_vertex_slot(uint path_index, uint path_length) {

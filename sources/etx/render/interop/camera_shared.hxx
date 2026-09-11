@@ -16,8 +16,8 @@ ETX_SHARED_INLINE float2 camera_shared_flip_y(ETX_IN(float2, uv)) {
   return float2(uv.x, -uv.y);
 }
 
-ETX_SHARED_INLINE float camera_shared_film_pdf_out(ETX_IN(Camera, camera), ETX_IN(float3, to_point)) {
-  float3 camera_to_point = to_point - camera.position;
+ETX_SHARED_INLINE float camera_shared_film_pdf_out(ETX_IN(Camera, camera), ETX_IN(float3, lens_point), ETX_IN(float3, to_point)) {
+  float3 camera_to_point = to_point - lens_point;
   float distance_squared = dot(camera_to_point, camera_to_point);
   if (distance_squared <= kEpsilon) {
     return 0.0f;

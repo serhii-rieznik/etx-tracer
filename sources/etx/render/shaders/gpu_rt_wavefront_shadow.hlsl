@@ -94,7 +94,7 @@
   bool visible = false;
 #if ETX_UPBP
   if (scene_path_mode_is_upbp()) {
-    const GPUUPBPResources upbp_resources = upbp_load_resources(resources);
+    GPUUPBPResources upbp_resources = upbp_load_resources(resources);
     const GPUUPBPVertex camera_vertex = upbp_load_vertex(upbp_resources.vertex_buffer, task.upbp_camera_vertex_index);
     const GPUUPBPVertex light_vertex = upbp_load_bpt_light_vertex(upbp_resources, task.upbp_light_vertex_index);
     GPUUPBPConnectionInterval connection = (GPUUPBPConnectionInterval)0;

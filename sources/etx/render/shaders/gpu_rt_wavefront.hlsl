@@ -465,7 +465,7 @@ float wavefront_surface_shading_pdf_environment(float3 direction, bool target_is
   for (uint i = 0u; i < environment_count; ++i) {
     uint emitter_index = kInvalidIndex;
     if (emitter_access_try_load_environment_emitter(context, i, emitter_index)) {
-      pdf_dir += emitter_discrete_pdf(emitter_index);
+      pdf_dir += emitter_discrete_pdf(emitter_index) * gpu_distant_emission_area_pdf(emitter_index);
     }
   }
 
@@ -473,9 +473,8 @@ float wavefront_surface_shading_pdf_environment(float3 direction, bool target_is
     return 0.0f;
   }
 
-  SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
   float normal_factor = target_is_surface ? abs(dot(target_geo_normal, direction)) : 1.0f;
-  return (normal_factor / (kPi * globals_data.bounding_sphere_radius * globals_data.bounding_sphere_radius)) * (pdf_dir / float(environment_count));
+  return normal_factor * (pdf_dir / float(environment_count));
 }
 
 bool wavefront_sample_emitter_index(uint light_sampling_mode, inout uint seed, out uint emitter_index, out float pdf_sample) {
@@ -738,7 +737,7 @@ bool wavefront_sample_emitter_to_point(uint light_sampling_mode, SpectralQuery s
     sample_value.normal = -sample_value.direction;
     sample_value.origin =
       from_point + sample_value.direction * distance_to_sphere(from_point, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
-    sample_value.pdf_area = 1.0f / (kPi * globals_data.bounding_sphere_radius * globals_data.bounding_sphere_radius);
+    sample_value.pdf_area = 1.0f / gpu_directional_emission_domain(access.emitter_direction, emitter_profile.emitter_angular_size_cosine).area;
     sample_value.pdf_dir = 1.0f;
     sample_value.pdf_dir_out = sample_value.pdf_area;
     sample_value.value = evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, float2(0.5f, 0.5f), spect);
@@ -820,15 +819,15 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
     }
 
     float3 direction_to_scene = -normalize(access.emitter_direction);
-    OrthonormalBasis basis = orthonormal_basis(direction_to_scene);
-    float2 disk_sample = sample_disk(float2(rnd01(seed), rnd01(seed)));
+    const DirectionalEmissionDomain domain = gpu_directional_emission_domain(access.emitter_direction, emitter_profile.emitter_angular_size_cosine);
+    const float3 launch_offset = directional_emission_position(domain, float2(rnd01(seed), rnd01(seed)));
     sample_value.direction = direction_to_scene;
     sample_value.normal = direction_to_scene;
-    sample_value.origin = globals_data.bounding_sphere_center + globals_data.bounding_sphere_radius * (disk_sample.x * basis.u + disk_sample.y * basis.v - direction_to_scene);
+    sample_value.origin = globals_data.bounding_sphere_center + launch_offset - globals_data.bounding_sphere_radius * direction_to_scene;
     sample_value.origin +=
       sample_value.direction * distance_to_sphere(sample_value.origin, sample_value.direction, globals_data.bounding_sphere_center, globals_data.bounding_sphere_radius);
     sample_value.pdf_dir = 1.0f;
-    sample_value.pdf_area = 1.0f / (kPi * globals_data.bounding_sphere_radius * globals_data.bounding_sphere_radius);
+    sample_value.pdf_area = 1.0f / domain.area;
     sample_value.pdf_dir_out = sample_value.pdf_area;
     sample_value.value = evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, float2(0.5f, 0.5f), spect);
     sample_value.is_delta = 1u;
@@ -1012,7 +1011,8 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
     film_sample_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, film_dimension + 0u),
       sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, film_dimension + 1u));
   }
-  float2 uv = camera_sample_film_uv(dtid.xy, camera.film_size, film_sample_rnd);
+  const float2 filter_sample = float2(rnd01(seed), rnd01(seed));
+  float2 uv = camera_sample_film_uv(dtid.xy, camera.film_size, film_sample_rnd, filter_sample);
   float2 lens_rnd = camera_lens_sampling_enabled(camera.lens_radius, camera.focal_distance) ? sample_primary_hybrid_2d(dtid.xy, constants.sample_index, kSamplerStreamSupport, seed)
                                                                                             : float2(0.0f, 0.0f);
   GPUWavefrontPathState state = (GPUWavefrontPathState)0;

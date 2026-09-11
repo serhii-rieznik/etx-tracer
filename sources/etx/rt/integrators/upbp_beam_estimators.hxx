@@ -32,6 +32,7 @@ struct UPBPPreparedBeam {
   double d_shared = 0.0;
   double d_pde_reverse_coefficient = 0.0;
   double d_pde_constant = 0.0;
+  double d_surface_constant = 0.0;
   double source_event_density = 1.0;
   float interval_distance = 0.0f;
   uint32_t tracking_event_count = 0u;
@@ -388,13 +389,16 @@ inline bool upbp_prepare_beam(const UPBPPathRecord& path, const UPBPRecursivePat
   if (beam.source_vertex_index > 0u) {
     const UPBPRecursiveLocalPDEAffine local = upbp_recursive_local_pde_affine(configuration, source.cls, source.delta, source.density_connectible, departure.weights,
       source_ray_ratio, departure.last_sin_theta, source.source);
-    result.d_pde_reverse_coefficient = departure.d_pde_a * local.reverse_pdf_inverse_coefficient;
-    result.d_pde_constant = departure.d_pde_a * local.constant + departure.d_pde_b;
+    result.d_pde_reverse_coefficient = departure.d_bpt_a * local.reverse_pdf_inverse_coefficient;
+    result.d_pde_constant = departure.d_bpt_a * local.constant + departure.d_pde_b;
+    result.d_surface_constant = departure.d_bpt_a * local.surface_coefficient + departure.d_surface_b;
   } else {
-    result.d_pde_constant = departure.weights.d_pde;
+    result.d_pde_constant = departure.weights.d_pde_base;
+    result.d_surface_constant = departure.weights.d_surface;
   }
   result.valid = (interval.medium_index == beam.medium_index) && (result.source_event_density > 0.0) && std::isfinite(result.source_event_density) &&
-                 std::isfinite(source_ray_ratio) && std::isfinite(result.d_shared) && std::isfinite(result.d_pde_reverse_coefficient) && std::isfinite(result.d_pde_constant);
+                 std::isfinite(source_ray_ratio) && std::isfinite(result.d_shared) && std::isfinite(result.d_pde_reverse_coefficient) &&
+                 (std::isfinite(result.d_pde_constant) && std::isfinite(result.d_surface_constant));
   if (result.valid == false) {
     result = {};
   }
@@ -447,7 +451,8 @@ ETX_UPBP_FORCE_INLINE bool upbp_complete_prepared_partial_medium_arrival(const U
     return false;
   }
   const double reverse_pdf_inverse = 1.0 / reverse_pdf;
-  weights.d_pde = (prepared.d_pde_reverse_coefficient * reverse_pdf_inverse + prepared.d_pde_constant) / forward_pdf;
+  weights.d_pde_base = (prepared.d_pde_reverse_coefficient * reverse_pdf_inverse + prepared.d_pde_constant) / forward_pdf;
+  weights.d_surface = prepared.d_surface_constant / forward_pdf;
   weights.d_shared = prepared.d_shared / forward_pdf;
   if (prepared.scale_d_shared_by_distance) {
     weights.d_shared *= static_cast<double>(transport_distance) * transport_distance;
@@ -456,7 +461,7 @@ ETX_UPBP_FORCE_INLINE bool upbp_complete_prepared_partial_medium_arrival(const U
   weights.ray_sample_reverse_pdf_inverse = reverse_pdf_inverse;
   weights.ray_sample_forward_ratio = 1.0 / query_real_event_density;
   weights.previous_delta = prepared.previous_delta;
-  return std::isfinite(weights.d_shared) && std::isfinite(weights.d_pde);
+  return std::isfinite(weights.d_shared) && (std::isfinite(weights.d_pde_base) && std::isfinite(weights.d_surface));
 }
 
 ETX_UPBP_FORCE_INLINE bool upbp_partial_prepared_beam_vertex(const Medium& medium, const UPBPPreparedMedium& prepared_medium, const UPBPPreparedBeam& prepared,

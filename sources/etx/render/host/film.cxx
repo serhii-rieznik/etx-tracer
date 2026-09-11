@@ -5,21 +5,17 @@
 #include <etx/render/host/denoiser.hxx>
 
 #include <etx/render/shared/scene.hxx>
+#include <etx/render/shared/scene_camera.hxx>
 
 // TODO : make better option
 #include <interop/render_options.hxx>
-
-#define ETX_LOG_NOISE_LEVEL 0
 
 namespace etx {
 
 namespace {
 
-constexpr uint32_t kMinSamples = 32u;
-
 enum StorageLayers : uint32_t {
   StorageAccumulation,
-  StorageAdaptive,
   StorageNormals,
   StorageAlbedo,
   StorageDenoised,
@@ -29,12 +25,8 @@ enum StorageLayers : uint32_t {
 
 struct InternalData {
   float3 color = {};
-  float error_level = 0.0f;
   uint32_t sample_count = 0;
   uint8_t written = 0;
-  uint8_t converged = 0;
-  uint8_t tmp = 0;
-  uint8_t pad = 0;
 };
 
 struct LayerInfo {
@@ -45,10 +37,9 @@ struct LayerInfo {
   {ViewLayer::Denoised, StorageDenoised},
   {ViewLayer::CurrentFrame, kInvalidIndex},
   {ViewLayer::Accumulation, StorageAccumulation},
-  {ViewLayer::AdaptiveAccumulation, StorageAdaptive},
+  {kInvalidIndex, kInvalidIndex},
   {ViewLayer::Albedo, StorageAlbedo},
   {ViewLayer::Normals, StorageNormals},
-  {ViewLayer::Debug, kInvalidIndex},
 };
 
 float filter_box(const float2& p, float radius) {
@@ -83,9 +74,6 @@ struct FilmImpl {
   std::vector<float3> storage_buffers[StorageLayerCount] = {};
   std::vector<float4> output_data = {};
   std::vector<InternalData> internal_data = {};
-  std::atomic<float> last_noise_level = {};
-  std::atomic<uint32_t> active_pixels = {};
-  uint32_t max_sample_count = 0u;
   uint32_t pixel_size = 1u;
   uint32_t target_pixel_size = 1u;
   uint2 render_window_origin = {};
@@ -103,9 +91,7 @@ struct FilmImpl {
     return render_window_size;
   }
 
-  void commit_iteration(float radiance_clamp, Film::NoiseEstimationSchedule schedule);
-  void estimate_noise(uint32_t sample_index, uint32_t total_samples, float threshold, Film::NoiseEstimationSchedule schedule);
-  void snapshot_noise_reference();
+  void commit_iteration(float radiance_clamp);
 };
 
 Film::Film(TaskScheduler& t) {
@@ -153,15 +139,11 @@ void Film::release() {
   _private->dimensions = {};
   _private->render_window_origin = {};
   _private->render_window_size = {};
-  _private->last_noise_level = {};
-  _private->active_pixels = 0u;
-  _private->max_sample_count = 0u;
 }
 
 void Film::reset_render_window() {
   _private->render_window_origin = {};
   _private->render_window_size = _private->dimensions;
-  _private->active_pixels = current_pixel_count();
 }
 
 bool Film::set_render_window(const uint2& origin, const uint2& size) {
@@ -171,7 +153,6 @@ bool Film::set_render_window(const uint2& origin, const uint2& size) {
 
   _private->render_window_origin = origin;
   _private->render_window_size = size;
-  _private->active_pixels = current_pixel_count();
   return true;
 }
 
@@ -189,14 +170,8 @@ void Film::generate_filter_image(uint32_t filter, std::vector<float4>& data) {
   }
 }
 
-float2 Film::sample(const PixelFilter& sampler, const uint2& pixel, const float2& rnd) const {
-  float2 jitter = rnd * 2.0f - 1.0f;
-  if (sampler.image_index != kInvalidIndex) {
-    jitter = sample_image_uv(sampler.image_index, rnd) * 2.0f - 1.0f;
-  }
-  float u = (float(pixel.x) + 0.5f + sampler.radius * jitter.x) / float(_private->dimensions.x) * 2.0f - 1.0f;
-  float v = (float(pixel.y) + 0.5f + sampler.radius * jitter.y) / float(_private->dimensions.y) * 2.0f - 1.0f;
-  return {u, v};
+float2 Film::sample(const PixelFilter& sampler, const uint2& pixel, const float2& pixel_rnd, const float2& filter_rnd) const {
+  return pixel_filter_sample_uv(pixel, _private->dimensions, pixel_rnd, sample_pixel_filter_offset(sampler, filter_rnd));
 }
 
 void Film::submit(const float3& value, const float3& normal, const float3& albedo, const uint2& pixel) {
@@ -234,9 +209,13 @@ void Film::submit(const float3& value, const float3& normal, const float3& albed
 }
 
 void Film::submit(const float3& value, const float2& ndc_coord) {
-  if (dot(value, value) < kEpsilon)
+  if ((value.x == 0.0f) && (value.y == 0.0f) && (value.z == 0.0f)) {
     return;
+  }
 
+  if (pixel_filter_contains_uv(ndc_coord) == false) {
+    return;
+  }
   float2 uv = ndc_coord * 0.5f + 0.5f;
   uint32_t x = static_cast<uint32_t>(uv.x * current_dimensions().x) * _private->pixel_size;
   uint32_t y = static_cast<uint32_t>(uv.y * current_dimensions().y) * _private->pixel_size;
@@ -260,116 +239,9 @@ void Film::submit(const float3& value, const float2& ndc_coord) {
   }
 }
 
-void FilmImpl::estimate_noise(uint32_t sample_index, uint32_t total_samples, float threshold, Film::NoiseEstimationSchedule schedule) {
-  max_sample_count = total_samples;
-
-  bool estimate = (sample_index >= kMinSamples) && ((sample_index % 2u) == 0u);
-  if (schedule == Film::NoiseEstimationSchedule::PowerOfTwoSampleCount) {
-    const uint32_t sample_count = sample_index + 1u;
-    estimate = (sample_count >= kMinSamples) && ((sample_count & (sample_count - 1u)) == 0u);
-  }
-
-  if ((threshold == 0.0f) || (estimate == false))
-    return;
-
-#if (ETX_LOG_NOISE_LEVEL)
-  auto t0 = std::chrono::steady_clock::now();
-#endif
-
-  auto var_data = storage_buffers[StorageAdaptive].data();
-  auto cam_data = storage_buffers[StorageAccumulation].data();
-  auto int_data = internal_data.data();
-
-  active_pixels = 0;
-  last_noise_level = 0.0f;
-  tasks.execute(total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
-    float total_noise = 0.0f;
-    for (uint32_t i = begin; i < end; ++i) {
-      if (int_data[i].converged)
-        continue;
-
-      const float3& v_i = cam_data[i];
-      const float3& v_a = var_data[i];
-      float error_diff = dot(abs(v_i - v_a), 1.0f);
-      float error_norm = dot(abs(v_i), 1.0f);
-      float error_level = error_diff / (((error_norm < 1.0f) ? sqrtf(error_norm) : error_norm) + kEpsilon);
-      uint32_t converged = error_level < threshold ? 1u : 0u;
-
-      int_data[i].error_level = error_level;
-      int_data[i].converged = converged;
-      int_data[i].tmp = converged;
-
-      active_pixels += converged;
-      total_noise += error_level;
-    }
-    last_noise_level.fetch_add(total_noise);
-  });
-
-#if (ETX_LOG_NOISE_LEVEL)
-  auto t1 = std::chrono::steady_clock::now();
-#endif
-
-  constexpr uint32_t kBlockSize = 5u;
-
-  if (active_pixels > 0.0f) {
-    last_noise_level = last_noise_level / float(active_pixels);
-  }
-
-  tasks.execute(total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
-    for (uint32_t i = begin; i < end; ++i) {
-      if (int_data[i].converged) {
-        continue;
-      }
-
-      uint32_t w = dimensions.x;
-      uint32_t x = i % w;
-      uint32_t y = i / w;
-      uint32_t begin_x = x >= kBlockSize ? x - kBlockSize : 0u;
-      uint32_t end_x = min(w, x + kBlockSize);
-      for (uint32_t p = begin_x; p < end_x; ++p) {
-        int_data[p + y * w].tmp = 0;
-      }
-    }
-  });
-
-#if (ETX_LOG_NOISE_LEVEL)
-  auto t2 = std::chrono::steady_clock::now();
-#endif
-
-  tasks.execute(total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
-    for (uint32_t i = begin; i < end; ++i) {
-      if (int_data[i].tmp) {
-        continue;
-      }
-
-      uint32_t w = dimensions.x;
-      uint32_t h = dimensions.y;
-      uint32_t x = i % w;
-      uint32_t y = i / w;
-
-      uint32_t begin_y = y >= kBlockSize ? y - kBlockSize : 0u;
-      uint32_t end_y = min(h, y + kBlockSize);
-      for (uint32_t p = begin_y; p < end_y; ++p) {
-        int_data[x + p * w].converged = 0;
-      }
-    }
-  });
-
-#if (ETX_LOG_NOISE_LEVEL)
-  auto t3 = std::chrono::steady_clock::now();
-  auto a0 = (t1 - t0).count() / 1.0e+6;
-  auto a1 = (t2 - t1).count() / 1.0e+6;
-  auto a2 = (t3 - t2).count() / 1.0e+6;
-  auto a3 = (t3 - t0).count() / 1.0e+6;
-  log::info("[%u] Estimated noise level in %.2fms (%.2f + %.2f + %.2f) -> %u active pixels", sample_index, a2, a0, a1, a2, _private->active_pixels.load());
-#endif
-}
-
-void FilmImpl::commit_iteration(float radiance_clamp, Film::NoiseEstimationSchedule schedule) {
+void FilmImpl::commit_iteration(float radiance_clamp) {
   auto int_data = internal_data.data();
   auto accumumlation = storage_buffers[StorageAccumulation].data();
-  auto adaptive = storage_buffers[StorageAdaptive].data();
-  const bool update_alternating_reference = schedule == Film::NoiseEstimationSchedule::EveryOtherIteration;
 
   uint64_t pixel_count = total_pixel_count();
   for (uint64_t i = 0; i < pixel_count; ++i) {
@@ -389,17 +261,9 @@ void FilmImpl::commit_iteration(float radiance_clamp, Film::NoiseEstimationSched
 
     if (sample_count == 0) {
       accumumlation[i] = idata.color;
-      if (update_alternating_reference) {
-        adaptive[i] = idata.color;
-      }
     } else {
       float t = float(double(sample_count) / double(sample_count + 1u));
       accumumlation[i] = lerp(idata.color, accumumlation[i], t);
-      if (update_alternating_reference && ((sample_count % 2u) == 0u)) {
-        uint32_t adaptive_sample_count = sample_count / 2u;
-        t = float(double(adaptive_sample_count) / double(adaptive_sample_count + 1u));
-        adaptive[i] = lerp(idata.color, adaptive[i], t);
-      }
     }
 
     idata.color = {};
@@ -408,25 +272,8 @@ void FilmImpl::commit_iteration(float radiance_clamp, Film::NoiseEstimationSched
   }
 }
 
-void FilmImpl::snapshot_noise_reference() {
-  const auto& accumulation = storage_buffers[StorageAccumulation];
-  auto& adaptive = storage_buffers[StorageAdaptive];
-  memcpy(adaptive.data(), accumulation.data(), accumulation.size() * sizeof(accumulation[0]));
-}
-
-void Film::commit_iteration(uint32_t sample_index, uint32_t total_samples, float noise_threshold, float radiance_clamp) {
-  commit_iteration(sample_index, total_samples, noise_threshold, radiance_clamp, NoiseEstimationSchedule::EveryOtherIteration);
-}
-
-void Film::commit_iteration(uint32_t sample_index, uint32_t total_samples, float noise_threshold, float radiance_clamp, NoiseEstimationSchedule noise_estimation_schedule) {
-  _private->commit_iteration(radiance_clamp, noise_estimation_schedule);
-  _private->estimate_noise(sample_index, total_samples, noise_threshold, noise_estimation_schedule);
-  if (noise_estimation_schedule == NoiseEstimationSchedule::PowerOfTwoSampleCount) {
-    const uint32_t sample_count = sample_index + 1u;
-    if ((sample_count >= (kMinSamples / 2u)) && ((sample_count & (sample_count - 1u)) == 0u)) {
-      _private->snapshot_noise_reference();
-    }
-  }
+void Film::commit_iteration(float radiance_clamp) {
+  _private->commit_iteration(radiance_clamp);
 }
 
 void Film::clear(uint32_t options) {
@@ -446,7 +293,6 @@ void Film::clear(uint32_t options) {
 
   bool clear[StorageLayerCount] = {};
   clear[StorageAccumulation] = clear_all;
-  clear[StorageAdaptive] = clear_all;
   clear[StorageNormals] = clear_all;
   clear[StorageAlbedo] = clear_all;
   clear[StorageDenoised] = clear_all;
@@ -457,11 +303,6 @@ void Film::clear(uint32_t options) {
       auto& buffer = buffers[id];
       memset(buffer.data(), 0, buffer.size() * sizeof(buffer[0]));
     }
-  }
-
-  if (clear_all) {
-    _private->last_noise_level = {};
-    _private->active_pixels = current_pixel_count();
   }
 
   _private->pixel_size = _private->target_pixel_size;
@@ -481,21 +322,11 @@ uint2 Film::current_dimensions() const {
 float4* Film::layer(uint32_t layer, float radiance_clamp) const {
   ETX_PROFILER_SCOPE();
 
+  ETX_ASSERT(layer_name(layer) != nullptr);
   const auto layer_ref = layer_info[layer].storage;
   auto output = _private->output_data.data();
 
-  if (layer == ViewLayer::Debug) {
-    const auto int_data = _private->internal_data.data();
-    bool total_valid = _private->max_sample_count > kMinSamples;
-    _private->tasks.execute(_private->total_pixel_count(), [&](uint32_t begin, uint32_t end, uint32_t) {
-      for (uint32_t i = begin; i < end; ++i) {
-        uint32_t pixel_sample_count = int_data[i].sample_count;
-        double t = total_valid && (pixel_sample_count >= kMinSamples) ? double(pixel_sample_count - kMinSamples) / double(_private->max_sample_count - kMinSamples) : 0.0;
-        float h = lerp(2.0f / 3.0f, 0.0f, float(t));
-        output[i] = to_float4(hsv_to_rgb({h, 1.0f, 1.0f}));
-      }
-    });
-  } else if (layer == ViewLayer::Result) {
+  if (layer == ViewLayer::Result) {
     ETX_PROFILER_SCOPE();
     auto accum = _private->storage_buffers[StorageAccumulation].data();
     auto current = _private->internal_data.data();
@@ -568,14 +399,9 @@ uint32_t Film::current_pixel_count() const {
   return dim.x * dim.y;
 }
 
-uint32_t Film::active_pixel_count() const {
-  return _private->active_pixels.load();
-}
-
 Film::MemoryStats Film::memory_stats() const {
   MemoryStats result = {};
   result.accumulation_bytes = _private->storage_buffers[StorageAccumulation].capacity() * sizeof(float3);
-  result.adaptive_bytes = _private->storage_buffers[StorageAdaptive].capacity() * sizeof(float3);
   result.normals_bytes = _private->storage_buffers[StorageNormals].capacity() * sizeof(float3);
   result.albedo_bytes = _private->storage_buffers[StorageAlbedo].capacity() * sizeof(float3);
   result.denoised_bytes = _private->storage_buffers[StorageDenoised].capacity() * sizeof(float3);
@@ -584,7 +410,7 @@ Film::MemoryStats Film::memory_stats() const {
   return result;
 }
 
-bool Film::active_pixel(uint32_t index, uint2& location) const {
+uint2 Film::pixel_location(uint32_t index) const {
   ETX_ASSERT(index < current_pixel_count());
 
   uint32_t linear_index = index;
@@ -612,17 +438,10 @@ bool Film::active_pixel(uint32_t index, uint2& location) const {
     linear_index = (render_window_origin.x + local_x) + (render_window_origin_y + local_y) * film_size.x;
   }
 
-  location = {
+  return {
     linear_index % film_size.x,
     linear_index / film_size.x,
   };
-  uint32_t i = location.x + (_private->dimensions.y - 1u - location.y) * film_size.x;
-  auto int_data = _private->internal_data.data();
-  return int_data[i].converged == 0;
-}
-
-float Film::noise_level() const {
-  return _private->last_noise_level;
 }
 
 const char* Film::layer_name(uint32_t layer) {
@@ -631,14 +450,12 @@ const char* Film::layer_name(uint32_t layer) {
     "Denoised",
     "Current Frame",
     "Accumulation",
-    "Adaptive Accumulation",
+    nullptr,
     "Albedo",
     "Normals",
-    "Debug",
   };
   static_assert(std::size(names) == ViewLayer::Count);
-  ETX_ASSERT(layer < ViewLayer::Count);
-  return names[layer];
+  return (layer < ViewLayer::Count) ? names[layer] : nullptr;
 }
 
 void Film::set_pixel_size(uint32_t size) {

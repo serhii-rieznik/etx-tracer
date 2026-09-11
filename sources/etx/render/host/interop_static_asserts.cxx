@@ -210,7 +210,8 @@ static_assert(alignof(GPUSceneOptions) == 16, "GPUSceneOptions alignment must ma
 static_assert(alignof(GPUImageBlobHeader) == 16, "GPUImageBlobHeader alignment must match HLSL packing");
 static_assert(alignof(GPUMediumBlobHeader) == 16, "GPUMediumBlobHeader alignment must match HLSL packing");
 static_assert(alignof(GPUScene) == 16, "GPUScene alignment must match HLSL packing");
-static_assert(sizeof(GPUSceneGlobals) == 400, "GPUSceneGlobals size changed; update shared ABI");
+static_assert(sizeof(GPUSceneGlobals) == 416, "GPUSceneGlobals size changed; update shared ABI");
+static_assert(offsetof(GPUSceneGlobals, emission_half_extent) == kSceneGlobalsEmissionHalfExtentOffset, "GPUSceneGlobals::emission_half_extent offset changed");
 static_assert(sizeof(GPUSceneOptions) == 48, "GPUSceneOptions size changed; update shared ABI");
 static_assert(sizeof(GPUImageBlobHeader) == 16, "GPUImageBlobHeader size changed; update shared ABI");
 static_assert(sizeof(GPUMediumBlobHeader) == 16, "GPUMediumBlobHeader size changed; update shared ABI");
@@ -247,7 +248,6 @@ static_assert(offsetof(GPUSceneOptions, min_path_length) == kSceneOptionsMinPath
 static_assert(offsetof(GPUSceneOptions, max_path_length) == kSceneOptionsMaxPathLengthOffset, "GPUSceneOptions::max_path_length offset changed");
 static_assert(offsetof(GPUSceneOptions, samples) == kSceneOptionsSamplesOffset, "GPUSceneOptions::samples offset changed");
 static_assert(offsetof(GPUSceneOptions, random_path_termination) == kSceneOptionsRandomPathTerminationOffset, "GPUSceneOptions::random_path_termination offset changed");
-static_assert(offsetof(GPUSceneOptions, noise_threshold) == kSceneOptionsNoiseThresholdOffset, "GPUSceneOptions::noise_threshold offset changed");
 static_assert(offsetof(GPUSceneOptions, radiance_clamp) == kSceneOptionsRadianceClampOffset, "GPUSceneOptions::radiance_clamp offset changed");
 static_assert(offsetof(GPUSceneOptions, strategy_flags) == kSceneOptionsStrategyFlagsOffset, "GPUSceneOptions::strategy_flags offset changed");
 static_assert(offsetof(GPUSceneOptions, light_sampling) == kSceneOptionsLightSamplingOffset, "GPUSceneOptions::light_sampling offset changed");

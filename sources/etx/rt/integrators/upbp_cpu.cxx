@@ -631,6 +631,7 @@ struct CPUUPBPImpl {
       return;
     }
     if (status.current_iteration == 0u) {
+      log::info("UPBP surface merging: initial radius %.9g", iteration.surface_radius);
       log::info("UPBP selected %llu light paths for %llu camera paths; advisory memory target %u MiB; %llu assigned to BB1D",
         static_cast<unsigned long long>(iteration.light_subpath_count), static_cast<unsigned long long>(iteration.camera_subpath_count), options.memory_budget_mb,
         static_cast<unsigned long long>(iteration.bb1d_light_subpath_count));
@@ -1043,16 +1044,14 @@ struct CPUUPBPImpl {
     Film& film = rt.film();
     for (const std::vector<UPBPLightSplat>& path_splats : light_splats) {
       for (const UPBPLightSplat& splat : path_splats) {
-        const float3 value = splat.value.to_rgb_estimate();
-        if (dot(value, value) > kEpsilon) {
-          film.submit(value, splat.film_uv);
-        }
+        film.submit(splat.value.to_rgb_estimate(), splat.film_uv);
       }
     }
   }
 
   bool evaluate_point_technique(const UPBPTechnique technique, const UPBPPointIndex& index, const double radius, const UPBPPathRecord& camera_path,
-    const UPBPRecursivePathWeights& camera_weights, const uint32_t camera_path_index, const uint32_t camera_vertex_index, SpectralResponse& value) {
+    const UPBPRecursivePathWeights& camera_weights, const uint32_t camera_path_index, const uint32_t camera_vertex_index, SpectralResponse& value,
+    const UPBPIterationParameters& measurement) {
     if ((index.size() == 0u) || (camera_vertex_index >= camera_path.vertices.size())) {
       return true;
     }
@@ -1064,7 +1063,7 @@ struct CPUUPBPImpl {
     }
     bool evaluation_valid = true;
     const bool query_valid = index.query(camera_path.vertices[camera_vertex_index].position, static_cast<float>(radius),
-      [this, technique, radius, &camera_path, &camera_weights, camera_path_index, camera_vertex_index, &camera_geometric_normal, &value, &evaluation_valid](
+      [this, &measurement, technique, radius, &camera_path, &camera_weights, camera_path_index, camera_vertex_index, &camera_geometric_normal, &value, &evaluation_valid](
         const UPBPPointReference& point, const float) {
         if (evaluation_valid == false) {
           return;
@@ -1077,9 +1076,9 @@ struct CPUUPBPImpl {
         Sampler sampler = upbp_pair_sampler(rt.scene().options.random_seed, status.current_iteration, camera_path_index, point.path_index, camera_vertex_index, point.vertex_index,
           UPBPRandomDomain::ScatteringEvaluation);
         UPBPPointMergeContribution contribution = {};
-        if (upbp_evaluate_point_merge(rt.scene(), iteration.spect, light_paths[point.path_index].subpath.path, point.vertex_index,
-              light_weights[point.path_index].arrivals[point.vertex_index], camera_path, camera_vertex_index, camera_weights.arrivals[camera_vertex_index], iteration.mis,
-              technique, options.kernel, radius, iteration.light_subpath_count, iteration.bpt_sample_count, camera_geometric_normal, sampler, contribution) == false) {
+        if (upbp_evaluate_point_merge(rt.scene(), measurement.spect, light_paths[point.path_index].subpath.path, point.vertex_index,
+              light_weights[point.path_index].arrivals[point.vertex_index], camera_path, camera_vertex_index, camera_weights.arrivals[camera_vertex_index], measurement.mis,
+              technique, options.kernel, radius, measurement.light_subpath_count, measurement.bpt_sample_count, camera_geometric_normal, sampler, contribution) == false) {
           evaluation_valid = false;
           return;
         }
@@ -1091,7 +1090,7 @@ struct CPUUPBPImpl {
   }
 
   bool evaluate_pb2d(const std::vector<UPBPBeamReference>& camera_beams, const std::vector<UPBPPreparedBeam>& prepared_camera_beams, SpectralResponse& value,
-    CameraEvaluationStatistics& statistics) {
+    CameraEvaluationStatistics& statistics, const UPBPIterationParameters& measurement) {
     if (pb2d_index.size() == 0u) {
       return true;
     }
@@ -1113,8 +1112,8 @@ struct CPUUPBPImpl {
       bool evaluation_valid = true;
       uint64_t query_candidate_count = 0u;
       const bool query_valid = pb2d_index.query_beam(
-        camera_beam, static_cast<float>(iteration.pb2d_radius), query_candidate_count,
-        [this, &camera_beam, &evaluation_valid, &statistics](const UPBPPointReference& point, const uint32_t) {
+        camera_beam, static_cast<float>(measurement.pb2d_radius), query_candidate_count,
+        [this, &measurement, &camera_beam, &evaluation_valid, &statistics](const UPBPPointReference& point, const uint32_t) {
           if (evaluation_valid == false) {
             return false;
           }
@@ -1140,7 +1139,7 @@ struct CPUUPBPImpl {
           ++statistics.spatial[SpatialStatisticPB2D].eligible_candidates;
           return true;
         },
-        [this, &medium, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPPointReference& point,
+        [this, &measurement, &medium, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPPointReference& point,
           const UPBPPointBeamIntersection& intersection) {
           SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticPB2D];
           ++spatial.intersections;
@@ -1159,7 +1158,7 @@ struct CPUUPBPImpl {
           UPBPBeamContribution contribution;
           if (upbp_evaluate_prepared_pb2d(light_vertex, light_weights[point.path_index].arrivals[point.vertex_index],
                 prepared_light_vertex_throughputs[static_cast<size_t>(prepared_index)], medium, prepared_mediums[camera_beam.medium_index], prepared_camera_beam, camera_beam,
-                intersection, iteration.mis, options.kernel, iteration.pb2d_radius, iteration.light_subpath_count, iteration.bpt_sample_count, contribution) == false) {
+                intersection, measurement.mis, options.kernel, measurement.pb2d_radius, measurement.light_subpath_count, measurement.bpt_sample_count, contribution) == false) {
             evaluation_valid = false;
             return;
           }
@@ -1177,7 +1176,7 @@ struct CPUUPBPImpl {
   }
 
   bool evaluate_bp2d(const UPBPPathRecord& camera_path, const UPBPRecursivePathWeights& camera_weights, const uint32_t camera_vertex_index, SpectralResponse& value,
-    CameraEvaluationStatistics& statistics) {
+    CameraEvaluationStatistics& statistics, const UPBPIterationParameters& measurement) {
     if (bp2d_index.size() == 0u) {
       return true;
     }
@@ -1190,12 +1189,12 @@ struct CPUUPBPImpl {
       return false;
     }
     const Medium& medium = rt.scene().mediums[camera_vertex.medium.index];
-    const SpectralResponse scattering = upbp_medium_scattering_coefficient(medium, iteration.spect, camera_vertex.position);
+    const SpectralResponse scattering = upbp_medium_scattering_coefficient(medium, measurement.spect, camera_vertex.position);
     if (scattering.is_zero()) {
       return true;
     }
     SpectralResponse camera_throughput = {};
-    if (upbp_remove_medium_collision_weight(camera_vertex.throughput, scattering, std::exp(camera_vertex.log_medium_event_density), camera_throughput) == false) {
+    if (upbp_remove_medium_collision_weight(camera_vertex.throughput, scattering, camera_throughput) == false) {
       return false;
     }
     const UPBPPointMergeMISInput::Weights prepared_camera_weights = upbp_point_merge_weights(camera_weights.arrivals[camera_vertex_index]);
@@ -1204,8 +1203,8 @@ struct CPUUPBPImpl {
     bool evaluation_valid = true;
     uint64_t query_candidate_count = 0u;
     const bool query_valid = bp2d_index.query_point_intersections(
-      camera_vertex.position, static_cast<float>(iteration.bp2d_radius), query_candidate_count,
-      [this, &camera_vertex, camera_vertex_index, &evaluation_valid, &statistics](const UPBPBeamReference& beam, const uint32_t beam_index) {
+      camera_vertex.position, static_cast<float>(measurement.bp2d_radius), query_candidate_count,
+      [this, &measurement, &camera_vertex, camera_vertex_index, &evaluation_valid, &statistics](const UPBPBeamReference& beam, const uint32_t beam_index) {
         if (evaluation_valid == false) {
           return false;
         }
@@ -1216,14 +1215,14 @@ struct CPUUPBPImpl {
         statistics.spatial[SpatialStatisticBP2D].eligible_candidates += static_cast<uint64_t>(eligible);
         return eligible;
       },
-      [this, &medium, &camera_vertex, &prepared_camera_weights, &camera_throughput, &scattering, &value, &evaluation_valid, &statistics](const UPBPBeamReference& beam,
-        const uint32_t beam_index, const UPBPPointBeamIntersection& intersection) {
+      [this, &measurement, &medium, &camera_vertex, &prepared_camera_weights, &camera_throughput, &scattering, &value, &evaluation_valid, &statistics](
+        const UPBPBeamReference& beam, const uint32_t beam_index, const UPBPPointBeamIntersection& intersection) {
         SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticBP2D];
         ++spatial.intersections;
         UPBPBeamContribution contribution;
         if (upbp_evaluate_prepared_bp2d(medium, prepared_mediums[camera_vertex.medium.index], prepared_bp2d_beams[beam_index], beam, intersection, camera_vertex.intersection.w_i,
-              prepared_camera_weights, camera_throughput, scattering, iteration.mis, options.kernel, iteration.bp2d_radius, iteration.light_subpath_count,
-              iteration.bpt_sample_count, contribution) == false) {
+              prepared_camera_weights, camera_throughput, scattering, measurement.mis, options.kernel, measurement.bp2d_radius, measurement.light_subpath_count,
+              measurement.bpt_sample_count, contribution) == false) {
           evaluation_valid = false;
           return;
         }
@@ -1237,7 +1236,7 @@ struct CPUUPBPImpl {
   }
 
   bool evaluate_bb1d(const std::vector<UPBPBeamReference>& camera_beams, const std::vector<UPBPPreparedBeam>& prepared_camera_beams, UPBPSpatialQueryState& query_state,
-    SpectralResponse& value, CameraEvaluationStatistics& statistics) {
+    SpectralResponse& value, CameraEvaluationStatistics& statistics, const UPBPIterationParameters& measurement) {
     if (bb1d_index.size() == 0u) {
       return true;
     }
@@ -1256,8 +1255,8 @@ struct CPUUPBPImpl {
       bool evaluation_valid = true;
       uint64_t query_candidate_count = 0u;
       const bool query_valid = bb1d_index.query_beam_intersections(
-        camera_beam, static_cast<float>(iteration.bb1d_radius), query_state, query_candidate_count,
-        [this, &camera_beam, prepared_camera_beam_valid, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam, const uint32_t light_beam_index) {
+        camera_beam, static_cast<float>(measurement.bb1d_radius), query_state, query_candidate_count,
+        [this, &measurement, &camera_beam, prepared_camera_beam_valid, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam, const uint32_t light_beam_index) {
           if (evaluation_valid == false) {
             return false;
           }
@@ -1267,13 +1266,13 @@ struct CPUUPBPImpl {
           statistics.spatial[SpatialStatisticBB1D].eligible_candidates += static_cast<uint64_t>(eligible);
           return eligible;
         },
-        [this, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam, const uint32_t light_beam_index,
+        [this, &measurement, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam, const uint32_t light_beam_index,
           const UPBPBeamBeamIntersection& intersection) {
           SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticBB1D];
           ++spatial.intersections;
           UPBPBeamContribution contribution;
           if (upbp_evaluate_bb1d(rt.scene().mediums[camera_beam.medium_index], prepared_mediums[camera_beam.medium_index], prepared_bb1d_beams[light_beam_index], light_beam,
-                prepared_camera_beam, camera_beam, intersection, iteration.mis, prepared_bb1d, iteration.bpt_sample_count, contribution) == false) {
+                prepared_camera_beam, camera_beam, intersection, measurement.mis, prepared_bb1d, measurement.bpt_sample_count, contribution) == false) {
             evaluation_valid = false;
             return;
           }
@@ -1312,11 +1311,7 @@ struct CPUUPBPImpl {
     }
     CameraWorkspace& workspace = camera_workspaces[thread_id];
     for (uint32_t path_index = begin; running() && (path_index < end); ++path_index) {
-      uint2 pixel = {};
-      if (film.active_pixel(path_index, pixel) == false) {
-        complete_camera_path(statistics);
-        continue;
-      }
+      const uint2 pixel = film.pixel_location(path_index);
       uint32_t timing_sample_hash = path_index;
       timing_sample_hash ^= timing_sample_hash >> 16u;
       timing_sample_hash *= 0x7feb352du;
@@ -1342,9 +1337,10 @@ struct CPUUPBPImpl {
         const uint2 sample_pixel = sampler_blue_noise_pixel(pixel, scene.options.random_seed);
         film_sample = sample_blue_noise_at_translated_pixel(sample_pixel, scene.options.samples, status.current_iteration, sampler_stream_dimension_base(kSamplerStreamOther));
       }
-      const float2 film_uv = film.sample(status.current_iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, pixel, film_sample);
+      const float2 film_uv = film.sample(scene.pixel_sampler, pixel, film_sample, film_sampler.next_2d());
+      const UPBPIterationParameters& measurement = iteration;
       UPBPCameraSubpathResult& camera = workspace.camera;
-      if (upbp_build_camera_subpath(rt, scene, iteration.spect, film_uv, scene.options.random_seed, status.current_iteration, path_index, maximum_vertices,
+      if (upbp_build_camera_subpath(rt, scene, measurement.spect, film_uv, scene.options.random_seed, status.current_iteration, path_index, maximum_vertices,
             options.maximum_boundary_count, options.maximum_null_events_per_interval, camera) == false) {
         const uint32_t terminal_vertex_class = camera.subpath.path.vertices.empty() ? kInvalidIndex : static_cast<uint32_t>(camera.subpath.path.vertices.back().cls);
         fail("UPBP camera subpath failed at pixel path " + std::to_string(path_index) + ", failure " + std::to_string(static_cast<uint32_t>(camera.subpath.failure)) +
@@ -1358,25 +1354,26 @@ struct CPUUPBPImpl {
       finish_camera_phase(CameraTimingSubpath);
       UPBPRecursivePathWeights& camera_weights = workspace.weights;
       begin_camera_phase();
-      if (upbp_compute_recursive_path_weights(scene, camera.subpath.path, iteration.mis, iteration.light_subpath_count, iteration.bpt_sample_count, camera_weights) == false) {
+      if (upbp_compute_recursive_path_weights(scene, camera.subpath.path, measurement.mis, measurement.light_subpath_count, measurement.bpt_sample_count, camera_weights) ==
+          false) {
         fail("UPBP recursive camera-path MIS failed at pixel path " + std::to_string(path_index) + ", vertex " + std::to_string(camera_weights.failure_vertex_index) +
              ", failure " + std::to_string(static_cast<uint32_t>(camera_weights.failure)));
         return;
       }
       finish_camera_phase(CameraTimingRecursiveMIS);
 
-      SpectralResponse value{iteration.spect, 0.0f};
-      if (iteration.mis.enabled(UPBPTechnique::BPT) || scene.strategy_enabled(Scene::Strategy::DirectHit)) {
+      SpectralResponse value{measurement.spect, 0.0f};
+      if (measurement.mis.enabled(UPBPTechnique::BPT) || scene.strategy_enabled(Scene::Strategy::DirectHit)) {
         begin_camera_phase();
         const uint32_t light_path_index =
-          iteration.light_subpath_count == iteration.camera_subpath_count
+          measurement.light_subpath_count == measurement.camera_subpath_count
             ? path_index
-            : upbp_select_light_path_index(scene.options.random_seed, status.current_iteration, path_index, static_cast<uint32_t>(iteration.light_subpath_count));
+            : upbp_select_light_path_index(scene.options.random_seed, status.current_iteration, path_index, static_cast<uint32_t>(measurement.light_subpath_count));
         UPBPBPTCameraEvaluation bpt = {};
         if ((light_path_index == kInvalidIndex) ||
-            (upbp_evaluate_bpt_camera_path(rt, scene, iteration.spect, light_paths[light_path_index].subpath.path, camera.subpath, scene.options.random_seed,
+            (upbp_evaluate_bpt_camera_path(rt, scene, measurement.spect, light_paths[light_path_index].subpath.path, camera.subpath, scene.options.random_seed,
                status.current_iteration, path_index, options.maximum_boundary_count, options.maximum_null_events_per_interval, light_weights[light_path_index], camera_weights,
-               iteration.mis, iteration.light_subpath_count, bpt) == false)) {
+               measurement.mis, measurement.light_subpath_count, bpt) == false)) {
           fail("UPBP BPT evaluation failed at pixel path " + std::to_string(path_index) + ", failure " + std::to_string(static_cast<uint32_t>(bpt.failure)) + ", segment failure " +
                std::to_string(static_cast<uint32_t>(bpt.segment_failure)) + ", medium failure " + std::to_string(static_cast<uint32_t>(bpt.medium_failure)) + ", triangle " +
                std::to_string(bpt.failure_intersection.triangle_index) + ", material " + std::to_string(bpt.failure_intersection.material_index) + ", instance " +
@@ -1389,27 +1386,27 @@ struct CPUUPBPImpl {
 
       for (uint32_t camera_vertex_index = 1u; camera_vertex_index < camera.subpath.path.vertices.size(); ++camera_vertex_index) {
         const UPBPPathVertexRecord& vertex = camera.subpath.path.vertices[camera_vertex_index];
-        if ((vertex.cls == UPBPVertexClass::Surface) && iteration.mis.enabled(UPBPTechnique::Surface)) {
+        if ((vertex.cls == UPBPVertexClass::Surface) && measurement.mis.enabled(UPBPTechnique::Surface)) {
           begin_camera_phase();
-          if (evaluate_point_technique(UPBPTechnique::Surface, surface_index, iteration.surface_radius, camera.subpath.path, camera_weights, path_index, camera_vertex_index,
-                value) == false) {
+          if (evaluate_point_technique(UPBPTechnique::Surface, surface_index, measurement.surface_radius, camera.subpath.path, camera_weights, path_index, camera_vertex_index,
+                value, measurement) == false) {
             fail("UPBP surface merging failed at pixel path " + std::to_string(path_index));
             return;
           }
           finish_camera_phase(CameraTimingSurfaceMerge);
         }
-        if ((vertex.cls == UPBPVertexClass::Medium) && iteration.mis.enabled(UPBPTechnique::PP3D)) {
+        if ((vertex.cls == UPBPVertexClass::Medium) && measurement.mis.enabled(UPBPTechnique::PP3D)) {
           begin_camera_phase();
-          if (evaluate_point_technique(UPBPTechnique::PP3D, pp3d_index, iteration.pp3d_radius, camera.subpath.path, camera_weights, path_index, camera_vertex_index, value) ==
-              false) {
+          if (evaluate_point_technique(UPBPTechnique::PP3D, pp3d_index, measurement.pp3d_radius, camera.subpath.path, camera_weights, path_index, camera_vertex_index, value,
+                measurement) == false) {
             fail("UPBP PP3D evaluation failed at pixel path " + std::to_string(path_index));
             return;
           }
           finish_camera_phase(CameraTimingPP3D);
         }
-        if ((vertex.cls == UPBPVertexClass::Medium) && iteration.mis.enabled(UPBPTechnique::BP2D)) {
+        if ((vertex.cls == UPBPVertexClass::Medium) && measurement.mis.enabled(UPBPTechnique::BP2D)) {
           begin_camera_phase();
-          if (evaluate_bp2d(camera.subpath.path, camera_weights, camera_vertex_index, value, statistics) == false) {
+          if (evaluate_bp2d(camera.subpath.path, camera_weights, camera_vertex_index, value, statistics, measurement) == false) {
             fail("UPBP BP2D evaluation failed at pixel path " + std::to_string(path_index));
             return;
           }
@@ -1419,7 +1416,7 @@ struct CPUUPBPImpl {
 
       std::vector<UPBPBeamReference>& camera_beams = workspace.beams;
       std::vector<UPBPPreparedBeam>& prepared_camera_beams = workspace.prepared_beams;
-      if (iteration.mis.enabled(UPBPTechnique::PB2D) || iteration.mis.enabled(UPBPTechnique::BB1D)) {
+      if (measurement.mis.enabled(UPBPTechnique::PB2D) || measurement.mis.enabled(UPBPTechnique::BB1D)) {
         begin_camera_phase();
         if (upbp_collect_medium_beams(camera.subpath.path, path_index, camera_beams) == false) {
           fail("UPBP camera-beam collection failed at pixel path " + std::to_string(path_index));
@@ -1428,25 +1425,25 @@ struct CPUUPBPImpl {
         prepared_camera_beams.resize(camera_beams.size());
         for (uint32_t beam_index = 0u; beam_index < camera_beams.size(); ++beam_index) {
           const UPBPBeamReference& beam = camera_beams[beam_index];
-          upbp_prepare_beam(camera.subpath.path, camera_weights, beam, iteration.mis, prepared_camera_beams[beam_index]);
-          if (spectral_query_compatible(beam.throughput_at_origin.as_query(), iteration.spect) == false) {
+          upbp_prepare_beam(camera.subpath.path, camera_weights, beam, measurement.mis, prepared_camera_beams[beam_index]);
+          if (spectral_query_compatible(beam.throughput_at_origin.as_query(), measurement.spect) == false) {
             fail("UPBP camera-beam spectrum is inconsistent at pixel path " + std::to_string(path_index) + ", beam " + std::to_string(beam_index));
             return;
           }
         }
         finish_camera_phase(CameraTimingBeamPreparation);
       }
-      if (iteration.mis.enabled(UPBPTechnique::PB2D)) {
+      if (measurement.mis.enabled(UPBPTechnique::PB2D)) {
         begin_camera_phase();
-        if (evaluate_pb2d(camera_beams, prepared_camera_beams, value, statistics) == false) {
+        if (evaluate_pb2d(camera_beams, prepared_camera_beams, value, statistics, measurement) == false) {
           fail("UPBP PB2D evaluation failed at pixel path " + std::to_string(path_index));
           return;
         }
         finish_camera_phase(CameraTimingPB2D);
       }
-      if (iteration.mis.enabled(UPBPTechnique::BB1D)) {
+      if (measurement.mis.enabled(UPBPTechnique::BB1D)) {
         begin_camera_phase();
-        if (evaluate_bb1d(camera_beams, prepared_camera_beams, workspace.bb1d_query_state, value, statistics) == false) {
+        if (evaluate_bb1d(camera_beams, prepared_camera_beams, workspace.bb1d_query_state, value, statistics, measurement) == false) {
           fail("UPBP BB1D evaluation failed at pixel path " + std::to_string(path_index));
           return;
         }
@@ -1455,16 +1452,19 @@ struct CPUUPBPImpl {
 
       begin_camera_phase();
       float3 normal = {};
-      SpectralResponse albedo{iteration.spect, 0.0f};
+      SpectralResponse albedo{measurement.spect, 0.0f};
       for (uint32_t vertex_index = 1u; vertex_index < camera.subpath.path.vertices.size(); ++vertex_index) {
         const UPBPPathVertexRecord& vertex = camera.subpath.path.vertices[vertex_index];
         if (vertex.cls == UPBPVertexClass::Surface) {
           normal = vertex.intersection.nrm;
           Sampler albedo_sampler = upbp_pair_sampler(scene.options.random_seed, status.current_iteration, path_index, 0u, vertex_index, 0u, UPBPRandomDomain::ScatteringEvaluation);
-          const BSDFData data = {iteration.spect, vertex.incident_medium_index, PathSource::Camera, vertex.intersection, vertex.intersection.w_i};
+          const BSDFData data = {measurement.spect, vertex.incident_medium_index, PathSource::Camera, vertex.intersection, vertex.intersection.w_i};
           albedo = bsdf::albedo(data, scene.materials[vertex.intersection.material_index], albedo_sampler);
           break;
         }
+      }
+      if (running() == false) {
+        return;
       }
       film.submit(value.to_rgb_estimate(), normal, albedo.to_rgb_estimate(), pixel);
       finish_camera_phase(CameraTimingFilmSubmission);
@@ -1531,9 +1531,7 @@ struct CPUUPBPImpl {
       return;
     }
     const Scene& scene = rt.scene();
-    const Film::NoiseEstimationSchedule noise_estimation_schedule =
-      scene.spectral() ? Film::NoiseEstimationSchedule::PowerOfTwoSampleCount : Film::NoiseEstimationSchedule::EveryOtherIteration;
-    rt.film().commit_iteration(status.current_iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp, noise_estimation_schedule);
+    rt.film().commit_iteration(scene.options.radiance_clamp);
     status.completed_iterations += 1u;
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;

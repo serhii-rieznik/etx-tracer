@@ -201,7 +201,7 @@ UPBPSurfacePreparedQuery upbp_surface_prepare_query(BSDFResourceContext context,
   return result;
 }
 
-BSDFEval upbp_surface_evaluate_prepared(UPBPSurfacePreparedQuery query, float3 outgoing_direction, inout Sampler sampler, out float reverse_pdf) {
+[noinline] BSDFEval upbp_surface_evaluate_prepared(UPBPSurfacePreparedQuery query, float3 outgoing_direction, inout Sampler sampler, out float reverse_pdf) {
   BSDFData reverse_data = query.data;
   reverse_data.w_i = -outgoing_direction;
   reverse_data.path_source = PathSource::Light;
@@ -228,7 +228,7 @@ BSDFEval upbp_surface_evaluate_prepared(UPBPSurfacePreparedQuery query, float3 o
 #define ETX_UPBP_SURFACE_VARIANT 1
 #include "gpu_rt_wavefront_upbp_density.hlsl"
 
-[numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 group_id : SV_GroupID, uint group_thread_index : SV_GroupIndex) {
+  [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 group_id : SV_GroupID, uint group_thread_index : SV_GroupIndex) {
   if (group_id.x < constants.dispatch_item_count) {
     upbp_evaluate_surface_point_merge_group(constants.dispatch_item_offset + group_id.x, group_thread_index);
   }

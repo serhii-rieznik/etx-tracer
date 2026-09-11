@@ -14,7 +14,8 @@ struct VCMSpatialGrid {
   std::vector<float3> _normals;
   std::vector<float3> _w_in;
   std::vector<float> _d_vcm;
-  std::vector<float> _d_vm;
+  std::vector<float> _d_vm_base;
+  std::vector<float> _d_surface;
   std::vector<uint32_t> _path_lengths;
   std::vector<SpectralResponse> _throughputs;
 };

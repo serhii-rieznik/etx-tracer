@@ -20,6 +20,7 @@ struct WavefrontConnectCameraPrepareInput {
   GPUWavefrontPathVertex previous_vertex;
   Camera camera;
   CameraFilmSampleShared camera_sample;
+  float2 splat_uv;
   Material material;
 };
 
@@ -65,7 +66,7 @@ float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_v
     return 1.0f;
   }
 
-  float current_from_camera_dir = camera_shared_film_pdf_out(input_value.camera, input_value.current_vertex.position);
+  float current_from_camera_dir = camera_shared_film_pdf_out(input_value.camera, input_value.camera_sample.position, input_value.current_vertex.position);
   float current_from_camera = wavefront_convert_solid_angle_pdf_to_area(current_from_camera_dir, input_value.camera_sample.position, input_value.current_vertex.position,
     wavefront_path_vertex_is_surface(input_value.current_vertex), input_value.current_vertex.normal);
 
@@ -75,12 +76,13 @@ float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_v
   float3 previous_direction = normalize(input_value.previous_vertex.position - input_value.current_vertex.position);
   float previous_from_current_dir =
     wavefront_connect_camera_stage_bsdf_pdf(wavefront_connect_camera_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
-  float vm_camera = scene_path_mode_is_vcm() && (wavefront_path_vertex_is_medium(input_value.current_vertex) == false) ? constants.vcm_vm_weight : 0.0f;
+  const float surface_factor = wavefront_vcm_surface_factor();
+  float vm_camera = scene_path_mode_is_vcm() && (wavefront_path_vertex_is_medium(input_value.current_vertex) == false) ? surface_factor : 0.0f;
   float adjacent_connection = input_value.current_vertex.forward_pdf;
   if (scene_path_mode_uses_bdpt_fast() && (input_value.path_meta.light_path_length != 1u)) {
     adjacent_connection = 0.0f;
   }
-  float w_light = current_from_camera * (vm_camera + adjacent_connection + input_value.current_vertex.reverse_pdf * previous_from_current_dir);
+  float w_light = current_from_camera * (vm_camera + adjacent_connection + wavefront_connection_mis(input_value.current_vertex, surface_factor) * previous_from_current_dir);
   return 1.0f / (1.0f + w_light);
 }
 
@@ -162,6 +164,7 @@ bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out Wavefr
   if ((input_value.camera_sample.pdf_dir <= 0.0f) || (input_value.camera_sample.weight <= 0.0f)) {
     return false;
   }
+  input_value.splat_uv = camera_sample_splat_uv(input_value.camera, input_value.camera_sample.uv, float2(rnd01(seed), rnd01(seed)));
 
   if (upbp == false) {
     input_value.state.sampler_seed = seed;
@@ -205,7 +208,7 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   }
 
   uint pixel_index = 0u;
-  if (wavefront_camera_ndc_to_pixel_index(input_value.camera, input_value.camera_sample.uv, pixel_index) == false) {
+  if (wavefront_camera_ndc_to_pixel_index(input_value.camera, input_value.splat_uv, pixel_index) == false) {
     return;
   }
 

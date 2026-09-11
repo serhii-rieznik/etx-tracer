@@ -6,14 +6,23 @@ namespace etx {
 
 struct UPBPRecursiveVertexWeights {
   double d_shared = 0.0;
-  double d_bpt = 0.0;
-  double d_pde = 0.0;
+  double d_bpt_base = 0.0;
+  double d_pde_base = 0.0;
+  double d_surface = 0.0;
   double ray_sample_forward_pdf_inverse = 0.0;
   double ray_sample_reverse_pdf_inverse = 0.0;
   double ray_sample_forward_ratio = 0.0;
   double ray_sample_reverse_ratio = 0.0;
   bool previous_in_medium = false;
   bool previous_delta = false;
+
+  double bpt(const double surface_factor) const {
+    return d_bpt_base + surface_factor * d_surface;
+  }
+
+  double pde(const double surface_factor) const {
+    return d_pde_base + surface_factor * d_surface;
+  }
 };
 
 enum class UPBPRecursiveWeightFailure : uint8_t {
@@ -32,7 +41,7 @@ struct UPBPRecursiveState {
   double last_sin_theta = 0.0;
   double d_bpt_a = 0.0;
   double d_bpt_b = 0.0;
-  double d_pde_a = 0.0;
+  double d_surface_b = 0.0;
   double d_pde_b = 0.0;
   UPBPRecursiveWeightFailure failure = UPBPRecursiveWeightFailure::None;
   uint32_t failure_vertex_index = 0u;
@@ -73,9 +82,12 @@ inline double upbp_vertex_cosine(const Scene& scene, const UPBPPathVertexRecord&
   return fabs(static_cast<double>(dot(geometric_normal, direction)));
 }
 
-inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration& configuration, const UPBPVertexClass vertex_class, const bool vertex_delta,
+inline double upbp_recursive_local_volume_factor(const UPBPDensityMISConfiguration& configuration, const UPBPVertexClass vertex_class, const bool vertex_delta,
   const bool vertex_density_connectible, const UPBPRecursiveVertexWeights& weights, const double next_reverse_pdf_inverse, const double next_reverse_ratio, const double sin_theta,
   const PathSource source) {
+  if ((vertex_class != UPBPVertexClass::Medium) || vertex_delta || (vertex_density_connectible == false)) {
+    return 0.0;
+  }
   const double forward_inverse = source == PathSource::Light ? weights.ray_sample_forward_pdf_inverse : next_reverse_pdf_inverse;
   const double forward_ratio = source == PathSource::Light ? weights.ray_sample_forward_ratio : next_reverse_ratio;
   const double reverse_inverse = source == PathSource::Light ? next_reverse_pdf_inverse : weights.ray_sample_forward_pdf_inverse;
@@ -92,7 +104,6 @@ inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration&
 
   double result = 0.0;
   constexpr UPBPTechnique techniques[] = {
-    UPBPTechnique::Surface,
     UPBPTechnique::PP3D,
     UPBPTechnique::PB2D,
     UPBPTechnique::BP2D,
@@ -104,6 +115,19 @@ inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration&
   return result;
 }
 
+inline double upbp_recursive_surface_coefficient(const UPBPDensityMISConfiguration& configuration, const UPBPVertexClass vertex_class, const bool vertex_delta,
+  const bool vertex_density_connectible) {
+  return ((vertex_class == UPBPVertexClass::Surface) && (vertex_delta == false) && vertex_density_connectible && configuration.enabled(UPBPTechnique::Surface)) ? 1.0 : 0.0;
+}
+
+inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration& configuration, const UPBPVertexClass vertex_class, const bool vertex_delta,
+  const bool vertex_density_connectible, const UPBPRecursiveVertexWeights& weights, const double next_reverse_pdf_inverse, const double next_reverse_ratio, const double sin_theta,
+  const PathSource source) {
+  return upbp_recursive_local_volume_factor(configuration, vertex_class, vertex_delta, vertex_density_connectible, weights, next_reverse_pdf_inverse, next_reverse_ratio, sin_theta,
+           source) +
+         configuration.factor(UPBPTechnique::Surface) * upbp_recursive_surface_coefficient(configuration, vertex_class, vertex_delta, vertex_density_connectible);
+}
+
 inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration& configuration, const UPBPPathVertexRecord& vertex, const UPBPRecursiveVertexWeights& weights,
   const double next_reverse_pdf_inverse, const double next_reverse_ratio, const double sin_theta, const PathSource source) {
   return upbp_recursive_local_pde_factor(configuration, vertex.cls, vertex.delta, vertex.density_connectible, weights, next_reverse_pdf_inverse, next_reverse_ratio, sin_theta,
@@ -111,6 +135,7 @@ inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration&
 }
 
 struct UPBPRecursiveLocalPDEAffine {
+  double surface_coefficient = 0.0;
   double reverse_pdf_inverse_coefficient = 0.0;
   double constant = 0.0;
 };
@@ -118,7 +143,8 @@ struct UPBPRecursiveLocalPDEAffine {
 inline UPBPRecursiveLocalPDEAffine upbp_recursive_local_pde_affine(const UPBPDensityMISConfiguration& configuration, const UPBPVertexClass vertex_class, const bool vertex_delta,
   const bool vertex_density_connectible, const UPBPRecursiveVertexWeights& weights, const double next_reverse_ratio, const double sin_theta, const PathSource source) {
   UPBPRecursiveLocalPDEAffine result = {};
-  result.constant = upbp_recursive_local_pde_factor(configuration, vertex_class, vertex_delta, vertex_density_connectible, weights, 0.0, next_reverse_ratio, sin_theta, source);
+  result.constant = upbp_recursive_local_volume_factor(configuration, vertex_class, vertex_delta, vertex_density_connectible, weights, 0.0, next_reverse_ratio, sin_theta, source);
+  result.surface_coefficient = upbp_recursive_surface_coefficient(configuration, vertex_class, vertex_delta, vertex_density_connectible);
 
   UPBPDensityMISContext variable_context = {
     2u,
@@ -168,10 +194,11 @@ inline bool upbp_initialize_recursive_state(const UPBPPathRecord& path, const ui
   state.weights.d_shared = endpoint.distant_endpoint ? 1.0 / endpoint.endpoint_pdf_area : 1.0 / endpoint.endpoint_pdf_direction;
   if (endpoint.delta == false) {
     const double cosine = endpoint.distant_endpoint ? 1.0 : fabs(static_cast<double>(dot(endpoint.intersection.nrm, endpoint.sampled_direction)));
-    state.weights.d_bpt = cosine / emission_density;
+    state.weights.d_bpt_base = cosine / emission_density;
   }
-  state.weights.d_pde = state.weights.d_bpt * static_cast<double>(bpt_sample_count);
-  const bool valid = std::isfinite(state.weights.d_shared) && std::isfinite(state.weights.d_bpt) && std::isfinite(state.weights.d_pde);
+  state.weights.d_pde_base = state.weights.d_bpt_base * static_cast<double>(bpt_sample_count);
+  const bool valid =
+    std::isfinite(state.weights.d_shared) && std::isfinite(state.weights.d_bpt_base) && (std::isfinite(state.weights.d_pde_base) && std::isfinite(state.weights.d_surface));
   state.failure = valid ? UPBPRecursiveWeightFailure::None : UPBPRecursiveWeightFailure::NonFiniteArrival;
   return valid;
 }
@@ -199,15 +226,17 @@ inline bool upbp_complete_recursive_arrival(const Scene& scene, const UPBPPathRe
   if (vertex_index > 1u) {
     const double next_reverse_inverse = 1.0 / reverse_pdf;
     const double next_reverse_ratio = upbp_short_beam_ray_factor(source);
-    const double local_factor =
-      upbp_recursive_local_pde_factor(configuration, source, state.weights, next_reverse_inverse, next_reverse_ratio, state.last_sin_theta, source.source);
-    state.weights.d_bpt = state.d_bpt_a * local_factor + state.d_bpt_b;
-    state.weights.d_pde = state.d_pde_a * local_factor + state.d_pde_b;
+    const double local_factor = upbp_recursive_local_volume_factor(configuration, source.cls, source.delta, source.density_connectible, state.weights, next_reverse_inverse,
+      next_reverse_ratio, state.last_sin_theta, source.source);
+    state.weights.d_bpt_base = state.d_bpt_a * local_factor + state.d_bpt_b;
+    state.weights.d_pde_base = state.d_bpt_a * local_factor + state.d_pde_b;
+    state.weights.d_surface = state.d_bpt_a * upbp_recursive_surface_coefficient(configuration, source.cls, source.delta, source.density_connectible) + state.d_surface_b;
   }
 
   state.weights.d_shared /= forward_pdf;
-  state.weights.d_bpt /= forward_pdf;
-  state.weights.d_pde /= forward_pdf;
+  state.weights.d_bpt_base /= forward_pdf;
+  state.weights.d_pde_base /= forward_pdf;
+  state.weights.d_surface /= forward_pdf;
 
   const float3 edge_direction = normalize(target.position - source.position);
   const double cosine = upbp_vertex_cosine(scene, target, edge_direction);
@@ -221,13 +250,15 @@ inline bool upbp_complete_recursive_arrival(const Scene& scene, const UPBPPathRe
     state.weights.d_shared *= distance_squared;
   }
   state.weights.d_shared /= cosine;
-  state.weights.d_bpt /= cosine;
-  state.weights.d_pde /= cosine;
+  state.weights.d_bpt_base /= cosine;
+  state.weights.d_pde_base /= cosine;
+  state.weights.d_surface /= cosine;
   state.weights.ray_sample_forward_pdf_inverse = 1.0 / forward_pdf;
   state.weights.ray_sample_reverse_pdf_inverse = 1.0 / reverse_pdf;
   state.weights.ray_sample_forward_ratio = upbp_short_beam_ray_factor(target);
   state.weights.ray_sample_reverse_ratio = upbp_short_beam_ray_factor(source);
-  const bool valid = std::isfinite(state.weights.d_shared) && std::isfinite(state.weights.d_bpt) && std::isfinite(state.weights.d_pde);
+  const bool valid =
+    std::isfinite(state.weights.d_shared) && std::isfinite(state.weights.d_bpt_base) && (std::isfinite(state.weights.d_pde_base) && std::isfinite(state.weights.d_surface));
   state.failure = valid ? UPBPRecursiveWeightFailure::None : UPBPRecursiveWeightFailure::NonFiniteArrival;
   state.failure_vertex_index = valid ? 0u : vertex_index;
   return valid;
@@ -257,15 +288,16 @@ inline bool upbp_prepare_recursive_departure(const Scene& scene, const UPBPPathR
   }
   const bool bpt_previous = (state.weights.previous_delta == false) && (vertex.delta == false);
   state.d_bpt_a = cosine / forward_pdf;
-  state.d_pde_a = cosine / forward_pdf;
   if (vertex.delta) {
-    state.d_bpt_b = cosine * state.weights.d_bpt / state.weights.ray_sample_reverse_pdf_inverse;
-    state.d_pde_b = cosine * state.weights.d_pde / state.weights.ray_sample_reverse_pdf_inverse;
+    state.d_bpt_b = cosine * state.weights.d_bpt_base / state.weights.ray_sample_reverse_pdf_inverse;
+    state.d_pde_b = cosine * state.weights.d_pde_base / state.weights.ray_sample_reverse_pdf_inverse;
+    state.d_surface_b = cosine * state.weights.d_surface / state.weights.ray_sample_reverse_pdf_inverse;
   } else {
     state.d_bpt_b =
-      (cosine / forward_pdf) * (state.weights.d_shared * static_cast<double>(bpt_previous) + reverse_pdf * state.weights.d_bpt / state.weights.ray_sample_reverse_pdf_inverse);
+      (cosine / forward_pdf) * (state.weights.d_shared * static_cast<double>(bpt_previous) + reverse_pdf * state.weights.d_bpt_base / state.weights.ray_sample_reverse_pdf_inverse);
     state.d_pde_b = (cosine / forward_pdf) * (state.weights.d_shared * static_cast<double>(bpt_previous) * static_cast<double>(bpt_sample_count) +
-                                               reverse_pdf * state.weights.d_pde / state.weights.ray_sample_reverse_pdf_inverse);
+                                               reverse_pdf * state.weights.d_pde_base / state.weights.ray_sample_reverse_pdf_inverse);
+    state.d_surface_b = (cosine / forward_pdf) * reverse_pdf * state.weights.d_surface / state.weights.ray_sample_reverse_pdf_inverse;
   }
   state.weights.d_shared = 1.0 / forward_pdf;
   state.weights.previous_in_medium = vertex.cls == UPBPVertexClass::Medium;
@@ -274,7 +306,7 @@ inline bool upbp_prepare_recursive_departure(const Scene& scene, const UPBPPathR
   const float3 incoming_direction = vertex.intersection.w_i;
   const double cosine_directions = static_cast<double>(dot(incoming_direction, vertex.sampled_direction));
   state.last_sin_theta = std::sqrt(fmax(0.0, 1.0 - cosine_directions * cosine_directions));
-  const bool valid = std::isfinite(state.d_bpt_a) && std::isfinite(state.d_bpt_b) && std::isfinite(state.d_pde_a) && std::isfinite(state.d_pde_b);
+  const bool valid = std::isfinite(state.d_bpt_a) && std::isfinite(state.d_bpt_b) && std::isfinite(state.d_surface_b) && std::isfinite(state.d_pde_b);
   state.failure = valid ? UPBPRecursiveWeightFailure::None : UPBPRecursiveWeightFailure::NonFiniteDeparture;
   state.failure_vertex_index = valid ? 0u : vertex_index;
   return valid;
@@ -361,14 +393,16 @@ inline bool upbp_complete_recursive_partial_medium_arrival(const UPBPPathRecord&
   }
 
   if (source_vertex_index > 0u) {
-    const double local_factor =
-      upbp_recursive_local_pde_factor(configuration, source, state.weights, 1.0 / reverse_pdf, upbp_short_beam_ray_factor(source), state.last_sin_theta, source.source);
-    state.weights.d_bpt = state.d_bpt_a * local_factor + state.d_bpt_b;
-    state.weights.d_pde = state.d_pde_a * local_factor + state.d_pde_b;
+    const double local_factor = upbp_recursive_local_volume_factor(configuration, source.cls, source.delta, source.density_connectible, state.weights, 1.0 / reverse_pdf,
+      upbp_short_beam_ray_factor(source), state.last_sin_theta, source.source);
+    state.weights.d_bpt_base = state.d_bpt_a * local_factor + state.d_bpt_b;
+    state.weights.d_pde_base = state.d_bpt_a * local_factor + state.d_pde_b;
+    state.weights.d_surface = state.d_bpt_a * upbp_recursive_surface_coefficient(configuration, source.cls, source.delta, source.density_connectible) + state.d_surface_b;
   }
   state.weights.d_shared /= forward_pdf;
-  state.weights.d_bpt /= forward_pdf;
-  state.weights.d_pde /= forward_pdf;
+  state.weights.d_bpt_base /= forward_pdf;
+  state.weights.d_pde_base /= forward_pdf;
+  state.weights.d_surface /= forward_pdf;
   if ((source_vertex_index > 0u) || (path.vertices.front().distant_endpoint == false)) {
     state.weights.d_shared *= static_cast<double>(transport_distance) * transport_distance;
   }
@@ -376,7 +410,7 @@ inline bool upbp_complete_recursive_partial_medium_arrival(const UPBPPathRecord&
   state.weights.ray_sample_reverse_pdf_inverse = 1.0 / reverse_pdf;
   state.weights.ray_sample_forward_ratio = 1.0 / query_real_event_density;
   state.weights.ray_sample_reverse_ratio = source.cls == UPBPVertexClass::Medium ? 1.0 / source_event_density : 0.0;
-  return std::isfinite(state.weights.d_shared) && std::isfinite(state.weights.d_bpt) && std::isfinite(state.weights.d_pde);
+  return std::isfinite(state.weights.d_shared) && std::isfinite(state.weights.d_bpt_base) && (std::isfinite(state.weights.d_pde_base) && std::isfinite(state.weights.d_surface));
 }
 
 }  // namespace etx

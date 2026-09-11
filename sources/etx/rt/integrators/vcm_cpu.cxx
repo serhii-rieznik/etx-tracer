@@ -44,6 +44,7 @@ struct CPUVCMImpl {
   VCMOptions vcm_options = {};
   VCMIteration vcm_iteration = {};
   VCMSpatialGrid _current_grid = {};
+  const char* failure = nullptr;
 
   std::mutex _light_vertices_lock;
   std::vector<VCMLightPath> _light_paths;
@@ -77,11 +78,12 @@ struct CPUVCMImpl {
     wait_for_tasks();
 
     status = {};
+    failure = nullptr;
 
     rt.film().clear(Film::ClearEverything);
 
     vcm_options.load(opt, rt.scene());
-    vcm_iteration.iteration = 0;
+    vcm_iteration = {};
     start_next_iteration();
   }
 
@@ -91,6 +93,7 @@ struct CPUVCMImpl {
     wait_for_tasks();
 
     const uint2 current_dim = rt.film().current_dimensions() * rt.film().pixel_size();
+    vcm_iteration.active_paths = rt.film().current_pixel_count();
     vcm_iteration.current_radius =
       vcm_iteration_radius(vcm_options.initial_radius, rt.geometry_bounding_sphere_radius(), max(current_dim.x, current_dim.y), vcm_iteration.iteration);
 
@@ -98,6 +101,9 @@ struct CPUVCMImpl {
     vcm_iteration.vc_weight = 1.0f / eta_vcm;
     vcm_iteration.vm_weight = vcm_options.merge_vertices() ? eta_vcm : 0.0f;
     vcm_iteration.vm_normalization = 1.0f / eta_vcm;
+    if (vcm_iteration.iteration == 0u) {
+      log::info("VCM surface merging: initial radius %.9g, %u light paths", vcm_iteration.current_radius, vcm_iteration.active_paths);
+    }
 
     status.current_iteration = vcm_iteration.iteration;
 
@@ -133,10 +139,7 @@ struct CPUVCMImpl {
           local_vertices.emplace_back(step_result.vertex_to_add);
         }
         if (step_result.splat) {
-          const float3 val = step_result.value_to_splat.to_rgb_estimate();
-          if (dot(val, val) > kEpsilon) {
-            film.submit(val, step_result.splat_uv);
-          }
+          film.submit(step_result.value_to_splat.to_rgb_estimate(), step_result.splat_uv);
         }
       }
 
@@ -166,24 +169,26 @@ struct CPUVCMImpl {
     auto& film = rt.film();
 
     for (uint32_t pi = range_begin; running() && (pi < range_end); ++pi) {
-      uint2 pixel = {};
-      if (film.active_pixel(pi, pixel)) {
-        const auto& light_path = _light_paths[pi];
+      const uint2 pixel = film.pixel_location(pi);
+      const auto& light_path = _light_paths[pi];
 
-        VCMPathState state = vcm_generate_camera_state(pixel, pi, scene, camera, vcm_iteration, light_path.spect);
-        while (running()) {
-          bool continue_tracing = vcm_camera_step(scene, vcm_iteration, vcm_options, light_paths, light_vertices, state, rt, _current_grid.data);
+      VCMPathState state = vcm_generate_camera_state(pixel, pi, scene, camera, vcm_iteration, light_path.spect);
+      const VCMIteration& measurement = vcm_iteration;
+      while (running()) {
+        bool continue_tracing = vcm_camera_step(scene, measurement, vcm_options, light_paths, light_vertices, state, rt, _current_grid.data);
 
-          if (continue_tracing == false) {
-            break;
-          }
+        if (continue_tracing == false) {
+          break;
         }
-
-        state.merged *= vcm_iteration.vm_normalization;
-        state.merged += state.gathered.to_rgb_estimate();
-
-        film.submit(state.merged, {}, {}, pixel);
       }
+
+      if (running() == false) {
+        break;
+      }
+      state.merged *= measurement.vm_normalization;
+      state.merged += state.gathered.to_rgb_estimate();
+
+      film.submit(state.merged, {}, {}, pixel);
     }
   }
 
@@ -203,9 +208,7 @@ struct CPUVCMImpl {
 
   void complete_camera_vertices() {
     const auto& scene = rt.scene();
-    const Film::NoiseEstimationSchedule noise_estimation_schedule =
-      scene.spectral() ? Film::NoiseEstimationSchedule::PowerOfTwoSampleCount : Film::NoiseEstimationSchedule::EveryOtherIteration;
-    rt.film().commit_iteration(vcm_iteration.iteration, scene.options.samples, scene.options.noise_threshold, scene.options.radiance_clamp, noise_estimation_schedule);
+    rt.film().commit_iteration(scene.options.radiance_clamp);
     status.completed_iterations += 1u;
     status.last_iteration_time = iteration_time.measure();
     status.total_time += status.last_iteration_time;
@@ -282,6 +285,14 @@ uint32_t CPUVCM::supported_strategies() const {
 
 const Integrator::Status& CPUVCM::status() const {
   return _private->status;
+}
+
+bool CPUVCM::failed() const {
+  return _private->failure != nullptr;
+}
+
+const char* CPUVCM::failure_reason() const {
+  return _private->failure != nullptr ? _private->failure : "";
 }
 
 }  // namespace etx

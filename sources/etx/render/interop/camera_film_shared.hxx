@@ -10,7 +10,7 @@ struct ETX_ALIGNED CameraFilmSampleShared {
   float weight ETX_INIT({});
   float pdf_dir ETX_INIT({});
   float pdf_area ETX_INIT({});
-  float pdf_dir_out ETX_INIT({});
+  float pdf_dir_out ETX_INIT({});  // Outgoing solid-angle density conditioned on the sampled lens position.
 };
 
 struct ETX_ALIGNED CameraFilmEvalShared {
@@ -64,7 +64,7 @@ ETX_SHARED_INLINE CameraFilmSampleShared camera_film_shared_evaluate(ETX_IN(Came
   result.normal = camera.direction;
 
   float cos_t = -dot(result.direction, result.normal);
-  if (cos_t < 0.0f) {
+  if (cos_t <= 0.0f) {
     ETX_ZERO_INIT(CameraFilmSampleShared, zero_result);
     return zero_result;
   }
@@ -82,18 +82,18 @@ ETX_SHARED_INLINE CameraFilmSampleShared camera_film_shared_evaluate(ETX_IN(Came
   float focal_plane_distance = ((camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) ? camera.focal_distance : 1.0f;
   float3 focus_point = result.position - result.direction * (focal_plane_distance / cos_t);
   float4 projected = camera_film_shared_project(camera.view_proj, float4(focus_point.x, focus_point.y, focus_point.z, 1.0f));
-  result.uv = float2(projected.x / projected.w, projected.y / projected.w);
-  if ((projected.w <= 0.0f) || (result.uv.x < -1.0f) || (result.uv.y < -1.0f) || (result.uv.x > 1.0f) || (result.uv.y > 1.0f)) {
+  if (projected.w <= 0.0f) {
     ETX_ZERO_INIT(CameraFilmSampleShared, zero_result);
     return zero_result;
   }
+  result.uv = float2(projected.x / projected.w, projected.y / projected.w);
 
   float lens_area = (camera.lens_radius > kEpsilon) ? kPi * camera.lens_radius * camera.lens_radius : 1.0f;
   result.pdf_area = 1.0f / lens_area;
   result.pdf_dir = result.pdf_area * distance_squared / cos_t;
-  result.pdf_dir_out = 1.0f / (camera.area * lens_area * cos_t * cos_t * cos_t);
+  result.pdf_dir_out = 1.0f / (camera.area * cos_t * cos_t * cos_t);
 
-  float importance = result.pdf_dir_out / cos_t;
+  float importance = result.pdf_area * result.pdf_dir_out / cos_t;
   result.weight = importance / result.pdf_dir;
   return result;
 }

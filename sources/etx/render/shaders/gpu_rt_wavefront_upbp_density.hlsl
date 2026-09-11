@@ -13,6 +13,7 @@ struct UPBPGPUPreparedBeam {
   float log_d_shared;
   float log_d_pde_reverse_coefficient;
   float log_d_pde_constant;
+  float log_d_surface_constant;
   float source_event_log_density;
   float interval_distance;
   uint first_event_index;
@@ -236,35 +237,9 @@ bool upbp_density_contribution_finite(GPUUPBPResources resources, uint technique
 
 float upbp_point_merge_mis_weight(GPUUPBPIteration iteration, uint selected_technique, GPUUPBPVertex light_vertex, GPUUPBPVertex camera_vertex, float scattering_pdf_forward,
   float scattering_pdf_reverse, float sin_theta) {
-  const GPUUPBPRecursiveWeights light = light_vertex.arrival_weights;
-  const GPUUPBPRecursiveWeights camera = camera_vertex.arrival_weights;
-  const float log_forward_ray_factor = light.log_ray_sample_forward_ratio;
-  const float log_reverse_ray_factor = camera.log_ray_sample_forward_pdf_inverse;
-  const float log_selected_factor = upbp_log_density_competitor_factor(iteration, selected_technique, camera_vertex, log_forward_ray_factor, log_reverse_ray_factor, sin_theta);
-  if (upbp_log_is_zero(log_selected_factor) || (scattering_pdf_forward <= 0.0f) || (scattering_pdf_reverse <= 0.0f)) {
-    return 0.0f;
-  }
-
-  const float light_bpt_applicable = (light.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u ? 0.0f : 1.0f;
-  const float camera_bpt_applicable = (camera.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u ? 0.0f : 1.0f;
-  const float log_light_shared = light_bpt_applicable > 0.0f ? light.log_d_shared + upbp_log_positive(iteration.bpt_sample_count) : kUPBPLogZero;
-  const float log_light_pde = upbp_log_is_zero(light.log_d_pde) ? kUPBPLogZero : log(scattering_pdf_forward) + light.log_d_pde - light.log_ray_sample_reverse_pdf_inverse;
-  const float log_w_light = upbp_log_add(log_light_shared, log_light_pde) - log_selected_factor;
-  const float log_camera_shared = camera_bpt_applicable > 0.0f ? camera.log_d_shared + upbp_log_positive(iteration.bpt_sample_count) : kUPBPLogZero;
-  const float log_camera_pde = upbp_log_is_zero(camera.log_d_pde) ? kUPBPLogZero : log(scattering_pdf_reverse) + camera.log_d_pde - camera.log_ray_sample_reverse_pdf_inverse;
-  const float log_w_camera = upbp_log_add(log_camera_shared, log_camera_pde) - log_selected_factor;
-  float log_w_local = 0.0f;
-  if (upbp_vertex_is_medium(camera_vertex)) {
-    const uint techniques[4] = {GPUUPBPTechnique::PP3D, GPUUPBPTechnique::PB2D, GPUUPBPTechnique::BP2D, GPUUPBPTechnique::BB1D};
-    [unroll] for (uint index = 0u; index < 4u; ++index) {
-      if (techniques[index] != selected_technique) {
-        const float log_factor = upbp_log_density_competitor_factor(iteration, techniques[index], camera_vertex, log_forward_ray_factor, log_reverse_ray_factor, sin_theta);
-        log_w_local = upbp_log_add(log_w_local, upbp_log_is_zero(log_factor) ? kUPBPLogZero : log_factor - log_selected_factor);
-      }
-    }
-  }
-  const float log_denominator = upbp_log_add(log_w_light, upbp_log_add(log_w_local, log_w_camera));
-  return isfinite(log_denominator) ? exp(-log_denominator) : 0.0f;
+  return upbp_surface_mis_weight(upbp_point_merge_mis_weights(iteration, selected_technique, light_vertex.arrival_weights, camera_vertex.arrival_weights, camera_vertex,
+                                   scattering_pdf_forward, scattering_pdf_reverse, sin_theta),
+    0.0f);
 }
 
 bool upbp_prepare_beam(GPUUPBPResources resources, GPUUPBPBeam beam, out UPBPGPUPreparedBeam result) {
@@ -272,6 +247,7 @@ bool upbp_prepare_beam(GPUUPBPResources resources, GPUUPBPBeam beam, out UPBPGPU
   result.log_d_shared = kUPBPLogZero;
   result.log_d_pde_reverse_coefficient = kUPBPLogZero;
   result.log_d_pde_constant = kUPBPLogZero;
+  result.log_d_surface_constant = kUPBPLogZero;
   result.source_throughput = spectral_response_zero((SpectralQuery)0);
   result.transport_at_origin.weight = spectral_response_zero((SpectralQuery)0);
   const uint total_vertex_capacity = resources.camera_vertex_capacity + resources.light_vertex_capacity;
@@ -332,21 +308,24 @@ bool upbp_prepare_beam(GPUUPBPResources resources, GPUUPBPBeam beam, out UPBPGPU
   const float log_source_ray_ratio = upbp_vertex_is_medium(source) ? -result.source_event_log_density : kUPBPLogZero;
   result.scale_d_shared_by_distance = (source.path_length > 0u) || ((source.flags & GPUUPBPVertexFlags::DistantEndpoint) == 0u);
   if (source.path_length > 0u) {
-    const float log_constant = upbp_log_recursive_local_pde_factor(resources.iteration, source, departure.weights, kUPBPLogZero, log_source_ray_ratio, departure.last_sin_theta);
+    const float log_constant = upbp_log_recursive_local_volume_factor(resources.iteration, source, departure.weights, kUPBPLogZero, log_source_ray_ratio, departure.last_sin_theta);
     float log_coefficient = kUPBPLogZero;
-    if ((source.flags & GPUUPBPVertexFlags::Camera) == 0u) {
+    if (upbp_vertex_from_light(source) && upbp_vertex_is_medium(source) && (upbp_vertex_is_delta(source) == false) && upbp_vertex_is_density_connectible(source)) {
       const float log_forward_ray_factor = departure.weights.log_ray_sample_forward_ratio;
       log_coefficient =
         upbp_log_add(upbp_log_density_competitor_factor(resources.iteration, GPUUPBPTechnique::PB2D, source, log_forward_ray_factor, 0.0f, departure.last_sin_theta),
           upbp_log_density_competitor_factor(resources.iteration, GPUUPBPTechnique::BB1D, source, log_forward_ray_factor, 0.0f, departure.last_sin_theta));
     }
-    result.log_d_pde_reverse_coefficient = upbp_log_product(departure.log_d_pde_a, log_coefficient);
-    result.log_d_pde_constant = upbp_log_add(upbp_log_product(departure.log_d_pde_a, log_constant), departure.log_d_pde_b);
+    result.log_d_pde_reverse_coefficient = upbp_log_product(departure.log_d_bpt_a, log_coefficient);
+    result.log_d_pde_constant = upbp_log_add(upbp_log_product(departure.log_d_bpt_a, log_constant), departure.log_d_pde_b);
+    result.log_d_surface_constant = upbp_log_add(upbp_log_product(departure.log_d_bpt_a, upbp_log_surface_coefficient(resources.iteration, source)), departure.log_d_surface_b);
   } else {
-    result.log_d_pde_constant = departure.weights.log_d_pde;
+    result.log_d_pde_constant = departure.weights.log_d_pde_base;
+    result.log_d_surface_constant = departure.weights.log_d_surface;
   }
   result.valid = (beam_interval.medium_index != kInvalidIndex) && isfinite(result.source_event_log_density) && isfinite(result.log_d_shared) &&
-                 isfinite(result.log_d_pde_reverse_coefficient) && isfinite(result.log_d_pde_constant) && (result.interval_distance > 0.0f);
+                 isfinite(result.log_d_pde_reverse_coefficient) && isfinite(result.log_d_pde_constant) && isfinite(result.log_d_surface_constant) &&
+                 (result.interval_distance > 0.0f);
   return result.valid;
 }
 
@@ -402,6 +381,7 @@ GPUUPBPDensityBeam upbp_pack_density_beam(GPUUPBPResources resources, GPUUPBPBea
   result.log_d_shared = prepared.log_d_shared;
   result.log_d_pde_reverse_coefficient = prepared.log_d_pde_reverse_coefficient;
   result.log_d_pde_constant = prepared.log_d_pde_constant;
+  result.log_d_surface_constant = prepared.log_d_surface_constant;
   result.source_event_log_density = prepared.source_event_log_density;
   result.interval_distance = prepared.interval_distance;
   result.flags = GPUUPBPDensityBeamFlags::Valid;
@@ -422,6 +402,7 @@ UPBPGPUPreparedBeam upbp_unpack_density_beam(GPUUPBPDensityBeam record) {
   result.log_d_shared = record.log_d_shared;
   result.log_d_pde_reverse_coefficient = record.log_d_pde_reverse_coefficient;
   result.log_d_pde_constant = record.log_d_pde_constant;
+  result.log_d_surface_constant = record.log_d_surface_constant;
   result.source_event_log_density = record.source_event_log_density;
   result.interval_distance = record.interval_distance;
   result.first_event_index = record.interval.first_event_index;
@@ -520,14 +501,15 @@ bool upbp_partial_prepared_beam_vertex_with_interval(GPUUPBPResources resources,
   if ((real_event_density <= 0.0f) || (transport_distance <= 0.0f) || (isfinite(log_forward_pdf) == false) || (isfinite(log_reverse_pdf) == false)) {
     return false;
   }
-  result.weights.log_d_pde =
+  result.weights.log_d_pde_base =
     upbp_log_add(upbp_log_is_zero(prepared.log_d_pde_reverse_coefficient) ? kUPBPLogZero : prepared.log_d_pde_reverse_coefficient - log_reverse_pdf, prepared.log_d_pde_constant);
-  result.weights.log_d_pde = upbp_log_is_zero(result.weights.log_d_pde) ? kUPBPLogZero : result.weights.log_d_pde - log_forward_pdf;
+  result.weights.log_d_pde_base = upbp_log_is_zero(result.weights.log_d_pde_base) ? kUPBPLogZero : result.weights.log_d_pde_base - log_forward_pdf;
+  result.weights.log_d_surface = upbp_log_is_zero(prepared.log_d_surface_constant) ? kUPBPLogZero : prepared.log_d_surface_constant - log_forward_pdf;
   result.weights.log_d_shared = prepared.log_d_shared - log_forward_pdf;
   if (prepared.scale_d_shared_by_distance) {
     result.weights.log_d_shared += 2.0f * log(transport_distance);
   }
-  result.weights.log_d_bpt = kUPBPLogZero;
+  result.weights.log_d_bpt_base = kUPBPLogZero;
   result.weights.log_ray_sample_forward_pdf_inverse = -log_forward_pdf;
   result.weights.log_ray_sample_reverse_pdf_inverse = -log_reverse_pdf;
   result.weights.log_ray_sample_forward_ratio = -log_real_event_density;
@@ -547,30 +529,8 @@ bool upbp_partial_prepared_beam_vertex(GPUUPBPResources resources, UPBPGPUPrepar
 
 float upbp_point_merge_mis_weight(GPUUPBPIteration iteration, uint selected_technique, GPUUPBPRecursiveWeights light, GPUUPBPRecursiveWeights camera, GPUUPBPVertex context_vertex,
   float scattering_pdf_forward, float scattering_pdf_reverse, float sin_theta) {
-  const float log_forward_ray_factor = light.log_ray_sample_forward_ratio;
-  const float log_reverse_ray_factor = camera.log_ray_sample_forward_pdf_inverse;
-  const float log_selected_factor = upbp_log_density_competitor_factor(iteration, selected_technique, context_vertex, log_forward_ray_factor, log_reverse_ray_factor, sin_theta);
-  if (upbp_log_is_zero(log_selected_factor) || (scattering_pdf_forward <= 0.0f) || (scattering_pdf_reverse <= 0.0f)) {
-    return 0.0f;
-  }
-  const bool light_previous_delta = (light.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
-  const bool camera_previous_delta = (camera.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
-  const float log_light_shared = light_previous_delta ? kUPBPLogZero : light.log_d_shared + upbp_log_positive(iteration.bpt_sample_count);
-  const float log_light_pde = upbp_log_is_zero(light.log_d_pde) ? kUPBPLogZero : log(scattering_pdf_forward) + light.log_d_pde - light.log_ray_sample_reverse_pdf_inverse;
-  const float log_w_light = upbp_log_add(log_light_shared, log_light_pde) - log_selected_factor;
-  const float log_camera_shared = camera_previous_delta ? kUPBPLogZero : camera.log_d_shared + upbp_log_positive(iteration.bpt_sample_count);
-  const float log_camera_pde = upbp_log_is_zero(camera.log_d_pde) ? kUPBPLogZero : log(scattering_pdf_reverse) + camera.log_d_pde - camera.log_ray_sample_reverse_pdf_inverse;
-  const float log_w_camera = upbp_log_add(log_camera_shared, log_camera_pde) - log_selected_factor;
-  float log_w_local = 0.0f;
-  const uint techniques[4] = {GPUUPBPTechnique::PP3D, GPUUPBPTechnique::PB2D, GPUUPBPTechnique::BP2D, GPUUPBPTechnique::BB1D};
-  [unroll] for (uint index = 0u; index < 4u; ++index) {
-    if (techniques[index] != selected_technique) {
-      const float log_factor = upbp_log_density_competitor_factor(iteration, techniques[index], context_vertex, log_forward_ray_factor, log_reverse_ray_factor, sin_theta);
-      log_w_local = upbp_log_add(log_w_local, upbp_log_is_zero(log_factor) ? kUPBPLogZero : log_factor - log_selected_factor);
-    }
-  }
-  const float log_denominator = upbp_log_add(log_w_light, upbp_log_add(log_w_local, log_w_camera));
-  return isfinite(log_denominator) ? exp(-log_denominator) : 0.0f;
+  return upbp_surface_mis_weight(
+    upbp_point_merge_mis_weights(iteration, selected_technique, light, camera, context_vertex, scattering_pdf_forward, scattering_pdf_reverse, sin_theta), 0.0f);
 }
 
 #if defined(ETX_UPBP_SURFACE_VARIANT)
@@ -589,34 +549,34 @@ Vertex upbp_surface_vertex(GPUUPBPVertex vertex) {
 }
 #endif
 
-bool upbp_medium_pre_collision_throughput_with_scattering(GPUUPBPVertex vertex, SpectralResponse throughput, SpectralResponse scattering, out SpectralResponse result) {
+bool upbp_medium_pre_collision_throughput_with_scattering(SpectralResponse throughput, SpectralResponse scattering, out SpectralResponse result) {
   result = spectral_response_zero(spectral_response_as_query(throughput));
-  const float event_density = exp(vertex.log_medium_event_density);
   const float minimum_scattering =
     (scattering.flags & SpectralFlags::Spectral) != 0u ? scattering.value : min(scattering.integrated.x, min(scattering.integrated.y, scattering.integrated.z));
-  if ((event_density <= 0.0f) || (minimum_scattering < 0.0f)) {
+  if (minimum_scattering < 0.0f) {
     return false;
   }
+  // Remove scattering, retaining the inverse event density of the sampled point.
   if ((throughput.flags & SpectralFlags::Spectral) != 0u) {
     if (scattering.value > 0.0f) {
-      result.value = throughput.value * event_density / scattering.value;
+      result.value = throughput.value / scattering.value;
     } else if (throughput.value != 0.0f) {
       return false;
     }
     return isfinite(result.value);
   }
   if (scattering.integrated.x > 0.0f) {
-    result.integrated.x = throughput.integrated.x * event_density / scattering.integrated.x;
+    result.integrated.x = throughput.integrated.x / scattering.integrated.x;
   } else if (throughput.integrated.x != 0.0f) {
     return false;
   }
   if (scattering.integrated.y > 0.0f) {
-    result.integrated.y = throughput.integrated.y * event_density / scattering.integrated.y;
+    result.integrated.y = throughput.integrated.y / scattering.integrated.y;
   } else if (throughput.integrated.y != 0.0f) {
     return false;
   }
   if (scattering.integrated.z > 0.0f) {
-    result.integrated.z = throughput.integrated.z * event_density / scattering.integrated.z;
+    result.integrated.z = throughput.integrated.z / scattering.integrated.z;
   } else if (throughput.integrated.z != 0.0f) {
     return false;
   }
@@ -630,7 +590,7 @@ bool upbp_medium_pre_collision_throughput(GPUUPBPVertex vertex, SpectralResponse
     result = spectral_response_zero(spectral_response_as_query(throughput));
     return false;
   }
-  return upbp_medium_pre_collision_throughput_with_scattering(vertex, throughput, scattering, result);
+  return upbp_medium_pre_collision_throughput_with_scattering(throughput, scattering, result);
 }
 
 #if defined(ETX_UPBP_SURFACE_VARIANT)
@@ -679,7 +639,8 @@ void upbp_evaluate_point_vertex_prepared(GPUUPBPResources resources, GPUUPBPVert
     return;
   }
   const float3 delta = light_vertex.position - camera_vertex.position;
-  const float kernel_value = upbp_kernel_value(resources.iteration.kernel, surface ? 2u : 3u, radius, dot(delta, delta));
+  const float distance_squared = dot(delta, delta);
+  const float kernel_value = upbp_kernel_value(resources.iteration.kernel, surface ? 2u : 3u, radius, distance_squared);
   if (kernel_value <= 0.0f) {
     return;
   }
@@ -833,9 +794,6 @@ void upbp_evaluate_point_candidate(GPUUPBPResources resources, GPUUPBPVertex cam
       }
     }
   }
-  if (spectral_response_is_zero(accumulated)) {
-    return;
-  }
   const uint local_path_index = camera_vertex.global_path_index - resources.iteration.camera_batch_offset;
   if (local_path_index >= resources.iteration.camera_batch_count) {
     return;
@@ -929,6 +887,8 @@ void upbp_evaluate_surface_point_merge_group(uint dispatch_index, uint group_thr
     [unroll] for (uint partition = 0u; partition < kGPUUPBPSurfacePartitionCount; ++partition) {
       exhausted_partition_count += upbp_surface_partition_exhausted[partition];
     }
+    // Every lane must read this iteration's completion state before producers can overwrite it.
+    GroupMemoryBarrierWithGroupSync();
     if (exhausted_partition_count == kGPUUPBPSurfacePartitionCount) {
       break;
     }
@@ -939,9 +899,6 @@ void upbp_evaluate_surface_point_merge_group(uint dispatch_index, uint group_thr
     SpectralResponse total = spectral_response_zero(spectral_response_as_query(upbp_unpack_spectral_response(upbp_surface_camera_vertex.throughput)));
     [unroll] for (uint lane_index = 0u; lane_index < 64u; ++lane_index) {
       total = spectral_response_add(total, upbp_unpack_spectral_response(upbp_surface_lane_contributions[lane_index]));
-    }
-    if (spectral_response_is_zero(total)) {
-      return;
     }
     const uint local_path_index = upbp_surface_camera_vertex.global_path_index - resources.iteration.camera_batch_offset;
     if (local_path_index < resources.iteration.camera_batch_count) {
@@ -1234,6 +1191,9 @@ SpectralResponse upbp_distant_emitter_radiance(uint emitter_index, SpectralQuery
 
   SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
   pdf_area = rcp(kPi * globals_data.bounding_sphere_radius * globals_data.bounding_sphere_radius);
+  if (emitter_instance.emitter_class == EmitterClass::Directional) {
+    pdf_area = 1.0f / gpu_directional_emission_domain(emitter_profile.emitter_direction, emitter_profile.emitter_angular_size_cosine).area;
+  }
   SpectralResponse result = spectral_response_zero(spect);
   if (emitter_instance.emitter_class == EmitterClass::Directional) {
     const float directional_cosine = dot(direction, emitter_profile.emitter_direction);
@@ -1335,11 +1295,8 @@ void upbp_evaluate_environment_direct_hit(uint path_index, GPUWavefrontResources
         const float log_reverse_ray_pdf = segment.log_transport_pdf_reverse + (upbp_vertex_is_medium(previous) ? previous.log_medium_event_density : 0.0f);
         const bool previous_delta = (endpoint.arrival_weights.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
         const float log_shared = previous_delta ? kUPBPLogZero : log(emitter_selection_pdf) + log(pdf_area) + endpoint.arrival_weights.log_d_shared;
-        const float log_bpt = upbp_log_is_zero(endpoint.arrival_weights.log_d_bpt)
-                                ? kUPBPLogZero
-                                : log(emitter_selection_pdf) + log(pdf_dir_out) + log_reverse_ray_pdf + endpoint.arrival_weights.log_d_bpt;
-        const float log_denominator = upbp_log_add(0.0f, upbp_log_add(log_shared, log_bpt));
-        mis_weight = isfinite(log_denominator) ? exp(-log_denominator) : 0.0f;
+        mis_weight = upbp_surface_mis_weight(upbp_bpt_direct_hit_cross_technique_weights(resources.iteration, endpoint.arrival_weights, log_shared,
+          log(emitter_selection_pdf) + log(pdf_dir_out) + log_reverse_ray_pdf), 0.0f);
       }
     } else if (upbp_camera_prefix_is_specular(resources, endpoint)) {
       mis_weight = 1.0f;
@@ -1415,11 +1372,9 @@ void upbp_evaluate_direct_hit_dispatch(uint dispatch_index) {
       const float emitter_selection_pdf = emitter_discrete_pdf(emitter_vertex.emitter_index);
       const bool previous_delta = (emitter_vertex.arrival_weights.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
       const float log_shared = previous_delta ? kUPBPLogZero : log(emitter_selection_pdf) + log(pdf_area) + emitter_vertex.arrival_weights.log_d_shared;
-      const float log_bpt = upbp_log_is_zero(emitter_vertex.arrival_weights.log_d_bpt)
-                              ? kUPBPLogZero
-                              : log(emitter_selection_pdf) + log(pdf_dir_out) + log_reverse_ray_pdf + emitter_vertex.arrival_weights.log_d_bpt;
-      const float log_denominator = upbp_log_add(0.0f, upbp_log_add(log_shared, log_bpt));
-      mis_weight = isfinite(log_denominator) ? exp(-log_denominator) : 0.0f;
+      mis_weight = upbp_surface_mis_weight(upbp_bpt_direct_hit_cross_technique_weights(resources.iteration, emitter_vertex.arrival_weights, log_shared,
+                                             log(emitter_selection_pdf) + log(pdf_dir_out) + log_reverse_ray_pdf),
+        0.0f);
     }
   } else if (upbp_camera_prefix_is_specular(resources, emitter_vertex)) {
     mis_weight = 1.0f;
@@ -2165,7 +2120,7 @@ groupshared GPUWavefrontCompactSpectralResponse upbp_bp2d_lane_contributions[kGP
         SpectralResponse camera_pre_collision = spectral_response_zero(spectral_response_as_query(camera_throughput));
         float camera_phase_function_g = 0.0f;
         if (upbp_vertex_medium_properties(upbp_bp2d_camera_vertex, spectral_response_as_query(camera_throughput), camera_scattering, camera_phase_function_g) &&
-            upbp_medium_pre_collision_throughput_with_scattering(upbp_bp2d_camera_vertex, camera_throughput, camera_scattering, camera_pre_collision)) {
+            upbp_medium_pre_collision_throughput_with_scattering(camera_throughput, camera_scattering, camera_pre_collision)) {
           upbp_bp2d_camera_pre_collision = upbp_pack_spectral_response(camera_pre_collision);
           upbp_bp2d_camera_scattering = upbp_pack_spectral_response(camera_scattering);
           upbp_bp2d_camera_phase_function_g = camera_phase_function_g;
@@ -2397,7 +2352,9 @@ groupshared GPUWavefrontCompactSpectralResponse upbp_bb1d_lane_contributions[64u
           upbp_bb1d_camera_interval, upbp_bb1d_context_vertex, intersection, accumulated);
       }
       GroupMemoryBarrierWithGroupSync();
-      if (upbp_bb1d_exhausted_partition_count == kGPUUPBPBB1DPartitionCount) {
+      const bool all_partitions_exhausted = upbp_bb1d_exhausted_partition_count == kGPUUPBPBB1DPartitionCount;
+      GroupMemoryBarrierWithGroupSync();
+      if (all_partitions_exhausted) {
         break;
       }
     }

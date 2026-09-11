@@ -16,7 +16,7 @@ VCMOptions VCMOptions::default_values() {
 
 void VCMOptions::load(const Options& opt, const Scene& scene) {
   initial_radius = opt.get_float("vcm-initial_radius", initial_radius);
-  kernel = opt.get_integral("vcm-kernel", kernel);
+  kernel = opt.get_bool("vcm-kernel", smooth_kernel()) ? Epanechnikov : Tophat;
 
   blue_noise = scene.blue_noise();
   set_option(DirectHit, scene.strategy_enabled(Scene::Strategy::DirectHit));
@@ -35,7 +35,7 @@ void VCMOptions::store(Options& opt) const {
   opt.set_string("vcm-opt", "VCM Options", "VCM Options");
   opt.set_bool("vcm-merging", enable_merging(), "Enable Merging");
   opt.set_bool("vcm-kernel", smooth_kernel(), "Smooth Merging Kernel");
-  opt.set_float("vcm-initial_radius", initial_radius, "Initial Radius", {0.0f, 10.0f});
+  opt.set_float("vcm-initial_radius", initial_radius, "Initial radius", {0.0f, 10.0f});
 }
 
 void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples, uint64_t sample_count, float radius, TaskScheduler& scheduler) {
@@ -46,12 +46,6 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
 
   TimeMeasure time_measure = {};
 
-  data.radius_squared = radius * radius;
-  if (data.radius_squared > 0.0f) {
-    data.inv_radius_squared = 1.0f / data.radius_squared;
-  } else {
-    data.inv_radius_squared = 0.0f;
-  }
   data.cell_size = 2.0f * radius;
   data.bounding_box = {{kMaxFloat, kMaxFloat, kMaxFloat}, 0.0f, {-kMaxFloat, -kMaxFloat, -kMaxFloat}, 0.0f};
 
@@ -78,7 +72,8 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   _normals.clear();
   _w_in.clear();
   _d_vcm.clear();
-  _d_vm.clear();
+  _d_vm_base.clear();
+  _d_surface.clear();
   _path_lengths.clear();
   _throughputs.clear();
   _cell_ends.resize(hash_table_size);
@@ -110,7 +105,8 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   _normals.resize(total);
   _w_in.resize(total);
   _d_vcm.resize(total);
-  _d_vm.resize(total);
+  _d_vm_base.resize(total);
+  _d_surface.resize(total);
   _path_lengths.resize(total);
   _throughputs.resize(total);
 
@@ -127,7 +123,8 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
       _normals[dst] = s.nrm;
       _w_in[dst] = s.w_i;
       _d_vcm[dst] = s.d_vcm;
-      _d_vm[dst] = s.d_vm;
+      _d_vm_base[dst] = s.d_vm_base;
+      _d_surface[dst] = s.d_surface;
       _path_lengths[dst] = s.path_length;
       _throughputs[dst] = s.throughput;
     }
@@ -138,7 +135,8 @@ void VCMSpatialGrid::construct(const Scene& scene, const VCMLightVertex* samples
   data.normals = make_array_view<float3>(_normals.data(), _normals.size());
   data.w_in = make_array_view<float3>(_w_in.data(), _w_in.size());
   data.d_vcm = make_array_view<float>(_d_vcm.data(), _d_vcm.size());
-  data.d_vm = make_array_view<float>(_d_vm.data(), _d_vm.size());
+  data.d_vm_base = make_array_view<float>(_d_vm_base.data(), _d_vm_base.size());
+  data.d_surface = make_array_view<float>(_d_surface.data(), _d_surface.size());
   data.path_lengths = make_array_view<uint32_t>(_path_lengths.data(), _path_lengths.size());
   data.throughputs = make_array_view<SpectralResponse>(_throughputs.data(), _throughputs.size());
 }

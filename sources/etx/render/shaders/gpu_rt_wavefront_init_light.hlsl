@@ -58,6 +58,19 @@
   GPUWavefrontResources resources = wavefront_load_resources();
   GPUWavefrontPathState cleared_state = (GPUWavefrontPathState)0;
   wavefront_store_path_state(resources.light_state_buffer, path_index, cleared_state);
+#if ETX_UPBP
+  if (scene_path_mode_is_upbp()) {
+    // A zero-contribution emission must not retain the previous batch's path history.
+    GPUUPBPPathState empty_path = (GPUUPBPPathState)0;
+    empty_path.first_vertex_index = kInvalidIndex;
+    empty_path.last_vertex_index = kInvalidIndex;
+    empty_path.current_segment_index = kInvalidIndex;
+    empty_path.current_interval_index = kInvalidIndex;
+    empty_path.global_path_index = upbp_resources.iteration.light_batch_offset + path_index;
+    empty_path.flags = GPUUPBPPathStateFlags::Light;
+    upbp_store_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, false, path_index), empty_path);
+  }
+#endif
   if (resources.light_subsurface_state_buffer != kInvalidIndex) {
     GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;
     subsurface_state.material_index = kInvalidIndex;
@@ -112,7 +125,7 @@
     float reverse_numerator = (emitter_sample.is_distant != 0u) ? 1.0f : cosine_term;
     state.reverse_pdf = wavefront_safe_div(reverse_numerator, emission_pdf);
   }
-  state.d_vm = scene_path_mode_is_vcm() ? (state.reverse_pdf * constants.vcm_vc_weight) : 0.0f;
+  state.d_vm = scene_path_mode_is_vcm() ? state.reverse_pdf : 0.0f;
   state.medium_index = emitter_sample.medium_index;
   state.path_length = 1u;
   state.pixel_index = output_pixel_index;

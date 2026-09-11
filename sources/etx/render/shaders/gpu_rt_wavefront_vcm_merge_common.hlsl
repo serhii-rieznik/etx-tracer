@@ -61,6 +61,7 @@ struct WavefrontVCMMergeQuery {
   uint sampler_seed;
   float radius_squared;
   float inv_radius_squared;
+  float vc_weight;
 #if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
   float3 spectral_estimate_scale;
 #endif
@@ -133,6 +134,7 @@ bool wavefront_vcm_merge_prepare(uint dispatch_index, out WavefrontVCMMergeQuery
   }
 #endif
   query.radius_squared = constants.vcm_radius * constants.vcm_radius;
+  query.vc_weight = constants.vcm_vc_weight;
   query.inv_radius_squared = 1.0f / query.radius_squared;
 #if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
   query.spectral_estimate_scale = wavefront_spectral_estimate(spectral_response_make(state.spect, 1.0f), state.spect);
@@ -154,7 +156,7 @@ uint wavefront_vcm_merge_cell_hash(float3 position, uint cell_index) {
 bool wavefront_vcm_merge_candidate_matches(WavefrontVCMMergeQuery query, uint light_index, out float distance_squared) {
   distance_squared = 0.0f;
   ByteAddressBuffer light_vertices = WAVEFRONT_RO_BUFFER(query.resources.light_vertex_buffer);
-  const uint light_vertex_offset = light_index * kGPUWavefrontLightPathVertexStride;
+  const uint light_vertex_offset = light_index * wavefront_light_path_vertex_stride();
   const uint packed_path_and_flags = light_vertices.Load(light_vertex_offset + kGPUWavefrontLightPathVertexPackedPathAndFlagsOffset);
   const uint light_path_length = wavefront_unpack_light_path_vertex_path_length(packed_path_and_flags);
   // VCM counts the first light-surface vertex as depth zero; GPU history includes the emitter root.
@@ -165,7 +167,7 @@ bool wavefront_vcm_merge_candidate_matches(WavefrontVCMMergeQuery query, uint li
   const float3 light_position = wavefront_load_float3(light_vertices, light_vertex_offset + kGPUWavefrontLightPathVertexPositionOffset);
   const float3 delta = light_position - query.camera_vertex.position;
   distance_squared = dot(delta, delta);
-  if ((distance_squared <= query.radius_squared) == false) {
+  if ((distance_squared < query.radius_squared) == false) {
     return false;
   }
   const float3 light_normal = wavefront_load_float3(light_vertices, light_vertex_offset + kGPUWavefrontLightPathVertexNormalOffset);
@@ -208,6 +210,14 @@ float3 wavefront_vcm_merge_evaluate(WavefrontVCMMergeQuery query, uint light_ind
     camera_eval = wavefront_vcm_merge_stage_bsdf_eval(query.bsdf_context, query.camera_data, outgoing_direction, query.material, sampler);
   }
   if (bsdf_eval_valid(camera_eval)) {
+#if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
+    const float3 estimate = camera_eval.func.integrated * (query.camera_vertex.throughput.integrated * light_vertex.throughput.integrated);
+#elif ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
+    const float3 estimate = query.spectral_estimate_scale * (camera_eval.func.value * (query.camera_vertex.throughput.value * light_vertex.throughput.value));
+#else
+    const SpectralResponse value = spectral_response_mul(camera_eval.func, spectral_response_mul(query.camera_vertex.throughput, light_vertex.throughput));
+    const float3 estimate = wavefront_spectral_estimate(value, query.camera_data.spectrum_sample);
+#endif
     float reverse_pdf = 0.0f;
 #if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)) && (ETX_SPECTRAL_MODE != ETX_SPECTRAL_MODE_RUNTIME)
     if (query.use_prepared_material) {
@@ -224,22 +234,15 @@ float3 wavefront_vcm_merge_evaluate(WavefrontVCMMergeQuery query, uint light_ind
     {
       reverse_pdf = wavefront_vcm_merge_stage_reverse_pdf(query.bsdf_context, query.camera_data, outgoing_direction, query.material, sampler);
     }
-    float w_light = light_vertex.forward_pdf * constants.vcm_vc_weight + light_vertex.d_vm * camera_eval.pdf;
-    float w_camera = query.camera_vertex.forward_pdf * constants.vcm_vc_weight + query.camera_vertex.d_vm * reverse_pdf;
+    float w_light = light_vertex.forward_pdf * query.vc_weight + wavefront_merge_mis(light_vertex, query.vc_weight) * camera_eval.pdf;
+    float w_camera = query.camera_vertex.forward_pdf * query.vc_weight + wavefront_merge_mis(query.camera_vertex, query.vc_weight) * reverse_pdf;
     float mis_weight = scene_multiple_importance_sampling_enabled() ? (1.0f / (1.0f + w_light + w_camera)) : 1.0f;
     float kernel_weight = 1.0f;
     if (constants.vcm_kernel != 0u) {
       kernel_weight = max(2.0f * (1.0f - distance_squared * query.inv_radius_squared), 0.0f);
     }
-#if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
-    const float3 estimate = camera_eval.func.integrated * (query.camera_vertex.throughput.integrated * light_vertex.throughput.integrated);
-#elif ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
-    const float3 estimate = query.spectral_estimate_scale * (camera_eval.func.value * (query.camera_vertex.throughput.value * light_vertex.throughput.value));
-#else
-    const SpectralResponse value = spectral_response_mul(camera_eval.func, spectral_response_mul(query.camera_vertex.throughput, light_vertex.throughput));
-    const float3 estimate = wavefront_spectral_estimate(value, query.camera_data.spectrum_sample);
-#endif
-    return estimate * (kernel_weight * mis_weight * constants.vcm_vm_normalization);
+
+    return estimate * (kernel_weight * mis_weight * query.vc_weight);
   }
   return float3(0.0f, 0.0f, 0.0f);
 }

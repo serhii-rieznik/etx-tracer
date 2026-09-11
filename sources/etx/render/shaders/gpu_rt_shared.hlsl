@@ -16,6 +16,7 @@
 #include <interop/distribution.hxx>
 #include <interop/camera_shared.hxx>
 #include <interop/camera_film_shared.hxx>
+#include <interop/pixel_filter_shared.hxx>
 #include <interop/scene_gpu_access_shared.hxx>
 #include <access/image_access_gpu.hxx>
 #include <access/image_evaluate_gpu.hxx>
@@ -28,6 +29,12 @@
 #include <interop/medium_phase_shared.hxx>
 #include <interop/surface_point_shared.hxx>
 #include <interop/scene_math_shared.hxx>
+#include <interop/directional_emission_shared.hxx>
+
+DirectionalEmissionDomain gpu_directional_emission_domain(float3 light_direction, float angular_cosine) {
+  const SceneGPUSharedGlobals globals = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
+  return directional_emission_domain(-normalize(light_direction), angular_cosine, globals.emission_half_extent, globals.bounding_sphere_radius);
+}
 
 static const uint kSceneStrategyDirectHit = 1u << 0u;
 static const uint kSceneStrategyConnectToLight = 1u << 1u;
@@ -536,29 +543,29 @@ bool gpu_path_tracing_neutral_eta(float eta) {
   return eta_delta <= (16.0f * kEpsilon);
 }
 
-float2 camera_primary_uv(uint2 pixel, uint2 film_size) {
-  return camera_shared_flip_y(camera_shared_center_uv(pixel, film_size));
-}
-
-float2 camera_sample_film_uv(uint2 pixel, uint2 film_size, float2 uv_sample) {
-  float2 uv = camera_primary_uv(pixel, film_size);
-  if (constants.sample_index == 0u) {
-    return uv;
-  }
-
+float2 camera_sample_filter_offset(float2 filter_sample) {
   SceneGPUSharedGlobals scene_globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
-  float2 jitter = uv_sample * 2.0f - 1.0f;
+  if (scene_globals_data.pixel_filter_radius == 0.0f) {
+    return float2(0.0f, 0.0f);
+  }
+  float2 jitter = filter_sample * 2.0f - 1.0f;
   if (scene_globals_data.pixel_filter_image_index != kInvalidIndex) {
     ImageSampleGPUContext sample_context = make_image_sample_gpu_context(constants.scene.images);
-    ImageSampleAccess image_sample = image_sample_access_default(uv_sample);
-    if (image_sample_try_sample(sample_context, scene_globals_data.pixel_filter_image_index, uv_sample, image_sample)) {
+    ImageSampleAccess image_sample = image_sample_access_default(filter_sample);
+    if (image_sample_try_sample(sample_context, scene_globals_data.pixel_filter_image_index, filter_sample, image_sample)) {
       jitter = image_sample.uv * 2.0f - 1.0f;
     }
   }
+  return scene_globals_data.pixel_filter_radius * jitter;
+}
 
-  float2 filtered_uv = float2((float(pixel.x) + 0.5f + scene_globals_data.pixel_filter_radius * jitter.x) / float(film_size.x) * 2.0f - 1.0f,
-    (float(pixel.y) + 0.5f + scene_globals_data.pixel_filter_radius * jitter.y) / float(film_size.y) * 2.0f - 1.0f);
-  return camera_shared_flip_y(filtered_uv);
+float2 camera_sample_film_uv(uint2 pixel, uint2 film_size, float2 pixel_sample, float2 filter_sample) {
+  const uint2 camera_pixel = uint2(pixel.x, film_size.y - 1u - pixel.y);
+  return pixel_filter_sample_uv(camera_pixel, film_size, pixel_sample, camera_sample_filter_offset(filter_sample));
+}
+
+float2 camera_sample_splat_uv(Camera camera, float2 uv, float2 filter_sample) {
+  return pixel_filter_splat_uv(uv, camera.film_size, camera_sample_filter_offset(filter_sample));
 }
 
 float2 camera_sample_lens_uv(Camera camera, float2 sensor_sample_rnd) {
@@ -861,6 +868,19 @@ bool try_load_distant_emission_access(uint emitter_index, float3 direction, out 
   ByteAddressBuffer emitter_profile_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.emitter_profiles)];
   emitter_profile = gpu_abi_load_emitter_profile(emitter_profile_buffer, emitter_profile_index);
   return true;
+}
+
+float gpu_distant_emission_area_pdf(uint emitter_index) {
+  GPUEmitterInstanceABIData instance = (GPUEmitterInstanceABIData)0;
+  GPUEmitterProfileABIData profile = (GPUEmitterProfileABIData)0;
+  if ((try_load_emitter_instance(emitter_index, instance) == false) || (try_load_emitter_profile(instance.emitter_profile_index, profile) == false)) {
+    return 0.0f;
+  }
+  if (instance.emitter_class == EmitterClass::Directional) {
+    return 1.0f / gpu_directional_emission_domain(profile.emitter_direction, profile.emitter_angular_size_cosine).area;
+  }
+  const SceneGPUSharedGlobals globals = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
+  return 1.0f / (kPi * globals.bounding_sphere_radius * globals.bounding_sphere_radius);
 }
 
 bool try_load_distribution_entry(uint entry_index, out DistributionEntry entry) {

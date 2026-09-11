@@ -38,8 +38,9 @@ SpectralResponse upbp_unpack_spectral_response(GPUWavefrontCompactSpectralRespon
 GPUUPBPRecursiveWeights upbp_load_recursive_weights(ByteAddressBuffer buffer, uint byte_offset) {
   GPUUPBPRecursiveWeights result = (GPUUPBPRecursiveWeights)0;
   result.log_d_shared = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveWeightsDSharedOffset));
-  result.log_d_bpt = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveWeightsDBPTOffset));
-  result.log_d_pde = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveWeightsDPDEOffset));
+  result.log_d_bpt_base = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveWeightsDBPTOffset));
+  result.log_d_pde_base = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveWeightsDPDEOffset));
+  result.log_d_surface = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveWeightsDSurfaceOffset));
   result.log_ray_sample_forward_pdf_inverse = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveWeightsRaySampleForwardPdfInverseOffset));
   result.log_ray_sample_reverse_pdf_inverse = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveWeightsRaySampleReversePdfInverseOffset));
   result.log_ray_sample_forward_ratio = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveWeightsRaySampleForwardRatioOffset));
@@ -50,8 +51,9 @@ GPUUPBPRecursiveWeights upbp_load_recursive_weights(ByteAddressBuffer buffer, ui
 
 void upbp_store_recursive_weights(RWByteAddressBuffer buffer, uint byte_offset, GPUUPBPRecursiveWeights value) {
   buffer.Store(byte_offset + kGPUUPBPRecursiveWeightsDSharedOffset, asuint(value.log_d_shared));
-  buffer.Store(byte_offset + kGPUUPBPRecursiveWeightsDBPTOffset, asuint(value.log_d_bpt));
-  buffer.Store(byte_offset + kGPUUPBPRecursiveWeightsDPDEOffset, asuint(value.log_d_pde));
+  buffer.Store(byte_offset + kGPUUPBPRecursiveWeightsDBPTOffset, asuint(value.log_d_bpt_base));
+  buffer.Store(byte_offset + kGPUUPBPRecursiveWeightsDPDEOffset, asuint(value.log_d_pde_base));
+  buffer.Store(byte_offset + kGPUUPBPRecursiveWeightsDSurfaceOffset, asuint(value.log_d_surface));
   buffer.Store(byte_offset + kGPUUPBPRecursiveWeightsRaySampleForwardPdfInverseOffset, asuint(value.log_ray_sample_forward_pdf_inverse));
   buffer.Store(byte_offset + kGPUUPBPRecursiveWeightsRaySampleReversePdfInverseOffset, asuint(value.log_ray_sample_reverse_pdf_inverse));
   buffer.Store(byte_offset + kGPUUPBPRecursiveWeightsRaySampleForwardRatioOffset, asuint(value.log_ray_sample_forward_ratio));
@@ -65,7 +67,7 @@ GPUUPBPRecursiveState upbp_load_recursive_state(ByteAddressBuffer buffer, uint b
   result.last_sin_theta = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveStateLastSinThetaOffset));
   result.log_d_bpt_a = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveStateDBPTAOffset));
   result.log_d_bpt_b = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveStateDBPTBOffset));
-  result.log_d_pde_a = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveStateDPDEAOffset));
+  result.log_d_surface_b = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveStateDSurfaceBOffset));
   result.log_d_pde_b = asfloat(buffer.Load(byte_offset + kGPUUPBPRecursiveStateDPDEBOffset));
   result.failure = buffer.Load(byte_offset + kGPUUPBPRecursiveStateFailureOffset);
   result.failure_vertex_index = buffer.Load(byte_offset + kGPUUPBPRecursiveStateFailureVertexIndexOffset);
@@ -77,7 +79,7 @@ void upbp_store_recursive_state(RWByteAddressBuffer buffer, uint byte_offset, GP
   buffer.Store(byte_offset + kGPUUPBPRecursiveStateLastSinThetaOffset, asuint(value.last_sin_theta));
   buffer.Store(byte_offset + kGPUUPBPRecursiveStateDBPTAOffset, asuint(value.log_d_bpt_a));
   buffer.Store(byte_offset + kGPUUPBPRecursiveStateDBPTBOffset, asuint(value.log_d_bpt_b));
-  buffer.Store(byte_offset + kGPUUPBPRecursiveStateDPDEAOffset, asuint(value.log_d_pde_a));
+  buffer.Store(byte_offset + kGPUUPBPRecursiveStateDSurfaceBOffset, asuint(value.log_d_surface_b));
   buffer.Store(byte_offset + kGPUUPBPRecursiveStateDPDEBOffset, asuint(value.log_d_pde_b));
   buffer.Store(byte_offset + kGPUUPBPRecursiveStateFailureOffset, value.failure);
   buffer.Store(byte_offset + kGPUUPBPRecursiveStateFailureVertexIndexOffset, value.failure_vertex_index);
@@ -605,6 +607,7 @@ GPUUPBPDensityBeam upbp_load_density_beam(uint descriptor_index, uint index) {
   result.log_d_shared = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamDSharedOffset));
   result.log_d_pde_reverse_coefficient = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamDPDEReverseCoefficientOffset));
   result.log_d_pde_constant = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamDPDEConstantOffset));
+  result.log_d_surface_constant = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamDSurfaceConstantOffset));
   result.source_event_log_density = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamSourceEventLogDensityOffset));
   result.interval_distance = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamIntervalDistanceOffset));
   result.flags = buffer.Load(base_offset + kGPUUPBPDensityBeamFlagsOffset);
@@ -626,6 +629,7 @@ void upbp_store_density_beam(uint descriptor_index, uint index, GPUUPBPDensityBe
   buffer.Store(base_offset + kGPUUPBPDensityBeamDSharedOffset, asuint(value.log_d_shared));
   buffer.Store(base_offset + kGPUUPBPDensityBeamDPDEReverseCoefficientOffset, asuint(value.log_d_pde_reverse_coefficient));
   buffer.Store(base_offset + kGPUUPBPDensityBeamDPDEConstantOffset, asuint(value.log_d_pde_constant));
+  buffer.Store(base_offset + kGPUUPBPDensityBeamDSurfaceConstantOffset, asuint(value.log_d_surface_constant));
   buffer.Store(base_offset + kGPUUPBPDensityBeamSourceEventLogDensityOffset, asuint(value.source_event_log_density));
   buffer.Store(base_offset + kGPUUPBPDensityBeamIntervalDistanceOffset, asuint(value.interval_distance));
   buffer.Store(base_offset + kGPUUPBPDensityBeamFlagsOffset, value.flags);

@@ -124,8 +124,9 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
   if (scene_path_mode_uses_bdpt_fast() && (input_value.camera_path_length != 1u)) {
     adjacent_connection = 0.0f;
   }
-  float vm_light = scene_path_mode_is_vcm() ? constants.vcm_vm_weight : 0.0f;
-  float w_camera = (density_ratio > 0.0f) ? wavefront_safe_div(vm_light + adjacent_connection + input_value.current_vertex.reverse_pdf * reverse_pdf, density_ratio) : 0.0f;
+  float vm_light = wavefront_vcm_surface_factor();
+  float w_camera =
+    (density_ratio > 0.0f) ? wavefront_safe_div(vm_light + adjacent_connection + wavefront_connection_mis(input_value.current_vertex) * reverse_pdf, density_ratio) : 0.0f;
   return 1.0f / (1.0f + w_light + w_camera);
 #endif
 }

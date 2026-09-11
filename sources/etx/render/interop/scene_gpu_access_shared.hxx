@@ -7,7 +7,6 @@ struct SceneGPUSharedOptions {
   uint32_t max_path_length;
   uint32_t samples;
   uint32_t random_path_termination;
-  float noise_threshold;
   float radiance_clamp;
   uint32_t strategy_flags;
   uint32_t light_sampling;
@@ -25,6 +24,7 @@ struct SceneGPUSharedGlobals {
   uint32_t active_emitter_count;
   float3 bounding_sphere_center;
   float bounding_sphere_radius;
+  float3 emission_half_extent;
   uint32_t pixel_filter_image_index;
   float pixel_filter_radius;
 };
@@ -69,7 +69,6 @@ ETX_SHARED_INLINE SceneGPUSharedOptions scene_gpu_load_options(uint32_t scene_op
   result.max_path_length = 0u;
   result.samples = 1u;
   result.random_path_termination = 0u;
-  result.noise_threshold = 0.0f;
   result.radiance_clamp = 0.0f;
   result.strategy_flags = 0u;
   result.light_sampling = 0u;
@@ -86,7 +85,6 @@ ETX_SHARED_INLINE SceneGPUSharedOptions scene_gpu_load_options(uint32_t scene_op
   result.max_path_length = scene_gpu_load_u32(scene_options_buffer, kSceneOptionsMaxPathLengthOffset);
   result.samples = scene_gpu_load_u32(scene_options_buffer, kSceneOptionsSamplesOffset);
   result.random_path_termination = scene_gpu_load_u32(scene_options_buffer, kSceneOptionsRandomPathTerminationOffset);
-  result.noise_threshold = scene_gpu_load_f32(scene_options_buffer, kSceneOptionsNoiseThresholdOffset);
   result.radiance_clamp = scene_gpu_load_f32(scene_options_buffer, kSceneOptionsRadianceClampOffset);
   result.strategy_flags = scene_gpu_load_u32(scene_options_buffer, kSceneOptionsStrategyFlagsOffset);
   result.light_sampling = scene_gpu_load_u32(scene_options_buffer, kSceneOptionsLightSamplingOffset);
@@ -115,6 +113,7 @@ ETX_SHARED_INLINE SceneGPUSharedGlobals scene_gpu_load_globals(ByteAddressBuffer
   result.active_emitter_count = scene_gpu_load_u32(scene_globals, kSceneGlobalsActiveEmitterCountOffset);
   result.bounding_sphere_center = asfloat(scene_globals.Load3(kSceneGlobalsBoundingSphereCenterOffset));
   result.bounding_sphere_radius = scene_gpu_load_f32(scene_globals, kSceneGlobalsBoundingSphereRadiusOffset);
+  result.emission_half_extent = asfloat(scene_globals.Load3(kSceneGlobalsEmissionHalfExtentOffset));
   result.pixel_filter_image_index = scene_gpu_load_u32(scene_globals, kSceneGlobalsPixelFilterImageIndexOffset);
   result.pixel_filter_radius = scene_gpu_load_f32(scene_globals, kSceneGlobalsPixelFilterRadiusOffset);
   return result;

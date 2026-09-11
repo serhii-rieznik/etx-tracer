@@ -18,7 +18,7 @@ struct ETX_ALIGNED CameraSample {
   float weight ETX_EMPTY_INIT;
   float pdf_dir ETX_EMPTY_INIT;
   float pdf_area ETX_EMPTY_INIT;
-  float pdf_dir_out ETX_EMPTY_INIT;
+  float pdf_dir_out ETX_EMPTY_INIT;  // Outgoing solid-angle density conditioned on the sampled lens position.
 
   ETX_SHARED_INLINE bool valid() const {
     return (pdf_dir > 0.0f) && (weight > 0.0f);
@@ -33,10 +33,6 @@ struct ETX_ALIGNED CameraEval {
 struct PixelFilter {
   uint32_t image_index = kInvalidIndex;
   float radius = 1.0f;
-
-  static PixelFilter empty() {
-    return {kInvalidIndex, 0.0f};
-  }
 };
 
 }  // namespace etx

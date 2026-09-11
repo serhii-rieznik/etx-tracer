@@ -161,7 +161,8 @@ ETX_SHARED_INLINE PTRayPayload make_ray_payload(const Scene& scene, const Camera
     payload.spect = SpectralQuery::sample();
   }
 
-  float2 uv = film.sample(iteration == 0u ? PixelFilter::empty() : scene.pixel_sampler, px, payload.smp.next_2d());
+  const float2 pixel_sample = payload.smp.next_2d();
+  float2 uv = film.sample(scene.pixel_sampler, px, pixel_sample, payload.smp.next_2d());
   payload.ray = generate_ray(camera, uv, payload.smp.next_2d());
   payload.throughput = {payload.spect, 1.0f};
   payload.accumulated = {payload.spect, 0.0f};

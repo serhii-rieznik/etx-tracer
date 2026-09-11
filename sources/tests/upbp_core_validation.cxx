@@ -322,7 +322,8 @@ bool validate_recursive_local_pde_affine() {
               for (const double reverse_pdf_inverse : inverse_values) {
                 const double expected = etx::upbp_recursive_local_pde_factor(configuration, vertex_class, vertex_delta, vertex_density_connectible, weights, reverse_pdf_inverse,
                   next_reverse_ratio, sin_theta, source);
-                const double actual = affine.constant + affine.reverse_pdf_inverse_coefficient * reverse_pdf_inverse;
+                const double actual =
+                  affine.constant + affine.reverse_pdf_inverse_coefficient * reverse_pdf_inverse + affine.surface_coefficient * configuration.factor(etx::UPBPTechnique::Surface);
                 const double tolerance = 1.0e-12 * fmax(1.0, fabs(expected));
                 valid = close_value(actual, expected, tolerance, "recursive local PDE affine") && valid;
               }
@@ -777,8 +778,8 @@ bool validate_augmented_recursive_weights() {
     valid = close_value(weights[1u].ray_sample_forward_pdf_inverse, 8.0, 1.0e-12, "forward augmented segment inverse") && valid;
     valid = close_value(weights[1u].ray_sample_reverse_pdf_inverse, 2.0, 1.0e-12, "reverse augmented segment inverse") && valid;
     valid = close_value(weights[2u].d_shared, 8.0, 1.0e-12, "second augmented recursive shared weight") && valid;
-    valid = close_value(weights[2u].d_bpt, 592.0, 1.0e-10, "augmented recursive BPT weight") && valid;
-    valid = close_value(weights[2u].d_pde, 592.0, 1.0e-10, "augmented recursive PDE weight") && valid;
+    valid = close_value(weights[2u].bpt(configuration.factor(etx::UPBPTechnique::Surface)), 592.0, 1.0e-10, "augmented recursive BPT weight") && valid;
+    valid = close_value(weights[2u].pde(configuration.factor(etx::UPBPTechnique::Surface)), 592.0, 1.0e-10, "augmented recursive PDE weight") && valid;
     valid = close_value(weights[2u].ray_sample_reverse_pdf_inverse, 8.0, 1.0e-12, "reverse endpoint-owned segment inverse") && valid;
   }
 
@@ -788,7 +789,9 @@ bool validate_augmented_recursive_weights() {
   if (resolution_independent_weights.size() == weights.size()) {
     for (uint32_t index = 0u; index < weights.size(); ++index) {
       valid = close_value(resolution_independent_weights[index].d_shared, weights[index].d_shared, 1.0e-12, "whole-film camera shared weight") && valid;
-      valid = close_value(resolution_independent_weights[index].d_bpt, weights[index].d_bpt, 1.0e-12, "whole-film camera BPT weight") && valid;
+      valid = close_value(resolution_independent_weights[index].bpt(configuration.factor(etx::UPBPTechnique::Surface)),
+                weights[index].bpt(configuration.factor(etx::UPBPTechnique::Surface)), 1.0e-12, "whole-film camera BPT weight") &&
+              valid;
     }
   }
   std::printf("augmented recursive weights %s\n", valid ? "valid" : "failed");
@@ -807,15 +810,14 @@ bool validate_zero_reverse_scattering_density() {
 
   etx::UPBPRecursiveState state = {};
   state.weights.d_shared = 3.0;
-  state.weights.d_bpt = 5.0;
-  state.weights.d_pde = 7.0;
+  state.weights.d_bpt_base = 5.0;
+  state.weights.d_pde_base = 7.0;
   state.weights.ray_sample_reverse_pdf_inverse = 2.0;
   etx::Scene scene = {};
   bool valid = etx::upbp_prepare_recursive_departure(scene, path, 1u, 4u, state);
   valid = (state.failure == etx::UPBPRecursiveWeightFailure::None) && valid;
   valid = close_value(state.d_bpt_a, 2.0, 0.0, "zero-reverse recursive BPT coefficient") && valid;
   valid = close_value(state.d_bpt_b, 6.0, 0.0, "zero-reverse recursive BPT constant") && valid;
-  valid = close_value(state.d_pde_a, 2.0, 0.0, "zero-reverse recursive PDE coefficient") && valid;
   valid = close_value(state.d_pde_b, 24.0, 0.0, "zero-reverse recursive PDE constant") && valid;
 
   vertex.scatter_pdf_reverse = -1.0f;
@@ -841,13 +843,13 @@ bool validate_point_merge_mis() {
   configuration.camera_beams_long = true;
   etx::UPBPRecursiveVertexWeights light = {};
   light.d_shared = 3.0;
-  light.d_pde = 7.0;
+  light.d_pde_base = 7.0;
   light.ray_sample_forward_pdf_inverse = 11.0;
   light.ray_sample_reverse_pdf_inverse = 2.0;
   light.ray_sample_forward_ratio = 2.0;
   etx::UPBPRecursiveVertexWeights camera = {};
   camera.d_shared = 4.0;
-  camera.d_pde = 8.0;
+  camera.d_pde_base = 8.0;
   camera.ray_sample_forward_pdf_inverse = 5.0;
   camera.ray_sample_reverse_pdf_inverse = 4.0;
   camera.ray_sample_forward_ratio = 3.0;
@@ -862,8 +864,8 @@ bool validate_point_merge_mis() {
   isolated.technique_factors[2u] = 10.0;
   etx::UPBPRecursiveVertexWeights isolated_light = light;
   etx::UPBPRecursiveVertexWeights isolated_camera = camera;
-  isolated_light.d_pde = 0.0;
-  isolated_camera.d_pde = 0.0;
+  isolated_light.d_pde_base = 0.0;
+  isolated_camera.d_pde_base = 0.0;
   valid = close_value(etx::upbp_point_merge_mis_weight({etx::UPBPTechnique::PP3D, etx::UPBPVertexClass::Medium, isolated_light, isolated_camera, isolated, 0.25, 0.5, 0.5, 0u}),
             1.0, 1.0e-14, "isolated point merge MIS") &&
           valid;
@@ -876,17 +878,17 @@ bool validate_medium_pre_collision_throughput() {
   const etx::SpectralResponse rgb_throughput{rgb, float3{1.5f, 4.0f, 0.0f}};
   const etx::SpectralResponse rgb_scattering{rgb, float3{1.5f, 2.0f, 0.0f}};
   etx::SpectralResponse result = {};
-  bool valid = etx::upbp_remove_medium_collision_weight(rgb_throughput, rgb_scattering, 2.0, result);
-  valid = close_value(result.integrated.x, 2.0, 1.0e-7, "RGB pre-collision red") && valid;
-  valid = close_value(result.integrated.y, 4.0, 1.0e-7, "RGB pre-collision green") && valid;
+  bool valid = etx::upbp_remove_medium_collision_weight(rgb_throughput, rgb_scattering, result);
+  valid = close_value(result.integrated.x, 1.0, 1.0e-7, "RGB pre-collision red") && valid;
+  valid = close_value(result.integrated.y, 2.0, 1.0e-7, "RGB pre-collision green") && valid;
   valid = close_value(result.integrated.z, 0.0, 1.0e-7, "RGB pre-collision zero channel") && valid;
 
   const etx::SpectralQuery spectral = {550.0f, SpectralFlags::Spectral};
-  valid = etx::upbp_remove_medium_collision_weight(etx::SpectralResponse{spectral, 1.5f}, etx::SpectralResponse{spectral, 2.5f}, 5.0, result) && valid;
-  valid = close_value(result.value, 3.0, 1.0e-7, "spectral pre-collision throughput") && valid;
+  valid = etx::upbp_remove_medium_collision_weight(etx::SpectralResponse{spectral, 1.5f}, etx::SpectralResponse{spectral, 2.5f}, result) && valid;
+  valid = close_value(result.value, 0.6, 1.0e-7, "spectral pre-collision throughput") && valid;
 
-  valid = (etx::upbp_remove_medium_collision_weight(etx::SpectralResponse{spectral, 1.0f}, etx::SpectralResponse{spectral, 0.0f}, 1.0, result) == false) && valid;
-  valid = (etx::upbp_remove_medium_collision_weight(etx::SpectralResponse{spectral, 1.0f}, etx::SpectralResponse{spectral, 1.0f}, 0.0, result) == false) && valid;
+  valid = (etx::upbp_remove_medium_collision_weight(etx::SpectralResponse{spectral, 1.0f}, etx::SpectralResponse{spectral, 0.0f}, result) == false) && valid;
+  valid = (etx::upbp_remove_medium_collision_weight(etx::SpectralResponse{spectral, 1.0f}, etx::SpectralResponse{spectral, -1.0f}, result) == false) && valid;
   std::printf("medium pre-collision throughput %s\n", valid ? "valid" : "failed");
   return valid;
 }

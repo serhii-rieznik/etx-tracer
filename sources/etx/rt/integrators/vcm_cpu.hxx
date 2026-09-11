@@ -24,6 +24,8 @@ struct CPUVCM : public Integrator {
   uint32_t supported_strategies() const override;
 
   const Status& status() const override;
+  bool failed() const override;
+  const char* failure_reason() const override;
 
  private:
   ETX_DECLARE_PIMPL(CPUVCM, 832);

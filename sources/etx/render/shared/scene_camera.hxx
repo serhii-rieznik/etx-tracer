@@ -1,5 +1,7 @@
 #pragma once
 
+#include <etx/render/interop/pixel_filter_shared.hxx>
+
 namespace etx {
 
 ETX_SHARED_INLINE float2 get_center_uv(const uint2& pixel, const uint2& dim) {
@@ -9,16 +11,16 @@ ETX_SHARED_INLINE float2 get_center_uv(const uint2& pixel, const uint2& dim) {
   };
 }
 
-ETX_SHARED_INLINE float2 get_jittered_uv(Sampler& smp, const uint2& pixel, const uint2& dim) {
-  float sample_radius = 0.5f;
-  return {
-    (float(pixel.x) + 0.5f + sample_radius * (smp.next() * 2.0f - 1.0f)) / float(dim.x) * 2.0f - 1.0f,
-    (float(pixel.y) + 0.5f + sample_radius * (smp.next() * 2.0f - 1.0f)) / float(dim.y) * 2.0f - 1.0f,
-  };
+ETX_SHARED_INLINE float2 sample_pixel_filter_offset(const PixelFilter& filter, const float2& rnd) {
+  if (filter.radius == 0.0f) {
+    return {};
+  }
+  const float2 sample = (filter.image_index == kInvalidIndex) ? rnd : sample_image_uv(filter.image_index, rnd);
+  return filter.radius * (sample * 2.0f - 1.0f);
 }
 
-ETX_SHARED_INLINE float film_pdf_out(const Camera& camera, const float3& to_point) {
-  float3 w_i = normalize(to_point - camera.position);
+ETX_SHARED_INLINE float film_pdf_out(const Camera& camera, const float3& lens_point, const float3& to_point) {
+  float3 w_i = normalize(to_point - lens_point);
   if (camera.cls == Camera::Class::Equirectangular) {
     const float3 local_direction = camera_equirectangular_world_to_local(camera, w_i);
     const float2 uv = direction_to_uv(local_direction, float2(0.0f, 0.0f), 1.0f, Projection::Equirectangular);
@@ -82,7 +84,7 @@ ETX_SHARED_INLINE CameraSample evaluate_film(const Camera& camera, const float3&
   result.normal = camera.direction;
 
   float cos_t = -dot(result.direction, result.normal);
-  if (cos_t < 0.0f) {
+  if (cos_t <= 0.0f) {
     return {};
   }
 
@@ -95,18 +97,18 @@ ETX_SHARED_INLINE CameraSample evaluate_film(const Camera& camera, const float3&
   float3 focus_point = result.position - result.direction * (focal_plane_distance / cos_t);
 
   float4 projected = camera.view_proj * float4{focus_point.x, focus_point.y, focus_point.z, 1.0f};
-  result.uv = {projected.x / projected.w, projected.y / projected.w};
-  if ((projected.w <= 0.0f) || (result.uv.x < -1.0f) || (result.uv.y < -1.0f) || (result.uv.x > 1.0f) || (result.uv.y > 1.0f)) {
+  if (projected.w <= 0.0f) {
     return {};
   }
+  result.uv = {projected.x / projected.w, projected.y / projected.w};
 
   float lens_area = (camera.lens_radius > kEpsilon) ? (kPi * sqr(camera.lens_radius)) : 1.0f;
 
   result.pdf_area = 1.0f / lens_area;
   result.pdf_dir = result.pdf_area * distance_squared / cos_t;
-  result.pdf_dir_out = 1.0f / (camera.area * lens_area * cos_t * cos_t * cos_t);
+  result.pdf_dir_out = 1.0f / (camera.area * cos_t * cos_t * cos_t);
 
-  float importance = result.pdf_dir_out / cos_t;
+  float importance = result.pdf_area * result.pdf_dir_out / cos_t;
   result.weight = importance / result.pdf_dir;
 
   return result;

@@ -32,6 +32,7 @@ struct GPUUPBPVertexFlags {
     DistantEndpoint = 1u << 8u,
     HasDeparture = 1u << 9u,
     InlineMedium = 1u << 10u,
+    FromLight = 1u << 11u,
   };
 };
 
@@ -275,10 +276,11 @@ struct GPUUPBPDensityBeamFlags {
   };
 };
 
-struct ETX_ALIGNED GPUUPBPRecursiveWeights {
+struct GPUUPBPRecursiveWeights {
   float log_d_shared ETX_INIT(0.0f);
-  float log_d_bpt ETX_INIT(0.0f);
-  float log_d_pde ETX_INIT(0.0f);
+  float log_d_bpt_base ETX_INIT(0.0f);
+  float log_d_pde_base ETX_INIT(0.0f);
+  float log_d_surface ETX_INIT(0.0f);
   float log_ray_sample_forward_pdf_inverse ETX_INIT(0.0f);
   float log_ray_sample_reverse_pdf_inverse ETX_INIT(0.0f);
   float log_ray_sample_forward_ratio ETX_INIT(0.0f);
@@ -291,11 +293,10 @@ struct ETX_ALIGNED GPUUPBPRecursiveState {
   float last_sin_theta ETX_INIT(0.0f);
   float log_d_bpt_a ETX_INIT(0.0f);
   float log_d_bpt_b ETX_INIT(0.0f);
-  float log_d_pde_a ETX_INIT(0.0f);
+  float log_d_surface_b ETX_INIT(0.0f);
   float log_d_pde_b ETX_INIT(0.0f);
   uint32_t failure ETX_INIT(0u);
   uint32_t failure_vertex_index ETX_INIT(0u);
-  uint32_t reserved0 ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUUPBPVertex {
@@ -323,19 +324,18 @@ struct ETX_ALIGNED GPUUPBPVertex {
   float eta ETX_INIT(1.0f);
   uint32_t sample_properties ETX_INIT(0u);
   GPUUPBPRecursiveWeights arrival_weights ETX_INIT({});
-  GPUUPBPRecursiveState departure_state ETX_INIT({});
   uint32_t previous_vertex_index ETX_INIT(kInvalidIndex);
   uint32_t incoming_segment_index ETX_INIT(kInvalidIndex);
   uint32_t path_length ETX_INIT(0u);
+  GPUUPBPRecursiveState departure_state ETX_INIT({});
   uint32_t global_path_index ETX_INIT(0u);
   float3 barycentric ETX_INIT({});
   uint32_t emitter_index ETX_INIT(kInvalidIndex);
-  GPUWavefrontCompactSpectralResponse inline_scattering ETX_INIT({});
-  GPUWavefrontCompactSpectralResponse inline_extinction ETX_INIT({});
   float inline_phase_function_g ETX_INIT(0.0f);
   uint32_t reserved0 ETX_INIT(0u);
   uint32_t reserved1 ETX_INIT(0u);
-  uint32_t reserved2 ETX_INIT(0u);
+  GPUWavefrontCompactSpectralResponse inline_scattering ETX_INIT({});
+  GPUWavefrontCompactSpectralResponse inline_extinction ETX_INIT({});
 };
 
 struct ETX_ALIGNED GPUUPBPPathState {
@@ -370,7 +370,6 @@ struct ETX_ALIGNED GPUUPBPBPTVertex {
   uint32_t emitter_index ETX_INIT(kInvalidIndex);
   float2 barycentric ETX_INIT({});
   float scatter_pdf_forward ETX_INIT(0.0f);
-  uint32_t reserved0 ETX_INIT(0u);
   GPUWavefrontCompactSpectralResponse inline_extinction ETX_INIT({});
 };
 
@@ -465,7 +464,6 @@ struct ETX_ALIGNED GPUUPBPDensityPoint {
   uint32_t global_path_index ETX_INIT(0u);
   float log_medium_event_density ETX_INIT(0.0f);
   float inline_phase_function_g ETX_INIT(0.0f);
-  uint32_t reserved0 ETX_INIT(0u);
   GPUWavefrontCompactSpectralResponse inline_scattering ETX_INIT({});
   GPUWavefrontCompactSpectralResponse inline_extinction ETX_INIT({});
 };
@@ -486,7 +484,7 @@ struct ETX_ALIGNED GPUUPBPDensityBeam {
   uint32_t flags ETX_INIT(0u);
   uint32_t event_buffer ETX_INIT(kInvalidIndex);
   uint32_t event_index_offset ETX_INIT(0u);
-  uint32_t reserved0 ETX_INIT(0u);
+  float log_d_surface_constant ETX_INIT(0.0f);
 };
 
 struct GPUUPBPDensityBatch {

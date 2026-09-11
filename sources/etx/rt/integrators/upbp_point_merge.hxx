@@ -3,6 +3,8 @@
 #include <etx/rt/integrators/upbp_connection.hxx>
 #include <etx/rt/integrators/upbp_recursive_mis.hxx>
 
+#include <initializer_list>
+
 namespace etx {
 
 inline SpectralResponse upbp_medium_scattering_coefficient(const Medium& medium, const SpectralQuery spect, const float3& position) {
@@ -13,17 +15,17 @@ inline SpectralResponse upbp_medium_scattering_coefficient(const Medium& medium,
   return medium_scattering(medium, spect) * density;
 }
 
-inline bool upbp_remove_medium_collision_weight(const SpectralResponse& throughput, const SpectralResponse& scattering, const double real_event_density, SpectralResponse& result) {
+inline bool upbp_remove_medium_collision_weight(const SpectralResponse& throughput, const SpectralResponse& scattering, SpectralResponse& result) {
   result = SpectralResponse{throughput.as_query(), 0.0f};
   if ((spectral_query_compatible(throughput.as_query(), scattering.as_query()) == false) || (throughput.valid() == false) || (scattering.valid() == false) ||
-      (scattering.minimum() < 0.0f) || (real_event_density <= 0.0) || (std::isfinite(real_event_density) == false)) {
+      (scattering.minimum() < 0.0f)) {
     return false;
   }
 
-  const float density = static_cast<float>(real_event_density);
+  // Remove scattering, retaining the inverse event density of the sampled point.
   if (throughput.spectral()) {
     if (scattering.value > 0.0f) {
-      result.value = throughput.value * density / scattering.value;
+      result.value = throughput.value / scattering.value;
     } else if (throughput.value != 0.0f) {
       return false;
     }
@@ -34,7 +36,7 @@ inline bool upbp_remove_medium_collision_weight(const SpectralResponse& throughp
     const float coefficient = *(&scattering.integrated.x + component);
     const float value = *(&throughput.integrated.x + component);
     if (coefficient > 0.0f) {
-      *(&result.integrated.x + component) = value * density / coefficient;
+      *(&result.integrated.x + component) = value / coefficient;
     } else if (value != 0.0f) {
       return false;
     }
@@ -47,14 +49,14 @@ inline bool upbp_medium_pre_collision_throughput(const Scene& scene, const Spect
     return false;
   }
   const SpectralResponse scattering = upbp_medium_scattering_coefficient(scene.mediums[vertex.medium.index], spect, vertex.position);
-  const double real_event_density = std::exp(vertex.log_medium_event_density);
-  return (scattering.is_zero() == false) && upbp_remove_medium_collision_weight(vertex.throughput, scattering, real_event_density, result);
+  return (scattering.is_zero() == false) && upbp_remove_medium_collision_weight(vertex.throughput, scattering, result);
 }
 
 struct UPBPPointMergeMISInput {
   struct Weights {
     double d_shared = 0.0;
-    double d_pde = 0.0;
+    double d_pde_base = 0.0;
+    double d_surface = 0.0;
     double ray_sample_forward_pdf_inverse = 0.0;
     double ray_sample_reverse_pdf_inverse = 0.0;
     double ray_sample_forward_ratio = 0.0;
@@ -64,7 +66,8 @@ struct UPBPPointMergeMISInput {
 
     Weights(const UPBPRecursiveVertexWeights& weights)
       : d_shared(weights.d_shared)
-      , d_pde(weights.d_pde)
+      , d_pde_base(weights.d_pde_base)
+      , d_surface(weights.d_surface)
       , ray_sample_forward_pdf_inverse(weights.ray_sample_forward_pdf_inverse)
       , ray_sample_reverse_pdf_inverse(weights.ray_sample_reverse_pdf_inverse)
       , ray_sample_forward_ratio(weights.ray_sample_forward_ratio)
@@ -87,7 +90,84 @@ inline UPBPPointMergeMISInput::Weights upbp_point_merge_weights(const UPBPRecurs
   return UPBPPointMergeMISInput::Weights{weights};
 }
 
-inline double upbp_point_merge_mis_weight(const UPBPPointMergeMISInput& input) {
+struct UPBPSurfaceMISWeights {
+  double constant_denominator = 0.0;
+  double surface_denominator = 0.0;
+  int denominator_exponent = 0;
+  bool surface_selected = false;
+
+  void add_scaled_term(const bool surface, const std::initializer_list<double> numerators, const std::initializer_list<double> denominators) {
+    double mantissa = 1.0;
+    int exponent = 0;
+    for (const double value : numerators) {
+      if (value == 0.0) {
+        return;
+      }
+      int value_exponent = 0;
+      mantissa *= std::frexp(value, &value_exponent);
+      exponent += value_exponent;
+    }
+    for (const double value : denominators) {
+      int value_exponent = 0;
+      mantissa /= std::frexp(value, &value_exponent);
+      exponent -= value_exponent;
+    }
+    if ((constant_denominator == 0.0) && (surface_denominator == 0.0)) {
+      denominator_exponent = exponent;
+    } else if (exponent > denominator_exponent) {
+      constant_denominator = std::ldexp(constant_denominator, denominator_exponent - exponent);
+      surface_denominator = std::ldexp(surface_denominator, denominator_exponent - exponent);
+      denominator_exponent = exponent;
+    }
+    double& coefficient = surface ? surface_denominator : constant_denominator;
+    coefficient += std::ldexp(mantissa, exponent - denominator_exponent);
+  }
+
+  void add_term(const bool surface, const std::initializer_list<double> numerators, const std::initializer_list<double> denominators) {
+    if (denominator_exponent == 0) {
+      double value = 1.0;
+      for (const double factor : numerators) {
+        if (factor == 0.0) {
+          return;
+        }
+        value *= factor;
+        if (std::isnormal(value) == false) {
+          add_scaled_term(surface, numerators, denominators);
+          return;
+        }
+      }
+      for (const double factor : denominators) {
+        value /= factor;
+        if (std::isnormal(value) == false) {
+          add_scaled_term(surface, numerators, denominators);
+          return;
+        }
+      }
+      double& coefficient = surface ? surface_denominator : constant_denominator;
+      const double sum = coefficient + value;
+      if ((value > 0.0) && std::isfinite(sum)) {
+        coefficient = sum;
+        return;
+      }
+    }
+    add_scaled_term(surface, numerators, denominators);
+  }
+
+  double weight(const double relative_surface_factor) const {
+    if (relative_surface_factor <= 0.0) {
+      return 0.0;
+    }
+    const double denominator =
+      surface_selected ? constant_denominator / relative_surface_factor + surface_denominator : constant_denominator + relative_surface_factor * surface_denominator;
+    if ((denominator <= 0.0) || (std::isfinite(denominator) == false)) {
+      return 0.0;
+    }
+    const double result = 1.0 / denominator;
+    return denominator_exponent == 0 ? result : std::ldexp(result, -denominator_exponent);
+  }
+};
+
+inline UPBPSurfaceMISWeights upbp_point_merge_mis_weights(const UPBPPointMergeMISInput& input) {
   const double forward_ray_factor = input.configuration.photon_beams_long ? input.light.ray_sample_forward_pdf_inverse : input.light.ray_sample_forward_ratio;
   const double reverse_ray_factor = input.configuration.camera_beams_long ? input.camera.ray_sample_forward_pdf_inverse : input.camera.ray_sample_forward_ratio;
   const UPBPDensityMISContext context = {
@@ -102,16 +182,20 @@ inline double upbp_point_merge_mis_weight(const UPBPPointMergeMISInput& input) {
   const double selected_factor = upbp_density_strategy_factor(input.configuration, context, input.selected_technique);
   if ((selected_factor <= 0.0) || (input.scattering_pdf_forward <= 0.0) || (input.scattering_pdf_reverse <= 0.0) || (input.light.ray_sample_reverse_pdf_inverse <= 0.0) ||
       (input.camera.ray_sample_reverse_pdf_inverse <= 0.0)) {
-    return 0.0;
+    return {};
   }
 
   const double inverse_selected_factor = 1.0 / selected_factor;
   const double light_bpt_applicable = input.light.previous_delta ? 0.0 : 1.0;
   const double camera_bpt_applicable = input.camera.previous_delta ? 0.0 : 1.0;
-  const double w_light = inverse_selected_factor * (input.light.d_shared * light_bpt_applicable * static_cast<double>(input.bpt_sample_count) +
-                                                     input.scattering_pdf_forward * input.light.d_pde / input.light.ray_sample_reverse_pdf_inverse);
-  const double w_camera = inverse_selected_factor * (input.camera.d_shared * camera_bpt_applicable * static_cast<double>(input.bpt_sample_count) +
-                                                      input.scattering_pdf_reverse * input.camera.d_pde / input.camera.ray_sample_reverse_pdf_inverse);
+  const double w_light_constant = inverse_selected_factor * (input.light.d_shared * light_bpt_applicable * static_cast<double>(input.bpt_sample_count) +
+                                                              input.scattering_pdf_forward * input.light.d_pde_base / input.light.ray_sample_reverse_pdf_inverse);
+  const double w_camera_constant = inverse_selected_factor * (input.camera.d_shared * camera_bpt_applicable * static_cast<double>(input.bpt_sample_count) +
+                                                               input.scattering_pdf_reverse * input.camera.d_pde_base / input.camera.ray_sample_reverse_pdf_inverse);
+  const double surface_factor = input.configuration.factor(UPBPTechnique::Surface);
+  const double w_light_surface = inverse_selected_factor * (input.scattering_pdf_forward * (surface_factor * input.light.d_surface) / input.light.ray_sample_reverse_pdf_inverse);
+  const double w_camera_surface =
+    inverse_selected_factor * (input.scattering_pdf_reverse * (surface_factor * input.camera.d_surface) / input.camera.ray_sample_reverse_pdf_inverse);
 
   double w_local = 1.0;
   if (input.vertex_class == UPBPVertexClass::Medium) {
@@ -128,8 +212,38 @@ inline double upbp_point_merge_mis_weight(const UPBPPointMergeMISInput& input) {
     }
   }
 
-  const double denominator = w_light + w_local + w_camera;
-  return (denominator > 0.0) && std::isfinite(denominator) ? 1.0 / denominator : 0.0;
+  const bool surface_selected = input.selected_technique == UPBPTechnique::Surface;
+  UPBPSurfaceMISWeights result = {
+    w_light_constant + (surface_selected ? 0.0 : w_local) + w_camera_constant,
+    w_light_surface + (surface_selected ? w_local : 0.0) + w_camera_surface,
+    0,
+    surface_selected,
+  };
+  if (std::isfinite(result.constant_denominator) && std::isfinite(result.surface_denominator)) {
+    return result;
+  }
+
+  // Retain coefficients whose normalized magnitude exceeds double range at the reference radius.
+  result = {0.0, 0.0, 0, surface_selected};
+  result.add_scaled_term(surface_selected, {1.0}, {});
+  result.add_scaled_term(false, {input.light.d_shared, light_bpt_applicable, static_cast<double>(input.bpt_sample_count)}, {selected_factor});
+  result.add_scaled_term(false, {input.camera.d_shared, camera_bpt_applicable, static_cast<double>(input.bpt_sample_count)}, {selected_factor});
+  result.add_scaled_term(false, {input.scattering_pdf_forward, input.light.d_pde_base}, {input.light.ray_sample_reverse_pdf_inverse, selected_factor});
+  result.add_scaled_term(false, {input.scattering_pdf_reverse, input.camera.d_pde_base}, {input.camera.ray_sample_reverse_pdf_inverse, selected_factor});
+  result.add_scaled_term(true, {input.scattering_pdf_forward, surface_factor, input.light.d_surface}, {input.light.ray_sample_reverse_pdf_inverse, selected_factor});
+  result.add_scaled_term(true, {input.scattering_pdf_reverse, surface_factor, input.camera.d_surface}, {input.camera.ray_sample_reverse_pdf_inverse, selected_factor});
+  if (input.vertex_class == UPBPVertexClass::Medium) {
+    for (const UPBPTechnique technique : {UPBPTechnique::PP3D, UPBPTechnique::PB2D, UPBPTechnique::BP2D, UPBPTechnique::BB1D}) {
+      if (technique != input.selected_technique) {
+        result.add_scaled_term(false, {upbp_density_strategy_factor(input.configuration, context, technique)}, {selected_factor});
+      }
+    }
+  }
+  return result;
+}
+
+inline double upbp_point_merge_mis_weight(const UPBPPointMergeMISInput& input) {
+  return upbp_point_merge_mis_weights(input).weight(1.0);
 }
 
 inline bool upbp_surface_merge_compatible(const Scene& scene, const UPBPPathVertexRecord& light, const UPBPPathVertexRecord& camera, const float3& camera_geometric_normal) {

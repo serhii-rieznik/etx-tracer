@@ -327,6 +327,7 @@ struct GPURaytracingRenderer : public Renderer {
     UPBPBuffer path_state_buffer = {};
     UPBPBuffer bpt_light_vertex_buffer = {};
     UPBPBuffer bpt_light_path_state_buffer = {};
+    uint32_t bpt_light_max_path_length = 0u;
     RHIBindlessHandle density_surface_point_tlas = {};
     RHIBindlessHandle density_medium_point_tlas = {};
     std::array<RHIBindlessHandle, kGPUUPBPSurfacePartitionCount> density_surface_point_blas = {};

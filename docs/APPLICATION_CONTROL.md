@@ -30,6 +30,16 @@ raytracer --render --scene /path/to/scene.etx.json --output /path/to/output.exr 
 Offline rendering runs to its configured sample or time target, saves the requested output, and exits. Control-server mode leaves the renderer stopped until a `run` command is sent. Neither workflow overwrites saved desktop preferences.
 Headless output has no independent presentation size. `GET /api/image` follows the active renderer's scene/film dimensions. The built-in browser client polls state and command results without overlapping requests. It refreshes the PNG blob when rendering or view state changes, once per second while rendering, and every five seconds while idle; its Refresh button remains available for an explicit update.
 
+## Pixel reconstruction
+
+CPU and GPU rendering use uniform sampling to the configured sample or time limit. The former `noise-threshold` scene field is ignored on load and omitted on save. Noise-based pixel stopping and its diagnostic views have been removed. View-layer IDs remain Result=0, Denoised=1, Current Frame=2, Accumulation=3, Albedo=5, and Normals=6; retired IDs 4 and 7 are rejected by `set_view_layer`.
+
+Scene JSON `pixel-filter-radius` specifies additional smoothing in film-pixel units. Zero gives a one-pixel box response; it does not select a point sample at the pixel centre. Positive values convolve that footprint with the normalized Blackman-Harris sampling table. The default remains 1.5.
+
+CPU and GPU camera paths sample the pixel area plus a filter offset. Light-tracing splats use the opposite offset before pixel assignment, including contributions projected just outside the unfiltered frame. Both estimate the same filtered image without changing exposure or normalizing by the number of accepted splats. The first accumulated sample uses the same reconstruction as subsequent samples.
+
+This convention changes edge response relative to older builds that used point sampling at radius zero, ignored the filter in CPU VCM, or deposited unfiltered light splats. The smoothing radius is independent of VCM/UPBP merging radii.
+
 ## HTTP API
 
 The built-in page is one client of the API; another UI can use the endpoints directly.

@@ -8,10 +8,8 @@ struct ViewLayer {
     Denoised,
     CurrentFrame,
     Accumulation,
-    AdaptiveAccumulation,
-    Albedo,
+    Albedo = 5u,  // Preserve application-control IDs of retained layers.
     Normals,
-    Debug,
 
     Count,
   };

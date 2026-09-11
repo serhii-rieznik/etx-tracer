@@ -4459,8 +4459,7 @@ bool SceneRepresentation::load_from_file(const char* filename, uint32_t options,
         _private->data.options.max_path_length = static_cast<uint32_t>(max(int64_t(1), int_value));
       } else if (json_get_int(i, "min-path-length", int_value)) {
         _private->data.options.min_path_length = static_cast<uint32_t>(max(int64_t(1), int_value));
-      } else if ((json_get_float(i, "noise-threshold", float_value)) && (std::isfinite(float_value))) {
-        _private->data.options.noise_threshold = clamp(float_value, 0.0f, 1.0f);
+
       } else if ((json_get_float(i, "radiance-clamp", float_value)) && (std::isfinite(float_value))) {
         _private->data.options.radiance_clamp = max(float_value, 0.0f);
       } else if ((json_get_float(i, "pixel-filter-radius", float_value)) && (std::isfinite(float_value))) {
@@ -4943,7 +4942,6 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   js["random-termination-start"] = impl->data.options.random_path_termination;
   js["max-path-length"] = impl->data.options.max_path_length;
   js["min-path-length"] = impl->data.options.min_path_length;
-  js["noise-threshold"] = impl->data.options.noise_threshold;
   js["radiance-clamp"] = impl->data.options.radiance_clamp;
   js["pixel-filter-radius"] = impl->data.pixel_filter.radius;
   js["geometry"] = geometry_ref;

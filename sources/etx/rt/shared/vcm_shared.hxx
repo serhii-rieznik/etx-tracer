@@ -109,16 +109,25 @@ struct ETX_ALIGNED VCMPathState {
   uint2 pixel_coord = {};
   SpectralQuery spect = {};
   float path_distance = 0.0f;
+  float d_surface = 0.0f;
 
   float d_vcm = 0.0f;
-  float d_vc = 0.0f;
-  float d_vm = 0.0f;
+  float d_vc_base = 0.0f;
+  float d_vm_base = 0.0f;
   float eta = 1.0f;
 
   uint32_t total_path_depth = 0;
   uint32_t medium_index = kInvalidIndex;
   uint32_t global_index = 0u;
   uint32_t flags = 0u;
+
+  ETX_SHARED_INLINE float connection_mis(const float surface_factor) const {
+    return d_vc_base + surface_factor * d_surface;
+  }
+
+  ETX_SHARED_INLINE float merge_mis(const float inverse_surface_factor) const {
+    return d_vm_base * inverse_surface_factor + d_surface;
+  }
 
   ETX_SHARED_INLINE bool delta_emitter() const {
     return (flags & DeltaEmitter) == DeltaEmitter;
@@ -180,15 +189,16 @@ struct ETX_ALIGNED VCMLightVertex {
     , w_i(s.ray.d)
     , d_vcm(s.d_vcm)
     , bc(i.barycentric)
-    , d_vc(s.d_vc)
+    , d_vc_base(s.d_vc_base)
     , pos(i.pos)
-    , d_vm(s.d_vm)
+    , d_vm_base(s.d_vm_base)
     , nrm(i.nrm)
     , triangle_index(i.triangle_index)
     , material_index(i.material_index)
     , instance_index(i.instance_index)
     , medium_index(s.medium_index)
     , is_medium(false)
+    , d_surface(s.d_surface)
     , path_length(s.total_path_depth)
     , path_index(index) {
   }
@@ -199,10 +209,10 @@ struct ETX_ALIGNED VCMLightVertex {
   float d_vcm = 0.0f;
 
   float3 bc = {};
-  float d_vc = 0.0f;
+  float d_vc_base = 0.0f;
 
   float3 pos = {};
-  float d_vm = 0.0f;
+  float d_vm_base = 0.0f;
 
   float3 nrm = {};
   uint32_t triangle_index = kInvalidIndex;
@@ -210,9 +220,14 @@ struct ETX_ALIGNED VCMLightVertex {
   uint32_t instance_index = kInvalidIndex;
   uint32_t medium_index = kInvalidIndex;
   bool is_medium = false;
+  float d_surface = 0.0f;
 
   uint32_t path_length = 0;
   uint32_t path_index = 0;
+
+  ETX_SHARED_INLINE float connection_mis(const float surface_factor) const {
+    return d_vc_base + surface_factor * d_surface;
+  }
 
   ETX_SHARED_INLINE Vertex vertex(const Scene& s) const {
     Vertex result = lerp_vertex(s, s.triangles[triangle_index], bc);
@@ -282,11 +297,12 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
   float cos_theta_bsdf = fabsf(dot(intersection.nrm, bsdf_sample.w_o));
 
   if (bsdf_sample.is_delta()) {
-    state.d_vc *= cos_theta_bsdf;
-    ETX_VALIDATE(state.d_vc);
+    state.d_vc_base *= cos_theta_bsdf;
+    ETX_VALIDATE(state.d_vc_base);
 
-    state.d_vm *= cos_theta_bsdf;
-    ETX_VALIDATE(state.d_vm);
+    state.d_vm_base *= cos_theta_bsdf;
+    state.d_surface *= cos_theta_bsdf;
+    ETX_VALIDATE(state.d_vm_base);
 
     state.d_vcm = 0.0f;
   } else {
@@ -295,11 +311,12 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
                             : bsdf::reverse_pdf(bsdf_data, bsdf_sample.w_o, mat, state.sampler);
     ETX_VALIDATE(rev_sample_pdf);
 
-    state.d_vc = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vc * rev_sample_pdf + state.d_vcm + it.vm_weight);
-    ETX_VALIDATE(state.d_vc);
+    state.d_vc_base = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vc_base * rev_sample_pdf + state.d_vcm);
+    ETX_VALIDATE(state.d_vc_base);
 
-    state.d_vm = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vm * rev_sample_pdf + state.d_vcm * it.vc_weight + 1.0f);
-    ETX_VALIDATE(state.d_vm);
+    state.d_vm_base = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_vm_base * rev_sample_pdf + state.d_vcm);
+    state.d_surface = (cos_theta_bsdf / bsdf_sample.pdf) * (state.d_surface * rev_sample_pdf + 1.0f);
+    ETX_VALIDATE(state.d_vm_base);
 
     state.d_vcm = 1.0f / bsdf_sample.pdf;
     ETX_VALIDATE(state.d_vcm);
@@ -315,7 +332,8 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Emitter& emitter, const VCMPathState& state, const VCMOptions& options, const Intersection& intersection) {
+ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Emitter& emitter, const VCMPathState& state, const VCMOptions& options, const VCMIteration& iteration,
+  const Intersection& intersection) {
   float pdf_emitter_area = 0.0f;
   float pdf_emitter_dir = 0.0f;
   float pdf_emitter_dir_out = 0.0f;
@@ -335,7 +353,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Emitter& emitter, cons
   }
 
   float emitter_sample_pdf = emitter_discrete_pdf(emitter);
-  float w_camera = state.d_vcm * pdf_emitter_area * emitter_sample_pdf + state.d_vc * (pdf_emitter_dir_out * emitter_sample_pdf);
+  float w_camera = state.d_vcm * pdf_emitter_area * emitter_sample_pdf + state.connection_mis(iteration.vm_weight) * (pdf_emitter_dir_out * emitter_sample_pdf);
   float weight = (options.enable_mis() && (state.total_path_depth > 1)) ? (1.0f / (1.0f + w_camera)) : 1.0f;
   return weight * (state.throughput * radiance);
 }
@@ -369,12 +387,12 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_emitter_state(uint32_t index, const 
   ETX_VALIDATE(state.d_vcm);
 
   if (emitter_sample.is_delta == false) {
-    state.d_vc = (emitter_sample.is_distant ? 1.0f : cos_t) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample);
-    ETX_VALIDATE(state.d_vc);
+    state.d_vc_base = (emitter_sample.is_distant ? 1.0f : cos_t) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample);
+    ETX_VALIDATE(state.d_vc_base);
   }
 
-  state.d_vm = state.d_vc * it.vc_weight;
-  ETX_VALIDATE(state.d_vm);
+  state.d_vm_base = state.d_vc_base;
+  ETX_VALIDATE(state.d_vm_base);
 
   state.eta = 1.0f;
   state.medium_index = emitter_sample.medium_index;
@@ -394,7 +412,9 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, con
   auto sampled_spectrum = spect.spectral() ? SpectralQuery::spectral_sample(state.sampler.next()) : SpectralQuery::sample();
   state.spect = (spect.wavelength == 0.0f) ? sampled_spectrum : spect;
 
-  state.uv = get_jittered_uv(state.sampler, coord, camera.film_size);
+  const float2 pixel_sample = state.sampler.next_2d();
+  const float2 filter_offset = sample_pixel_filter_offset(scene.pixel_sampler, state.sampler.next_2d());
+  state.uv = pixel_filter_sample_uv(coord, camera.film_size, pixel_sample, filter_offset);
   state.ray = generate_ray(camera, state.uv, state.sampler.next_2d());
   state.throughput = {state.spect, 1.0f};
   state.gathered = {state.spect, 0.0f};
@@ -402,8 +422,8 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, con
 
   auto film_eval = film_evaluate_out(state.spect, camera, state.ray);
   state.d_vcm = 1.0f / film_eval.pdf_dir;
-  state.d_vc = 0.0f;
-  state.d_vm = 0.0f;
+  state.d_vc_base = 0.0f;
+  state.d_vm_base = 0.0f;
   state.medium_index = camera.medium_index;
   state.eta = 1.0f;
   state.path_distance = 0.0f;
@@ -448,11 +468,12 @@ ETX_SHARED_INLINE bool vcm_handle_sampled_medium(const Scene& scene, const Mediu
   ETX_VALIDATE(pdf_rev);
 
   // Update MIS recurrence for non-delta event with cos_theta = 1 for media
-  // Medium vertices are not mergeable: exclude merging competitors in d_vm
-  state.d_vc = (1.0f / pdf_fwd) * (state.d_vc * pdf_rev + state.d_vcm);
-  ETX_VALIDATE(state.d_vc);
-  state.d_vm = (1.0f / pdf_fwd) * (state.d_vm * pdf_rev + 0.0f);
-  ETX_VALIDATE(state.d_vm);
+  // Medium vertices are not mergeable: exclude merging competitors in d_vm_base
+  state.d_vc_base = (1.0f / pdf_fwd) * (state.d_vc_base * pdf_rev + state.d_vcm);
+  ETX_VALIDATE(state.d_vc_base);
+  state.d_vm_base = (1.0f / pdf_fwd) * (state.d_vm_base * pdf_rev + 0.0f);
+  state.d_surface = (1.0f / pdf_fwd) * state.d_surface * pdf_rev;
+  ETX_VALIDATE(state.d_vm_base);
   state.d_vcm = 1.0f / pdf_fwd;
   ETX_VALIDATE(state.d_vcm);
 
@@ -499,13 +520,14 @@ ETX_SHARED_INLINE void vcm_update_light_vcm(const Intersection& intersection, VC
 
   float cos_to_prev = fabsf(dot(intersection.nrm, -state.ray.d));
   state.d_vcm /= cos_to_prev;
-  state.d_vc /= cos_to_prev;
-  state.d_vm /= cos_to_prev;
+  state.d_vc_base /= cos_to_prev;
+  state.d_vm_base /= cos_to_prev;
+  state.d_surface /= cos_to_prev;
   state.path_distance = 0.0f;
 }
 
-ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Camera& camera, const VCMIteration& vcm_iteration,
-  const VCMOptions& options, bool camera_at_medium, const Intersection* isect, const float3& medium_pos, VCMPathState& state, float2& uv) {
+ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, const Scene& scene, const Camera& camera, const VCMIteration& iteration, const VCMOptions& options,
+  bool camera_at_medium, const Intersection* isect, const float3& medium_pos, VCMPathState& state, float2& uv) {
   if ((options.connect_to_camera() == false) || (state.total_path_depth + 2 > scene.options.max_path_length) || (state.total_path_depth + 2 < scene.options.min_path_length)) {
     return {};
   }
@@ -515,6 +537,11 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
   if (camera_sample.pdf_dir <= 0.0f) {
     return {};
   }
+  uv = pixel_filter_splat_uv(camera_sample.uv, camera.film_size, sample_pixel_filter_offset(scene.pixel_sampler, state.sampler.next_2d()));
+  if (pixel_filter_contains_uv(uv) == false) {
+    return {};
+  }
+  const VCMIteration& vcm_iteration = iteration;
 
   auto direction = camera_sample.position - sample_pos;
   float dist2 = dot(direction, direction);
@@ -558,13 +585,11 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
     return {};
   }
 
-  uv = camera_sample.uv;
-
   float camera_pdf = camera_sample.pdf_dir_out * (camera_at_medium ? 1.0f : fabsf(dot(isect->nrm, w_o))) / dist2;
   ETX_VALIDATE(camera_pdf);
 
   float vmW_cam = camera_at_medium ? 0.0f : vcm_iteration.vm_weight;
-  float w_light = camera_pdf * (vmW_cam + state.d_vcm + state.d_vc * reverse_pdf);
+  float w_light = camera_pdf * (vmW_cam + state.d_vcm + state.connection_mis(vcm_iteration.vm_weight) * reverse_pdf);
   ETX_VALIDATE(w_light);
 
   float weight = options.enable_mis() ? (1.0f / (1.0f + w_light)) : 1.0f;
@@ -579,7 +604,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
   return tr * scatter * state.throughput * camera_sample.weight * weight;
 }
 
-ETX_SHARED_INLINE void vcm_cam_handle_miss(const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
+ETX_SHARED_INLINE void vcm_cam_handle_miss(const VCMOptions& options, const VCMIteration& iteration, const Intersection& intersection, VCMPathState& state) {
   if (options.direct_hit() == false)
     return;
 
@@ -629,7 +654,7 @@ ETX_SHARED_INLINE void vcm_cam_handle_miss(const VCMOptions& options, const Inte
     float inv_count = (environment_emitter_count > 0u) ? (1.0f / float(environment_emitter_count)) : 0.0f;
     sum_pdf_dir *= inv_count;
     sum_pdf_dir_out *= inv_count;
-    float w_camera_sum = state.d_vcm * sum_pdf_dir + state.d_vc * sum_pdf_dir_out;
+    float w_camera_sum = state.d_vcm * sum_pdf_dir + state.connection_mis(iteration.vm_weight) * sum_pdf_dir_out;
     ETX_VALIDATE(w_camera_sum);
     float weight = options.enable_mis() && (state.total_path_depth > 1) ? (1.0f / (1.0f + w_camera_sum)) : 1.0f;
     ETX_VALIDATE(weight);
@@ -643,12 +668,13 @@ ETX_SHARED_INLINE void vcm_cam_handle_miss(const VCMOptions& options, const Inte
 ETX_SHARED_INLINE void vcm_update_camera_vcm(const Intersection& intersection, VCMPathState& state) {
   float cos_to_prev = fabsf(dot(intersection.nrm, -state.ray.d));
   state.d_vcm *= sqr(state.path_distance + intersection.t) / cos_to_prev;
-  state.d_vc /= cos_to_prev;
-  state.d_vm /= cos_to_prev;
+  state.d_vc_base /= cos_to_prev;
+  state.d_vm_base /= cos_to_prev;
+  state.d_surface /= cos_to_prev;
   state.path_distance = 0.0f;
 }
 
-ETX_SHARED_INLINE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& options, const Intersection& intersection, VCMPathState& state) {
+ETX_SHARED_INLINE void vcm_handle_direct_hit(const Scene& scene, const VCMOptions& options, const VCMIteration& iteration, const Intersection& intersection, VCMPathState& state) {
   if ((options.direct_hit() == false) || (intersection.emitter_index == kInvalidIndex))
     return;
 
@@ -659,7 +685,7 @@ ETX_SHARED_INLINE void vcm_handle_direct_hit(const Scene& scene, const VCMOption
   if (try_load_emitter_instance(intersection.emitter_index, emitter_instance) == false) {
     return;
   }
-  state.gathered += vcm_get_radiance(emitter_instance, state, options, intersection);
+  state.gathered += vcm_get_radiance(emitter_instance, state, options, iteration, intersection);
 }
 
 ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, const VCMIteration& vcm_iteration, const VCMOptions& options, bool camera_at_medium,
@@ -725,7 +751,8 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, cons
   }
 
   float vmW_nee = camera_at_medium ? 0.0f : vcm_iteration.vm_weight;
-  float w_camera = (emitter_sample.pdf_dir_out * camera_factor) / (emitter_sample.pdf_dir * l_dot_e) * (vmW_nee + state.d_vcm + state.d_vc * reverse_pdf);
+  float w_camera =
+    (emitter_sample.pdf_dir_out * camera_factor) / (emitter_sample.pdf_dir * l_dot_e) * (vmW_nee + state.d_vcm + state.connection_mis(vcm_iteration.vm_weight) * reverse_pdf);
   float weight = options.enable_mis() ? 1.0f / (1.0f + w_light + w_camera) : 1.0f;
   ETX_VALIDATE(weight);
 
@@ -815,9 +842,9 @@ ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Scene& scene, const Spe
   }
 
   float vmW_pair = (camera_at_medium || light_vertex.is_medium) ? 0.0f : vm_weight;
-  float w_light = camera_area_pdf * (vmW_pair + light_vertex.d_vcm + light_vertex.d_vc * light_rev_pdf);
+  float w_light = camera_area_pdf * (vmW_pair + light_vertex.d_vcm + light_vertex.connection_mis(vm_weight) * light_rev_pdf);
   ETX_VALIDATE(w_light);
-  float w_camera = light_area_pdf * (vmW_pair + state.d_vcm + state.d_vc * camera_rev_pdf);
+  float w_camera = light_area_pdf * (vmW_pair + state.d_vcm + state.connection_mis(vm_weight) * camera_rev_pdf);
   ETX_VALIDATE(w_camera);
   float weight = options.enable_mis() ? 1.0f / (1.0f + w_light + w_camera) : 1.0f;
   ETX_VALIDATE(weight);
@@ -836,7 +863,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light_path(const Scene& scene,
   SpectralResponse result = {state.spect, 0.0f};
   for (uint64_t i = 0; i < light_path.count; ++i) {
     const auto& light_vertex = light_vertices[light_path.index + i];
-    const uint64_t target_path_length = state.total_path_depth + i + 2u;
+    const uint64_t target_path_length = uint64_t(state.total_path_depth) + light_vertex.path_length + 2u;
     if (target_path_length < scene.options.min_path_length)
       continue;
     if (target_path_length > scene.options.max_path_length)
@@ -873,14 +900,13 @@ struct ETX_ALIGNED VCMSpatialGridData {
   ArrayView<float3> normals ETX_EMPTY_INIT;
   ArrayView<float3> w_in ETX_EMPTY_INIT;
   ArrayView<float> d_vcm ETX_EMPTY_INIT;
-  ArrayView<float> d_vm ETX_EMPTY_INIT;
+  ArrayView<float> d_vm_base ETX_EMPTY_INIT;
+  ArrayView<float> d_surface ETX_EMPTY_INIT;
   ArrayView<uint32_t> path_lengths ETX_EMPTY_INIT;
   ArrayView<SpectralResponse> throughputs ETX_EMPTY_INIT;
   BoundingBox bounding_box ETX_EMPTY_INIT;
   uint32_t hash_table_mask ETX_EMPTY_INIT;
   float cell_size ETX_EMPTY_INIT;
-  float radius_squared ETX_EMPTY_INIT;
-  float inv_radius_squared ETX_EMPTY_INIT;
 
   ETX_SHARED_INLINE uint32_t cell_index(int32_t x, int32_t y, int32_t z) const {
     return ((x * 73856093u) ^ (y * 19349663) ^ (z * 83492791)) & hash_table_mask;
@@ -891,17 +917,17 @@ struct ETX_ALIGNED VCMSpatialGridData {
     return cell_index(static_cast<int32_t>(m.x), static_cast<int32_t>(m.y), static_cast<int32_t>(m.z));
   }
 
-  ETX_SHARED_INLINE float3 gather_index(const Scene& scene, const Intersection& intersection, const VCMOptions& options, float vc_weight, uint32_t index,
-    VCMPathState& state) const {
+  ETX_SHARED_INLINE float3 gather_index(const Scene& scene, const Intersection& intersection, const VCMOptions& options, float vc_weight, float radius_squared,
+    float inv_radius_squared, uint32_t index, VCMPathState& state) const {
     const auto& mat = scene.materials[intersection.material_index];
 
     const auto camera_data = BSDFData{state.spect, state.medium_index, PathSource::Camera, intersection, intersection.w_i};
     const auto t_camera = state.throughput;
     const float w_camera_base = state.d_vcm * vc_weight;
+    const float camera_merge_mis = state.merge_mis(vc_weight);
     const bool use_mis = options.enable_mis();
     const bool use_epan = (options.kernel == VCMOptions::Epanechnikov);
     const uint32_t range_begin = (index == 0) ? 0 : cell_ends[index - 1llu];
-
     float3 merged = {};
     for (uint32_t j = range_begin, range_end = cell_ends[index]; j < range_end; ++j) {
       const auto& light_throughput = throughputs[j];
@@ -912,7 +938,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
 
       auto d = positions[j] - intersection.pos;
       float distance_squared = dot(d, d);
-      if ((distance_squared > radius_squared) || (path_lengths[j] + state.total_path_depth + 1 > scene.options.max_path_length)) {
+      if ((distance_squared >= radius_squared) || (path_lengths[j] + state.total_path_depth + 1 > scene.options.max_path_length)) {
         continue;
       }
       if (dot(intersection.nrm, normals[j]) <= kEpsilon) {
@@ -925,10 +951,13 @@ struct ETX_ALIGNED VCMSpatialGridData {
         continue;
       }
 
+      auto path_value = camera_bsdf.func * t_camera * light_throughput;
+      ETX_VALIDATE(path_value);
+      const float3 path_rgb = path_value.to_rgb_estimate();
       auto camera_rev_pdf = bsdf::reverse_pdf(camera_data, -wi, mat, state.sampler);
 
-      float w_light = d_vcm[j] * vc_weight + d_vm[j] * camera_bsdf.pdf;
-      float w_camera = w_camera_base + state.d_vm * camera_rev_pdf;
+      float w_light = d_vcm[j] * vc_weight + (d_vm_base[j] * vc_weight + d_surface[j]) * camera_bsdf.pdf;
+      float w_camera = w_camera_base + camera_merge_mis * camera_rev_pdf;
       float weight = use_mis ? (1.0f / (1.0f + w_light + w_camera)) : 1.0f;
 
       float kernel_weight = 1.0f;
@@ -938,20 +967,23 @@ struct ETX_ALIGNED VCMSpatialGridData {
         kernel_weight = fmaxf(2.0f * one_minus, 0.0f);
       }
 
-      auto path_value = camera_bsdf.func * t_camera * light_throughput;
-      ETX_VALIDATE(path_value);
-      merged += path_value.to_rgb_estimate() * (kernel_weight * weight);
+      merged += path_rgb * (kernel_weight * weight);
       ETX_CHECK_FINITE(merged);
     }
     return merged;
   }
 
-  ETX_SHARED_INLINE float3 gather(const Scene& scene, VCMPathState& state, const VCMOptions& options, const Intersection& intersection, float vc_weight) const {
+  ETX_SHARED_INLINE float3 gather(const Scene& scene, VCMPathState& state, const VCMOptions& options, const Intersection& intersection, const VCMIteration& iteration) const {
     if (positions.count == 0) {
       return {};
     }
 
-    if (bounding_box_contains(bounding_box, intersection.pos) == false) {
+    const float radius = iteration.current_radius;
+    ETX_ASSERT((radius > 0.0f) && (radius <= (0.5f * cell_size)));
+    const float radius_squared = radius * radius;
+    const float inv_radius_squared = 1.0f / radius_squared;
+    const float3 bounds_delta = intersection.pos - min(max(intersection.pos, bounding_box.p_min), bounding_box.p_max);
+    if (dot(bounds_delta, bounds_delta) > radius_squared) {
       return {};
     }
 
@@ -987,7 +1019,7 @@ struct ETX_ALIGNED VCMSpatialGridData {
       if (duplicate_index) {
         continue;
       }
-      merged += gather_index(scene, intersection, options, vc_weight, cell_indices[i], state);
+      merged += gather_index(scene, intersection, options, iteration.vc_weight, radius_squared, inv_radius_squared, cell_indices[i], state);
     }
 
     return merged;
@@ -1041,10 +1073,11 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
 
     // Update MIS recurrences for continuation
 
-    state.d_vc = (1.0f / pdf_fwd) * (state.d_vc * pdf_rev + state.d_vcm);
-    ETX_VALIDATE(state.d_vc);
-    state.d_vm = (1.0f / pdf_fwd) * (state.d_vm * pdf_rev + 0.0f);
-    ETX_VALIDATE(state.d_vm);
+    state.d_vc_base = (1.0f / pdf_fwd) * (state.d_vc_base * pdf_rev + state.d_vcm);
+    ETX_VALIDATE(state.d_vc_base);
+    state.d_vm_base = (1.0f / pdf_fwd) * (state.d_vm_base * pdf_rev + 0.0f);
+    state.d_surface = (1.0f / pdf_fwd) * state.d_surface * pdf_rev;
+    ETX_VALIDATE(state.d_vm_base);
     state.d_vcm = 1.0f / pdf_fwd;
     ETX_VALIDATE(state.d_vcm);
 
@@ -1064,7 +1097,7 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   }
 
   if (found_intersection == false) {
-    vcm_cam_handle_miss(options, intersection, state);
+    vcm_cam_handle_miss(options, iteration, intersection, state);
     return false;
   }
 
@@ -1097,7 +1130,7 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   state.sampler.pop_fixed();
 
   vcm_update_camera_vcm(intersection, state);
-  vcm_handle_direct_hit(scene, options, intersection, state);
+  vcm_handle_direct_hit(scene, options, iteration, intersection, state);
 
   subsurface::Gather ss_gather = {};
   bool subsurface_path = (bsdf_sample.properties & BSDFSample::Diffuse) && (mat.subsurface_cls != SubsurfaceMaterial::Disabled);
@@ -1138,7 +1171,7 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   }
 
   if (is_connectible && options.merge_vertices() && (state.total_path_depth + 1 <= scene.options.max_path_length)) {
-    state.merged += spatial_grid.gather(scene, state, options, intersection, iteration.vc_weight);
+    state.merged += spatial_grid.gather(scene, state, options, intersection, iteration);
   }
 
   if (subsurface_path && (subsurface_sampled == false)) {
@@ -1182,8 +1215,9 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
       v.throughput = state.throughput;
       v.w_i = state.ray.d;  // incoming direction before scattering
       v.d_vcm = state.d_vcm;
-      v.d_vc = state.d_vc;
-      v.d_vm = state.d_vm;
+      v.d_vc_base = state.d_vc_base;
+      v.d_vm_base = state.d_vm_base;
+      v.d_surface = state.d_surface;
       v.pos = medium_sample.pos;
       v.nrm = {0.0f, 0.0f, 0.0f};
       v.triangle_index = kInvalidIndex;
@@ -1218,10 +1252,11 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
     float pdf_rev = medium_phase_function(med, w_o_smp, w_i);
     ETX_VALIDATE(pdf_rev);
 
-    state.d_vc = (1.0f / pdf_fwd) * (state.d_vc * pdf_rev + state.d_vcm);
-    ETX_VALIDATE(state.d_vc);
-    state.d_vm = (1.0f / pdf_fwd) * (state.d_vm * pdf_rev + 0.0f);
-    ETX_VALIDATE(state.d_vm);
+    state.d_vc_base = (1.0f / pdf_fwd) * (state.d_vc_base * pdf_rev + state.d_vcm);
+    ETX_VALIDATE(state.d_vc_base);
+    state.d_vm_base = (1.0f / pdf_fwd) * (state.d_vm_base * pdf_rev + 0.0f);
+    state.d_surface = (1.0f / pdf_fwd) * state.d_surface * pdf_rev;
+    ETX_VALIDATE(state.d_vm_base);
     state.d_vcm = 1.0f / pdf_fwd;
     ETX_VALIDATE(state.d_vcm);
 

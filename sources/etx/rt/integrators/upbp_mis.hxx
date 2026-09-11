@@ -476,6 +476,7 @@ enum class UPBPLightToCameraFailure : uint8_t {
 
 struct UPBPLightToCameraContribution {
   CameraSample camera_sample = {};
+  float2 splat_uv = {};
   UPBPScatteringEval light_scattering = {};
   UPBPConnectionTransmittanceResult transmittance = {};
   UPBPPathRecord camera_endpoint_path = {};
@@ -504,6 +505,10 @@ inline bool upbp_evaluate_light_to_camera(const Raytracing& rt, const Scene& sce
   }
   result.camera_sample = sample_film(camera_sampler, rt.camera(), light_vertex.position);
   if (result.camera_sample.valid() == false) {
+    return true;
+  }
+  result.splat_uv = pixel_filter_splat_uv(result.camera_sample.uv, rt.camera().film_size, sample_pixel_filter_offset(scene.pixel_sampler, camera_sampler.next_2d()));
+  if (pixel_filter_contains_uv(result.splat_uv) == false) {
     return true;
   }
 

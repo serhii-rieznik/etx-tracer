@@ -118,9 +118,10 @@ struct RaytracingImpl {
     } else if (update_flags[UpdateFlags::InstanceTransforms]) {
       update_host_scene_transforms(scene);
     }
-    const SceneBoundingSphere transport_sphere = compute_transport_bounding_sphere(internal_data.transport_bounds, camera);
+    const SceneBoundingSphere transport_sphere = compute_transport_bounding_sphere(internal_data.transport_bounds, camera, scene.mediums.count != 0u);
     scene.bounding_sphere_center = transport_sphere.center;
     scene.bounding_sphere_radius = transport_sphere.radius;
+    scene.emission_half_extent = transport_sphere.emission_half_extent;
     film.allocate(internal_data.camera.film_size);
     scene.options.properties[Scene::Properties::Committed] = true;
     scene_global_publish(this, &scene);
@@ -324,6 +325,7 @@ struct RaytracingImpl {
       nullptr);
 
     rt_scene = rtcNewScene(rt_device);
+    rtcSetSceneFlags(rt_scene, RTC_SCENE_FLAG_ROBUST);
     mesh_scenes.assign(s.meshes.count, nullptr);
     instance_geometries.assign(s.instances.count, nullptr);
     for (uint32_t mesh_index = 0u; mesh_index < s.meshes.count; ++mesh_index) {
@@ -333,6 +335,7 @@ struct RaytracingImpl {
       }
 
       RTCScene mesh_scene = rtcNewScene(rt_device);
+      rtcSetSceneFlags(mesh_scene, RTC_SCENE_FLAG_ROBUST);
       RTCGeometry geometry = rtcNewGeometry(rt_device, RTCGeometryType::RTC_GEOMETRY_TYPE_TRIANGLE);
       rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_VERTEX, 0, RTCFormat::RTC_FORMAT_FLOAT3, s.vertices.pos.a, 0, sizeof(float3), s.vertices.pos.count);
       rtcSetSharedGeometryBuffer(geometry, RTCBufferType::RTC_BUFFER_TYPE_INDEX, 0, RTCFormat::RTC_FORMAT_UINT3, s.triangles.a, mesh.triangle_offset * sizeof(Triangle),
