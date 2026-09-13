@@ -82,6 +82,7 @@ struct RTApplication {
   SceneResourceEditResult on_material_deleted(uint32_t index);
   std::string on_material_renamed(uint32_t index, const std::string&);
   void on_material_changed(uint32_t index);
+  SpectrumTarget on_spectrum_applied(const SpectrumTarget& target, const SpectralDistribution& spectrum);
   SceneResourceEditResult on_medium_added();
   SceneResourceEditResult on_medium_duplicated(uint32_t index);
   SceneResourceEditResult on_medium_deleted(uint32_t index);

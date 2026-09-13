@@ -170,6 +170,8 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
   };
 
   Class cls = SpectralDistribution::Invalid;
+  bool wavelengths_in_nm = false;
+  bool normalize_illuminant = true;
   std::vector<Sample> samples;
   samples.reserve(WavelengthCount);
 
@@ -191,7 +193,7 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
             ++colon;
           }
           const char* cls_begin = colon;
-          while ((*colon != 0) && (*colon != ' ') && (*colon != '\t')) {
+          while ((*colon != 0) && (*colon != ' ') && (*colon != '\t') && (*colon != '\r')) {
             ++colon;
           }
           std::string cls_name(cls_begin, colon - cls_begin);
@@ -205,6 +207,12 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
             cls = SpectralDistribution::Reflectance;
           }
         }
+      } else if (strstr(begin, "#wavelength-unit:") == begin) {
+        char unit[16] = {};
+        wavelengths_in_nm = (sscanf(begin, "#wavelength-unit: %15s", unit) == 1) && (strcmp(unit, "nm") == 0);
+      } else if (strstr(begin, "#normalization:") == begin) {
+        char normalization[16] = {};
+        normalize_illuminant = (sscanf(begin, "#normalization: %15s", normalization) != 1) || (strcmp(normalization, "none") != 0);
       } else if (strstr(begin, "#title") == begin) {
         const char* title_begin = strchr(begin, ':');
         if (title_begin != nullptr) {
@@ -240,11 +248,19 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     return SpectralDistribution::Invalid;
   }
 
+  if (wavelengths_in_nm) {
+    for (const Sample& sample : samples) {
+      if ((valid_value(sample.wavelength) == false) || (sample.wavelength <= 0.0f) || (valid_value(sample.values[0]) == false) ||
+          ((values1 != nullptr) && (valid_value(sample.values[1]) == false))) {
+        return SpectralDistribution::Invalid;
+      }
+    }
+  }
   std::sort(samples.begin(), samples.end());
 
   float scale = 1.0f;
   float min_value = samples.front().wavelength;
-  while (min_value < 100.0f) {
+  while ((wavelengths_in_nm == false) && (min_value < 100.0f)) {
     min_value *= 10.0f;
     scale *= 10.0f;
   }
@@ -253,11 +269,37 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
   samples0.reserve(WavelengthCount);
   std::vector<float2> samples1;
   samples1.reserve(WavelengthCount);
-  for (auto& sample : samples) {
-    float w = sample.wavelength * scale;
-    if ((w >= kShortestWavelength) && (w <= kLongestWavelength)) {
-      samples0.emplace_back(float2{w, sample.values[0]});
-      samples1.emplace_back(float2{w, sample.values[1]});
+  const auto append_sample = [&](float wavelength) {
+    const auto upper = std::upper_bound(samples.begin(), samples.end(), wavelength, [](float value, const Sample& sample) {
+      return value < sample.wavelength;
+    });
+    float power[2] = {};
+    for (uint32_t i = 0; i < 2u; ++i) {
+      if (upper == samples.begin()) {
+        power[i] = samples.front().values[i];
+      } else if (upper == samples.end()) {
+        power[i] = samples.back().values[i];
+      } else {
+        const Sample& lower = *(upper - 1);
+        const double t = (double(wavelength) - lower.wavelength) / (double(upper->wavelength) - lower.wavelength);
+        power[i] = static_cast<float>((1.0 - t) * lower.values[i] + t * upper->values[i]);
+      }
+    }
+    samples0.emplace_back(float2{wavelength, power[0]});
+    samples1.emplace_back(float2{wavelength, power[1]});
+  };
+  if (wavelengths_in_nm) {
+    // Sample before from_samples merges nearby wavelengths so authored knots remain distinct.
+    for (uint32_t i = 0; i < WavelengthCount; ++i) {
+      append_sample(kShortestWavelength + float(i));
+    }
+  } else {
+    for (const auto& sample : samples) {
+      const float w = sample.wavelength * scale;
+      if ((w >= kShortestWavelength) && (w <= kLongestWavelength)) {
+        samples0.emplace_back(float2{w, sample.values[0]});
+        samples1.emplace_back(float2{w, sample.values[1]});
+      }
     }
   }
 
@@ -305,7 +347,7 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
     }
   }
 
-  if (cls == SpectralDistribution::Illuminant) {
+  if ((cls == SpectralDistribution::Illuminant) && normalize_illuminant) {
     float lum = values0.luminance();
     if (lum > 0.0f) {
       values0.scale(1.0f / lum);

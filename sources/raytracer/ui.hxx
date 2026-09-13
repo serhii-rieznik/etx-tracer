@@ -8,6 +8,7 @@
 
 #include "renderer.hxx"
 #include "options.hxx"
+#include "spectrum_editor.hxx"
 
 #include <algorithm>
 #include <functional>
@@ -238,6 +239,7 @@ struct UI {
     std::function<SceneResourceEditResult(uint32_t)> material_deleted;
     std::function<std::string(uint32_t, const std::string&)> material_renamed;
     std::function<void(uint32_t)> material_changed;
+    std::function<SpectrumTarget(const SpectrumTarget&, const SpectralDistribution&)> spectrum_applied;
     std::function<SceneResourceEditResult()> medium_added;
     std::function<SceneResourceEditResult(uint32_t)> medium_duplicated;
     std::function<SceneResourceEditResult(uint32_t)> medium_deleted;
@@ -457,7 +459,7 @@ struct UI {
     UIObjects = 1u << 0u,
     UIProperties = 1u << 1u,
     UIMemoryDiagnostics = 1u << 2u,
-    UIDefaults = UIObjects | UIProperties,
+    UIDefaults = UIObjects | UIProperties | UIMemoryDiagnostics,
   };
 
   struct SelectionState {
@@ -540,6 +542,15 @@ struct UI {
   bool _embedded_menu_enabled = true;
   uint32_t _font_image = 0u;
   std::unordered_map<std::string, SpectrumEditorState> _spectrum_editors;
+  SpectrumCurveEditor _spectrum_curve;
+  SpectrumTarget _spectrum_target;
+  SpectralDistribution _spectrum_source;
+  bool _spectrum_live_preview = true;
+  bool _spectrum_preview_pending = false;
+  bool _spectrum_tab_requested = false;
+  void build_spectrum_editor(SceneRepresentation& scene_rep);
+  void read_spectrum_source(const SceneData& scene_data);
+  void edit_spectrum_button(SceneRepresentation& scene_rep, const char* label, SpectrumTarget::Channel channel, uint32_t spectrum_index);
   std::unordered_map<std::string, bool> _material_anisotropy;
   std::vector<int32_t> _selected_material_positions;
   std::vector<uint32_t> _pending_material_selection_indices;

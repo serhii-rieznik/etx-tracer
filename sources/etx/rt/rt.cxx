@@ -118,7 +118,7 @@ struct RaytracingImpl {
     } else if (update_flags[UpdateFlags::InstanceTransforms]) {
       update_host_scene_transforms(scene);
     }
-    const SceneBoundingSphere transport_sphere = compute_transport_bounding_sphere(internal_data.transport_bounds, camera, scene.mediums.count != 0u);
+    const SceneBoundingSphere transport_sphere = compute_transport_bounding_sphere(internal_data.transport_bounds, camera, scene_data.has_exterior_medium_transport(camera));
     scene.bounding_sphere_center = transport_sphere.center;
     scene.bounding_sphere_radius = transport_sphere.radius;
     scene.emission_half_extent = transport_sphere.emission_half_extent;

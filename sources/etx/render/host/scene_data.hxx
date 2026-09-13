@@ -13,6 +13,8 @@
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/scene_hierarchy.hxx>
+
+#include <unordered_map>
 namespace etx {
 
 enum class SceneUpdateScope : uint32_t {
@@ -34,7 +36,7 @@ struct SceneBoundingSphere {
   float3 emission_half_extent = {};
 };
 
-SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transport_bounds, const Camera& camera, bool has_media);
+SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transport_bounds, const Camera& camera, bool has_exterior_media);
 
 struct UpdateFlags {
   enum : uint32_t {
@@ -180,6 +182,7 @@ struct SceneData {
   std::vector<Image> images_vector;
   std::vector<Medium> mediums_vector;
   std::vector<Scene::EnergyCompensationInterface> energy_compensation_interfaces;
+  std::unordered_map<uint64_t, uint32_t> energy_compensation_interface_cache;
   SceneHierarchy hierarchy;
 
   BufferPool buffer_pool;
@@ -207,6 +210,7 @@ struct SceneData {
 
   BoundingBox compute_bounding_volumes() const;
   BoundingBox compute_transport_bounding_volumes() const;
+  bool has_exterior_medium_transport(const Camera& camera) const;
 
   uint64_t compute_transforms_hash() const;
   uint64_t compute_instance_transforms_hash() const;

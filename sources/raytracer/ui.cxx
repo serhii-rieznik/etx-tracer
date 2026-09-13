@@ -848,6 +848,15 @@ void UI::select_resource_edit_result(SelectionKind kind, const SceneResourceEdit
 }
 
 void UI::apply_resource_remapping(SelectionKind kind, const std::vector<uint32_t>& old_to_new) {
+  if (kind == SelectionKind::Material) {
+    const uint32_t old_material = _spectrum_target.material_index;
+    _spectrum_target.material_index = old_material < old_to_new.size() ? old_to_new[old_material] : kInvalidIndex;
+    if (_spectrum_target.material_index == kInvalidIndex) {
+      _spectrum_target.spectrum_index = kInvalidIndex;
+      _spectrum_preview_pending = false;
+      _spectrum_curve.source_update_requested = false;
+    }
+  }
   if (_selection.kind != kind) {
     return;
   }
@@ -875,7 +884,11 @@ void UI::apply_resource_remapping(SelectionKind kind, const std::vector<uint32_t
   }
 
   const uint32_t new_index = old_index < old_to_new.size() ? old_to_new[old_index] : kInvalidIndex;
+  const SpectrumTarget spectrum_target = _spectrum_target;
+  const bool spectrum_preview_pending = _spectrum_preview_pending;
   reset_selection();
+  _spectrum_target = spectrum_target;
+  _spectrum_preview_pending = spectrum_preview_pending;
   if (new_index != kInvalidIndex) {
     _pending_selection = {kind, new_index, true};
   }
@@ -1576,6 +1589,10 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
   };
 
   ImGui::TextUnformatted(base_label);
+  if (_editing_material_indices != nullptr) {
+    ImGui::SameLine();
+    edit_spectrum_button(scene, "Edit##emission", SpectrumTarget::Channel::Emission, spectrum_index);
+  }
   SpectrumEditorState::Mode previous_mode = editor_state.mode;
   full_width_item();
   if (ImGui::BeginCombo("##emission_mode", kModeLabels[static_cast<uint32_t>(editor_state.mode)])) {
@@ -2706,6 +2723,8 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       0, "Surface",
       [&]() {
         ImGui::Text("Reflectance Spectrum");
+        ImGui::SameLine();
+        edit_spectrum_button(scene_rep, "Edit##reflectance", SpectrumTarget::Channel::Reflectance, material.reflectance.spectrum_index);
         changed |= mixed_control(material_values_mixed([](const Material& value) {
           return value.reflectance.spectrum_index;
         }),
@@ -2723,6 +2742,8 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
         if (material.cls != MaterialClass::DiffractionGrating) {
           ImGui::Spacing();
           ImGui::Text("Scattering Spectrum");
+          ImGui::SameLine();
+          edit_spectrum_button(scene_rep, "Edit##scattering", SpectrumTarget::Channel::Scattering, material.scattering.spectrum_index);
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.scattering.spectrum_index;
           }),
@@ -2906,6 +2927,9 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             const bool int_ior_changed = mixed_control(int_ior_mixed, [&]() {
               return ior_picker(scene_rep, "Inside", material.int_ior, data, int_ior_mixed);
             });
+            edit_spectrum_button(scene_rep, "Edit eta##inside", SpectrumTarget::Channel::InsideEta, material.int_ior.eta_index);
+            ImGui::SameLine();
+            edit_spectrum_button(scene_rep, "Edit k##inside", SpectrumTarget::Channel::InsideK, material.int_ior.k_index);
             if (int_ior_changed) {
               _material_batch_changed_fields |= MaterialBatchChangedIntIOR;
               changed = true;
@@ -2918,6 +2942,9 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             const bool ext_ior_changed = mixed_control(ext_ior_mixed, [&]() {
               return ior_picker(scene_rep, "Outside", material.ext_ior, data, ext_ior_mixed);
             });
+            edit_spectrum_button(scene_rep, "Edit eta##outside", SpectrumTarget::Channel::OutsideEta, material.ext_ior.eta_index);
+            ImGui::SameLine();
+            edit_spectrum_button(scene_rep, "Edit k##outside", SpectrumTarget::Channel::OutsideK, material.ext_ior.k_index);
             if (ext_ior_changed) {
               _material_batch_changed_fields |= MaterialBatchChangedExtIOR;
               changed = true;
@@ -3009,6 +3036,9 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
         const bool thinfilm_ior_changed = mixed_control(thinfilm_ior_mixed, [&]() {
           return ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data, thinfilm_ior_mixed, true);
         });
+        edit_spectrum_button(scene_rep, "Edit eta##thinfilm", SpectrumTarget::Channel::ThinfilmEta, material.thinfilm.ior.eta_index);
+        ImGui::SameLine();
+        edit_spectrum_button(scene_rep, "Edit k##thinfilm", SpectrumTarget::Channel::ThinfilmK, material.thinfilm.ior.k_index);
         if (thinfilm_ior_changed) {
           _material_batch_changed_fields |= MaterialBatchChangedThinfilmIOR;
           changed = true;
@@ -3087,6 +3117,8 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           }),
             [&]() {
               ImGui::TextUnformatted("Distance");
+              ImGui::SameLine();
+              edit_spectrum_button(scene_rep, "Edit##subsurface", SpectrumTarget::Channel::Subsurface, material.subsurface.spectrum_index);
               return spectrum_picker(scene_rep, "Subsurface Distance", material.subsurface.spectrum_index, true, true);
             });
           changed |= mixed_control(material_values_mixed([](const Material& value) {
@@ -3315,6 +3347,9 @@ void UI::reset_selection() {
   _name_edit_pending = false;
   clear_selection_history();
   _spectrum_editors.clear();
+  _spectrum_target = {};
+  _spectrum_preview_pending = false;
+  _spectrum_curve.source_update_requested = false;
   _material_anisotropy.clear();
   _selected_material_positions.clear();
   _pending_material_selection_indices.clear();
@@ -3547,7 +3582,7 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
       };
       ui_toggle("Scene Explorer", UIObjects, MenuCommand::ToggleSceneObjects);
       ui_toggle("Inspector", UIProperties, MenuCommand::ToggleProperties);
-      ui_toggle("Diagnostics", UIMemoryDiagnostics, MenuCommand::ToggleMemoryDiagnostics);
+      ui_toggle("Bottom panel", UIMemoryDiagnostics, MenuCommand::ToggleMemoryDiagnostics);
       ImGui::Separator();
       if (ImGui::MenuItem("Reset Layout")) {
         execute_menu_command(MenuCommand::ResetLayout);
@@ -4283,13 +4318,7 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
     ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ctx.wpadding.x, ctx.wpadding.y));
     ImGui::BeginChild("##workspace_inspector", ImVec2(inspector_width, main_height), ImGuiChildFlags_Borders);
-    if (data.scene_loaded == false) {
-      ImGui::BeginDisabled();
-    }
     build_inspector(scene_rep, ctx, data);
-    if (data.scene_loaded == false) {
-      ImGui::EndDisabled();
-    }
     ImGui::EndChild();
     ImGui::PopStyleVar();
   }
@@ -4338,11 +4367,16 @@ void UI::build_inspector(SceneRepresentation& scene_rep, const BuildContext& ctx
   if (ImGui::BeginTabBar("##inspector_tabs")) {
     const ImGuiTabItemFlags inspector_flags = _inspector_tab_requested ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
     if (ImGui::BeginTabItem("Inspector", nullptr, inspector_flags)) {
+      ImGui::BeginDisabled(data.scene_loaded == false);
       build_properties_window(scene_rep, ctx, data);
+      ImGui::EndDisabled();
       ImGui::EndTabItem();
     }
+
     if (ImGui::BeginTabItem("Render")) {
+      ImGui::BeginDisabled(data.scene_loaded == false);
       build_rendering_properties(scene_rep, ctx, data);
+      ImGui::EndDisabled();
       ImGui::EndTabItem();
     }
     ImGui::EndTabBar();
@@ -4353,6 +4387,12 @@ void UI::build_inspector(SceneRepresentation& scene_rep, const BuildContext& ctx
 void UI::build_diagnostics(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   (void)ctx;
   if (ImGui::BeginTabBar("##diagnostics_tabs")) {
+    const ImGuiTabItemFlags spectrum_flags = _spectrum_tab_requested ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
+    if (ImGui::BeginTabItem("Spectrum", nullptr, spectrum_flags)) {
+      _spectrum_tab_requested = false;
+      build_spectrum_editor(scene_rep);
+      ImGui::EndTabItem();
+    }
     if (ImGui::BeginTabItem("Performance")) {
       build_debug_info_content();
       ImGui::EndTabItem();

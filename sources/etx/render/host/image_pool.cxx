@@ -477,8 +477,9 @@ struct ImagePoolImpl {
       return;
     }
 
-    if (handle >= images.size())
+    if ((handle >= images.size()) || keys[handle].empty()) {
       return;
+    }
 
     Image& image = images[handle];
     buffer_pool.destroy(image.pixel_buffer);
@@ -493,6 +494,7 @@ struct ImagePoolImpl {
 
     paths[handle].clear();
     keys[handle].clear();
+    free_indices.push_back(handle);
   }
 
   void remove_all() {
@@ -505,6 +507,7 @@ struct ImagePoolImpl {
     paths.clear();
     keys.clear();
     mapping.clear();
+    free_indices.clear();
     counter = 0;
   }
 
@@ -700,6 +703,7 @@ struct ImagePoolImpl {
   std::vector<std::string> paths;
   std::vector<std::string> keys;
   std::unordered_map<std::string, uint32_t> mapping;
+  std::vector<uint32_t> free_indices;
   uint64_t counter = 0;
 
   static std::string file_image_key(const std::string& path, uint32_t image_options, const float2& offset, const float2& scale) {
@@ -712,12 +716,18 @@ struct ImagePoolImpl {
   }
 
   uint32_t create_entry(const std::string& path, const std::string& key) {
-    uint32_t index = static_cast<uint32_t>(images.size());
-    images.emplace_back();
+    const uint32_t index = free_indices.empty() ? static_cast<uint32_t>(images.size()) : free_indices.back();
+    if (free_indices.empty()) {
+      images.emplace_back();
+      paths.emplace_back();
+      keys.emplace_back();
+    } else {
+      free_indices.pop_back();
+    }
     images[index].pixel_buffer = buffer_pool.create(0u, "image_pixels");
     images[index].distribution_buffer = buffer_pool.create(0u, "image_distributions");
-    paths.emplace_back(path);
-    keys.emplace_back(key);
+    paths[index] = path;
+    keys[index] = key;
     mapping[key] = index;
     return index;
   }
@@ -746,6 +756,7 @@ void ImagePool::swap_contents(ImagePool& other) {
   swap(_private->paths, other._private->paths);
   swap(_private->keys, other._private->keys);
   swap(_private->mapping, other._private->mapping);
+  swap(_private->free_indices, other._private->free_indices);
   swap(_private->counter, other._private->counter);
 }
 

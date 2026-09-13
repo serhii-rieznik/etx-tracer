@@ -219,6 +219,8 @@ struct GPUUPBPDensityCompactMode {
     BPTPathStates = 3u,
     CameraVertices = 4u,
     CameraIntervals = 5u,
+    SurfacePointBounds = 6u,
+    MediumPointBounds = 7u,
   };
 };
 

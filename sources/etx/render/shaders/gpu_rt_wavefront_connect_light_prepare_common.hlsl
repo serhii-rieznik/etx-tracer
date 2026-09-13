@@ -164,11 +164,14 @@ float3 wavefront_connect_light_shadow_origin(GPUWavefrontPathVertex vertex, floa
 }
 
 #if ETX_UPBP
-uint wavefront_connect_light_upbp_connection_medium(WavefrontConnectLightPrepareInput input_value, float3 direction_to_camera) {
+uint wavefront_connect_light_upbp_connection_medium(WavefrontConnectLightPrepareInput input_value, GPUUPBPVertex light_vertex, float3 direction_to_camera) {
   if (wavefront_path_vertex_is_medium(input_value.light_vertex)) {
     return input_value.light_vertex.medium_index;
   }
   if (wavefront_path_vertex_is_surface(input_value.light_vertex)) {
+    if ((dot(input_value.light_vertex.geo_normal, input_value.light_vertex.w_i) * dot(input_value.light_vertex.geo_normal, direction_to_camera)) < 0.0f) {
+      return light_vertex.incident_medium_index;
+    }
     return dot(input_value.light_vertex.geo_normal, direction_to_camera) < 0.0f ? input_value.light_material.int_medium : input_value.light_material.ext_medium;
   }
   return input_value.light_vertex.medium_index;
@@ -597,7 +600,7 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
     const GPUUPBPVertex camera_vertex = upbp_load_vertex(upbp_resources.vertex_buffer, input_value.camera_vertex_index);
     const GPUUPBPVertex light_vertex = upbp_load_bpt_light_vertex(upbp_resources, input_value.light_vertex_index);
     const bool light_vertex_inline_medium = (input_value.light_vertex.inline_medium_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u;
-    task.medium_index = light_vertex_inline_medium ? kInvalidIndex : wavefront_connect_light_upbp_connection_medium(input_value, direction_to_camera);
+    task.medium_index = light_vertex_inline_medium ? kInvalidIndex : wavefront_connect_light_upbp_connection_medium(input_value, light_vertex, direction_to_camera);
     task.upbp_camera_vertex_index = input_value.camera_vertex_index;
     task.upbp_light_vertex_index = input_value.light_vertex_index;
     task.upbp_camera_pdf_forward_bits = asuint(candidate.camera_pdf);

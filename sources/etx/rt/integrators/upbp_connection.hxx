@@ -56,6 +56,9 @@ inline uint32_t upbp_connection_medium(const Scene& scene, const UPBPPathVertexR
   const Material& material = scene.materials[vertex.intersection.material_index];
   const Triangle& triangle = scene.triangles[vertex.intersection.triangle_index];
   const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, triangle, vertex.intersection.instance_index);
+  if ((dot(geometric_normal, vertex.intersection.w_i) * dot(geometric_normal, outgoing_direction)) < 0.0f) {
+    return vertex.incident_medium_index;
+  }
   return (dot(geometric_normal, outgoing_direction) < 0.0f) ? material.int_medium : material.ext_medium;
 }
 

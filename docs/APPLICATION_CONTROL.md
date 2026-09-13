@@ -4,6 +4,24 @@ ETX Tracer exposes core renderer and view operations through typed commands and 
 
 Windows pickup notes, platform-sensitive areas, and the validation matrix are documented in [WINDOWS_HANDOVER.md](WINDOWS_HANDOVER.md).
 
+## Spectrum editor
+
+The bottom panel's **Spectrum** tab edits wavelength/value pairs. Click the curve or use **Add point** to insert a wavelength/value pair. Drag points to edit them, or select a point and press Enter in either numeric field to commit its values. Duplicate wavelengths are rejected. **Delete point** removes interior points. The first and last points are protected. Resize the panel with its upper divider or toggle **View > Bottom panel**.
+
+**Simplify** is an explicit operation. Set the maximum absolute value error and confirm **Simplify** to retain the fewest original control points that satisfy that limit under linear interpolation. Endpoints and retained point values stay unchanged. A zero tolerance removes only exactly redundant points. Opening the dialog or cancelling it does not alter the curve. Simplification updates the bound source spectrum even when live preview is paused; renderer preparation defers that update until it is safe. The renderer continues to receive the full wavelength grid. Loading or opening a spectrum never simplifies it automatically.
+
+Values are preserved without normalization or a 0–1 limit. The plot automatically fits the data's wavelength and value ranges, holding the axes fixed during a drag. Flat curves receive display padding. The original SPD classification is retained, including dielectric files and files without a class header. **Save SPD** offers an optional classification override; this does not change values or the assignment target. Two-column SPD files, including dielectric files such as diamond, can be loaded; legacy wavelength units are converted to nanometres. Saved files retain point precision and explicitly disable illuminant normalization. Built-in spectrum files are read-only, and loading another file asks before discarding unsaved edits.
+
+Select a **Material**, select an **Assignment target**, and click **Assign**. Targets include scattering, reflectance, emission, subsurface distance, and inside/outside or thin-film IOR eta and k. Selection alone does not change the material. Assignment replaces its existing spectrum; objects sharing the material update together. Nonzero IOR k enables conductor IOR evaluation; zero k selects dielectric evaluation. **Live preview** applies subsequent edits to the assigned slot and restarts accumulation. Changing material or target requires another Assign click. The material list follows resource additions and deletions. Scene reloads retain the draft and clear the assignment.
+
+In a single material's properties, **Edit** opens its existing spectrum in the bottom editor and enables live editing immediately. IOR controls provide separate **Edit eta** and **Edit k** buttons. Opening the editor preserves all raw samples and creates no scene resources. These buttons are disabled for multiple selected materials or an absent spectrum.
+
+The bound graph follows changes to the current spectrum from material color pickers, presets, file loading, or replacement of the material spectrum slot. An external source change replaces pending graph edits and reloads its raw samples; a simplified curve may therefore return to per-wavelength points. Changes made while the panel is hidden appear when it is shown again. Unchanged sources retain the current control points and selection. Graph edits update the same source without triggering a reload of their own control points.
+
+The curve and its points use wavelength colors from a cached CIE-based display palette. Wavelengths outside 390–780 nm are shown in the theme's neutral color. This is a display aid and does not change spectrum values.
+
+Applied spectra persist with the scene. Save an SPD separately to retain the authored control points.
+
 ## Launch modes
 
 Normal desktop behavior is unchanged:

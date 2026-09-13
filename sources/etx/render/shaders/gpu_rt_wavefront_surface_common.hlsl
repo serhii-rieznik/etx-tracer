@@ -697,7 +697,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
       connection_source = (state.path_length == 1u) ? current_d_vcm : 0.0f;
     }
     state.reverse_pdf = wavefront_safe_div((current_d_vc * reverse_phase_pdf) + connection_source, phase_pdf);
-    state.d_vm = scene_path_mode_is_vcm() ? wavefront_safe_div(current_d_vm * reverse_phase_pdf, phase_pdf) : 0.0f;
+    state.d_vm = scene_path_mode_is_vcm() ? wavefront_safe_div((current_d_vm * reverse_phase_pdf) + current_d_vcm, phase_pdf) : 0.0f;
     state.d_surface = scene_path_mode_is_vcm() ? wavefront_safe_div(current_d_surface * reverse_phase_pdf, phase_pdf) : 0.0f;
     state.sampled_bsdf_pdf = phase_pdf;
     state.ray.o = current_vertex.position;

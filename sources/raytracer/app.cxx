@@ -349,6 +349,7 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.material_deleted = std::bind(&RTApplication::on_material_deleted, this, std::placeholders::_1);
     ui.callbacks.material_renamed = std::bind(&RTApplication::on_material_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
+    ui.callbacks.spectrum_applied = std::bind(&RTApplication::on_spectrum_applied, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.medium_added = std::bind(&RTApplication::on_medium_added, this);
     ui.callbacks.medium_duplicated = std::bind(&RTApplication::on_medium_duplicated, this, std::placeholders::_1);
     ui.callbacks.medium_deleted = std::bind(&RTApplication::on_medium_deleted, this, std::placeholders::_1);

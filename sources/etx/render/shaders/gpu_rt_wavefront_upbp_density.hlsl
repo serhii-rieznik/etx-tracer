@@ -1425,6 +1425,19 @@ uint upbp_surface_query_family_from_material(uint material_index) {
     return;
   }
   const uint input_index = constants.dispatch_item_offset + dtid.x;
+  if ((constants.work_queue_index == GPUUPBPDensityCompactMode::SurfacePointBounds) || (constants.work_queue_index == GPUUPBPDensityCompactMode::MediumPointBounds)) {
+    const bool surface = constants.work_queue_index == GPUUPBPDensityCompactMode::SurfacePointBounds;
+    const uint point_buffer = surface ? resources.density_output_surface_point_buffer : resources.density_output_medium_point_buffer;
+    const uint point_count = surface ? resources.density_output_surface_point_capacity : resources.density_output_medium_point_capacity;
+    const uint aabb_buffer = surface ? resources.point_aabb_buffer : resources.density_output_medium_point_aabb_buffer;
+    if (input_index >= point_count) {
+      return;
+    }
+    const float3 position = upbp_load_density_point(point_buffer, input_index).position;
+    const float radius = max(surface ? resources.iteration.surface_radius : max(resources.iteration.pp3d_radius, resources.iteration.pb2d_radius), 1.0e-7f);
+    upbp_store_density_aabb(aabb_buffer, input_index, position - radius, position + radius, input_index);
+    return;
+  }
   if (constants.work_queue_index == GPUUPBPDensityCompactMode::BPTVertices) {
     const uint vertex_count = min(WAVEFRONT_RO_BUFFER(resources.counter_buffer).Load(GPUUPBPCounterIndex::LightVertex * sizeof(uint)), resources.light_vertex_capacity);
     if ((input_index < vertex_count) && (resources.bpt_light_vertex_buffer != kInvalidIndex)) {
@@ -1507,22 +1520,18 @@ uint upbp_surface_query_family_from_material(uint material_index) {
     }
     const uint output_buffer = surface ? resources.density_output_surface_point_buffer : resources.density_output_medium_point_buffer;
     const uint output_capacity = surface ? resources.density_output_surface_point_capacity : resources.density_output_medium_point_capacity;
-    const uint output_aabb_buffer = surface ? resources.point_aabb_buffer : resources.density_output_medium_point_aabb_buffer;
-    const uint output_aabb_capacity = surface ? resources.point_aabb_capacity : resources.density_output_medium_point_aabb_capacity;
     const uint output_counter = surface ? GPUUPBPCounterIndex::DensitySurfacePoint : GPUUPBPCounterIndex::DensityMediumPoint;
-    if ((output_buffer == kInvalidIndex) || (output_aabb_buffer == kInvalidIndex)) {
+    if (output_buffer == kInvalidIndex) {
       return;
     }
     uint output_index = 0u;
     WAVEFRONT_RW_BUFFER(resources.counter_buffer).InterlockedAdd(output_counter * sizeof(uint), 1u, output_index);
-    if ((output_index >= output_capacity) || (output_index >= output_aabb_capacity)) {
+    if (output_index >= output_capacity) {
       uint ignored = 0u;
       WAVEFRONT_RW_BUFFER(resources.counter_buffer).InterlockedOr(GPUUPBPCounterIndex::OverflowFlags * sizeof(uint), GPUUPBPOverflowFlags::Point, ignored);
       return;
     }
     upbp_store_density_point(output_buffer, output_index, upbp_pack_density_point(vertex));
-    const float radius = max(surface ? resources.iteration.surface_radius : max(resources.iteration.pp3d_radius, resources.iteration.pb2d_radius), 1.0e-7f);
-    upbp_store_density_aabb(output_aabb_buffer, output_index, vertex.position - radius, vertex.position + radius, output_index);
     return;
   }
   if (constants.work_queue_index != GPUUPBPDensityCompactMode::Beams) {
@@ -2201,7 +2210,6 @@ groupshared UPBPGPUPreparedBeam upbp_bb1d_prepared_camera;
 groupshared GPUUPBPInterval upbp_bb1d_camera_interval;
 groupshared GPUUPBPVertex upbp_bb1d_context_vertex;
 groupshared uint upbp_bb1d_query_valid;
-groupshared uint upbp_bb1d_exhausted_partition_count;
 groupshared GPUWavefrontCompactSpectralResponse upbp_bb1d_lane_contributions[64u];
 
 [numthreads(64, 1, 1)] void wavefront_upbp_bb1d_main(uint3 group_id : SV_GroupID, uint group_thread_index : SV_GroupIndex) {
@@ -2309,52 +2317,21 @@ groupshared GPUWavefrontCompactSpectralResponse upbp_bb1d_lane_contributions[64u
     ray.TMin = 0.0f;
     ray.TMax = upbp_bb1d_camera_beam.length;
     RayQuery<RAY_FLAG_FORCE_NON_OPAQUE> query;
-    const uint partition_acceleration_structure = upbp_load_bb1d_partition_acceleration_structure(wavefront_resources, group_thread_index);
-    const bool partition_valid = partition_acceleration_structure != kInvalidIndex;
-    const uint query_acceleration_structure = partition_valid ? partition_acceleration_structure : resources.beam_acceleration_structure;
-    const uint medium_mask = 1u << (upbp_bb1d_camera_interval.medium_index & 7u);
-    query.TraceRayInline(bindless_accel_structs[NonUniformResourceIndex(query_acceleration_structure)], RAY_FLAG_FORCE_NON_OPAQUE, medium_mask, ray);
-    for (;;) {
-      if (group_thread_index == 0u) {
-        upbp_bb1d_exhausted_partition_count = 0u;
-      }
-      GroupMemoryBarrierWithGroupSync();
-      bool candidate_found = false;
-      uint beam_index = kInvalidIndex;
-      UPBPGPUBeamBeamIntersection intersection = (UPBPGPUBeamBeamIntersection)0;
-      uint partition_exhausted = partition_valid ? 0u : 1u;
-      if (group_thread_index < kGPUUPBPBB1DPartitionCount) {
-        [loop] for (;;) {
-          if (partition_valid == false) {
-            break;
-          }
-          if (query.Proceed() == false) {
-            partition_exhausted = 1u;
-            break;
-          }
-          if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE) {
-            beam_index = query.CandidateInstanceID();
-            const GPUUPBPBeamReference reference = upbp_load_bb1d_beam_reference(resources.bb1d_beam_buffer, beam_index);
-            if (upbp_bb1d_density_candidate_intersects(resources, reference, upbp_bb1d_camera_beam, upbp_bb1d_camera_interval.medium_index, intersection)) {
-              candidate_found = true;
-              break;
-            }
+    const uint partition_acceleration_structure =
+      (group_thread_index < kGPUUPBPBB1DPartitionCount) ? upbp_load_bb1d_partition_acceleration_structure(wavefront_resources, group_thread_index) : kInvalidIndex;
+    if (partition_acceleration_structure != kInvalidIndex) {
+      const uint medium_mask = 1u << (upbp_bb1d_camera_interval.medium_index & 7u);
+      query.TraceRayInline(bindless_accel_structs[NonUniformResourceIndex(partition_acceleration_structure)], RAY_FLAG_FORCE_NON_OPAQUE, medium_mask, ray);
+      while (query.Proceed()) {
+        if (query.CandidateType() == CANDIDATE_PROCEDURAL_PRIMITIVE) {
+          const uint beam_index = query.CandidateInstanceID();
+          const GPUUPBPBeamReference reference = upbp_load_bb1d_beam_reference(resources.bb1d_beam_buffer, beam_index);
+          UPBPGPUBeamBeamIntersection intersection = (UPBPGPUBeamBeamIntersection)0;
+          if (upbp_bb1d_density_candidate_intersects(resources, reference, upbp_bb1d_camera_beam, upbp_bb1d_camera_interval.medium_index, intersection)) {
+            upbp_evaluate_bb1d_density_candidate(resources, upbp_bb1d_camera_beam, upbp_bb1d_prepared_camera, upbp_load_density_beam(resources.bb1d_beam_buffer, beam_index),
+              upbp_bb1d_camera_interval, upbp_bb1d_context_vertex, intersection, accumulated);
           }
         }
-      }
-      if (partition_exhausted != 0u) {
-        uint ignored = 0u;
-        InterlockedAdd(upbp_bb1d_exhausted_partition_count, 1u, ignored);
-      }
-      if (candidate_found) {
-        upbp_evaluate_bb1d_density_candidate(resources, upbp_bb1d_camera_beam, upbp_bb1d_prepared_camera, upbp_load_density_beam(resources.bb1d_beam_buffer, beam_index),
-          upbp_bb1d_camera_interval, upbp_bb1d_context_vertex, intersection, accumulated);
-      }
-      GroupMemoryBarrierWithGroupSync();
-      const bool all_partitions_exhausted = upbp_bb1d_exhausted_partition_count == kGPUUPBPBB1DPartitionCount;
-      GroupMemoryBarrierWithGroupSync();
-      if (all_partitions_exhausted) {
-        break;
       }
     }
   }

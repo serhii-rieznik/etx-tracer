@@ -31,6 +31,10 @@ set(RAYTRACER_SHARED_SOURCES
   app.cxx
   ui.hxx
   ui.cxx
+  spectrum_editor.hxx
+  spectrum_editor.cxx
+  ui_spectrum.cxx
+  app_spectrum.cxx
   platform_ui.hxx
   platform_ui.cxx
   render_context.hxx

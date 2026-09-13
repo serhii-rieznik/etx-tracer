@@ -2032,13 +2032,30 @@ bool ensure_cache_file_gpu(RHIContext& rhi, EnergyCompensationGpuPipeline& pipel
   }
 }
 
+void release_energy_compensation_interface_images(SceneData& data, const Scene::EnergyCompensationInterface& interface_data) {
+  data.images.remove(interface_data.directional_lut);
+  data.images.remove(interface_data.average_lut);
+  data.images.remove(interface_data.geometric_lut);
+  data.images.remove(interface_data.geometric_average_lut);
+  data.images.remove(interface_data.conductor_fms_lut);
+  data.images.remove(interface_data.probability_lut);
+}
+
 bool bind_energy_compensation_interface(SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode,
-  std::unordered_map<uint64_t, uint32_t>& interface_cache, TaskScheduler& scheduler, RHIContext* rhi, EnergyCompensationGpuPipeline* gpu_pipeline, uint32_t& out_interface_index) {
+  const std::vector<Scene::EnergyCompensationInterface>& previous_interfaces, std::unordered_map<uint64_t, uint32_t>& interface_cache, TaskScheduler& scheduler, RHIContext* rhi,
+  EnergyCompensationGpuPipeline* gpu_pipeline, uint32_t& out_interface_index) {
   const bool conductor = material_class == MaterialClass::Conductor;
   const uint64_t hash = hash_material_interface(data, material, material_class, cache_mode);
   const auto found = interface_cache.find(hash);
   if (found != interface_cache.end()) {
     out_interface_index = found->second;
+    return true;
+  }
+
+  const auto resident = data.energy_compensation_interface_cache.find(hash);
+  if (resident != data.energy_compensation_interface_cache.end()) {
+    out_interface_index = data.add_energy_compensation_interface(previous_interfaces[resident->second]);
+    interface_cache[hash] = out_interface_index;
     return true;
   }
 
@@ -2058,102 +2075,59 @@ bool bind_energy_compensation_interface(SceneData& data, const Material& materia
   interface_data.cache_mode = cache_mode;
   const uint32_t slice_count = thinfilm_lut_slice_count(material.thinfilm);
   interface_data.thinfilm_slice_count = slice_count;
-  if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
+  const bool spectral = cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar;
+  if (spectral) {
     interface_data.spectral_wavelength_count = kEnergyCompensationSpectralWavelengthCount;
     interface_data.spectral_shortest_wavelength = kShortestWavelength;
     interface_data.spectral_longest_wavelength = kLongestWavelength;
   }
-  if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
-    std::vector<float4> directional_pixels;
-    std::vector<float4> average_pixels;
-    std::vector<float4> geometric_pixels;
-    std::vector<float4> geometric_average_pixels;
-    std::vector<float4> conductor_fms_pixels;
-    std::vector<float4> probability_pixels;
-    const uint32_t directional_width = conductor ? kEnergyCompensationConductorLutSize : (kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize);
-    const uint32_t directional_height = conductor ? kEnergyCompensationConductorLutSize : kEnergyCompensationDielectricLutSize;
-    const uint32_t average_width = conductor ? kEnergyCompensationConductorLutSize : kEnergyCompensationDielectricAverageWidth;
-    const uint32_t average_height = conductor ? 1u : kEnergyCompensationDielectricLutSize;
-    const uint32_t packed_slice_count = slice_count * kEnergyCompensationSpectralWavelengthGroupCount;
-    if ((load_rgba32f_lut_slices(paths, directional_width, directional_height, packed_slice_count, directional_pixels, &GeneratedInterfacePaths::directional) == false) ||
-        (load_rgba32f_lut_slices(paths, average_width, average_height, packed_slice_count, average_pixels, &GeneratedInterfacePaths::average) == false)) {
-      return false;
-    }
 
-    interface_data.directional_lut =
-      data.images.add_from_data_3d(directional_pixels.data(), uint3{directional_width, directional_height, packed_slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-    interface_data.average_lut =
-      data.images.add_from_data_3d(average_pixels.data(), uint3{average_width, average_height, packed_slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-
-    if (conductor) {
-      if ((load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize, slice_count, geometric_pixels,
-             &GeneratedInterfacePaths::geometric) == false) ||
-          (load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, 1u, slice_count, geometric_average_pixels, &GeneratedInterfacePaths::geometric_average) == false) ||
-          (load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, 1u, packed_slice_count, conductor_fms_pixels, &GeneratedInterfacePaths::conductor_fms) == false)) {
-        return false;
-      }
-      interface_data.geometric_lut = data.images.add_from_data_3d(geometric_pixels.data(),
-        uint3{kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize, slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-      interface_data.geometric_average_lut = data.images.add_from_data_3d(geometric_average_pixels.data(), uint3{kEnergyCompensationConductorLutSize, 1u, slice_count},
-        Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-      interface_data.conductor_fms_lut = data.images.add_from_data_3d(conductor_fms_pixels.data(), uint3{kEnergyCompensationConductorLutSize, 1u, packed_slice_count},
-        Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-    } else {
-      if (load_rgba32f_lut_slices(paths, directional_width, directional_height, packed_slice_count, probability_pixels, &GeneratedInterfacePaths::probability) == false) {
-        return false;
-      }
-      interface_data.probability_lut = data.images.add_from_data_3d(probability_pixels.data(), uint3{directional_width, directional_height, packed_slice_count},
-        Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-    }
-  } else if (slice_count == 1u) {
-    interface_data.directional_lut = data.add_image(paths.directional.generic_string().c_str(), Image::SkipSRGBConversion);
-    interface_data.average_lut = data.add_image(paths.average.generic_string().c_str(), Image::SkipSRGBConversion);
-    interface_data.geometric_lut = conductor ? data.add_image(paths.geometric.generic_string().c_str(), Image::SkipSRGBConversion) : kInvalidIndex;
-    interface_data.geometric_average_lut = conductor ? data.add_image(paths.geometric_average.generic_string().c_str(), Image::SkipSRGBConversion) : kInvalidIndex;
-    interface_data.conductor_fms_lut = conductor ? data.add_image(paths.conductor_fms.generic_string().c_str(), Image::SkipSRGBConversion) : kInvalidIndex;
-  } else {
-    std::vector<float4> directional_pixels;
-    std::vector<float4> average_pixels;
-    std::vector<float4> geometric_pixels;
-    std::vector<float4> geometric_average_pixels;
-    std::vector<float4> conductor_fms_pixels;
-    const uint32_t directional_width = conductor ? kEnergyCompensationConductorLutSize : (kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize);
-    const uint32_t directional_height = conductor ? kEnergyCompensationConductorLutSize : kEnergyCompensationDielectricLutSize;
-    const uint32_t average_width = conductor ? kEnergyCompensationConductorLutSize : kEnergyCompensationDielectricAverageWidth;
-    const uint32_t average_height = conductor ? 1u : kEnergyCompensationDielectricLutSize;
-    if ((load_rgba32f_lut_slices(paths, directional_width, directional_height, slice_count, directional_pixels, &GeneratedInterfacePaths::directional) == false) ||
-        (load_rgba32f_lut_slices(paths, average_width, average_height, slice_count, average_pixels, &GeneratedInterfacePaths::average) == false)) {
-      return false;
-    }
-
-    interface_data.directional_lut =
-      data.images.add_from_data_3d(directional_pixels.data(), uint3{directional_width, directional_height, slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-    interface_data.average_lut =
-      data.images.add_from_data_3d(average_pixels.data(), uint3{average_width, average_height, slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-
-    if (conductor) {
-      if ((load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize, slice_count, geometric_pixels,
-             &GeneratedInterfacePaths::geometric) == false) ||
-          (load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, 1u, slice_count, geometric_average_pixels, &GeneratedInterfacePaths::geometric_average) == false) ||
-          (load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, 1u, slice_count, conductor_fms_pixels, &GeneratedInterfacePaths::conductor_fms) == false)) {
-        return false;
-      }
-      interface_data.geometric_lut = data.images.add_from_data_3d(geometric_pixels.data(),
-        uint3{kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize, slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-      interface_data.geometric_average_lut = data.images.add_from_data_3d(geometric_average_pixels.data(), uint3{kEnergyCompensationConductorLutSize, 1u, slice_count},
-        Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-      interface_data.conductor_fms_lut =
-        data.images.add_from_data_3d(conductor_fms_pixels.data(), uint3{kEnergyCompensationConductorLutSize, 1u, slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
-    } else {
-      interface_data.geometric_lut = kInvalidIndex;
-      interface_data.geometric_average_lut = kInvalidIndex;
-      interface_data.conductor_fms_lut = kInvalidIndex;
-    }
+  std::vector<float4> directional_pixels;
+  std::vector<float4> average_pixels;
+  std::vector<float4> geometric_pixels;
+  std::vector<float4> geometric_average_pixels;
+  std::vector<float4> conductor_fms_pixels;
+  std::vector<float4> probability_pixels;
+  const uint32_t directional_width = conductor ? kEnergyCompensationConductorLutSize : (kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize);
+  const uint32_t directional_height = conductor ? kEnergyCompensationConductorLutSize : kEnergyCompensationDielectricLutSize;
+  const uint32_t average_width = conductor ? kEnergyCompensationConductorLutSize : kEnergyCompensationDielectricAverageWidth;
+  const uint32_t average_height = conductor ? 1u : kEnergyCompensationDielectricLutSize;
+  const uint32_t packed_slice_count = spectral ? (slice_count * kEnergyCompensationSpectralWavelengthGroupCount) : slice_count;
+  if ((load_rgba32f_lut_slices(paths, directional_width, directional_height, packed_slice_count, directional_pixels, &GeneratedInterfacePaths::directional) == false) ||
+      (load_rgba32f_lut_slices(paths, average_width, average_height, packed_slice_count, average_pixels, &GeneratedInterfacePaths::average) == false)) {
+    return false;
   }
-  const uint32_t interface_index = data.add_energy_compensation_interface(interface_data);
-  interface_cache[hash] = interface_index;
-  out_interface_index = interface_index;
-  log::info("Bound material energy-compensation interface %u to %s", interface_index, paths.directional.generic_string().c_str());
+  if (conductor) {
+    if ((load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize, slice_count, geometric_pixels,
+           &GeneratedInterfacePaths::geometric) == false) ||
+        (load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, 1u, slice_count, geometric_average_pixels, &GeneratedInterfacePaths::geometric_average) == false) ||
+        (load_rgba32f_lut_slices(paths, kEnergyCompensationConductorLutSize, 1u, packed_slice_count, conductor_fms_pixels, &GeneratedInterfacePaths::conductor_fms) == false)) {
+      return false;
+    }
+  } else if (spectral &&
+             (load_rgba32f_lut_slices(paths, directional_width, directional_height, packed_slice_count, probability_pixels, &GeneratedInterfacePaths::probability) == false)) {
+    return false;
+  }
+
+  // Each interface owns its images. Load all slices before allocating so a failed read leaves no partial resources.
+  interface_data.directional_lut =
+    data.images.add_from_data_3d(directional_pixels.data(), uint3{directional_width, directional_height, packed_slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+  interface_data.average_lut =
+    data.images.add_from_data_3d(average_pixels.data(), uint3{average_width, average_height, packed_slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+  if (conductor) {
+    interface_data.geometric_lut = data.images.add_from_data_3d(geometric_pixels.data(),
+      uint3{kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize, slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+    interface_data.geometric_average_lut =
+      data.images.add_from_data_3d(geometric_average_pixels.data(), uint3{kEnergyCompensationConductorLutSize, 1u, slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+    interface_data.conductor_fms_lut = data.images.add_from_data_3d(conductor_fms_pixels.data(), uint3{kEnergyCompensationConductorLutSize, 1u, packed_slice_count},
+      Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+  } else if (spectral) {
+    interface_data.probability_lut =
+      data.images.add_from_data_3d(probability_pixels.data(), uint3{directional_width, directional_height, packed_slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+  }
+  out_interface_index = data.add_energy_compensation_interface(interface_data);
+  interface_cache[hash] = out_interface_index;
+  log::info("Bound material energy-compensation interface %u to %s", out_interface_index, paths.directional.generic_string().c_str());
   return true;
 }
 
@@ -2181,8 +2155,8 @@ bool ensure_energy_compensation_interfaces_impl(SceneData& data, TaskScheduler& 
     if (material.cls == MaterialClass::OpenPBR) {
       Material dielectric_material = material;
       dielectric_material.cls = MaterialClass::Dielectric;
-      const bool dielectric_bound = bind_energy_compensation_interface(data, dielectric_material, MaterialClass::Dielectric, cache_mode, interface_cache, scheduler, rhi,
-        &gpu_pipeline, material.energy_compensation_interface_index);
+      const bool dielectric_bound = bind_energy_compensation_interface(data, dielectric_material, MaterialClass::Dielectric, cache_mode, previous_interfaces, interface_cache,
+        scheduler, rhi, &gpu_pipeline, material.energy_compensation_interface_index);
 
       Material conductor_material = material;
       conductor_material.cls = MaterialClass::Conductor;
@@ -2195,8 +2169,8 @@ bool ensure_energy_compensation_interfaces_impl(SceneData& data, TaskScheduler& 
       }
       conductor_material.int_ior.eta_index = data.defaults.conductor_eta;
       conductor_material.int_ior.k_index = data.defaults.conductor_k;
-      const bool conductor_bound = bind_energy_compensation_interface(data, conductor_material, MaterialClass::Conductor, cache_mode, interface_cache, scheduler, rhi,
-        &gpu_pipeline, material.conductor_energy_compensation_interface_index);
+      const bool conductor_bound = bind_energy_compensation_interface(data, conductor_material, MaterialClass::Conductor, cache_mode, previous_interfaces, interface_cache,
+        scheduler, rhi, &gpu_pipeline, material.conductor_energy_compensation_interface_index);
       result = (dielectric_bound && conductor_bound) && result;
       continue;
     }
@@ -2206,7 +2180,7 @@ bool ensure_energy_compensation_interfaces_impl(SceneData& data, TaskScheduler& 
     }
 
     const uint32_t material_class = (material.cls == MaterialClass::Plastic) ? MaterialClass::Dielectric : material.cls;
-    result = bind_energy_compensation_interface(data, material, material_class, cache_mode, interface_cache, scheduler, rhi, &gpu_pipeline,
+    result = bind_energy_compensation_interface(data, material, material_class, cache_mode, previous_interfaces, interface_cache, scheduler, rhi, &gpu_pipeline,
                material.energy_compensation_interface_index) &&
              result;
   }
@@ -2216,11 +2190,23 @@ bool ensure_energy_compensation_interfaces_impl(SceneData& data, TaskScheduler& 
   }
 
   if (result == false) {
+    for (const auto& [hash, index] : interface_cache) {
+      if (data.energy_compensation_interface_cache.contains(hash) == false) {
+        release_energy_compensation_interface_images(data, data.energy_compensation_interfaces[index]);
+      }
+    }
     data.energy_compensation_interfaces = previous_interfaces;
     for (uint32_t material_index = 0u; material_index < data.materials.size(); ++material_index) {
       data.materials[material_index].energy_compensation_interface_index = previous_material_interfaces[material_index].x;
       data.materials[material_index].conductor_energy_compensation_interface_index = previous_material_interfaces[material_index].y;
     }
+  } else {
+    for (const auto& [hash, index] : data.energy_compensation_interface_cache) {
+      if (interface_cache.contains(hash) == false) {
+        release_energy_compensation_interface_images(data, previous_interfaces[index]);
+      }
+    }
+    data.energy_compensation_interface_cache = std::move(interface_cache);
   }
 
   return result;

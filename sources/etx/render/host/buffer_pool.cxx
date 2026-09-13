@@ -36,7 +36,7 @@ void BufferPool::destroy(BufferHandle handle) {
 
   slot->alive = false;
   slot->used = 0u;
-  slot->bytes.clear();
+  std::vector<uint8_t>().swap(slot->bytes);
   slot->name.clear();
   slot->generation += 1u;
 

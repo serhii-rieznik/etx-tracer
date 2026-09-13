@@ -119,6 +119,7 @@ struct GPURaytracingRenderer : public Renderer {
   void set_wavefront_steps_per_render(uint32_t value);
   void set_wavefront_auto_tuning(bool value);
   void set_batch_coarse_progress(bool value);
+  void wait_for_pending_work(RHIContext& ctx);
   void set_kernel_timing_enabled(bool value);
   const RendererKernelTimingStats& kernel_timing_stats() const {
     return (_preserved_timing_stats_valid && (_render_timing_active == false)) ? _preserved_kernel_timing_stats : _kernel_timing_stats;
@@ -260,6 +261,24 @@ struct GPURaytracingRenderer : public Renderer {
     TraceBounce = 1u,
     FinalizeSample = 2u,
     UPBPEvaluateLightBatch = 3u,
+    UPBPEvaluateDensity = 4u,
+  };
+
+  struct UPBPDensityQueryWork {
+    PipelineStage stage = PipelineStage::UPBPDirectHit;
+    uint32_t count = 0u;
+    uint32_t mode = 0u;
+    uint32_t partition_offset = 0u;
+    bool cooperative = false;
+  };
+
+  struct DensityDispatch {
+    RHICommandBuffer command = {};
+    PipelineStage stage = PipelineStage::UPBPDirectHit;
+    bool timed = false;
+    bool measured = false;
+    uint32_t dispatch_count = 0u;
+    uint32_t item_count = 0u;
   };
 
   struct UPBPBuffer {
@@ -270,9 +289,7 @@ struct GPURaytracingRenderer : public Renderer {
 
   struct UPBPDensityBatchResources {
     UPBPBuffer surface_point_buffer = {};
-    UPBPBuffer surface_point_aabb_buffer = {};
     UPBPBuffer medium_point_buffer = {};
-    UPBPBuffer medium_point_aabb_buffer = {};
     UPBPBuffer beam_buffer = {};
     UPBPBuffer event_buffer = {};
     uint32_t surface_point_count = 0u;
@@ -365,6 +382,11 @@ struct GPURaytracingRenderer : public Renderer {
     bool density_cache_ready = false;
     bool camera_phase_started = false;
     bool render_reset_pending = false;
+    std::vector<UPBPDensityQueryWork> density_query_work = {};
+    size_t density_query_work_index = 0u;
+    uint32_t density_query_offset = 0u;
+    GPURTConstants density_constants = {};
+    std::array<double, static_cast<size_t>(PipelineStage::Count)> density_query_ms = {};
     RHIResourceState counter_readback_state = RHIResourceState::Undefined;
     RHIResourceState bpt_light_vertex_state = RHIResourceState::Undefined;
     RHIResourceState bpt_light_path_state_state = RHIResourceState::Undefined;
@@ -372,6 +394,9 @@ struct GPURaytracingRenderer : public Renderer {
 
   void destroy_scene_buffers(RHIContext& ctx);
   void destroy_wavefront_buffers(RHIContext& ctx);
+  RHIResult finish_density_dispatch(RHIContext& ctx, bool wait);
+  void submit_density_dispatch(RHIContext& ctx);
+  void advance_density_dispatches(RHIContext& ctx);
   void destroy_upbp_buffers(RHIDevice& device);
   uint64_t destroy_upbp_resident_path_buffers(RHIDevice& device);
   uint64_t destroy_upbp_completed_camera_wavefront_buffers(RHIDevice& device);
@@ -390,6 +415,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool ensure_upbp_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t global_path_count, uint32_t resident_light_capacity, uint32_t resident_camera_capacity,
     uint32_t camera_batch_index, uint32_t camera_batch_offset, uint32_t camera_batch_count);
   bool update_upbp_iteration_resources(RHIDevice& device, const SceneRepresentation& scene, uint32_t global_path_count);
+  bool reserve_upbp_history(RHIContext& ctx, const SceneRepresentation& scene, const uint32_t* counters, uint32_t active_paths, uint32_t bounce_count, bool from_camera);
   bool ensure_light_vertex_capacity(RHIContext& ctx, uint32_t required_vertex_capacity);
   void request_pipeline_preparation(const SceneRepresentation& scene, const char* reason, bool force_reload);
   void poll_preparation_tasks(RHIContext& ctx, bool wait_for_active = false);
@@ -587,6 +613,8 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _frame_index = 0u;
   uint32_t _sample_index = 0u;
   WavefrontRenderStep _wavefront_render_step = WavefrontRenderStep::InitSample;
+  std::array<DensityDispatch, 2u> _density_dispatches = {};
+  uint32_t _density_dispatch_count = 0u;
   uint32_t _wavefront_path_iteration = 0u;
   uint32_t _wavefront_hard_iteration_cap = 0u;
   uint32_t _wavefront_camera_queue_count = 0u;

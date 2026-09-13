@@ -468,10 +468,10 @@ ETX_SHARED_INLINE bool vcm_handle_sampled_medium(const Scene& scene, const Mediu
   ETX_VALIDATE(pdf_rev);
 
   // Update MIS recurrence for non-delta event with cos_theta = 1 for media
-  // Medium vertices are not mergeable: exclude merging competitors in d_vm_base
+  // Medium vertices retain BPT competitors but do not add a surface-merging competitor.
   state.d_vc_base = (1.0f / pdf_fwd) * (state.d_vc_base * pdf_rev + state.d_vcm);
   ETX_VALIDATE(state.d_vc_base);
-  state.d_vm_base = (1.0f / pdf_fwd) * (state.d_vm_base * pdf_rev + 0.0f);
+  state.d_vm_base = (1.0f / pdf_fwd) * (state.d_vm_base * pdf_rev + state.d_vcm);
   state.d_surface = (1.0f / pdf_fwd) * state.d_surface * pdf_rev;
   ETX_VALIDATE(state.d_vm_base);
   state.d_vcm = 1.0f / pdf_fwd;
@@ -1075,7 +1075,7 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
 
     state.d_vc_base = (1.0f / pdf_fwd) * (state.d_vc_base * pdf_rev + state.d_vcm);
     ETX_VALIDATE(state.d_vc_base);
-    state.d_vm_base = (1.0f / pdf_fwd) * (state.d_vm_base * pdf_rev + 0.0f);
+    state.d_vm_base = (1.0f / pdf_fwd) * (state.d_vm_base * pdf_rev + state.d_vcm);
     state.d_surface = (1.0f / pdf_fwd) * state.d_surface * pdf_rev;
     ETX_VALIDATE(state.d_vm_base);
     state.d_vcm = 1.0f / pdf_fwd;
@@ -1254,7 +1254,7 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
 
     state.d_vc_base = (1.0f / pdf_fwd) * (state.d_vc_base * pdf_rev + state.d_vcm);
     ETX_VALIDATE(state.d_vc_base);
-    state.d_vm_base = (1.0f / pdf_fwd) * (state.d_vm_base * pdf_rev + 0.0f);
+    state.d_vm_base = (1.0f / pdf_fwd) * (state.d_vm_base * pdf_rev + state.d_vcm);
     state.d_surface = (1.0f / pdf_fwd) * state.d_surface * pdf_rev;
     ETX_VALIDATE(state.d_vm_base);
     state.d_vcm = 1.0f / pdf_fwd;

@@ -309,7 +309,7 @@ void PlatformUI::setup(UI& ui) {
   [view_menu addItem:[NSMenuItem separatorItem]];
   g_scene_objects_item = add_command_item(view_menu, @"Scene Explorer", MenuCommand::ToggleSceneObjects, @"1", NSEventModifierFlagCommand | NSEventModifierFlagOption);
   g_properties_item = add_command_item(view_menu, @"Inspector", MenuCommand::ToggleProperties, @"2", NSEventModifierFlagCommand | NSEventModifierFlagOption);
-  g_diagnostics_item = add_command_item(view_menu, @"Diagnostics", MenuCommand::ToggleMemoryDiagnostics, @"3", NSEventModifierFlagCommand | NSEventModifierFlagOption);
+  g_diagnostics_item = add_command_item(view_menu, @"Bottom panel", MenuCommand::ToggleMemoryDiagnostics, @"3", NSEventModifierFlagCommand | NSEventModifierFlagOption);
   [view_menu addItem:[NSMenuItem separatorItem]];
   add_command_item(view_menu, @"Reset Workspace Layout", MenuCommand::ResetLayout, @"");
 

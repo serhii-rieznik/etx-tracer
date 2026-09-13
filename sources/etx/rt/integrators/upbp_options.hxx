@@ -27,7 +27,7 @@ struct UPBPOptions {
   float radius_alpha = 0.75f;
   uint32_t maximum_boundary_count = 64u;
   uint32_t maximum_null_events_per_interval = 1024u;
-  uint32_t maximum_bb1d_light_path_count = 0u;
+  uint32_t maximum_bb1d_light_path_count = 49152u;
 
   bool enabled(const UPBPTechnique technique) const {
     return (technique_mask & static_cast<uint32_t>(technique)) != 0u;

@@ -2589,9 +2589,6 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
 
   const bool time_limited = options.time_seconds > 0.0;
   const uint32_t target_sample_count = time_limited ? std::numeric_limits<uint32_t>::max() : max(1u, session.scene.data().options.samples);
-  const uint64_t frames_per_sample_budget = std::max<uint64_t>(4096u, static_cast<uint64_t>(session.scene.data().options.max_path_length) + 2u);
-  const uint64_t max_gpu_frame_count_u64 = std::max<uint64_t>(1024u, static_cast<uint64_t>(target_sample_count) * frames_per_sample_budget);
-  const uint32_t max_gpu_frame_count = static_cast<uint32_t>(std::min<uint64_t>(max_gpu_frame_count_u64, std::numeric_limits<uint32_t>::max()));
   const auto render_begin = std::chrono::steady_clock::now();
   double total_frame_time_ms = 0.0;
   double first_frame_time_ms = 0.0;
@@ -2599,7 +2596,7 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   uint32_t last_logged_sample_count = session.gpu_renderer.completed_samples();
   bool finish_requested = false;
   auto last_progress_log_time = render_begin;
-  while (session.gpu_renderer.is_running() && (frame_index < max_gpu_frame_count)) {
+  while (session.gpu_renderer.is_running()) {
     const auto frame_begin = std::chrono::steady_clock::now();
     const auto begin_frame_begin = std::chrono::steady_clock::now();
     session.render_context.begin_frame();
@@ -2608,6 +2605,7 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     frame_data.dt = 0.0f;
     const auto frame_render_begin = std::chrono::steady_clock::now();
     session.gpu_renderer.render(session.render_context.context(), session.scene, frame_data);
+    session.gpu_renderer.wait_for_pending_work(session.render_context.context());
     const auto frame_render_end = std::chrono::steady_clock::now();
     if (session.gpu_renderer.runtime_failed()) {
       session.render_context.end_frame();
@@ -2657,11 +2655,11 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   }
   const uint32_t completed_sample_count = session.gpu_renderer.completed_samples();
   if (time_limited && ((finish_requested == false) || (completed_sample_count == 0u) || session.gpu_renderer.is_running())) {
-    log::error("GPU batch render did not complete a sample after the %.3fs time budget within %u frames", options.time_seconds, max_gpu_frame_count);
+    log::error("GPU batch render did not complete a sample after the %.3fs time budget", options.time_seconds);
     return false;
   }
   if ((time_limited == false) && (completed_sample_count < target_sample_count)) {
-    log::error("GPU batch render did not reach target samples (%u / %u) within %u frames", session.gpu_renderer.completed_samples(), target_sample_count, max_gpu_frame_count);
+    log::error("GPU batch render did not reach target samples (%u / %u)", session.gpu_renderer.completed_samples(), target_sample_count);
     return false;
   }
   const auto render_end = std::chrono::steady_clock::now();

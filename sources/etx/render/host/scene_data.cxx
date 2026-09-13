@@ -95,7 +95,7 @@ uint64_t hash_hierarchy_attachments(const SceneHierarchy& hierarchy) {
 
 }  // namespace
 
-SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transport_bounds, const Camera& camera, const bool has_media) {
+SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transport_bounds, const Camera& camera, const bool has_exterior_media) {
   float3 camera_extent = {};
   if ((camera.cls == Camera::Class::Perspective) && (camera.lens_radius > kEpsilon) && (camera.focal_distance > kEpsilon)) {
     camera_extent = camera.lens_radius * float3{
@@ -109,7 +109,7 @@ SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transpo
   float3 bounds_max = max(transport_bounds.p_max, camera.position + camera_extent);
   // Only media can create primary scattering vertices beyond the geometry and camera bounds.
   // Keep those vertices inside the domain used to terminate subsequent unbounded segments.
-  if (has_media && (camera.cls == Camera::Class::Perspective) && (camera.clip_far > 0.0f)) {
+  if (has_exterior_media && (camera.cls == Camera::Class::Perspective) && (camera.clip_far > 0.0f)) {
     const float far_horizontal_scale = camera.clip_far * camera.tan_half_fov;
     const float far_vertical_scale = far_horizontal_scale / camera.aspect;
     float3 far_extent = {
@@ -132,7 +132,7 @@ SceneBoundingSphere compute_transport_bounding_sphere(const BoundingBox& transpo
   const float padding = max(kRayEpsilon, coordinate_scale * kRayEpsilon);
   const float padded_radius = radius + padding;
   // Medium transport can occupy the full termination sphere, beyond surface bounds.
-  const float3 emission_half_extent = has_media ? float3{padded_radius, padded_radius, padded_radius} : bounds_max - center + float3{padding, padding, padding};
+  const float3 emission_half_extent = has_exterior_media ? float3{padded_radius, padded_radius, padded_radius} : bounds_max - center + float3{padding, padding, padding};
   return {center, padded_radius, emission_half_extent};
 }
 
@@ -196,6 +196,25 @@ BoundingBox SceneData::compute_bounding_volumes() const {
   }
 
   return bbox;
+}
+
+bool SceneData::has_exterior_medium_transport(const Camera& camera) const {
+  if (camera.medium_index < mediums_vector.size()) {
+    return true;
+  }
+  for (const Material& material : materials) {
+    if (material.ext_medium < mediums_vector.size()) {
+      return true;
+    }
+  }
+  for (const EmitterProfile& emitter : emitter_profiles) {
+    if (emitter.medium_index < mediums_vector.size()) {
+      return true;
+    }
+  }
+  // Interior media are confined by the scene's material boundaries. Explicit camera,
+  // emitter or exterior assignments can instead start transport outside those bounds.
+  return false;
 }
 
 BoundingBox SceneData::compute_transport_bounding_volumes() const {
@@ -263,6 +282,7 @@ void SceneData::clear(TaskScheduler& scheduler) {
   images_vector.clear();
   mediums_vector.clear();
   energy_compensation_interfaces.clear();
+  energy_compensation_interface_cache.clear();
   hierarchy.clear();
   spectrum_names.clear();
   material_mapping.clear();
@@ -294,6 +314,7 @@ void SceneData::swap_contents(SceneData& other) {
   swap(images_vector, other.images_vector);
   swap(mediums_vector, other.mediums_vector);
   swap(energy_compensation_interfaces, other.energy_compensation_interfaces);
+  swap(energy_compensation_interface_cache, other.energy_compensation_interface_cache);
   swap(hierarchy, other.hierarchy);
   swap(buffer_pool, other.buffer_pool);
   images.swap_contents(other.images);
