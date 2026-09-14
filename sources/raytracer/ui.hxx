@@ -547,7 +547,6 @@ struct UI {
   SpectrumCurveEditor _spectrum_curve;
   SpectrumTarget _spectrum_target;
   SpectralDistribution _spectrum_source;
-  bool _spectrum_live_preview = true;
   bool _spectrum_preview_pending = false;
   bool _spectrum_tab_requested = false;
   void build_spectrum_editor(SceneRepresentation& scene_rep);

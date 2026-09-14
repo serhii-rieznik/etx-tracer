@@ -23,6 +23,7 @@ struct SpectrumDocument {
   SpectralDistribution distribution() const;
   float evaluate(float wavelength) const;
   bool simplify(float maximum_error);
+  bool normalize();
 };
 
 struct SpectrumCurveEditor {
@@ -33,7 +34,6 @@ struct SpectrumCurveEditor {
   double plot_min = 0.0;
   double plot_max = 1.0;
   bool modified = false;
-  bool source_update_requested = false;
   std::string error;
 
   bool build();
@@ -46,7 +46,7 @@ struct SpectrumCurveEditor {
   float _drag_max_wavelength = kLongestWavelength;
   std::string _pending_load_path;
   int _save_class = 0;
-  float _simplify_maximum_error = 0.0001f;
+  float _simplify_maximum_error = 0.01f;
 };
 
 }  // namespace etx

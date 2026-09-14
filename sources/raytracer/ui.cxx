@@ -854,7 +854,6 @@ void UI::apply_resource_remapping(SelectionKind kind, const std::vector<uint32_t
     if (_spectrum_target.material_index == kInvalidIndex) {
       _spectrum_target.spectrum_index = kInvalidIndex;
       _spectrum_preview_pending = false;
-      _spectrum_curve.source_update_requested = false;
     }
   }
   if (_selection.kind != kind) {
@@ -3351,7 +3350,6 @@ void UI::reset_selection() {
   _spectrum_editors.clear();
   _spectrum_target = {};
   _spectrum_preview_pending = false;
-  _spectrum_curve.source_update_requested = false;
   _material_anisotropy.clear();
   _selected_material_positions.clear();
   _pending_material_selection_indices.clear();

@@ -17,7 +17,6 @@ void UI::edit_spectrum_button(SceneRepresentation& scene_rep, const char* label,
   const uint32_t material_index = _editing_material_indices->front();
   _spectrum_target = {material_index, spectrum_index, channel};
   read_spectrum_source(scene_rep.data());
-  _spectrum_live_preview = true;
   _spectrum_tab_requested = true;
   _ui_setup |= UIMemoryDiagnostics;
 }
@@ -25,7 +24,6 @@ void UI::edit_spectrum_button(SceneRepresentation& scene_rep, const char* label,
 void UI::read_spectrum_source(const SceneData& scene_data) {
   const SpectralDistribution& spectrum = scene_data.spectrum_values[_spectrum_target.spectrum_index];
   _spectrum_curve.modified = false;
-  _spectrum_curve.source_update_requested = false;
   _spectrum_curve.error.clear();
   auto& document = _spectrum_curve.document;
   document.classification = "reflectance";
@@ -68,7 +66,6 @@ void UI::build_spectrum_editor(SceneRepresentation& scene_rep) {
     if ((slot == nullptr) || (*slot >= scene_data.spectrum_values.size()) || scene_data.spectrum_values[*slot].empty()) {
       _spectrum_target.spectrum_index = kInvalidIndex;
       _spectrum_preview_pending = false;
-      _spectrum_curve.source_update_requested = false;
       _spectrum_curve.error = "The source spectrum is no longer available.";
     } else {
       const SpectralDistribution& source = scene_data.spectrum_values[*slot];
@@ -101,7 +98,6 @@ void UI::build_spectrum_editor(SceneRepresentation& scene_rep) {
     _spectrum_target.material_index = kInvalidIndex;
     _spectrum_target.spectrum_index = kInvalidIndex;
     _spectrum_preview_pending = false;
-    _spectrum_curve.source_update_requested = false;
   }
   ImGui::SeparatorText("Material assignment");
   ImGui::TextUnformatted("Material");
@@ -115,7 +111,6 @@ void UI::build_spectrum_editor(SceneRepresentation& scene_rep) {
         _spectrum_target.material_index = index;
         _spectrum_target.spectrum_index = kInvalidIndex;
         _spectrum_preview_pending = false;
-        _spectrum_curve.source_update_requested = false;
       }
       ImGui::PopID();
     }
@@ -130,12 +125,7 @@ void UI::build_spectrum_editor(SceneRepresentation& scene_rep) {
     _spectrum_target.channel = static_cast<SpectrumTarget::Channel>(channel);
     _spectrum_target.spectrum_index = kInvalidIndex;
     _spectrum_preview_pending = false;
-    _spectrum_curve.source_update_requested = false;
   }
-  if (_spectrum_target.spectrum_index == kInvalidIndex) {
-    _spectrum_curve.source_update_requested = false;
-  }
-  ImGui::Checkbox("Live preview", &_spectrum_live_preview);
   const bool can_apply = (_spectrum_target.material_index < scene_data.materials.size()) && (_spectrum_target.channel != SpectrumTarget::Channel::None) &&
                          static_cast<bool>(callbacks.spectrum_applied) && (preparation_active() == false);
   ImGui::BeginDisabled(can_apply == false);
@@ -144,8 +134,8 @@ void UI::build_spectrum_editor(SceneRepresentation& scene_rep) {
   const bool ior_target = (_spectrum_target.channel == SpectrumTarget::Channel::InsideEta) || (_spectrum_target.channel == SpectrumTarget::Channel::InsideK) ||
                           (_spectrum_target.channel == SpectrumTarget::Channel::OutsideEta) || (_spectrum_target.channel == SpectrumTarget::Channel::OutsideK) ||
                           (_spectrum_target.channel == SpectrumTarget::Channel::ThinfilmEta) || (_spectrum_target.channel == SpectrumTarget::Channel::ThinfilmK);
-  const bool preview_ready = _spectrum_live_preview && _spectrum_preview_pending && ((ior_target == false) || (ImGui::IsMouseDown(ImGuiMouseButton_Left) == false));
-  if (can_apply && (apply || _spectrum_curve.source_update_requested || preview_ready)) {
+  const bool preview_ready = _spectrum_preview_pending && ((ior_target == false) || (ImGui::IsMouseDown(ImGuiMouseButton_Left) == false));
+  if (can_apply && (apply || preview_ready)) {
     if (_spectrum_curve.document.validate(_spectrum_curve.error)) {
       const SpectrumTarget result = callbacks.spectrum_applied(_spectrum_target, _spectrum_curve.document.distribution());
       if (result.spectrum_index != kInvalidIndex) {
@@ -157,11 +147,9 @@ void UI::build_spectrum_editor(SceneRepresentation& scene_rep) {
       }
     }
     _spectrum_preview_pending = false;
-    _spectrum_curve.source_update_requested = false;
   }
   if (_spectrum_target.spectrum_index != kInvalidIndex) {
-    ImGui::TextDisabled(
-      _spectrum_live_preview ? "Live preview active" : (_spectrum_preview_pending ? "Preview paused; click Assign to update" : "Source up to date; live preview paused"));
+    ImGui::TextDisabled(_spectrum_preview_pending ? "Changes pending" : "Changes apply automatically");
   }
   ImGui::TextWrapped("Objects sharing this material update together.");
   ImGui::EndChild();

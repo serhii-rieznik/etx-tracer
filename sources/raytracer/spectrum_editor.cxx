@@ -113,6 +113,10 @@ bool SpectrumDocument::simplify(float maximum_error) {
   if ((points.size() <= 2u) || (std::isfinite(maximum_error) == false) || (maximum_error < 0.0f)) {
     return false;
   }
+  const auto bounds = std::minmax_element(points.begin(), points.end(), [](const float2& a, const float2& b) {
+    return a.y < b.y;
+  });
+  const double allowed_error = double(maximum_error) * (double(bounds.second->y) - bounds.first->y);
   const size_t count = points.size();
   std::vector<size_t> point_counts(count, count);
   std::vector<size_t> previous(count);
@@ -129,8 +133,8 @@ bool SpectrumDocument::simplify(float maximum_error) {
         point_counts[end] = point_counts[begin] + 1u;
         previous[end] = begin;
       }
-      min_slope = std::max(min_slope, (height - maximum_error) / width);
-      max_slope = std::min(max_slope, (height + maximum_error) / width);
+      min_slope = std::max(min_slope, (height - allowed_error) / width);
+      max_slope = std::min(max_slope, (height + allowed_error) / width);
       if (min_slope > max_slope) {
         break;
       }
@@ -146,6 +150,19 @@ bool SpectrumDocument::simplify(float maximum_error) {
     index = previous[index];
   }
   points = std::move(simplified);
+  return true;
+}
+
+bool SpectrumDocument::normalize() {
+  const float peak = std::max_element(points.begin(), points.end(), [](const float2& a, const float2& b) {
+    return a.y < b.y;
+  })->y;
+  if (peak <= 1.0f) {
+    return false;
+  }
+  for (float2& point : points) {
+    point.y /= peak;
+  }
   return true;
 }
 
@@ -329,7 +346,84 @@ bool SpectrumCurveEditor::build() {
   bool changed = false;
   bool loaded_this_frame = false;
   const bool wide = ImGui::GetContentRegionAvail().x >= (ImGui::GetFontSize() * 55.0f);
-  if (ImGui::Button("Load SPD...")) {
+  const bool load = ImGui::Button("Load SPD...");
+  ImGui::SameLine();
+  const bool save = ImGui::Button("Save SPD...");
+  ImGui::SameLine();
+  ImGui::BeginDisabled(document.points.size() <= 2u);
+  const bool simplify = ImGui::Button("Simplify...");
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  const bool normalize = ImGui::Button("Normalize");
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Scale reflectance down to a peak of 1.\nLower peaks remain unchanged.");
+  }
+
+  ImGui::SetNextItemWidth(wide ? ImGui::GetFontSize() * 9.0f : ImGui::GetContentRegionAvail().x * 0.55f);
+  const bool select = ImGui::InputFloat("Wavelength (nm)", &wavelength, 0.0f, 0.0f, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue);
+  if (select || ImGui::IsItemDeactivatedAfterEdit()) {
+    selected_point = -1;
+    if (validate_point({wavelength, 0.0f}, error)) {
+      const auto position = std::lower_bound(document.points.begin(), document.points.end(), wavelength, [](const float2& point, float x) {
+        return point.x < x;
+      });
+      if ((position != document.points.end()) && (position->x == wavelength)) {
+        select_point(static_cast<int>(position - document.points.begin()));
+      } else {
+        value = document.evaluate(wavelength);
+      }
+      error.clear();
+    }
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Select an existing wavelength, or enter a new wavelength and use Add point. Drag a point to move it.");
+  }
+  if (wide) {
+    ImGui::SameLine();
+  }
+  ImGui::SetNextItemWidth(wide ? ImGui::GetFontSize() * 7.0f : ImGui::GetContentRegionAvail().x * 0.55f);
+  const bool commit = ImGui::InputFloat("Value", &value, 0.0f, 0.0f, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue);
+  if ((commit || ImGui::IsItemDeactivatedAfterEdit()) && (selected_point >= 0) && validate_point({wavelength, value}, error)) {
+    float& power = document.points[selected_point].y;
+    changed |= power != value;
+    power = value;
+    error.clear();
+  }
+  if (wide) {
+    ImGui::SameLine();
+  }
+  if (ImGui::Button("Add point") && validate_point({wavelength, value}, error)) {
+    const auto position = std::lower_bound(document.points.begin(), document.points.end(), wavelength, [](const float2& point, float x) {
+      return point.x < x;
+    });
+    const int index = static_cast<int>(position - document.points.begin());
+    if ((position != document.points.end()) && (position->x == wavelength)) {
+      select_point(index);
+    } else {
+      document.points.insert(position, {wavelength, value});
+      select_point(index);
+      changed = true;
+    }
+    error.clear();
+  }
+  ImGui::SameLine();
+  const bool can_delete = (selected_point > 0) && ((static_cast<size_t>(selected_point) + 1u) < document.points.size());
+  ImGui::BeginDisabled(can_delete == false);
+  if (ImGui::Button("Delete point") && can_delete) {
+    document.points.erase(document.points.begin() + selected_point);
+    select_point(std::min(selected_point, static_cast<int>(document.points.size()) - 1));
+    error.clear();
+    changed = true;
+  }
+  ImGui::EndDisabled();
+  if (normalize && document.normalize()) {
+    value = selected_point >= 0 ? document.points[selected_point].y : document.evaluate(wavelength);
+    error.clear();
+    changed = true;
+  }
+  modified |= changed;
+
+  if (load) {
     const std::string path = open_file("spd", nullptr);
     if (path.empty() == false) {
       if (modified) {
@@ -341,8 +435,7 @@ bool SpectrumCurveEditor::build() {
       }
     }
   }
-  ImGui::SameLine();
-  if (ImGui::Button("Save SPD...")) {
+  if (save) {
     _save_class = 0;
     error.clear();
     ImGui::OpenPopup("Save spectrum");
@@ -375,17 +468,14 @@ bool SpectrumCurveEditor::build() {
     }
     ImGui::EndPopup();
   }
-  ImGui::SameLine();
-  ImGui::BeginDisabled(document.points.size() <= 2u);
-  if (ImGui::Button("Simplify...")) {
+  if (simplify) {
     ImGui::OpenPopup("Simplify spectrum");
   }
-  ImGui::EndDisabled();
   if (ImGui::BeginPopupModal("Simplify spectrum", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::Text("%zu control points", document.points.size());
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);
     ImGui::InputFloat("Maximum error", &_simplify_maximum_error, 0.0f, 0.0f, "%.6g");
-    ImGui::TextUnformatted("Absolute value error; endpoints are retained.");
+    ImGui::TextUnformatted("Fraction of the curve's value range; endpoints are retained.");
     const bool valid_error = std::isfinite(_simplify_maximum_error) && (_simplify_maximum_error >= 0.0f);
     ImGui::BeginDisabled(valid_error == false);
     if (ImGui::Button("Simplify")) {
@@ -393,7 +483,6 @@ bool SpectrumCurveEditor::build() {
         select_point(0);
         fit();
         changed = true;
-        source_update_requested = true;
       }
       error.clear();
       ImGui::CloseCurrentPopup();
@@ -424,7 +513,7 @@ bool SpectrumCurveEditor::build() {
     ImGui::TextWrapped("%s%s", document.title.c_str(), modified ? " *" : "");
   }
   const ImVec2 origin = ImGui::GetCursorScreenPos();
-  const float footer_height = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetFrameHeightWithSpacing() * 2.0f;
+  const float footer_height = ImGui::GetTextLineHeightWithSpacing();
   const float plot_height = wide ? std::max(ImGui::GetFontSize() * 6.0f, ImGui::GetContentRegionAvail().y - footer_height) : ImGui::GetFontSize() * 12.0f;
   const ImVec2 size(std::max(120.0f, ImGui::GetContentRegionAvail().x), plot_height);
   const float margin = ImGui::GetFontSize() * 0.6f;
@@ -446,8 +535,11 @@ bool SpectrumCurveEditor::build() {
   const float min_wavelength = _drag_min_wavelength;
   const float max_wavelength = _drag_max_wavelength;
   const auto to_screen = [&](const float2& p) {
-    return ImVec2(lo.x + (p.x - min_wavelength) / (max_wavelength - min_wavelength) * (hi.x - lo.x),
+    return ImVec2(hi.x - (p.x - min_wavelength) / (max_wavelength - min_wavelength) * (hi.x - lo.x),
       hi.y - static_cast<float>(std::clamp((double(p.y) - plot_min) / (plot_max - plot_min), 0.0, 1.0)) * (hi.y - lo.y));
+  };
+  const auto to_wavelength = [&](float x) {
+    return min_wavelength + (hi.x - x) / (hi.x - lo.x) * (max_wavelength - min_wavelength);
   };
   ImDrawList* draw = ImGui::GetWindowDrawList();
   draw->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), ImGui::GetColorU32(ImGuiCol_FrameBg), ImGui::GetStyle().FrameRounding);
@@ -464,7 +556,7 @@ bool SpectrumCurveEditor::build() {
     if ((a.x == b.x) && (a.y == b.y)) {
       return;
     }
-    const int steps = std::max(1, static_cast<int>(std::ceil((b.x - a.x) / 4.0f)));
+    const int steps = std::max(1, static_cast<int>(std::ceil(std::abs(b.x - a.x) / 4.0f)));
     ImVec2 start = a;
     for (int i = 1; i <= steps; ++i) {
       const float t = float(i) / float(steps);
@@ -487,7 +579,7 @@ bool SpectrumCurveEditor::build() {
     const float distance_squared = (mouse.x - closest.x) * (mouse.x - closest.x) + (mouse.y - closest.y) * (mouse.y - closest.y);
     if (distance_squared < line_distance) {
       line_distance = distance_squared;
-      insertion_wavelength = std::clamp(min_wavelength + (closest.x - lo.x) / (hi.x - lo.x) * (max_wavelength - min_wavelength), min_wavelength, max_wavelength);
+      insertion_wavelength = std::clamp(to_wavelength(closest.x), min_wavelength, max_wavelength);
     }
   };
   ImVec2 previous = to_screen({min_wavelength, document.points.front().y});
@@ -508,7 +600,7 @@ bool SpectrumCurveEditor::build() {
   draw_segment(previous, to_screen({max_wavelength, document.points.back().y}));
   for (int i = first_vertex; i < draw->VtxBuffer.Size; ++i) {
     ImDrawVert& vertex = draw->VtxBuffer[i];
-    const float wavelength = min_wavelength + (vertex.pos.x - lo.x) / (hi.x - lo.x) * (max_wavelength - min_wavelength);
+    const float wavelength = to_wavelength(vertex.pos.x);
     vertex.col = (vertex.col & IM_COL32_A_MASK) | (wavelength_color(wavelength) & ~IM_COL32_A_MASK);
   }
   for (int i = 0; i < static_cast<int>(document.points.size()); ++i) {
@@ -546,8 +638,7 @@ bool SpectrumCurveEditor::build() {
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     const float lower = selected_point == 0 ? min_wavelength : std::nextafter(document.points[selected_point - 1].x, max_wavelength);
     const float upper = (selected_point + 1) == static_cast<int>(document.points.size()) ? max_wavelength : std::nextafter(document.points[selected_point + 1].x, 0.0f);
-    float2 point = {std::clamp(min_wavelength + (mouse.x - lo.x) / (hi.x - lo.x) * (max_wavelength - min_wavelength), lower, upper),
-      static_cast<float>(std::max(0.0, plot_min + (hi.y - mouse.y) / (hi.y - lo.y) * (plot_max - plot_min)))};
+    float2 point = {std::clamp(to_wavelength(mouse.x), lower, upper), static_cast<float>(std::max(0.0, plot_min + (hi.y - mouse.y) / (hi.y - lo.y) * (plot_max - plot_min)))};
     if (validate_point(point, error)) {
       const float2 old = document.points[selected_point];
       document.points[selected_point] = point;
@@ -556,68 +647,11 @@ bool SpectrumCurveEditor::build() {
       changed |= (old.x != point.x) || (old.y != point.y);
     }
   }
-  ImGui::TextDisabled("%.6g - %.6g nm | %.6g - %.6g | %zu points", min_wavelength, max_wavelength, plot_min, plot_max, document.points.size());
+  ImGui::TextDisabled("%.6g - %.6g nm | %.6g - %.6g | %zu points", max_wavelength, min_wavelength, plot_min, plot_max, document.points.size());
   if (wide) {
     ImGui::SameLine();
     ImGui::TextDisabled("%s%s", document.title.c_str(), modified ? " *" : "");
-  } else {
-    ImGui::TextWrapped("Click the line to add a point. Enter updates the selected point; Add creates a point.");
   }
-  ImGui::SetNextItemWidth(wide ? ImGui::GetFontSize() * 9.0f : ImGui::GetContentRegionAvail().x * 0.55f);
-  bool commit = ImGui::InputFloat("Wavelength (nm)", &wavelength, 0.0f, 0.0f, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue);
-  if (wide) {
-    ImGui::SameLine();
-  }
-  ImGui::SetNextItemWidth(wide ? ImGui::GetFontSize() * 7.0f : ImGui::GetContentRegionAvail().x * 0.55f);
-  commit |= ImGui::InputFloat("Value", &value, 0.0f, 0.0f, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue);
-  const auto commit_point = [&](bool insert) {
-    const float2 point = {wavelength, value};
-    if (validate_point(point, error) == false) {
-      return;
-    }
-    const auto position = std::lower_bound(document.points.begin(), document.points.end(), wavelength, [](const float2& p, float x) {
-      return p.x < x;
-    });
-    int index = static_cast<int>(position - document.points.begin());
-    if ((position != document.points.end()) && (position->x == wavelength) && (insert || (index != selected_point))) {
-      error = "A point already exists at this wavelength. Select it to edit.";
-      return;
-    }
-    if (insert == false) {
-      const float2 previous = document.points[selected_point];
-      if ((previous.x == point.x) && (previous.y == point.y)) {
-        error.clear();
-        return;
-      }
-      document.points.erase(document.points.begin() + selected_point);
-      if (index > selected_point) {
-        --index;
-      }
-    }
-    document.points.insert(document.points.begin() + index, point);
-    select_point(index);
-    error.clear();
-    changed = true;
-  };
-  if (commit && (selected_point >= 0)) {
-    commit_point(false);
-  }
-  if (wide) {
-    ImGui::SameLine();
-  }
-  if (ImGui::Button("Add point")) {
-    commit_point(true);
-  }
-  ImGui::SameLine();
-  const bool can_delete = (selected_point > 0) && ((static_cast<size_t>(selected_point) + 1u) < document.points.size());
-  ImGui::BeginDisabled(can_delete == false);
-  if (ImGui::Button("Delete point") && can_delete) {
-    document.points.erase(document.points.begin() + selected_point);
-    select_point(std::min(selected_point, static_cast<int>(document.points.size()) - 1));
-    error.clear();
-    changed = true;
-  }
-  ImGui::EndDisabled();
   if (changed && (loaded_this_frame == false)) {
     modified = true;
   }
