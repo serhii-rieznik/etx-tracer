@@ -311,8 +311,10 @@ struct UI {
   bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&);
   bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&, const std::vector<uint32_t>& material_indices);
   bool build_medium(uint32_t medium_index, Medium& medium, SpectralDistribution* absorption, SpectralDistribution* scattering);
-  bool spectrum_picker(const char* widget_id, const std::string& editor_key, SpectralDistribution& spd, bool linear, bool scale, bool show_color = true, bool show_scale = true);
-  bool spectrum_picker(SceneRepresentation& scene_rep, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color = true, bool show_scale = true);
+  bool spectrum_picker(const char* widget_id, const std::string& editor_key, SpectralDistribution& spd, SpectralDistribution::Class spectrum_class, bool linear, bool scale,
+    bool show_color = true, bool show_scale = true);
+  bool spectrum_picker(SceneRepresentation& scene_rep, const char* widget_id, uint32_t spd_index, SpectralDistribution::Class spectrum_class, bool linear, bool scale,
+    bool show_color = true, bool show_scale = true);
   bool image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options);
   bool sampled_image_picker(SceneRepresentation& scene_rep, const char* label, SampledImage& image, uint32_t image_options);
   bool angle_editor(const char* label, float2& angles, float min_azimuth, float max_azimuth, float min_elevation, float max_elevation, float pole_threshold);

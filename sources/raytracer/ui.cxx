@@ -1627,7 +1627,7 @@ bool UI::emission_picker(SceneRepresentation& scene, const char* label, const ch
       changed = true;
     }
   }
-  changed |= spectrum_picker(scene, color_name.c_str(), spectrum_index, true, true, editor_state.mode == SpectrumEditorState::Mode::Color, true);
+  changed |= spectrum_picker(scene, color_name.c_str(), spectrum_index, SpectralDistribution::Illuminant, true, true, editor_state.mode == SpectrumEditorState::Mode::Color, true);
 
   int matched_index = -1;
   if ((spectrum_index < scene.data().spectrum_values.size())) {
@@ -1870,7 +1870,8 @@ bool UI::sampled_image_picker(SceneRepresentation& scene_rep, const char* label,
   return changed;
 }
 
-bool UI::spectrum_picker(SceneRepresentation& scene, const char* widget_id, uint32_t spd_index, bool linear, bool scale, bool show_color, bool show_scale) {
+bool UI::spectrum_picker(SceneRepresentation& scene, const char* widget_id, uint32_t spd_index, SpectralDistribution::Class spectrum_class, bool linear, bool scale,
+  bool show_color, bool show_scale) {
   if (scene.data().spectrum_values.empty()) {
     return false;
   }
@@ -1880,12 +1881,13 @@ bool UI::spectrum_picker(SceneRepresentation& scene, const char* widget_id, uint
   SpectralDistribution& spd = scene.data().spectrum_values[spd_index];
   const std::string editor_key = std::string("spectrum:") + std::to_string(spd_index) + ":" + widget_id;
   ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-  const bool result = spectrum_picker(widget_id, editor_key, spd, linear, scale, show_color, show_scale);
+  const bool result = spectrum_picker(widget_id, editor_key, spd, spectrum_class, linear, scale, show_color, show_scale);
   ImGui::PopItemWidth();
   return result;
 }
 
-bool UI::spectrum_picker(const char* widget_id, const std::string& editor_key, SpectralDistribution& spd, bool linear, bool scale, bool show_color, bool show_scale) {
+bool UI::spectrum_picker(const char* widget_id, const std::string& editor_key, SpectralDistribution& spd, SpectralDistribution::Class spectrum_class, bool linear, bool scale,
+  bool show_color, bool show_scale) {
   scale = scale && linear;
 
   auto [state_it, state_inserted] = _spectrum_editors.emplace(editor_key, SpectrumEditorState{});
@@ -1962,7 +1964,7 @@ bool UI::spectrum_picker(const char* widget_id, const std::string& editor_key, S
 
     if (from_color) {
       value *= applied_scale;
-      spd = SpectralDistribution::rgb_luminance(value);
+      spd = spectrum_class == SpectralDistribution::Illuminant ? SpectralDistribution::rgb_luminance(value) : SpectralDistribution::rgb_reflectance(value);
       editor_state.scale = applied_scale;
     } else if (scale) {
       if (editor_state.mode == SpectrumEditorState::Mode::Temperature) {
@@ -2729,7 +2731,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           return value.reflectance.spectrum_index;
         }),
           [&]() {
-            return spectrum_picker(scene_rep, "Reflectance", material.reflectance.spectrum_index, false, false);
+            return spectrum_picker(scene_rep, "Reflectance", material.reflectance.spectrum_index, SpectralDistribution::Reflectance, false, false);
           });
         changed |= mixed_control(material_values_mixed([](const Material& value) {
           return value.reflectance.image_index;
@@ -2748,7 +2750,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             return value.scattering.spectrum_index;
           }),
             [&]() {
-              return spectrum_picker(scene_rep, "Scattering", material.scattering.spectrum_index, false, false);
+              return spectrum_picker(scene_rep, "Scattering", material.scattering.spectrum_index, SpectralDistribution::Reflectance, false, false);
             });
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.scattering.image_index;
@@ -3119,7 +3121,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
               ImGui::TextUnformatted("Distance");
               ImGui::SameLine();
               edit_spectrum_button(scene_rep, "Edit##subsurface", SpectrumTarget::Channel::Subsurface, material.subsurface.spectrum_index);
-              return spectrum_picker(scene_rep, "Subsurface Distance", material.subsurface.spectrum_index, true, true);
+              return spectrum_picker(scene_rep, "Subsurface Distance", material.subsurface.spectrum_index, SpectralDistribution::Reflectance, true, true);
             });
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.subsurface.image_index;
@@ -3234,14 +3236,14 @@ bool UI::build_medium(uint32_t medium_index, Medium& m, SpectralDistribution* ab
   ImGui::Text("Absorption");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   const std::string absorption_editor_key = "medium:" + std::to_string(medium_index) + ":absorption";
-  if ((absorption != nullptr) && spectrum_picker("Absorption##medium_absorption", absorption_editor_key, *absorption, true, true)) {
+  if ((absorption != nullptr) && spectrum_picker("Absorption##medium_absorption", absorption_editor_key, *absorption, SpectralDistribution::Reflectance, true, true)) {
     changed = true;
   }
 
   ImGui::Text("Scattering");
   ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
   const std::string scattering_editor_key = "medium:" + std::to_string(medium_index) + ":scattering";
-  if ((scattering != nullptr) && spectrum_picker("Scattering##medium_scattering", scattering_editor_key, *scattering, true, true)) {
+  if ((scattering != nullptr) && spectrum_picker("Scattering##medium_scattering", scattering_editor_key, *scattering, SpectralDistribution::Reflectance, true, true)) {
     changed = true;
   }
 
