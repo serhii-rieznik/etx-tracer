@@ -279,6 +279,7 @@ void SceneData::clear(TaskScheduler& scheduler) {
   emitter_profiles.clear();
   emitter_names.clear();
   spectrum_values.clear();
+  spectrum_sources.clear();
   images_vector.clear();
   mediums_vector.clear();
   energy_compensation_interfaces.clear();
@@ -311,6 +312,7 @@ void SceneData::swap_contents(SceneData& other) {
   swap(emitter_profiles, other.emitter_profiles);
   swap(emitter_names, other.emitter_names);
   swap(spectrum_values, other.spectrum_values);
+  swap(spectrum_sources, other.spectrum_sources);
   swap(images_vector, other.images_vector);
   swap(mediums_vector, other.mediums_vector);
   swap(energy_compensation_interfaces, other.energy_compensation_interfaces);
@@ -336,10 +338,67 @@ void SceneData::swap_contents(SceneData& other) {
   swap(_medium_attachment_nodes_scratch, other._medium_attachment_nodes_scratch);
 }
 
+SpectralDistribution SpectrumSource::output() const {
+  if ((std::isfinite(strength) == false) || (strength < 0.0f) || (base.valid() == false))
+    return {};
+  const float3 scaled = base.integrated() * strength;
+  if ((std::isfinite(scaled.x) == false) || (std::isfinite(scaled.y) == false) || (std::isfinite(scaled.z) == false))
+    return {};
+  for (uint32_t i = 0u; i < base.spectral_entry_count; ++i) {
+    if (std::isfinite(base.spectral_entries[i].power * strength) == false)
+      return {};
+  }
+  SpectralDistribution result = base;
+  result.scale(strength);
+  return result;
+}
+
+void SpectrumSource::generate() {
+  if (mode == Mode::Temperature) {
+    base = SpectralDistribution::from_normalized_black_body(temperature, 1.0f);
+    if (kind == Kind::Reflectance) {
+      float3 tint = max(base.integrated(), float3{0.0f});
+      const float peak = max(tint.x, max(tint.y, tint.z));
+      if (peak > 0.0f) {
+        tint /= peak;
+      }
+      base = SpectralDistribution::rgb_reflectance(tint);
+    }
+  } else if (mode == Mode::Color) {
+    base = kind == Kind::IOR        ? SpectralDistribution::constant(color.x)
+           : kind == Kind::Emission ? SpectralDistribution::rgb_luminance(color)
+                                    : SpectralDistribution::rgb_reflectance(color);
+    if (kind == Kind::IOR) {
+      const float2 values[] = {{kShortestWavelength, color.x}, {kLongestWavelength, color.x}};
+      base = SpectralDistribution::from_samples(values, 2u);
+      base.integrated_value = rgb_to_xyz(base.integrated());
+    }
+  }
+}
+
+bool SpectrumSource::matches(const SpectralDistribution& spectrum) const {
+  const SpectralDistribution expected = output();
+  return (expected.spectral_entry_count == spectrum.spectral_entry_count) &&
+         (std::memcmp(&expected.integrated_value, &spectrum.integrated_value, sizeof(expected.integrated_value)) == 0) &&
+         (std::memcmp(expected.spectral_entries, spectrum.spectral_entries, spectrum.spectral_entry_count * sizeof(SpectralDistribution::Entry)) == 0);
+}
+
+uint32_t SceneData::copy_spectrum(uint32_t index) {
+  if (index >= spectrum_values.size()) {
+    return kInvalidIndex;
+  }
+  const uint32_t copy = add_spectrum(spectrum_values[index]);
+  if (const auto source = spectrum_sources.find(index); (source != spectrum_sources.end()) && source->second.matches(spectrum_values[index])) {
+    spectrum_sources[copy] = source->second;
+  }
+  return copy;
+}
+
 uint32_t SceneData::add_spectrum(const char* source_id, const SpectralDistribution& spd) {
   ETX_CRITICAL((source_id != nullptr) && (source_id[0] != 0));
 
   uint32_t index = uint32_t(spectrum_values.size());
+  spectrum_sources.erase(index);
   spectrum_values.emplace_back(spd);
   spectrum_names.emplace_back(source_id);
   return index;

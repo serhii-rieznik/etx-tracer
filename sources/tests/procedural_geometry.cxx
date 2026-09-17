@@ -665,8 +665,19 @@ bool test_native_scene_hierarchy_round_trip() {
   if (check_condition(source.data().cameras.empty() == false, "default camera is available for hierarchy round trip") == false) {
     return false;
   }
-  const uint32_t first_camera_node = hierarchy.add_node("first-camera", parent_index, {});
-  hierarchy.add_attachment(first_camera_node, {etx::SceneAttachment::Type::Camera, 0u, 0u, 0u});
+  uint32_t first_camera_node = kInvalidIndex;
+  for (uint32_t node_index = 0u; node_index < hierarchy.nodes.size(); ++node_index) {
+    const auto& node = hierarchy.nodes[node_index];
+    for (uint32_t offset = 0u; offset < node.attachment_count; ++offset) {
+      const auto& attachment = hierarchy.attachments[node.attachment_offset + offset];
+      if ((attachment.type == etx::SceneAttachment::Type::Camera) && (attachment.resource_index == 0u)) {
+        first_camera_node = node_index;
+      }
+    }
+  }
+  if (check_condition((first_camera_node != kInvalidIndex) && hierarchy.set_parent(first_camera_node, parent_index), "existing camera parent assigned") == false) {
+    return false;
+  }
   etx::SceneData::CameraInfo second_camera = source.data().cameras[0];
   second_camera.id = "second-camera";
   second_camera.active = false;

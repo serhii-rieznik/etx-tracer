@@ -139,24 +139,9 @@ inline bool upbp_walk_subsurface_segment(const Raytracing& rt, const Scene& scen
     },
     exit_intersection);
   if (exit_found == false) {
-    Intersection other_intersection = {};
-    const Sampler initial_surface_sampler = intersection_sampler;
-    const bool other_surface_found = upbp_trace_with_medium_origin_retry(
-      ray,
-      [&rt, &scene, &intersection_sampler](const Ray& trace_ray, Intersection& trace_intersection) {
-        return rt.trace(scene, trace_ray, trace_intersection, intersection_sampler);
-      },
-      [&intersection_sampler, &initial_surface_sampler]() {
-        intersection_sampler = initial_surface_sampler;
-      },
-      other_intersection);
-    if (other_surface_found) {
-      result.intersection = other_intersection;
-      result.failure = UPBPSceneSegmentFailure::SubsurfaceExitMaterialMismatch;
-      return false;
-    }
-    result.failure = UPBPSceneSegmentFailure::SubsurfaceExitNotFound;
-    return false;
+    result.segment.weight = {subsurface_state.tracking.spect, 0.0f};
+    result.terminal = UPBPSceneSegmentTerminal::Absorb;
+    return true;
   }
   if ((exit_intersection.t <= 0.0f) || (std::isfinite(exit_intersection.t) == false)) {
     result.intersection = exit_intersection;
@@ -306,7 +291,8 @@ inline bool upbp_build_subpath(const Raytracing& rt, const Scene& scene, const U
     result.active_medium_index = scene_segment.active_medium_index;
     result.terminal = scene_segment.terminal;
     if ((scene_segment.terminal == UPBPSceneSegmentTerminal::Miss) || (scene_segment.terminal == UPBPSceneSegmentTerminal::Absorb)) {
-      if (result.path.append_terminal_segment(scene_segment.segment) == false) {
+      const bool absorbed_without_interval = (scene_segment.terminal == UPBPSceneSegmentTerminal::Absorb) && scene_segment.segment.intervals.empty();
+      if ((absorbed_without_interval == false) && (result.path.append_terminal_segment(scene_segment.segment) == false)) {
         result.failure = UPBPSubpathFailure::PathCapacity;
         return false;
       }

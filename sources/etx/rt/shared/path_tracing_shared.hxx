@@ -106,7 +106,12 @@ ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, c
     }
 
     Intersection local_i;
-    bool intersection_found = rt.trace_material(scene, ray, in_intersection.material_index, local_i, smp);
+    Ray exit_ray = ray;
+    exit_ray.max_t = kMaxFloat;
+    if (rt.trace_material(scene, exit_ray, in_intersection.material_index, local_i, smp) == false) {
+      return GatherResult::Failed;
+    }
+    const bool intersection_found = local_i.t <= ray.max_t;
     if (intersection_found) {
       ray.max_t = local_i.t;
     }

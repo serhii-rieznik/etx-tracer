@@ -1,21 +1,43 @@
 #pragma once
 
-#include <etx/render/shared/material.hxx>
+#include <etx/render/host/scene_data.hxx>
 
 namespace etx {
 
 struct SpectrumTarget {
   uint32_t* spectrum_slot(Material& material) const;
+  uint32_t* spectrum_slot(SceneData& scene) const;
 
   uint32_t material_index = kInvalidIndex;
   uint32_t spectrum_index = kInvalidIndex;
-  enum class Channel : uint32_t { None, Scattering, Reflectance, Emission, InsideEta, InsideK, OutsideEta, OutsideK, Subsurface, ThinfilmEta, ThinfilmK } channel = Channel::None;
+  enum class Channel : uint32_t {
+    None,
+    Scattering,
+    Reflectance,
+    Emission,
+    InsideEta,
+    InsideK,
+    OutsideEta,
+    OutsideK,
+    Subsurface,
+    ThinfilmEta,
+    ThinfilmK,
+    Absorption
+  } channel = Channel::None;
+  uint32_t medium_index = kInvalidIndex;
+  uint32_t emitter_index = kInvalidIndex;
+};
+
+struct SpectrumEdit {
+  std::vector<SpectrumTarget> targets;
+  SpectrumSource source;
 };
 
 struct SpectrumDocument {
   std::vector<float2> points = {{kShortestWavelength, 0.5f}, {kLongestWavelength, 0.5f}};
   std::string classification = "reflectance";
   std::string title = "Custom spectrum";
+  std::string path;
 
   bool validate(std::string& error) const;
   bool load(const std::string& path, std::string& error);
@@ -41,11 +63,8 @@ struct SpectrumCurveEditor {
   void fit();
 
  private:
-  bool load_file(const std::string& path);
   float _drag_min_wavelength = kShortestWavelength;
   float _drag_max_wavelength = kLongestWavelength;
-  std::string _pending_load_path;
-  int _save_class = 0;
   float _simplify_maximum_error = 0.01f;
 };
 

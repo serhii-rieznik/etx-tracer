@@ -82,14 +82,13 @@ struct RTApplication {
   SceneResourceEditResult on_material_deleted(uint32_t index);
   std::string on_material_renamed(uint32_t index, const std::string&);
   void on_material_changed(uint32_t index);
-  SpectrumTarget on_spectrum_applied(const SpectrumTarget& target, const SpectralDistribution& spectrum);
+  bool on_spectrum_applied(const std::vector<SpectrumEdit>& edits);
   SceneResourceEditResult on_medium_added();
   SceneResourceEditResult on_medium_duplicated(uint32_t index);
   SceneResourceEditResult on_medium_deleted(uint32_t index);
   std::string on_medium_renamed(uint32_t index, const std::string&);
   void on_medium_changed(uint32_t index);
-  void on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index);
-  uint32_t on_make_mesh_material_unique(uint32_t mesh_index, uint32_t material_index);
+  SceneEditResult on_mesh_material_changed(uint32_t node_index, uint32_t mesh_index, uint32_t material_index, bool make_unique);
   void on_emitter_changed(uint32_t index);
   SceneResourceEditResult on_emitter_added(uint32_t type);
   SceneResourceEditResult on_emitter_duplicated(uint32_t index);
@@ -101,7 +100,7 @@ struct RTApplication {
   std::string on_camera_renamed(uint32_t index, const std::string& name);
   SceneEditResult on_empty_node_added();
   SceneEditResult on_primitive_added(ScenePrimitive primitive);
-  SceneEditResult on_node_duplicated(uint32_t node_index);
+  SceneEditResult on_node_duplicated(uint32_t node_index, NodeDuplicateMode mode);
   SceneEditResult on_node_deleted(uint32_t node_index);
   SceneEditResult on_node_reparented(uint32_t node_index, uint32_t parent_index);
   SceneEditResult on_node_enabled_changed(uint32_t node_index, bool enabled);

@@ -17,6 +17,25 @@
 #include <unordered_map>
 namespace etx {
 
+struct SpectrumSource {
+  enum class Mode : uint32_t { Spectrum, Color, Temperature };
+  enum class Kind : uint32_t { Reflectance, Emission, Coefficient, IOR };
+  Mode mode = Mode::Spectrum;
+  Kind kind = Kind::Reflectance;
+  float3 color = {0.5f, 0.5f, 0.5f};
+  float temperature = 6500.0f;
+  float strength = 1.0f;
+  SpectralDistribution base = {};
+  std::vector<float2> points;
+  std::string title = "Custom spectrum";
+  std::string classification;
+  std::string path;
+
+  SpectralDistribution output() const;
+  void generate();
+  bool matches(const SpectralDistribution& spectrum) const;
+};
+
 enum class SceneUpdateScope : uint32_t {
   None = 0u,
   Camera = 1u,
@@ -179,6 +198,7 @@ struct SceneData {
   std::vector<EmitterProfile> emitter_profiles;
   std::vector<std::string> emitter_names;
   std::vector<SpectralDistribution> spectrum_values;
+  std::unordered_map<uint32_t, SpectrumSource> spectrum_sources;
   std::vector<Image> images_vector;
   std::vector<Medium> mediums_vector;
   std::vector<Scene::EnergyCompensationInterface> energy_compensation_interfaces;
@@ -224,6 +244,7 @@ struct SceneData {
   uint32_t add_spectrum(const SpectralDistribution& spd);
   uint32_t add_spectrum();
   uint32_t find_spectrum(const char* id) const;
+  uint32_t copy_spectrum(uint32_t index);
 
   bool has_material(const char* name) const;
   uint32_t add_material(const char* name);

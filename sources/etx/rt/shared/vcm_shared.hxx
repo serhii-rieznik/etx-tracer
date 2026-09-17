@@ -1140,6 +1140,10 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   }
   const bool subsurface_sampled = ss_gather_result == subsurface::GatherResult::Succeeded;
 
+  if (subsurface_path && (subsurface_sampled == false)) {
+    return false;
+  }
+
   if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler
     if (subsurface_sampled) {
       Intersection out_isect = ss_gather.intersection;
@@ -1172,10 +1176,6 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
 
   if (is_connectible && options.merge_vertices() && (state.total_path_depth + 1 <= scene.options.max_path_length)) {
     state.merged += spatial_grid.gather(scene, state, options, intersection, iteration);
-  }
-
-  if (subsurface_path && (subsurface_sampled == false)) {
-    return false;
   }
 
   return vcm_next_ray(scene, PathSource::Camera, options, state, iteration, intersection, bsdf_data, bsdf_sample, subsurface_sampled);
@@ -1309,6 +1309,10 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
   }
   const bool subsurface_sampled = ss_gather_result == subsurface::GatherResult::Succeeded;
 
+  if (subsurface_path && (subsurface_sampled == false)) {
+    return result;
+  }
+
   if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler
     result.add_vertex = true;
     result.vertex_to_add = {state, intersection, path_index};
@@ -1351,10 +1355,6 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
     bsdf_sample.pdf = fabsf(dot(bsdf_sample.w_o, intersection.nrm)) / kPi;
     bsdf_sample.eta = 1.0f;
     bsdf_data = BSDFData{state.spect, state.medium_index, PathSource::Light, intersection, intersection.w_i};
-  }
-
-  if (subsurface_path && (subsurface_sampled == false)) {
-    return result;
   }
 
   if (vcm_next_ray(scene, PathSource::Light, options, state, iteration, intersection, bsdf_data, bsdf_sample, subsurface_sampled) == false) {

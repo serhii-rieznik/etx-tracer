@@ -791,8 +791,7 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
   if (scene_path_mode_is_upbp()) {
     GPUUPBPResources upbp_resources = upbp_load_resources(wavefront_load_resources());
     GPUUPBPPathState upbp_path_state = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, from_camera, path_index));
-    if (((upbp_path_state.flags & GPUUPBPPathStateFlags::Valid) == 0u) ||
-        (upbp_begin_transport_segment(upbp_resources, from_camera, path_index, spect, upbp_path_state) == false)) {
+    if ((upbp_path_state.flags & GPUUPBPPathStateFlags::Valid) == 0u) {
       upbp_mark_failed_path(upbp_resources, from_camera, path_index, GPUUPBPPathFailure::BeginSegment);
       return false;
     }
@@ -801,18 +800,11 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
     exit_ray.TMax = kMaxFloat;
     TraceSurfaceResult surface_hit = (TraceSurfaceResult)0;
     if (wavefront_trace_subsurface_material_with_origin_retry(exit_ray, subsurface_state.material_index, seed, surface_hit) == false) {
-      TraceSurfaceResult other_surface_hit = (TraceSurfaceResult)0;
-      if (wavefront_trace_subsurface_material_with_origin_retry(exit_ray, kInvalidIndex, seed, other_surface_hit)) {
-        if (upbp_mark_failed_path(upbp_resources, from_camera, path_index, GPUUPBPPathFailure::SubsurfaceExitMaterialMismatch)) {
-          RWByteAddressBuffer counters = WAVEFRONT_RW_BUFFER(upbp_resources.counter_buffer);
-          counters.Store(GPUUPBPCounterIndex::FirstFailureDetail0 * 4u, subsurface_state.material_index);
-          counters.Store(GPUUPBPCounterIndex::FirstFailureDetail1 * 4u, other_surface_hit.tri.material_index);
-          counters.Store(GPUUPBPCounterIndex::FirstFailureDetail2 * 4u, upbp_path_state.path_length);
-          counters.Store(GPUUPBPCounterIndex::FirstFailureDetail3 * 4u, upbp_path_segment_count(upbp_path_state));
-        }
-        return false;
-      }
-      upbp_mark_failed_path(upbp_resources, from_camera, path_index, GPUUPBPPathFailure::SubsurfaceExitNotFound);
+      GPUUPBPVertex vertex = upbp_load_vertex(upbp_resources.vertex_buffer, upbp_path_state.last_vertex_index);
+      vertex.flags &= ~GPUUPBPVertexFlags::HasDeparture;
+      upbp_store_vertex(upbp_resources.vertex_buffer, upbp_path_state.last_vertex_index, vertex);
+      subsurface_state.flags = 0u;
+      result.transmittance = spectral_response_make(spect, 0.0f);
       return false;
     }
     if ((surface_hit.hit_t <= 0.0f) || (isfinite(surface_hit.hit_t) == false)) {
@@ -822,6 +814,11 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
         counters.Store(GPUUPBPCounterIndex::FirstFailureDetail1 * 4u, surface_hit.triangle_index);
         counters.Store(GPUUPBPCounterIndex::FirstFailureDetail2 * 4u, surface_hit.instance_index);
       }
+      return false;
+    }
+
+    if (upbp_begin_transport_segment(upbp_resources, from_camera, path_index, spect, upbp_path_state) == false) {
+      upbp_mark_failed_path(upbp_resources, from_camera, path_index, GPUUPBPPathFailure::BeginSegment);
       return false;
     }
 
@@ -878,10 +875,15 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
 
   RayDesc subsurface_ray = ray;
   subsurface_ray.TMin = max(kRayEpsilon, ray.TMin);
-  subsurface_ray.TMax = sampled_distance;
+  subsurface_ray.TMax = kMaxFloat;
 
   TraceSurfaceResult surface_hit = (TraceSurfaceResult)0;
-  bool intersection_found = wavefront_trace_subsurface_material(subsurface_ray, subsurface_state.material_index, seed, surface_hit);
+  if (wavefront_trace_subsurface_material(subsurface_ray, subsurface_state.material_index, seed, surface_hit) == false) {
+    subsurface_state.flags = 0u;
+    result.transmittance = spectral_response_make(spect, 0.0f);
+    return false;
+  }
+  const bool intersection_found = surface_hit.hit_t <= sampled_distance;
   float segment_distance = intersection_found ? surface_hit.hit_t : sampled_distance;
   SpectralResponse tr = spectral_response_exp(spectral_response_mul(subsurface_state.extinction, -segment_distance));
   SpectralResponse pdf_factor = tr;

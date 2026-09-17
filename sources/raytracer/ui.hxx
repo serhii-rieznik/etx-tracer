@@ -144,6 +144,9 @@ struct UI {
   }
 
   bool handle_event(const sapp_event*);
+  void invalidate_scene_resources() {
+    _mesh_materials_dirty = true;
+  }
   void execute_menu_command(MenuCommand command, uint32_t argument = 0u, const std::string& value = {});
 
   void set_embedded_menu_enabled(bool value) {
@@ -239,14 +242,13 @@ struct UI {
     std::function<SceneResourceEditResult(uint32_t)> material_deleted;
     std::function<std::string(uint32_t, const std::string&)> material_renamed;
     std::function<void(uint32_t)> material_changed;
-    std::function<SpectrumTarget(const SpectrumTarget&, const SpectralDistribution&)> spectrum_applied;
+    std::function<bool(const std::vector<SpectrumEdit>&)> spectrum_applied;
     std::function<SceneResourceEditResult()> medium_added;
     std::function<SceneResourceEditResult(uint32_t)> medium_duplicated;
     std::function<SceneResourceEditResult(uint32_t)> medium_deleted;
     std::function<std::string(uint32_t, const std::string&)> medium_renamed;
     std::function<void(uint32_t)> medium_changed;
-    std::function<void(uint32_t, uint32_t)> mesh_material_changed;          // mesh_index, new_material_index
-    std::function<uint32_t(uint32_t, uint32_t)> mesh_material_made_unique;  // mesh_index, source_material_index
+    std::function<SceneEditResult(uint32_t, uint32_t, uint32_t, bool)> mesh_material_changed;
     std::function<void(uint32_t)> emitter_changed;
     std::function<SceneResourceEditResult(uint32_t)> emitter_added;  // 0=environment, 1=directional, 2=atmosphere
     std::function<SceneResourceEditResult(uint32_t)> emitter_duplicated;
@@ -258,7 +260,7 @@ struct UI {
     std::function<std::string(uint32_t, const std::string&)> camera_renamed;
     std::function<SceneEditResult()> empty_node_added;
     std::function<SceneEditResult(ScenePrimitive)> primitive_added;
-    std::function<SceneEditResult(uint32_t)> node_duplicated;
+    std::function<SceneEditResult(uint32_t, NodeDuplicateMode)> node_duplicated;
     std::function<SceneEditResult(uint32_t)> node_deleted;
     std::function<SceneEditResult(uint32_t, uint32_t)> node_reparented;
     std::function<SceneEditResult(uint32_t, bool)> node_enabled_changed;
@@ -310,17 +312,16 @@ struct UI {
   void load_image() const;
   bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&);
   bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&, const std::vector<uint32_t>& material_indices);
-  bool build_medium(uint32_t medium_index, Medium& medium, SpectralDistribution* absorption, SpectralDistribution* scattering);
-  bool spectrum_picker(const char* widget_id, const std::string& editor_key, SpectralDistribution& spd, SpectralDistribution::Class spectrum_class, bool linear, bool scale,
-    bool show_color = true, bool show_scale = true);
-  bool spectrum_picker(SceneRepresentation& scene_rep, const char* widget_id, uint32_t spd_index, SpectralDistribution::Class spectrum_class, bool linear, bool scale,
-    bool show_color = true, bool show_scale = true);
+  bool build_medium(SceneRepresentation& scene_rep, uint32_t medium_index, Medium& medium);
+  bool material_spectrum_control(SceneRepresentation& scene_rep, const char* label, SpectrumTarget::Channel channel, SpectrumSource::Kind kind);
+  bool spectrum_control(SceneRepresentation& scene_rep, const char* label, const std::vector<SpectrumTarget>& targets, SpectrumSource::Kind kind, bool expanded);
+  void flush_spectrum_changes(SceneRepresentation& scene_rep);
   bool image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options);
   bool sampled_image_picker(SceneRepresentation& scene_rep, const char* label, SampledImage& image, uint32_t image_options);
   bool angle_editor(const char* label, float2& angles, float min_azimuth, float max_azimuth, float min_elevation, float max_elevation, float pole_threshold);
-  bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior, const FrameData&);
-  bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior, const FrameData&, bool mixed, bool dielectric_only = false);
-  bool emission_picker(SceneRepresentation& scene_rep, const char* label, const char* id_suffix, uint32_t& spectrum_index, const FrameData&);
+  bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior, const FrameData&, bool mixed, bool dielectric_only, SpectrumTarget::Channel eta_channel,
+    SpectrumTarget::Channel k_channel);
+
   bool medium_dropdown(const char* label, uint32_t& medium);
   void update_name_buffer(SelectionKind kind, int32_t index, const char* current_name);
   void commit_name_edit(bool preserve_selection);
@@ -387,8 +388,9 @@ struct UI {
   void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_camera_resource_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_atmosphere_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  uint32_t build_mesh_material_assignment(SceneRepresentation& scene_rep, uint32_t mesh_index);
-  uint32_t material_mesh_usage_count(const SceneRepresentation& scene_rep, uint32_t material_index) const;
+  uint32_t build_mesh_material_assignment(SceneRepresentation& scene_rep, uint32_t node_index, uint32_t& mesh_index);
+  void update_mesh_material_usage(const SceneData& scene);
+  uint32_t material_mesh_usage_count(const SceneRepresentation& scene_rep, uint32_t material_index);
   void build_node_appearance_properties(SceneRepresentation& scene_rep, const SceneNode& node, uint32_t attachment_end, const FrameData& data);
   void build_medium_resource_properties(SceneRepresentation& scene_rep, uint32_t medium_index);
   void build_emitter_resource_properties(SceneRepresentation& scene_rep, uint32_t emitter_index, const FrameData& data, bool standalone_actions);
@@ -469,15 +471,17 @@ struct UI {
     int32_t index = -1;
   };
 
-  struct SpectrumEditorState {
-    float3 color = {};
-    float scale = 1.0f;
-    float temperature = 6500.0f;
-    enum class Mode : uint32_t {
-      Color,
-      Temperature,
-      Preset,
-    } mode = Mode::Color;
+  struct SpectrumControlState {
+    SpectrumSource source;
+    SpectrumCurveEditor curve;
+    SpectralDistribution observed;
+    SpectrumSource custom;
+    char preset_filter[128] = {};
+    bool initialized = false;
+    bool pending = false;
+    bool interacting = false;
+    std::vector<SpectrumTarget> targets;
+    std::string error;
   };
 
   struct PendingSelection {
@@ -543,14 +547,13 @@ struct UI {
   RHIImGuiTheme _theme = RHIImGuiTheme::Dark;
   bool _embedded_menu_enabled = true;
   uint32_t _font_image = 0u;
-  std::unordered_map<std::string, SpectrumEditorState> _spectrum_editors;
-  SpectrumCurveEditor _spectrum_curve;
-  SpectrumTarget _spectrum_target;
-  SpectralDistribution _spectrum_source;
-  bool _spectrum_preview_pending = false;
+  std::unordered_map<uint32_t, SpectrumControlState> _spectrum_controls;
+  std::vector<SpectrumTarget> _spectrum_targets;
+  SpectrumSource::Kind _spectrum_kind = SpectrumSource::Kind::Reflectance;
+  std::string _spectrum_label;
   bool _spectrum_tab_requested = false;
+  const IORDatabase* _spectrum_database = nullptr;
   void build_spectrum_editor(SceneRepresentation& scene_rep);
-  void read_spectrum_source(const SceneData& scene_data);
   void edit_spectrum_button(SceneRepresentation& scene_rep, const char* label, SpectrumTarget::Channel channel, uint32_t spectrum_index);
   std::unordered_map<std::string, bool> _material_anisotropy;
   std::vector<int32_t> _selected_material_positions;
@@ -562,6 +565,8 @@ struct UI {
   uint64_t _material_mapping_hash = 0ull;
   uint64_t _medium_mapping_hash = 0ull;
   uint64_t _mesh_mapping_hash = 0ull;
+  bool _mesh_materials_dirty = true;
+  std::vector<std::vector<uint32_t>> _mesh_material_indices;
   bool _auto_open_emission_section = false;
   bool _camera_fov_vertical = false;
   ViewportGeometry _viewport_geometry = {};

@@ -703,9 +703,17 @@ struct CPUBidirectionalImpl : public Task {
         return StepResult::Break;
       }
 
-      bool found_intersection = rt.trace_material(scene, ray, subsurface_material, intersection, smp);
+      Ray exit_ray = ray;
+      exit_ray.max_t = kMaxFloat;
+      Intersection exit_intersection = {};
+      if (rt.trace_material(scene, exit_ray, subsurface_material, exit_intersection, smp) == false) {
+        payload.throughput = {payload.spect, 0.0f};
+        return StepResult::Break;
+      }
+      const bool found_intersection = exit_intersection.t <= ray.max_t;
 
       if (found_intersection) {
+        intersection = exit_intersection;
         ray.max_t = intersection.t;
       }
 

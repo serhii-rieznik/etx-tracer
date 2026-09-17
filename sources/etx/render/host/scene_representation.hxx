@@ -46,6 +46,11 @@ enum class NodeGeometryEditResult : uint32_t {
 
 const char* node_geometry_edit_result_message(NodeGeometryEditResult result);
 
+enum class NodeDuplicateMode : uint32_t {
+  Linked,
+  Independent,
+};
+
 enum class ScenePrimitive : uint32_t {
   Sphere,
   Box,
@@ -166,6 +171,9 @@ struct SceneRepresentation {
   SceneEditResult create_empty_node();
   SceneEditResult create_primitive(ScenePrimitive primitive);
   SceneEditResult duplicate_node_subtree(uint32_t node_index);
+  SceneEditResult duplicate_node_subtree(uint32_t node_index, NodeDuplicateMode mode);
+  SceneEditStatus validate_node_duplication(uint32_t node_index) const;
+  SceneEditResult set_node_mesh_material(uint32_t node_index, uint32_t mesh_index, uint32_t material_index, bool make_unique);
   SceneEditResult delete_node_subtree(uint32_t node_index);
   SceneEditResult reparent_node(uint32_t node_index, uint32_t parent_index);
   SceneEditResult set_node_enabled(uint32_t node_index, bool enabled);

@@ -349,14 +349,14 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.material_deleted = std::bind(&RTApplication::on_material_deleted, this, std::placeholders::_1);
     ui.callbacks.material_renamed = std::bind(&RTApplication::on_material_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.material_changed = std::bind(&RTApplication::on_material_changed, this, std::placeholders::_1);
-    ui.callbacks.spectrum_applied = std::bind(&RTApplication::on_spectrum_applied, this, std::placeholders::_1, std::placeholders::_2);
+    ui.callbacks.spectrum_applied = std::bind(&RTApplication::on_spectrum_applied, this, std::placeholders::_1);
     ui.callbacks.medium_added = std::bind(&RTApplication::on_medium_added, this);
     ui.callbacks.medium_duplicated = std::bind(&RTApplication::on_medium_duplicated, this, std::placeholders::_1);
     ui.callbacks.medium_deleted = std::bind(&RTApplication::on_medium_deleted, this, std::placeholders::_1);
     ui.callbacks.medium_renamed = std::bind(&RTApplication::on_medium_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
-    ui.callbacks.mesh_material_changed = std::bind(&RTApplication::on_mesh_material_changed, this, std::placeholders::_1, std::placeholders::_2);
-    ui.callbacks.mesh_material_made_unique = std::bind(&RTApplication::on_make_mesh_material_unique, this, std::placeholders::_1, std::placeholders::_2);
+    ui.callbacks.mesh_material_changed =
+      std::bind(&RTApplication::on_mesh_material_changed, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4);
     ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
     ui.callbacks.emitter_added = std::bind(&RTApplication::on_emitter_added, this, std::placeholders::_1);
     ui.callbacks.emitter_duplicated = std::bind(&RTApplication::on_emitter_duplicated, this, std::placeholders::_1);
@@ -368,7 +368,7 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.camera_renamed = std::bind(&RTApplication::on_camera_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.empty_node_added = std::bind(&RTApplication::on_empty_node_added, this);
     ui.callbacks.primitive_added = std::bind(&RTApplication::on_primitive_added, this, std::placeholders::_1);
-    ui.callbacks.node_duplicated = std::bind(&RTApplication::on_node_duplicated, this, std::placeholders::_1);
+    ui.callbacks.node_duplicated = std::bind(&RTApplication::on_node_duplicated, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.node_deleted = std::bind(&RTApplication::on_node_deleted, this, std::placeholders::_1);
     ui.callbacks.node_reparented = std::bind(&RTApplication::on_node_reparented, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.node_enabled_changed = std::bind(&RTApplication::on_node_enabled_changed, this, std::placeholders::_1, std::placeholders::_2);
@@ -969,6 +969,7 @@ std::string RTApplication::save_scene_file(const std::string& file_name) {
 }
 
 void RTApplication::mark_scene_dirty() {
+  ui.invalidate_scene_resources();
   if ((_current_scene_file.empty() == false) && scene.valid()) {
     _scene_dirty = true;
   }
@@ -1390,63 +1391,27 @@ void RTApplication::on_medium_changed(uint32_t index) {
   notify_scene_might_have_changed();
 }
 
-void RTApplication::on_mesh_material_changed(uint32_t mesh_index, uint32_t material_index) {
-  mark_scene_dirty();
+SceneEditResult RTApplication::on_mesh_material_changed(uint32_t node_index, uint32_t mesh_index, uint32_t material_index, bool make_unique) {
   const bool cpu_was_running = cpu_renderer.is_running();
   if (cpu_was_running) {
     cpu_renderer.stop();
   }
-
-  scene.set_mesh_material(mesh_index, material_index);
-  scene.create_area_emitters_from_materials();
-  notify_scene_might_have_changed();
-
-  if (cpu_was_running) {
-    cpu_renderer.restart();
-  }
-}
-
-uint32_t RTApplication::on_make_mesh_material_unique(uint32_t mesh_index, uint32_t material_index) {
-  SceneData& scene_data = scene.data();
-  if ((mesh_index >= scene_data.meshes.size()) || (material_index >= scene_data.materials.size())) {
-    return kInvalidIndex;
-  }
-
-  const bool cpu_was_running = cpu_renderer.is_running();
-  if (cpu_was_running) {
-    cpu_renderer.stop();
-    _restart_cpu_after_material_resource_preparation = true;
-  }
-
-  Material material = scene_data.materials[material_index];
-  const auto clone_spectrum = [&](uint32_t spectrum_index) {
-    return spectrum_index < scene_data.spectrum_values.size() ? scene_data.add_spectrum(scene_data.spectrum_values[spectrum_index]) : kInvalidIndex;
-  };
-  material.reflectance.spectrum_index = clone_spectrum(material.reflectance.spectrum_index);
-  material.scattering.spectrum_index = clone_spectrum(material.scattering.spectrum_index);
-  material.emission.spectrum_index = clone_spectrum(material.emission.spectrum_index);
-  material.subsurface.spectrum_index = clone_spectrum(material.subsurface.spectrum_index);
-  material.thinfilm.ior.eta_index = clone_spectrum(material.thinfilm.ior.eta_index);
-  material.thinfilm.ior.k_index = clone_spectrum(material.thinfilm.ior.k_index);
-  material.ext_ior.eta_index = clone_spectrum(material.ext_ior.eta_index);
-  material.ext_ior.k_index = clone_spectrum(material.ext_ior.k_index);
-  material.int_ior.eta_index = clone_spectrum(material.int_ior.eta_index);
-  material.int_ior.k_index = clone_spectrum(material.int_ior.k_index);
-  material.energy_compensation_interface_index = kInvalidIndex;
-  material.conductor_energy_compensation_interface_index = kInvalidIndex;
-
-  std::string source_name = "material";
-  for (const auto& [name, index] : scene_data.material_mapping) {
-    if (index == material_index) {
-      source_name = name;
-      break;
+  const SceneEditResult result = scene.set_node_mesh_material(node_index, mesh_index, material_index, make_unique);
+  if (result.succeeded()) {
+    mark_scene_dirty();
+    const Mesh& mesh = scene.data().meshes[result.mesh_index];
+    if (make_unique && (mesh.triangle_count > 0u)) {
+      _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+      on_material_changed(scene.data().triangles[mesh.triangle_offset].material_index);
+    } else {
+      scene.create_area_emitters_from_materials();
+      notify_scene_might_have_changed();
     }
   }
-  const std::string clone_name = source_name + " copy";
-  const uint32_t clone_index = scene_data.clone_material(material, clone_name.c_str());
-  scene.set_mesh_material(mesh_index, clone_index);
-  on_material_changed(clone_index);
-  return clone_index;
+  if (cpu_was_running && ((make_unique == false) || (result.succeeded() == false))) {
+    cpu_renderer.restart();
+  }
+  return result;
 }
 
 void RTApplication::on_emitter_changed(uint32_t index) {
@@ -1645,14 +1610,24 @@ SceneEditResult RTApplication::on_primitive_added(ScenePrimitive primitive) {
   return result;
 }
 
-SceneEditResult RTApplication::on_node_duplicated(uint32_t node_index) {
+SceneEditResult RTApplication::on_node_duplicated(uint32_t node_index, NodeDuplicateMode mode) {
   const bool cpu_was_running = cpu_renderer.is_running();
   if (cpu_was_running) {
     cpu_renderer.stop();
   }
-
-  const SceneEditResult result = scene.duplicate_node_subtree(node_index);
+  const size_t material_count = scene.data().materials.size();
+  const size_t emitter_count = scene.data().emitter_profiles.size();
+  const SceneEditResult result = scene.duplicate_node_subtree(node_index, mode);
   if (result.succeeded()) {
+    if (scene.data().emitter_profiles.size() != emitter_count) {
+      rebuild_all_atmosphere_emitters();
+    }
+    if (scene.data().materials.size() != material_count) {
+      _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+      on_material_changed(kInvalidIndex);
+      return result;
+    }
+    scene.create_area_emitters_from_materials();
     handle_scene_hierarchy_changed();
   }
   if (cpu_was_running) {

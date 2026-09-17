@@ -1,8 +1,6 @@
 #include "spectrum_editor.hxx"
 
 #include <etx/core/core.hxx>
-#include <etx/core/environment.hxx>
-#include <etx/core/platform.hxx>
 #include <imgui.h>
 
 #include <algorithm>
@@ -46,6 +44,25 @@ bool validate_point(const float2& point, std::string& error) {
 }
 
 }  // namespace
+
+uint32_t* SpectrumTarget::spectrum_slot(SceneData& scene) const {
+  if (medium_index != kInvalidIndex) {
+    if (medium_index >= scene.mediums.array_size())
+      return nullptr;
+    Medium& medium = scene.mediums.get(medium_index);
+    if (channel == Channel::Absorption)
+      return &medium.absorption_index;
+    if (channel == Channel::Scattering)
+      return &medium.scattering_index;
+    return nullptr;
+  }
+  if (emitter_index != kInvalidIndex) {
+    if ((emitter_index >= scene.emitter_profiles.size()) || (channel != Channel::Emission))
+      return nullptr;
+    return &scene.emitter_profiles[emitter_index].emission.spectrum_index;
+  }
+  return material_index < scene.materials.size() ? spectrum_slot(scene.materials[material_index]) : nullptr;
+}
 
 uint32_t* SpectrumTarget::spectrum_slot(Material& material) const {
   switch (channel) {
@@ -157,7 +174,7 @@ bool SpectrumDocument::normalize() {
   const float peak = std::max_element(points.begin(), points.end(), [](const float2& a, const float2& b) {
     return a.y < b.y;
   })->y;
-  if (peak <= 1.0f) {
+  if (peak <= 0.0f) {
     return false;
   }
   for (float2& point : points) {
@@ -248,6 +265,7 @@ bool SpectrumDocument::load(const std::string& path, std::string& error) {
   if (loaded.validate(error) == false) {
     return false;
   }
+  loaded.path = path;
   *this = std::move(loaded);
   return true;
 }
@@ -332,35 +350,20 @@ void SpectrumCurveEditor::fit() {
   }
 }
 
-bool SpectrumCurveEditor::load_file(const std::string& path) {
-  if (document.load(path, error) == false) {
-    return false;
-  }
-  fit();
-  select_point(0);
-  modified = false;
-  return true;
-}
-
 bool SpectrumCurveEditor::build() {
   bool changed = false;
-  bool loaded_this_frame = false;
-  const bool wide = ImGui::GetContentRegionAvail().x >= (ImGui::GetFontSize() * 55.0f);
-  const bool load = ImGui::Button("Load SPD...");
-  ImGui::SameLine();
-  const bool save = ImGui::Button("Save SPD...");
-  ImGui::SameLine();
+  const bool wide = ImGui::GetContentRegionAvail().x >= (ImGui::GetFontSize() * 42.0f);
   ImGui::BeginDisabled(document.points.size() <= 2u);
   const bool simplify = ImGui::Button("Simplify...");
   ImGui::EndDisabled();
   ImGui::SameLine();
-  const bool normalize = ImGui::Button("Normalize");
+  const bool normalize = ImGui::Button("Normalize peak to 1");
   if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Scale reflectance down to a peak of 1.\nLower peaks remain unchanged.");
+    ImGui::SetTooltip("Rescale the source curve to a peak of 1. Strength stays unchanged.");
   }
 
-  ImGui::SetNextItemWidth(wide ? ImGui::GetFontSize() * 9.0f : ImGui::GetContentRegionAvail().x * 0.55f);
-  const bool select = ImGui::InputFloat("Wavelength (nm)", &wavelength, 0.0f, 0.0f, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue);
+  ImGui::SetNextItemWidth(wide ? ImGui::GetFontSize() * 6.0f : ImGui::GetContentRegionAvail().x * 0.55f);
+  const bool select = ImGui::InputFloat("nm", &wavelength, 0.0f, 0.0f, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue);
   if (select || ImGui::IsItemDeactivatedAfterEdit()) {
     selected_point = -1;
     if (validate_point({wavelength, 0.0f}, error)) {
@@ -381,7 +384,7 @@ bool SpectrumCurveEditor::build() {
   if (wide) {
     ImGui::SameLine();
   }
-  ImGui::SetNextItemWidth(wide ? ImGui::GetFontSize() * 7.0f : ImGui::GetContentRegionAvail().x * 0.55f);
+  ImGui::SetNextItemWidth(wide ? ImGui::GetFontSize() * 5.0f : ImGui::GetContentRegionAvail().x * 0.55f);
   const bool commit = ImGui::InputFloat("Value", &value, 0.0f, 0.0f, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue);
   if ((commit || ImGui::IsItemDeactivatedAfterEdit()) && (selected_point >= 0) && validate_point({wavelength, value}, error)) {
     float& power = document.points[selected_point].y;
@@ -423,51 +426,6 @@ bool SpectrumCurveEditor::build() {
   }
   modified |= changed;
 
-  if (load) {
-    const std::string path = open_file("spd", nullptr);
-    if (path.empty() == false) {
-      if (modified) {
-        _pending_load_path = path;
-        ImGui::OpenPopup("Discard spectrum edits?");
-      } else {
-        loaded_this_frame = load_file(path);
-        changed |= loaded_this_frame;
-      }
-    }
-  }
-  if (save) {
-    _save_class = 0;
-    error.clear();
-    ImGui::OpenPopup("Save spectrum");
-  }
-  if (ImGui::BeginPopupModal("Save spectrum", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::Text("Original class: %s", document.classification.empty() ? "unspecified" : document.classification.c_str());
-    constexpr const char* classes[] = {"Keep original", "reflectance", "illuminant", "dielectric", "conductor"};
-    ImGui::Combo("File classification", &_save_class, classes, static_cast<int>(std::size(classes)));
-    if (ImGui::Button("Save as...")) {
-      const std::string path = save_file("spd", nullptr);
-      if (path.empty() == false) {
-        const std::string original_class = document.classification;
-        if (_save_class != 0) {
-          document.classification = classes[_save_class];
-        }
-        if (document.save(path, env().file_in_data("spectrum"), error)) {
-          modified = false;
-          ImGui::CloseCurrentPopup();
-        } else {
-          document.classification = original_class;
-        }
-      }
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel")) {
-      ImGui::CloseCurrentPopup();
-    }
-    if (error.empty() == false) {
-      ImGui::TextWrapped("%s", error.c_str());
-    }
-    ImGui::EndPopup();
-  }
   if (simplify) {
     ImGui::OpenPopup("Simplify spectrum");
   }
@@ -494,27 +452,12 @@ bool SpectrumCurveEditor::build() {
     }
     ImGui::EndPopup();
   }
-  if (ImGui::BeginPopupModal("Discard spectrum edits?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Loading another spectrum will discard the unsaved draft.");
-    if (ImGui::Button("Discard and load")) {
-      loaded_this_frame = load_file(_pending_load_path);
-      changed |= loaded_this_frame;
-      _pending_load_path.clear();
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel")) {
-      _pending_load_path.clear();
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
   if (wide == false) {
     ImGui::TextWrapped("%s%s", document.title.c_str(), modified ? " *" : "");
   }
   const ImVec2 origin = ImGui::GetCursorScreenPos();
   const float footer_height = ImGui::GetTextLineHeightWithSpacing();
-  const float plot_height = wide ? std::max(ImGui::GetFontSize() * 6.0f, ImGui::GetContentRegionAvail().y - footer_height) : ImGui::GetFontSize() * 12.0f;
+  const float plot_height = wide ? std::max(ImGui::GetFontSize() * 4.0f, ImGui::GetContentRegionAvail().y - footer_height) : ImGui::GetFontSize() * 12.0f;
   const ImVec2 size(std::max(120.0f, ImGui::GetContentRegionAvail().x), plot_height);
   const float margin = ImGui::GetFontSize() * 0.6f;
   const ImVec2 lo(origin.x + margin, origin.y + margin);
@@ -652,7 +595,7 @@ bool SpectrumCurveEditor::build() {
     ImGui::SameLine();
     ImGui::TextDisabled("%s%s", document.title.c_str(), modified ? " *" : "");
   }
-  if (changed && (loaded_this_frame == false)) {
+  if (changed) {
     modified = true;
   }
   if (error.empty() == false) {

@@ -36,7 +36,9 @@ struct UPBPSceneSegmentResult {
   MediumTrackingFailure medium_failure = MediumTrackingFailure::None;
 
   bool valid() const {
-    return (failure == UPBPSceneSegmentFailure::None) && (terminal != UPBPSceneSegmentTerminal::Failure) && segment.valid();
+    const bool absorbed_without_interval = (terminal == UPBPSceneSegmentTerminal::Absorb) && segment.intervals.empty() &&
+                                           (segment.failure == MediumTrackingFailure::None) && segment.weight.is_zero();
+    return (failure == UPBPSceneSegmentFailure::None) && (terminal != UPBPSceneSegmentTerminal::Failure) && (absorbed_without_interval || segment.valid());
   }
 };
 

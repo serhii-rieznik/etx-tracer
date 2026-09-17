@@ -300,11 +300,6 @@ uint32_t SceneHierarchy::duplicate_subtree(uint32_t node_index) {
     if (attachment_end > updated_hierarchy.attachments.size()) {
       return kInvalidIndex;
     }
-    for (uint64_t attachment_index = source_node.attachment_offset; attachment_index < attachment_end; ++attachment_index) {
-      if (updated_hierarchy.attachments[attachment_index].type != SceneAttachment::Type::Mesh) {
-        return kInvalidIndex;
-      }
-    }
     duplicated_attachment_count += source_node.attachment_count;
   }
 

@@ -963,8 +963,10 @@ bool test_center_node_pivot_preserves_geometry_and_children() {
   }
   const etx::AffineTransform original_child_world = data.hierarchy.world_transforms[child_node];
   float3 original_world_positions[3] = {};
+  float3 original_local_positions[3] = {};
   for (uint32_t corner = 0u; corner < 3u; ++corner) {
-    original_world_positions[corner] = etx::transform_point(local_transform, data.vertices.pos[triangle.i[corner]]);
+    original_local_positions[corner] = data.vertices.pos[triangle.i[corner]];
+    original_world_positions[corner] = etx::transform_point(local_transform, original_local_positions[corner]);
   }
 
   if (check_condition(scene.edit_node_geometry(edited_node, etx::NodeGeometryOperation::CenterPivot) == etx::NodeGeometryEditResult::Success,
@@ -979,12 +981,12 @@ bool test_center_node_pivot_preserves_geometry_and_children() {
   if (check_condition(nearly_equal(float3{edited.local_transform.rows[0].w, edited.local_transform.rows[1].w, edited.local_transform.rows[2].w}, {9.0f, 10.0f, 0.0f}),
         "pivot moves to the transformed triangle center") == false ||
       check_condition(affine_nearly_equal(data.hierarchy.world_transforms[child_node], original_child_world), "pivot edit preserves direct child world transforms") == false ||
-      check_condition(nearly_equal(data.vertices.pos[0], {0.0f, 0.0f, 0.0f}), "pivot edit leaves source vertices unchanged") == false) {
+      check_condition((edited_mesh_index == mesh_index) && (data.meshes.size() == 1u) && (data.vertices.pos.size() == 3u), "pivot reuses unshared geometry") == false) {
     return false;
   }
   for (uint32_t corner = 0u; corner < 3u; ++corner) {
     const float3 edited_local_position = data.vertices.pos[edited_triangle.i[corner]];
-    if (check_condition(nearly_equal(edited_local_position, data.vertices.pos[triangle.i[corner]] - expected_center), "pivot recenters private local geometry") == false ||
+    if (check_condition(nearly_equal(edited_local_position, original_local_positions[corner] - expected_center), "pivot recenters local geometry") == false ||
         check_condition(nearly_equal(etx::transform_point(edited.local_transform, edited_local_position), original_world_positions[corner]),
           "pivot edit preserves rendered vertex positions") == false) {
       return false;

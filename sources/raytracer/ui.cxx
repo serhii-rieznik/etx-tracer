@@ -848,14 +848,22 @@ void UI::select_resource_edit_result(SelectionKind kind, const SceneResourceEdit
 }
 
 void UI::apply_resource_remapping(SelectionKind kind, const std::vector<uint32_t>& old_to_new) {
-  if (kind == SelectionKind::Material) {
-    const uint32_t old_material = _spectrum_target.material_index;
-    _spectrum_target.material_index = old_material < old_to_new.size() ? old_to_new[old_material] : kInvalidIndex;
-    if (_spectrum_target.material_index == kInvalidIndex) {
-      _spectrum_target.spectrum_index = kInvalidIndex;
-      _spectrum_preview_pending = false;
+  auto remap_targets = [&](std::vector<SpectrumTarget>& targets) {
+    for (SpectrumTarget& target : targets) {
+      uint32_t* index = kind == SelectionKind::Material  ? &target.material_index
+                        : kind == SelectionKind::Medium  ? &target.medium_index
+                        : kind == SelectionKind::Emitter ? &target.emitter_index
+                                                         : nullptr;
+      if ((index != nullptr) && (*index != kInvalidIndex)) {
+        *index = *index < old_to_new.size() ? old_to_new[*index] : kInvalidIndex;
+        if (*index == kInvalidIndex)
+          target.spectrum_index = kInvalidIndex;
+      }
     }
-  }
+  };
+  remap_targets(_spectrum_targets);
+  for (auto& [index, state] : _spectrum_controls)
+    remap_targets(state.targets);
   if (_selection.kind != kind) {
     return;
   }
@@ -883,11 +891,9 @@ void UI::apply_resource_remapping(SelectionKind kind, const std::vector<uint32_t
   }
 
   const uint32_t new_index = old_index < old_to_new.size() ? old_to_new[old_index] : kInvalidIndex;
-  const SpectrumTarget spectrum_target = _spectrum_target;
-  const bool spectrum_preview_pending = _spectrum_preview_pending;
+  auto spectrum_targets = _spectrum_targets;
   reset_selection();
-  _spectrum_target = spectrum_target;
-  _spectrum_preview_pending = spectrum_preview_pending;
+  _spectrum_targets = std::move(spectrum_targets);
   if (new_index != kInvalidIndex) {
     _pending_selection = {kind, new_index, true};
   }
@@ -1426,13 +1432,40 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
   return changed;
 }
 
-bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveIndex& ior, const FrameData& data) {
-  return ior_picker(scene, name, ior, data, false, false);
-}
-
-bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveIndex& ior, const FrameData& data, bool mixed, bool dielectric_only) {
-  bool changed = false;
+bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveIndex& ior, const FrameData& data, bool mixed, bool dielectric_only,
+  SpectrumTarget::Channel eta_channel, SpectrumTarget::Channel k_channel) {
   bool load_from_file = false;
+  const auto queue = [&](const SpectralDistribution& spectrum, SpectrumTarget::Channel channel, uint32_t index, const std::string& title, const std::string& path) {
+    auto& state = _spectrum_controls[index];
+    state = {};
+    state.initialized = true;
+    state.observed = scene.data().spectrum_values[index];
+    state.source.kind = SpectrumSource::Kind::IOR;
+    state.source.base = spectrum;
+    state.source.title = title;
+    state.source.path = path;
+    state.source.color = float3{spectrum.spectral_entries[spectrum.spectral_entry_count / 2u].power};
+    state.custom = state.source;
+    state.curve.document.points.clear();
+    for (uint32_t i = 0; i < spectrum.spectral_entry_count; ++i)
+      state.curve.document.points.push_back({spectrum.spectral_entries[i].wavelength, spectrum.spectral_entries[i].power});
+    state.curve.document.title = title;
+    state.curve.document.path = path;
+    state.source.points = state.curve.document.points;
+    state.custom = state.source;
+    state.curve.select_point(0);
+    state.curve.fit();
+    if (_editing_material_indices != nullptr) {
+      for (uint32_t material : *_editing_material_indices) {
+        SpectrumTarget target{.material_index = material, .channel = channel};
+        if (const auto* slot = target.spectrum_slot(scene.data()); slot != nullptr) {
+          target.spectrum_index = *slot;
+          state.targets.push_back(target);
+        }
+      }
+    }
+    state.pending = state.targets.empty() == false;
+  };
 
   int matched_index = -1;
   static const SpectralDistribution null_spectrum = SpectralDistribution::constant(0.0f);
@@ -1512,12 +1545,8 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
             bool is_current = (matched_index == def_index);
             if (ImGui::Selectable(def.title.c_str(), is_current)) {
               matched_index = def_index;
-              ior.cls = def.cls;
-              ETX_CRITICAL(ior.eta_index != kInvalidIndex);
-              scene.data().spectrum_values[ior.eta_index] = def.eta;
-              ETX_CRITICAL(ior.k_index != kInvalidIndex);
-              scene.data().spectrum_values[ior.k_index] = def.k;
-              changed = true;
+              queue(def.eta, eta_channel, ior.eta_index, def.title + " eta", def.filename);
+              queue(def.k, k_channel, ior.k_index, def.title + " k", def.filename);
               ImGui::CloseCurrentPopup();
             }
             if (is_current) {
@@ -1554,182 +1583,16 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
     SpectralDistribution t_k = {};
     auto cls = SpectralDistribution::load_refractive_index(filename.c_str(), t_eta, t_k, title);
     if ((cls != SpectralDistribution::Invalid) && ((dielectric_only == false) || (cls == SpectralDistribution::Dielectric))) {
-      ior.cls = cls;
-      ETX_CRITICAL(ior.eta_index != kInvalidIndex);
-      scene.data().spectrum_values[ior.eta_index] = t_eta;
-      ETX_CRITICAL(ior.k_index != kInvalidIndex);
-      scene.data().spectrum_values[ior.k_index] = t_k;
-      changed = true;
+      queue(t_eta, eta_channel, ior.eta_index, title + " eta", filename);
+      queue(t_k, k_channel, ior.k_index, title + " k", filename);
+    } else if (filename.empty() == false) {
+      _spectrum_controls[ior.eta_index].error = "Could not load this IOR file. Choose a valid paired IOR spectrum of the required type.";
     }
   }
 
-  return changed;
-}
-
-bool UI::emission_picker(SceneRepresentation& scene, const char* label, const char* id_suffix, uint32_t& spectrum_index, const FrameData& data) {
-  if (scene.data().spectrum_values.empty())
-    return false;
-
-  bool changed = false;
-  bool load_from_file = false;
-
-  const char* base_label = (label != nullptr) ? label : "Emission";
-  const char* unique_id = (id_suffix != nullptr) ? id_suffix : base_label;
-
-  std::string color_name = std::string(base_label) + "_Color_" + unique_id;
-  const std::string editor_key = std::string("emission:") + unique_id + ":" + std::to_string(spectrum_index);
-  auto [state_it, inserted] = _spectrum_editors.emplace(editor_key, SpectrumEditorState{});
-  SpectrumEditorState& editor_state = state_it->second;
-
-  static const char* kModeLabels[] = {
-    "Color",
-    "Temperature",
-    "Preset",
-  };
-
-  ImGui::TextUnformatted(base_label);
-  if (_editing_material_indices != nullptr) {
-    ImGui::SameLine();
-    edit_spectrum_button(scene, "Edit##emission", SpectrumTarget::Channel::Emission, spectrum_index);
-  }
-  SpectrumEditorState::Mode previous_mode = editor_state.mode;
-  full_width_item();
-  if (ImGui::BeginCombo("##emission_mode", kModeLabels[static_cast<uint32_t>(editor_state.mode)])) {
-    for (uint32_t i = 0; i < 3; ++i) {
-      bool selected = (editor_state.mode == static_cast<SpectrumEditorState::Mode>(i));
-      if (ImGui::Selectable(kModeLabels[i], selected)) {
-        editor_state.mode = static_cast<SpectrumEditorState::Mode>(i);
-      }
-      if (selected) {
-        ImGui::SetItemDefaultFocus();
-      }
-    }
-    ImGui::EndCombo();
-  }
-
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  if (editor_state.mode == SpectrumEditorState::Mode::Temperature) {
-    if (editor_state.mode != previous_mode) {
-      SpectralDistribution temp_spd = SpectralDistribution::from_normalized_black_body(editor_state.temperature, editor_state.scale);
-      scene.data().spectrum_values[spectrum_index] = temp_spd;
-      changed = true;
-    }
-    const std::string temperature_label = format_string("##emission_temp_%s", unique_id);
-    float temperature = editor_state.temperature;
-    full_width_item();
-    if (ImGui::InputFloat(temperature_label.c_str(), &temperature, 100.0f, 1000.0f, "%.0f K")) {
-      temperature = std::clamp(temperature, 1000.0f, 40000.0f);
-      editor_state.temperature = temperature;
-      SpectralDistribution temp_spd = SpectralDistribution::from_normalized_black_body(temperature, editor_state.scale);
-      scene.data().spectrum_values[spectrum_index] = temp_spd;
-      editor_state.color = {};
-      changed = true;
-    }
-  }
-  changed |= spectrum_picker(scene, color_name.c_str(), spectrum_index, SpectralDistribution::Illuminant, true, true, editor_state.mode == SpectrumEditorState::Mode::Color, true);
-
-  int matched_index = -1;
-  if ((spectrum_index < scene.data().spectrum_values.size())) {
-    static const SpectralDistribution null_spectrum = SpectralDistribution::constant(0.0f);
-    matched_index = data.ior_database.find_matching_index(scene.data().spectrum_values[spectrum_index], null_spectrum, SpectralDistribution::Illuminant);
-  }
-
-  const char* preview_text = base_label;
-  std::string preview_storage;
-  if ((matched_index >= 0) && (matched_index < static_cast<int>(data.ior_database.definitions.size()))) {
-    preview_storage = data.ior_database.definitions[static_cast<size_t>(matched_index)].title;
-    preview_text = preview_storage.c_str();
-  } else {
-    preview_text = "Select Preset";
-  }
-
-  const std::string popup_id = format_string("emission_popup##%s", unique_id);
-
-  if (editor_state.mode == SpectrumEditorState::Mode::Preset) {
-    std::string button_label = std::string(preview_text) + "##emission_" + unique_id;
-    if (ImGui::Button(button_label.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
-      ImGui::OpenPopup(popup_id.c_str());
-    }
-  }
-
-  ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 28.0f, 0.0f), ImGuiCond_Always);
-  if (ImGui::BeginPopup(popup_id.c_str())) {
-    if (ImGui::Selectable("None", false)) {
-      scene.data().spectrum_values[spectrum_index] = SpectralDistribution::constant(0.0f);
-      matched_index = -1;
-      changed = true;
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::Separator();
-
-    bool has_presets = false;
-    if (data.ior_database.definitions.empty() == false) {
-      const auto& entries = data.ior_database.class_entries(SpectralDistribution::Illuminant);
-      has_presets = entries.empty() == false;
-
-      if (has_presets) {
-        size_t column_count = std::min<size_t>(2, std::max<size_t>(1, entries.size()));
-        size_t per_column = (entries.size() + column_count - 1u) / column_count;
-
-        std::string table_id = std::string("emission_presets_##") + unique_id;
-        if (ImGui::BeginTable(table_id.c_str(), static_cast<int>(column_count), ImGuiTableFlags_SizingStretchSame)) {
-          for (size_t col = 0; col < column_count; ++col) {
-            ImGui::TableNextColumn();
-            size_t start = col * per_column;
-            size_t end = min(start + per_column, entries.size());
-            for (size_t idx = start; idx < end; ++idx) {
-              size_t def_index = entries[idx];
-              if (def_index >= data.ior_database.definitions.size())
-                continue;
-              const IORDefinition& def = data.ior_database.definitions[def_index];
-              bool is_current = (matched_index == static_cast<int>(def_index));
-              if (ImGui::Selectable(def.title.c_str(), is_current)) {
-                scene.data().spectrum_values[spectrum_index] = def.eta;
-                scene.data().spectrum_values[spectrum_index].scale(editor_state.scale);
-                matched_index = static_cast<int>(def_index);
-                changed = true;
-                ImGui::CloseCurrentPopup();
-              }
-              if (is_current) {
-                ImGui::SetItemDefaultFocus();
-              }
-            }
-          }
-          ImGui::EndTable();
-        }
-      }
-    }
-
-    if (has_presets == false) {
-      ImGui::TextDisabled("No emission presets available");
-    }
-
-    if (ImGui::Selectable("Load from file...", false)) {
-      load_from_file = true;
-      ImGui::CloseCurrentPopup();
-    }
-
-    ImGui::EndPopup();
-  }
-
-  if (load_from_file) {
-    auto filename = open_file("spd");
-    if (filename.empty() == false) {
-      std::string title = {};
-      SpectralDistribution loaded = {};
-      auto cls = SpectralDistribution::load_from_file(filename.c_str(), loaded, nullptr, false, title);
-      if (cls != SpectralDistribution::Invalid) {
-        scene.data().spectrum_values[spectrum_index] = loaded;
-        scene.data().spectrum_values[spectrum_index].scale(editor_state.scale);
-        matched_index = -1;
-        changed = true;
-      } else {
-        log::warning("Failed to load emission spectrum from `%s`", filename.c_str());
-      }
-    }
-  }
-
-  return changed;
+  if (const auto found = _spectrum_controls.find(ior.eta_index); (found != _spectrum_controls.end()) && (found->second.error.empty() == false))
+    ImGui::TextWrapped("%s", found->second.error.c_str());
+  return false;
 }
 
 bool UI::medium_dropdown(const char* label, uint32_t& medium) {
@@ -1869,175 +1732,10 @@ bool UI::sampled_image_picker(SceneRepresentation& scene_rep, const char* label,
   return changed;
 }
 
-bool UI::spectrum_picker(SceneRepresentation& scene, const char* widget_id, uint32_t spd_index, SpectralDistribution::Class spectrum_class, bool linear, bool scale,
-  bool show_color, bool show_scale) {
-  if (scene.data().spectrum_values.empty()) {
-    return false;
-  }
-  if (spd_index >= scene.data().spectrum_values.size()) {
-    return false;
-  }
-  SpectralDistribution& spd = scene.data().spectrum_values[spd_index];
-  const std::string editor_key = std::string("spectrum:") + std::to_string(spd_index) + ":" + widget_id;
-  ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
-  const bool result = spectrum_picker(widget_id, editor_key, spd, spectrum_class, linear, scale, show_color, show_scale);
-  ImGui::PopItemWidth();
-  return result;
-}
-
-bool UI::spectrum_picker(const char* widget_id, const std::string& editor_key, SpectralDistribution& spd, SpectralDistribution::Class spectrum_class, bool linear, bool scale,
-  bool show_color, bool show_scale) {
-  scale = scale && linear;
-
-  auto [state_it, state_inserted] = _spectrum_editors.emplace(editor_key, SpectrumEditorState{});
-  SpectrumEditorState& editor_state = state_it->second;
-
-  float3 linear_rgb = spd.integrated();
-  float default_scale = 1.0f;
-  float max_component = max(max(linear_rgb.x, linear_rgb.y), linear_rgb.z);
-  if (scale) {
-    constexpr float kScaleUnityThreshold = 1.0001f;
-    if (max_component > kScaleUnityThreshold) {
-      default_scale = max_component;
-      if (default_scale > 0.0f) {
-        linear_rgb /= default_scale;
-      }
-    }
-  }
-
-  float3 default_display = linear ? linear_rgb : linear_to_gamma(linear_rgb);
-  if (state_inserted) {
-    editor_state.color = default_display;
-    editor_state.scale = default_scale;
-  }
-
-  const std::string name_buffer = format_string("##color_%s", widget_id);
-
-  std::string scale_label = {};
-  if (scale && show_scale) {
-    scale_label = format_string("##scale_%s", widget_id);
-  }
-
-  auto sync_from_spd = [&](bool update_color, bool update_scale) {
-    if ((update_color == false) && (update_scale == false))
-      return;
-
-    float3 refreshed_linear = spd.integrated();
-    float refreshed_scale = editor_state.scale;
-    float3 refreshed_display = editor_state.color;
-
-    constexpr float kScaleUnityThreshold = 1.0001f;
-    if (scale && (update_color || update_scale)) {
-      float refreshed_max = max(max(refreshed_linear.x, refreshed_linear.y), refreshed_linear.z);
-      if (refreshed_max > kScaleUnityThreshold) {
-        refreshed_scale = refreshed_max;
-        if (refreshed_scale > 0.0f) {
-          refreshed_linear /= refreshed_scale;
-        }
-      } else {
-        refreshed_scale = 1.0f;
-      }
-    }
-
-    if (update_color) {
-      refreshed_display = linear ? refreshed_linear : linear_to_gamma(refreshed_linear);
-      if (scale) {
-        refreshed_display.x = std::clamp(refreshed_display.x, 0.0f, 1.0f);
-        refreshed_display.y = std::clamp(refreshed_display.y, 0.0f, 1.0f);
-        refreshed_display.z = std::clamp(refreshed_display.z, 0.0f, 1.0f);
-      }
-      editor_state.color = refreshed_display;
-    }
-
-    if (update_scale) {
-      editor_state.scale = refreshed_scale;
-    }
-  };
-
-  auto rebuild_spectrum = [&](float applied_scale, bool from_color) {
-    float3 value = editor_state.color;
-    if ((linear == false) && from_color) {
-      value = gamma_to_linear(value);
-    }
-    applied_scale = from_color ? max(applied_scale, 1.0f) : max(applied_scale, 0.0f);
-
-    if (from_color) {
-      value *= applied_scale;
-      spd = spectrum_class == SpectralDistribution::Illuminant ? SpectralDistribution::rgb_luminance(value) : SpectralDistribution::rgb_reflectance(value);
-      editor_state.scale = applied_scale;
-    } else if (scale) {
-      if (editor_state.mode == SpectrumEditorState::Mode::Temperature) {
-        spd = SpectralDistribution::from_normalized_black_body(editor_state.temperature, applied_scale);
-      } else {
-        spd.scale(applied_scale / max(editor_state.scale, 1.0e-6f));
-      }
-      editor_state.scale = applied_scale;
-    }
-  };
-
-  ImGuiColorEditFlags color_flags = ImGuiColorEditFlags_Float | ImGuiColorEditFlags_InputRGB;
-  if (linear && (scale == false)) {
-    color_flags |= ImGuiColorEditFlags_HDR;
-  }
-
-  bool color_active = false;
-  bool color_edited = false;
-  bool color_deactivated_after_edit = false;
-  if (show_color) {
-    ImGui::ColorEdit3(name_buffer.c_str(), &editor_state.color.x, color_flags);
-    color_active = ImGui::IsItemActive();
-    color_edited = ImGui::IsItemEdited();
-    color_deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
-
-    if (scale) {
-      editor_state.color.x = std::clamp(editor_state.color.x, 0.0f, 1.0f);
-      editor_state.color.y = std::clamp(editor_state.color.y, 0.0f, 1.0f);
-      editor_state.color.z = std::clamp(editor_state.color.z, 0.0f, 1.0f);
-    }
-  }
-
-  bool changed = false;
-  if (show_color && color_deactivated_after_edit) {
-    editor_state.scale = 1.0f;
-    rebuild_spectrum(editor_state.scale, true);
-    changed = true;
-  }
-
-  bool scale_changed = false;
-  bool scale_active = false;
-  bool scale_deactivated_after_edit = false;
-  if (scale && show_scale) {
-    ImGui::TextUnformatted("Scale");
-    full_width_item();
-    float drag_speed = max(0.01f, max(editor_state.scale, 1.0f) * 0.01f);
-    float scale_value = editor_state.scale;
-    scale_changed = ImGui::DragFloat(scale_label.c_str(), &scale_value, drag_speed, show_color ? 1.0f : 0.01f, 1000.0f, "%.2f", ImGuiSliderFlags_NoRoundToFormat);
-    scale_active = ImGui::IsItemActive();
-    scale_deactivated_after_edit = ImGui::IsItemDeactivatedAfterEdit();
-    if (scale_changed) {
-      if (show_color) {
-        scale_value = max(scale_value, 1.0f);
-      } else {
-        scale_value = max(scale_value, 0.0f);
-      }
-      rebuild_spectrum(scale_value, show_color);
-      editor_state.scale = scale_value;
-      changed = true;
-    }
-  }
-
-  bool skip_sync = (show_color && (color_active || color_edited || color_deactivated_after_edit)) ||  //
-                   (show_scale && (scale_active || scale_changed || scale_deactivated_after_edit));
-  if (skip_sync == false) {
-    sync_from_spd(show_color, show_color);
-  }
-
-  return changed;
-}
-
 void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
   ETX_PROFILER_SCOPE();
   ImGuizmo::BeginFrame();
+  _spectrum_database = &data.ior_database;
   _node_transform_editor_interaction_rendered_this_frame = false;
   _camera_property_interaction_rendered_this_frame = false;
 
@@ -2163,6 +1861,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
     callbacks.emitter_changed(_pending_emitter_change);
   }
   _pending_emitter_change = kInvalidIndex;
+  flush_spectrum_changes(scene_rep);
   build_unsaved_changes_modal();
   build_renderer_preparation_modal();
 }
@@ -2723,14 +2422,11 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
     with_section(
       0, "Surface",
       [&]() {
-        ImGui::Text("Reflectance Spectrum");
-        ImGui::SameLine();
-        edit_spectrum_button(scene_rep, "Edit##reflectance", SpectrumTarget::Channel::Reflectance, material.reflectance.spectrum_index);
         changed |= mixed_control(material_values_mixed([](const Material& value) {
           return value.reflectance.spectrum_index;
         }),
           [&]() {
-            return spectrum_picker(scene_rep, "Reflectance", material.reflectance.spectrum_index, SpectralDistribution::Reflectance, false, false);
+            return material_spectrum_control(scene_rep, "Reflectance", SpectrumTarget::Channel::Reflectance, SpectrumSource::Kind::Reflectance);
           });
         changed |= mixed_control(material_values_mixed([](const Material& value) {
           return value.reflectance.image_index;
@@ -2742,14 +2438,12 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           });
         if (material.cls != MaterialClass::DiffractionGrating) {
           ImGui::Spacing();
-          ImGui::Text("Scattering Spectrum");
-          ImGui::SameLine();
-          edit_spectrum_button(scene_rep, "Edit##scattering", SpectrumTarget::Channel::Scattering, material.scattering.spectrum_index);
+
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.scattering.spectrum_index;
           }),
             [&]() {
-              return spectrum_picker(scene_rep, "Scattering", material.scattering.spectrum_index, SpectralDistribution::Reflectance, false, false);
+              return material_spectrum_control(scene_rep, "Scattering", SpectrumTarget::Channel::Scattering, SpectrumSource::Kind::Reflectance);
             });
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.scattering.image_index;
@@ -2926,7 +2620,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
               return value.int_ior;
             });
             const bool int_ior_changed = mixed_control(int_ior_mixed, [&]() {
-              return ior_picker(scene_rep, "Inside", material.int_ior, data, int_ior_mixed);
+              return ior_picker(scene_rep, "Inside", material.int_ior, data, int_ior_mixed, false, SpectrumTarget::Channel::InsideEta, SpectrumTarget::Channel::InsideK);
             });
             edit_spectrum_button(scene_rep, "Edit eta##inside", SpectrumTarget::Channel::InsideEta, material.int_ior.eta_index);
             ImGui::SameLine();
@@ -2941,7 +2635,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
               return value.ext_ior;
             });
             const bool ext_ior_changed = mixed_control(ext_ior_mixed, [&]() {
-              return ior_picker(scene_rep, "Outside", material.ext_ior, data, ext_ior_mixed);
+              return ior_picker(scene_rep, "Outside", material.ext_ior, data, ext_ior_mixed, false, SpectrumTarget::Channel::OutsideEta, SpectrumTarget::Channel::OutsideK);
             });
             edit_spectrum_button(scene_rep, "Edit eta##outside", SpectrumTarget::Channel::OutsideEta, material.ext_ior.eta_index);
             ImGui::SameLine();
@@ -3035,7 +2729,8 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           return value.thinfilm.ior;
         });
         const bool thinfilm_ior_changed = mixed_control(thinfilm_ior_mixed, [&]() {
-          return ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data, thinfilm_ior_mixed, true);
+          return ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data, thinfilm_ior_mixed, true, SpectrumTarget::Channel::ThinfilmEta,
+            SpectrumTarget::Channel::ThinfilmK);
         });
         edit_spectrum_button(scene_rep, "Edit eta##thinfilm", SpectrumTarget::Channel::ThinfilmEta, material.thinfilm.ior.eta_index);
         ImGui::SameLine();
@@ -3119,8 +2814,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             [&]() {
               ImGui::TextUnformatted("Distance");
               ImGui::SameLine();
-              edit_spectrum_button(scene_rep, "Edit##subsurface", SpectrumTarget::Channel::Subsurface, material.subsurface.spectrum_index);
-              return spectrum_picker(scene_rep, "Subsurface Distance", material.subsurface.spectrum_index, SpectralDistribution::Reflectance, true, true);
+              return material_spectrum_control(scene_rep, "Subsurface Distance", SpectrumTarget::Channel::Subsurface, SpectrumSource::Kind::Coefficient);
             });
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.subsurface.image_index;
@@ -3189,7 +2883,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
         return value.emission.spectrum_index;
       }),
         [&]() {
-          return emission_picker(scene_rep, "Emission", preset_id.c_str(), material.emission.spectrum_index, data);
+          return material_spectrum_control(scene_rep, "Emission", SpectrumTarget::Channel::Emission, SpectrumSource::Kind::Emission);
         });
       changed |= mixed_control(material_values_mixed([](const Material& value) {
         return value.emission.image_index;
@@ -3214,7 +2908,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   return changed;
 }
 
-bool UI::build_medium(uint32_t medium_index, Medium& m, SpectralDistribution* absorption, SpectralDistribution* scattering) {
+bool UI::build_medium(SceneRepresentation& scene_rep, uint32_t medium_index, Medium& m) {
   bool changed = false;
 
   ImGui::Text("Medium Type");
@@ -3232,19 +2926,10 @@ bool UI::build_medium(uint32_t medium_index, Medium& m, SpectralDistribution* ab
     }
   }
 
-  ImGui::Text("Absorption");
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  const std::string absorption_editor_key = "medium:" + std::to_string(medium_index) + ":absorption";
-  if ((absorption != nullptr) && spectrum_picker("Absorption##medium_absorption", absorption_editor_key, *absorption, SpectralDistribution::Reflectance, true, true)) {
-    changed = true;
-  }
-
-  ImGui::Text("Scattering");
-  ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-  const std::string scattering_editor_key = "medium:" + std::to_string(medium_index) + ":scattering";
-  if ((scattering != nullptr) && spectrum_picker("Scattering##medium_scattering", scattering_editor_key, *scattering, SpectralDistribution::Reflectance, true, true)) {
-    changed = true;
-  }
+  spectrum_control(scene_rep, "Absorption", {{.spectrum_index = m.absorption_index, .channel = SpectrumTarget::Channel::Absorption, .medium_index = medium_index}},
+    SpectrumSource::Kind::Coefficient, false);
+  spectrum_control(scene_rep, "Scattering", {{.spectrum_index = m.scattering_index, .channel = SpectrumTarget::Channel::Scattering, .medium_index = medium_index}},
+    SpectrumSource::Kind::Coefficient, false);
 
   ImGui::TextUnformatted("Anisotropy");
   full_width_item();
@@ -3347,9 +3032,8 @@ void UI::reset_selection() {
   _name_edit_original_buffer[0] = 0;
   _name_edit_pending = false;
   clear_selection_history();
-  _spectrum_editors.clear();
-  _spectrum_target = {};
-  _spectrum_preview_pending = false;
+  _spectrum_targets.clear();
+
   _material_anisotropy.clear();
   _selected_material_positions.clear();
   _pending_material_selection_indices.clear();
@@ -3357,6 +3041,8 @@ void UI::reset_selection() {
 }
 
 void UI::reset_scene_state() {
+  _spectrum_controls.clear();
+  invalidate_scene_resources();
   reset_selection();
   _node_transform_editor = {};
   _node_geometry_edit_result_node = -1;
@@ -4144,6 +3830,10 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
     _reset_layout_requested = false;
   }
 
+  const bool light_theme = _theme == RHIImGuiTheme::Light;
+  const ImVec4 explorer_background = light_theme ? ImVec4(0.91f, 0.94f, 0.96f, 1.0f) : ImVec4(0.105f, 0.125f, 0.145f, 1.0f);
+  const ImVec4 inspector_background = light_theme ? ImVec4(0.95f, 0.935f, 0.91f, 1.0f) : ImVec4(0.145f, 0.13f, 0.11f, 1.0f);
+  const ImVec4 diagnostics_background = light_theme ? ImVec4(0.93f, 0.92f, 0.96f, 1.0f) : ImVec4(0.125f, 0.115f, 0.15f, 1.0f);
   const bool explorer_visible = (_ui_setup & UIObjects) != 0u;
   const bool inspector_visible = (_ui_setup & UIProperties) != 0u;
   const bool diagnostics_visible = (_ui_setup & UIMemoryDiagnostics) != 0u;
@@ -4190,7 +3880,9 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
   if (explorer_visible) {
     ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ctx.wpadding.x, ctx.wpadding.y));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, explorer_background);
     ImGui::BeginChild("##workspace_explorer", ImVec2(explorer_width, main_height), ImGuiChildFlags_Borders);
+    ImGui::PopStyleColor();
     if (data.scene_loaded == false) {
       ImGui::BeginDisabled();
     }
@@ -4317,7 +4009,9 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
 
     ImGui::SetCursorScreenPos(ImVec2(cursor_x, content_origin.y));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ctx.wpadding.x, ctx.wpadding.y));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, inspector_background);
     ImGui::BeginChild("##workspace_inspector", ImVec2(inspector_width, main_height), ImGuiChildFlags_Borders);
+    ImGui::PopStyleColor();
     build_inspector(scene_rep, ctx, data);
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -4339,7 +4033,9 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
 
     ImGui::SetCursorScreenPos(ImVec2(content_origin.x, splitter_y + splitter_size));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(ctx.wpadding.x, ctx.wpadding.y));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, diagnostics_background);
     ImGui::BeginChild("##workspace_diagnostics", ImVec2(content_size.x, content_size.y - main_height - splitter_size), ImGuiChildFlags_Borders);
+    ImGui::PopStyleColor();
     build_diagnostics(scene_rep, ctx, data);
     ImGui::EndChild();
     ImGui::PopStyleVar();
@@ -4891,17 +4587,90 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
     ImGui::InputTextWithHint("##resource_filter", "Search resources", _resource_filter, sizeof(_resource_filter));
     ImGui::Spacing();
     const bool filter_active = _resource_filter[0] != '\0';
+    const SceneData& scene_data = scene_rep.data();
+    std::vector<uint8_t> used_meshes(scene_data.meshes.size(), 0u);
+    std::vector<uint8_t> used_materials(scene_data.materials.size(), 0u);
+    std::vector<uint8_t> used_media(scene_data.mediums_vector.size(), 0u);
+    std::vector<uint8_t> used_cameras(scene_data.cameras.size(), 0u);
+    std::vector<uint8_t> used_emitters(scene_data.emitter_profiles.size(), 0u);
+    const auto mark_used = [](std::vector<uint8_t>& flags, uint32_t index) {
+      if (index < flags.size())
+        flags[index] = 1u;
+    };
+    for (const auto& attachment : scene_data.hierarchy.attachments) {
+      switch (attachment.type) {
+        case SceneAttachment::Type::Mesh:
+          mark_used(used_meshes, attachment.resource_index);
+          break;
+        case SceneAttachment::Type::Camera:
+          mark_used(used_cameras, attachment.resource_index);
+          break;
+        case SceneAttachment::Type::Emitter:
+          mark_used(used_emitters, attachment.resource_index);
+          break;
+        case SceneAttachment::Type::Medium:
+          mark_used(used_media, attachment.resource_index);
+          break;
+      }
+    }
+    update_mesh_material_usage(scene_data);
+    for (uint32_t i = 0u; i < scene_data.meshes.size(); ++i) {
+      if (used_meshes[i] == 0u)
+        continue;
+      for (uint32_t material_index : _mesh_material_indices[i]) {
+        mark_used(used_materials, material_index);
+      }
+    }
+    for (uint32_t i = 0u; i < scene_data.materials.size(); ++i) {
+      if (used_materials[i] == 0u)
+        continue;
+      mark_used(used_media, scene_data.materials[i].int_medium);
+      mark_used(used_media, scene_data.materials[i].ext_medium);
+      if (const auto found = scene_data.material_to_emitter_profile.find(i); found != scene_data.material_to_emitter_profile.end()) {
+        mark_used(used_emitters, found->second);
+      }
+    }
+    for (uint32_t i = 0u; i < scene_data.cameras.size(); ++i) {
+      if (scene_data.cameras[i].active)
+        used_cameras[i] = 1u;
+      if (used_cameras[i] != 0u)
+        mark_used(used_media, scene_data.cameras[i].cam.medium_index);
+    }
+    for (uint32_t i = 0u; i < scene_data.emitter_profiles.size(); ++i) {
+      const auto& emitter = scene_data.emitter_profiles[i];
+      if (emitter.cls != EmitterProfile::Class::Area)
+        used_emitters[i] = 1u;
+      if (used_emitters[i] != 0u)
+        mark_used(used_media, emitter.medium_index);
+    }
+    const bool light_theme = _theme == RHIImGuiTheme::Light;
+    const ImVec4 used_color = light_theme ? ImVec4(0.43f, 0.34f, 0.12f, 1.0f) : ImVec4(0.88f, 0.82f, 0.58f, 1.0f);
+    const ImVec4 unused_color = light_theme ? ImVec4(0.43f, 0.45f, 0.47f, 1.0f) : ImVec4(0.59f, 0.61f, 0.64f, 1.0f);
+    const auto resource_item = [&](const char* label, bool selected, bool used) {
+      ImGui::PushStyleColor(ImGuiCol_Text, used ? used_color : unused_color);
+      const bool pressed = selectable_with_ellipsis(label, selected);
+      ImGui::PopStyleColor();
+      draw_item_tooltip(used ? "Used by the scene" : "Unused by the scene", ImGuiHoveredFlags_DelayNormal);
+      return pressed;
+    };
     constexpr ImGuiTreeNodeFlags category_flags =
       ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_Framed | ImGuiTreeNodeFlags_FramePadding;
     if (ImGui::BeginChild("##resource_tree", ImVec2(-FLT_MIN, -FLT_MIN), ImGuiChildFlags_Borders)) {
-      const auto begin_category = [&](const char* id, const char* label, size_t resource_count) {
+      const auto begin_category = [&](const char* id, const char* label, size_t resource_count, uint32_t category) {
         if (filter_active) {
           ImGui::SetNextItemOpen(true, ImGuiCond_Always);
         }
-        return ImGui::TreeNodeEx(id, category_flags, "%s (%zu)", label, resource_count);
+        const ImVec4 tints[] = {{0.55f, 0.44f, 0.19f, 1.0f}, {0.25f, 0.45f, 0.42f, 1.0f}, {0.55f, 0.35f, 0.23f, 1.0f}, {0.37f, 0.35f, 0.55f, 1.0f}};
+        const ImVec4 base = ImGui::GetStyleColorVec4(ImGuiCol_Header);
+        const float amount = light_theme ? 0.12f : 0.18f;
+        const ImVec4 tint = tints[category];
+        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(base.x + amount * (tint.x - base.x), base.y + amount * (tint.y - base.y), base.z + amount * (tint.z - base.z), base.w));
+        const bool open = ImGui::TreeNodeEx(id, category_flags, "%s (%zu)", label, resource_count);
+        ImGui::PopStyleColor();
+        return open;
       };
 
-      if (begin_category("##resource_materials", "Materials", static_cast<size_t>(_material_mapping.size()))) {
+      if (begin_category("##resource_materials", "Materials", static_cast<size_t>(_material_mapping.size()), 0u)) {
         uint32_t visible_count = 0u;
         for (uint64_t i = 0u; i < _material_mapping.size(); ++i) {
           const int32_t list_index = static_cast<int32_t>(i);
@@ -4912,7 +4681,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
           ++visible_count;
           ImGui::PushID(list_index);
           const bool entry_selected = (_selection.kind == SelectionKind::Material) && material_list_position_selected(list_index);
-          if (selectable_with_ellipsis(entry.name, entry_selected)) {
+          if (resource_item(entry.name, entry_selected, used_materials[_material_mapping.at(list_index)] != 0u)) {
             const ImGuiIO& io = ImGui::GetIO();
             if (io.KeyShift) {
               set_material_selection_range(list_index);
@@ -4930,7 +4699,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
         ImGui::TreePop();
       }
 
-      if (begin_category("##resource_mediums", "Mediums", static_cast<size_t>(_medium_mapping.size()))) {
+      if (begin_category("##resource_mediums", "Mediums", static_cast<size_t>(_medium_mapping.size()), 1u)) {
         uint32_t visible_count = 0u;
         for (uint64_t i = 0u; i < _medium_mapping.size(); ++i) {
           const int32_t list_index = static_cast<int32_t>(i);
@@ -4941,7 +4710,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
           ++visible_count;
           ImGui::PushID(static_cast<int>(i + 1024u));
           const bool entry_selected = (_selection.kind == SelectionKind::Medium) && (_selection.index == list_index);
-          if (selectable_with_ellipsis(entry.name, entry_selected)) {
+          if (resource_item(entry.name, entry_selected, used_media[_medium_mapping.at(list_index)] != 0u)) {
             set_selection(SelectionKind::Medium, list_index);
           }
           ImGui::PopID();
@@ -4952,7 +4721,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
         ImGui::TreePop();
       }
 
-      if (begin_category("##resource_lights", "Lights", scene_rep.data().emitter_profiles.size())) {
+      if (begin_category("##resource_lights", "Lights", scene_rep.data().emitter_profiles.size(), 2u)) {
         uint32_t visible_count = 0u;
         const std::vector<std::string>& emitter_names = scene_rep.emitter_names();
         for (uint32_t emitter_index = 0u; emitter_index < scene_rep.data().emitter_profiles.size(); ++emitter_index) {
@@ -4970,7 +4739,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
           ++visible_count;
           ImGui::PushID(static_cast<int>(emitter_index + 4096u));
           const bool entry_selected = (_selection.kind == SelectionKind::Emitter) && (_selection.index == static_cast<int32_t>(emitter_index));
-          if (selectable_with_ellipsis(label.c_str(), entry_selected)) {
+          if (resource_item(label.c_str(), entry_selected, used_emitters[emitter_index] != 0u)) {
             set_selection(SelectionKind::Emitter, static_cast<int32_t>(emitter_index));
           }
           ImGui::PopID();
@@ -4981,7 +4750,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
         ImGui::TreePop();
       }
 
-      if (begin_category("##resource_cameras", "Cameras", scene_rep.data().cameras.size())) {
+      if (begin_category("##resource_cameras", "Cameras", scene_rep.data().cameras.size(), 3u)) {
         uint32_t visible_count = 0u;
         for (uint32_t camera_index = 0u; camera_index < scene_rep.data().cameras.size(); ++camera_index) {
           const auto& camera = scene_rep.data().cameras[camera_index];
@@ -4992,7 +4761,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
           ++visible_count;
           ImGui::PushID(static_cast<int>(camera_index + 8192u));
           const bool entry_selected = (_selection.kind == SelectionKind::Camera) && (_selection.index == static_cast<int32_t>(camera_index));
-          if (selectable_with_ellipsis(label.c_str(), entry_selected)) {
+          if (resource_item(label.c_str(), entry_selected, used_cameras[camera_index] != 0u)) {
             set_selection(SelectionKind::Camera, static_cast<int32_t>(camera_index));
           }
           ImGui::PopID();
@@ -5012,6 +4781,7 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
   ctx.with_window(UIObjects, "Scene Tree", [&]() {
     SceneHierarchy& hierarchy = scene_rep.data().hierarchy;
     uint32_t duplicate_request = kInvalidIndex;
+    NodeDuplicateMode duplicate_mode = NodeDuplicateMode::Linked;
     uint32_t reparent_source = kInvalidIndex;
     uint32_t reparent_target = kInvalidIndex;
     constexpr const char* node_payload_type = "ETX_SCENE_NODE";
@@ -5232,10 +5002,20 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
             ImGui::PushID(static_cast<int>(node_index));
             if (ImGui::BeginPopupContextItem("##node_context", ImGuiPopupFlags_MouseButtonRight)) {
               set_selection(SelectionKind::Node, static_cast<int32_t>(node_index));
-              const bool duplicate_available = static_cast<bool>(callbacks.node_duplicated);
-              if (ImGui::MenuItem("Duplicate", nullptr, false, duplicate_available)) {
+              const SceneEditStatus duplicate_status = scene_rep.validate_node_duplication(node_index);
+              const bool duplicate_available = callbacks.node_duplicated && (duplicate_status == SceneEditStatus::Success);
+              if (ImGui::MenuItem("Duplicate Linked", nullptr, false, duplicate_available)) {
                 duplicate_request = node_index;
+                duplicate_mode = NodeDuplicateMode::Linked;
               }
+              draw_item_tooltip(duplicate_available ? "Share geometry and materials; copy cameras, lights and volumes." : scene_edit_status_message(duplicate_status),
+                ImGuiHoveredFlags_AllowWhenDisabled);
+              if (ImGui::MenuItem("Duplicate Independent", nullptr, false, duplicate_available)) {
+                duplicate_request = node_index;
+                duplicate_mode = NodeDuplicateMode::Independent;
+              }
+              draw_item_tooltip(duplicate_available ? "Copy geometry and editable resources, preserving sharing within the assembly." : scene_edit_status_message(duplicate_status),
+                ImGuiHoveredFlags_AllowWhenDisabled);
               const bool delete_available = static_cast<bool>(callbacks.node_deleted);
               if (ImGui::MenuItem("Delete...", nullptr, false, delete_available)) {
                 request_node_deletion(node_index);
@@ -5270,7 +5050,7 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
 
     if ((duplicate_request != kInvalidIndex) && callbacks.node_duplicated) {
       commit_name_edit(true);
-      select_scene_edit_node(callbacks.node_duplicated(duplicate_request));
+      select_scene_edit_node(callbacks.node_duplicated(duplicate_request, duplicate_mode));
     }
     if ((reparent_source != kInvalidIndex) && callbacks.node_reparented) {
       select_scene_edit_node(callbacks.node_reparented(reparent_source, reparent_target));
@@ -6365,31 +6145,13 @@ void UI::build_medium_resource_properties(SceneRepresentation& scene_rep, uint32
   }
   Medium& medium = scene_rep.data().mediums.get(medium_index);
   Medium edited_medium = medium;
-  SpectralDistribution* absorption = nullptr;
-  SpectralDistribution edited_absorption = {};
-  if (medium.absorption_index < scene_rep.data().spectrum_values.size()) {
-    edited_absorption = scene_rep.data().spectrum_values[medium.absorption_index];
-    absorption = &edited_absorption;
-  }
-  SpectralDistribution* scattering = nullptr;
-  SpectralDistribution edited_scattering = {};
-  if (medium.scattering_index < scene_rep.data().spectrum_values.size()) {
-    edited_scattering = scene_rep.data().spectrum_values[medium.scattering_index];
-    scattering = &edited_scattering;
-  }
-  const bool changed = build_medium(medium_index, edited_medium, absorption, scattering);
+  const bool changed = build_medium(scene_rep, medium_index, edited_medium);
   if (changed) {
     const bool representation_changed = (edited_medium.cls != medium.cls) || (edited_medium.grid_type_enum() != medium.grid_type_enum());
     queue_medium_change(medium_index);
     medium = edited_medium;
     if (representation_changed) {
       scene_rep.data().mediums.clear_volume_path(medium_index);
-    }
-    if (absorption != nullptr) {
-      scene_rep.data().spectrum_values[medium.absorption_index] = edited_absorption;
-    }
-    if (scattering != nullptr) {
-      scene_rep.data().spectrum_values[medium.scattering_index] = edited_scattering;
     }
   }
 }
@@ -6463,8 +6225,8 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
   if (emitter.cls == EmitterProfile::Class::Area) {
     auto& material = scene_rep.data().materials[material_index];
     const std::string material_id = std::to_string(material_index);
-    const std::string area_preset_id = "area_material_emission_" + material_id;
-    const bool spectrum_changed = emission_picker(scene_rep, "Emission", area_preset_id.c_str(), material.emission.spectrum_index, data);
+    const bool spectrum_changed =
+      spectrum_control(scene_rep, "Emission", {{material_index, material.emission.spectrum_index, SpectrumTarget::Channel::Emission}}, SpectrumSource::Kind::Emission, false);
     ImGui::TextUnformatted("Emission Texture");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
     const std::string texture_label = "Emission Texture##area_emission_texture_" + material_id;
@@ -6485,8 +6247,8 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
       }
     }
   } else {
-    std::string emitter_preset_id = "emitter_emission_" + std::to_string(emitter_index);
-    common_changed = emission_picker(scene_rep, "Emission", emitter_preset_id.c_str(), emitter.emission.spectrum_index, data);
+    spectrum_control(scene_rep, "Emission", {{.spectrum_index = emitter.emission.spectrum_index, .channel = SpectrumTarget::Channel::Emission, .emitter_index = emitter_index}},
+      SpectrumSource::Kind::Emission, false);
   }
 
   if (_medium_mapping.empty() == false) {
@@ -6658,7 +6420,7 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
   }
 }
 
-uint32_t UI::build_mesh_material_assignment(SceneRepresentation& scene_rep, uint32_t mesh_index) {
+uint32_t UI::build_mesh_material_assignment(SceneRepresentation& scene_rep, uint32_t node_index, uint32_t& mesh_index) {
   if (mesh_index >= scene_rep.data().meshes.size()) {
     return kInvalidIndex;
   }
@@ -6693,37 +6455,53 @@ uint32_t UI::build_mesh_material_assignment(SceneRepresentation& scene_rep, uint
   if (ImGui::Combo("##mesh_material", &selected_material, material_names.data(), static_cast<int>(material_names.size())) && (selected_material >= 0)) {
     const uint32_t new_material_index = _material_mapping.at(selected_material);
     if (callbacks.mesh_material_changed) {
-      callbacks.mesh_material_changed(mesh_index, new_material_index);
+      const auto result = callbacks.mesh_material_changed(node_index, mesh_index, new_material_index, false);
+      _scene_edit_status = result.status;
+      if (result.succeeded()) {
+        mesh_index = result.mesh_index;
+        current_material = new_material_index;
+      }
     }
-    current_material = new_material_index;
   }
   return current_material;
 }
 
-uint32_t UI::material_mesh_usage_count(const SceneRepresentation& scene_rep, uint32_t material_index) const {
-  uint32_t usage_count = 0u;
-  const auto& scene = scene_rep.data();
-  std::vector<uint8_t> counted_meshes(scene.meshes.size(), 0u);
-  for (const SceneNode& node : scene.hierarchy.nodes) {
-    const uint64_t attachment_begin = node.attachment_offset;
-    const uint64_t attachment_end = std::min<uint64_t>(attachment_begin + node.attachment_count, scene.hierarchy.attachments.size());
-    for (uint64_t attachment_index = attachment_begin; attachment_index < attachment_end; ++attachment_index) {
-      const SceneAttachment& attachment = scene.hierarchy.attachments[attachment_index];
-      if ((attachment.type != SceneAttachment::Type::Mesh) || (attachment.resource_index >= scene.meshes.size()) || (counted_meshes[attachment.resource_index] != 0u)) {
-        continue;
-      }
-
-      counted_meshes[attachment.resource_index] = 1u;
-      const Mesh& mesh = scene.meshes[attachment.resource_index];
-      const uint64_t triangle_begin = mesh.triangle_offset;
-      const uint64_t triangle_end = std::min<uint64_t>(triangle_begin + mesh.triangle_count, scene.triangles.size());
-      for (uint64_t triangle_index = triangle_begin; triangle_index < triangle_end; ++triangle_index) {
-        if (scene.triangles[triangle_index].material_index == material_index) {
-          ++usage_count;
-          break;
-        }
+void UI::update_mesh_material_usage(const SceneData& scene) {
+  if ((_mesh_materials_dirty == false) && (_mesh_material_indices.size() == scene.meshes.size())) {
+    return;
+  }
+  _mesh_material_indices.resize(scene.meshes.size());
+  std::vector<uint32_t> seen(scene.materials.size(), kInvalidIndex);
+  for (uint32_t i = 0u; i < scene.meshes.size(); ++i) {
+    auto& materials = _mesh_material_indices[i];
+    materials.clear();
+    const Mesh& mesh = scene.meshes[i];
+    for (uint32_t j = 0u; j < mesh.triangle_count; ++j) {
+      const uint32_t material = scene.triangles[mesh.triangle_offset + j].material_index;
+      if ((material < seen.size()) && (seen[material] != i)) {
+        seen[material] = i;
+        materials.push_back(material);
       }
     }
+  }
+  _mesh_materials_dirty = false;
+}
+
+uint32_t UI::material_mesh_usage_count(const SceneRepresentation& scene_rep, uint32_t material_index) {
+  uint32_t usage_count = 0u;
+  const auto& scene = scene_rep.data();
+  update_mesh_material_usage(scene);
+  for (const SceneNode& node : scene.hierarchy.nodes) {
+    bool uses_material = false;
+    for (uint32_t i = 0u; (uses_material == false) && (i < node.attachment_count); ++i) {
+      const SceneAttachment& attachment = scene.hierarchy.attachments[node.attachment_offset + i];
+      if ((attachment.type != SceneAttachment::Type::Mesh) || (attachment.resource_index >= scene.meshes.size())) {
+        continue;
+      }
+      const auto& materials = _mesh_material_indices[attachment.resource_index];
+      uses_material = std::find(materials.begin(), materials.end(), material_index) != materials.end();
+    }
+    usage_count += uses_material ? 1u : 0u;
   }
   return usage_count;
 }
@@ -6746,7 +6524,7 @@ void UI::build_node_appearance_properties(SceneRepresentation& scene_rep, const 
   ImGui::SeparatorText(mesh_indices.size() == 1u ? "Appearance" : "Appearances");
   ImGui::PushID("node_appearance");
   for (size_t mesh_position = 0u; mesh_position < mesh_indices.size(); ++mesh_position) {
-    const uint32_t mesh_index = mesh_indices[mesh_position];
+    uint32_t mesh_index = mesh_indices[mesh_position];
     ImGui::PushID(static_cast<int>(mesh_position));
     bool appearance_open = true;
     if (mesh_indices.size() > 1u) {
@@ -6755,15 +6533,17 @@ void UI::build_node_appearance_properties(SceneRepresentation& scene_rep, const 
       appearance_open = ImGui::CollapsingHeader(mesh_name != nullptr ? mesh_name : "Mesh", ImGuiTreeNodeFlags_Framed);
     }
     if (appearance_open) {
-      uint32_t material_index = build_mesh_material_assignment(scene_rep, mesh_index);
+      uint32_t material_index = build_mesh_material_assignment(scene_rep, static_cast<uint32_t>(_selection.index), mesh_index);
       if (material_index < scene_rep.data().materials.size()) {
         const uint32_t usage_count = material_mesh_usage_count(scene_rep, material_index);
         if (usage_count > 1u) {
-          ImGui::TextDisabled("Shared by %u meshes", usage_count);
-          if (ImGui::Button("Make Unique", ImVec2(-FLT_MIN, 0.0f)) && callbacks.mesh_material_made_unique) {
-            const uint32_t unique_material_index = callbacks.mesh_material_made_unique(mesh_index, material_index);
-            if (unique_material_index < scene_rep.data().materials.size()) {
-              material_index = unique_material_index;
+          ImGui::TextDisabled("Shared by %u objects", usage_count);
+          if (ImGui::Button("Make Unique", ImVec2(-FLT_MIN, 0.0f)) && callbacks.mesh_material_changed) {
+            const auto result = callbacks.mesh_material_changed(static_cast<uint32_t>(_selection.index), mesh_index, material_index, true);
+            _scene_edit_status = result.status;
+            if (result.succeeded()) {
+              mesh_index = result.mesh_index;
+              material_index = scene_rep.data().triangles[scene_rep.data().meshes[mesh_index].triangle_offset].material_index;
               _material_mapping.build(scene_rep.material_mapping());
               _material_mapping_hash = hash_mapping(scene_rep.material_mapping());
               clear_selection_history();
