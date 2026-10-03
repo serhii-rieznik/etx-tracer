@@ -27,8 +27,10 @@ struct TaskScheduler {
 
   Task::Handle schedule(uint64_t range, Task*);
   Task::Handle schedule(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
+  Task::Handle schedule_background(std::function<void(uint32_t, uint32_t, uint32_t)> func);
 
   void execute(uint64_t range, Task*);
+  void execute_background(uint64_t range, Task*);
   void execute(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);
 
   void execute_linear(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func);

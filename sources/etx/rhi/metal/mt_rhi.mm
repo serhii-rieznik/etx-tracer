@@ -2077,17 +2077,17 @@ RHIResult MTContext::query_command_buffer(RHICommandBuffer cmd) {
   return RHIResult::InvalidHandle;
 }
 
-void MTContext::submit_command_buffer(const RHISubmitInfo& info) {
+RHIResult MTContext::submit_command_buffer(const RHISubmitInfo& info) {
   (void)info.wait_semaphores;
   (void)info.signal_semaphores;
   MTCommandBuffer* command_buffer = _impl->find_command_buffer(info.command_buffer);
   if (command_buffer == nullptr) {
-    return;
+    return RHIResult::InvalidHandle;
   }
 
   id<MTLCommandBuffer> submitted_command_buffer = command_buffer->_impl->command_buffer;
   if (submitted_command_buffer == nil) {
-    return;
+    return RHIResult::InvalidHandle;
   }
 
   MTInflightSubmission inflight_submission = {
@@ -2095,13 +2095,10 @@ void MTContext::submit_command_buffer(const RHISubmitInfo& info) {
     .command_buffer = submitted_command_buffer,
     .drawable = nil,
   };
-  if (_impl->current_drawable != nil) {
-    [submitted_command_buffer presentDrawable:_impl->current_drawable];
-    inflight_submission.drawable = _impl->current_drawable;
-    _impl->current_drawable = nil;
+  reap_completed_command_buffers(_impl->inflight_command_buffers);
+  if (_impl->inflight_command_buffers.size() == _impl->inflight_command_buffers.capacity()) {
+    _impl->inflight_command_buffers.reserve((_impl->inflight_command_buffers.capacity() * 2u) + 1u);
   }
-  [submitted_command_buffer commit];
-  [submitted_command_buffer retain];
   if (command_buffer->_impl->timestamp_sample_buffer != nil) {
     auto existing_it = _impl->submitted_timestamp_sample_buffers.find(info.command_buffer);
     if (existing_it != _impl->submitted_timestamp_sample_buffers.end()) {
@@ -2112,10 +2109,17 @@ void MTContext::submit_command_buffer(const RHISubmitInfo& info) {
     }
     command_buffer->_impl->timestamp_sample_buffer = nil;
   }
-  reap_completed_command_buffers(_impl->inflight_command_buffers);
+  if (_impl->current_drawable != nil) {
+    [submitted_command_buffer presentDrawable:_impl->current_drawable];
+    inflight_submission.drawable = _impl->current_drawable;
+    _impl->current_drawable = nil;
+  }
+  [submitted_command_buffer commit];
+  [submitted_command_buffer retain];
   _impl->inflight_command_buffers.push_back(inflight_submission);
   command_buffer->detach_submitted();
   _impl->command_buffers.erase(info.command_buffer);
+  return RHIResult::Success;
 }
 
 void MTContext::program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func) {
@@ -3707,6 +3711,7 @@ RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAcceler
   std::string error_message = {};
   if (desc.type == RHIAccelerationStructureType::BottomLevel) {
     descriptor = create_metal_blas_descriptor(desc.geometries, desc.geometry_count, _impl, &error_message);
+    descriptor.usage = desc.allow_update ? MTLAccelerationStructureUsageRefit : MTLAccelerationStructureUsageNone;
   } else {
     if (desc.instance_count == 0u) {
       return {RHIResult::InvalidArgument, {}};
@@ -3812,6 +3817,7 @@ void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
   std::string error_message = {};
   if (desc.type == RHIAccelerationStructureType::BottomLevel) {
     descriptor = create_metal_blas_descriptor(desc.geometries, desc.geometry_count, owner->device._impl, &error_message);
+    descriptor.usage = desc.allow_update ? MTLAccelerationStructureUsageRefit : MTLAccelerationStructureUsageNone;
   } else {
     auto instance_buffer_it = owner->device._impl->buffers.find(desc.instance_buffer);
     if ((instance_buffer_it == owner->device._impl->buffers.end()) || (instance_buffer_it->second.buffer == nil) || (desc.instance_count == 0u)) {

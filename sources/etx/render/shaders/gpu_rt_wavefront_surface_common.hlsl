@@ -284,7 +284,7 @@ SpectralResponse wavefront_evaluate_local_direct_hit_radiance(uint emitter_index
   if ((try_load_emitter_instance(emitter_index, emitter_instance) == false) || (try_load_emitter_profile(emitter_instance.emitter_profile_index, emitter_profile) == false)) {
     return spectral_response_zero(spect);
   }
-  if (emitter_instance.emitter_class != EmitterClass::Area) {
+  if (emitter_access_is_local_class(emitter_instance.emitter_class) == false) {
     return spectral_response_zero(spect);
   }
 
@@ -331,7 +331,7 @@ SpectralResponse wavefront_compute_local_direct_hit_contribution(SpectralQuery s
   if (try_load_emitter_instance(emitter_index, emitter_instance) == false) {
     return spectral_response_zero(spect);
   }
-  if (emitter_instance.emitter_class != EmitterClass::Area) {
+  if (emitter_access_is_local_class(emitter_instance.emitter_class) == false) {
     return spectral_response_zero(spect);
   }
 
@@ -599,7 +599,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     current_vertex.d_surface = state.d_surface;
     if ((from_camera == false) && (state.path_length == 1u) && (previous_vertex.emitter_index != kInvalidIndex)) {
       GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
-      if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_instance.emitter_class != EmitterClass::Area)) {
+      if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_access_is_local_class(emitter_instance.emitter_class) == false)) {
         previous_vertex.pdf_from_prev = wavefront_distant_emitter_sample_pdf(previous_vertex.emitter_index, -previous_vertex.w_i);
         current_vertex.pdf_from_prev = wavefront_distant_emitter_area_pdf(previous_vertex.emitter_index, previous_vertex.w_i, current_vertex);
         wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u), previous_vertex);
@@ -741,7 +741,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     }
     if ((from_camera == false) && (state.path_length == 1u) && (previous_vertex.emitter_index != kInvalidIndex)) {
       GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
-      if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_instance.emitter_class != EmitterClass::Area)) {
+      if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_access_is_local_class(emitter_instance.emitter_class) == false)) {
         previous_vertex.pdf_from_prev = wavefront_distant_emitter_sample_pdf(previous_vertex.emitter_index, -previous_vertex.w_i);
         if ((scene_path_mode_is_bdpt_full() || scene_path_mode_uses_bdpt_fast()) && (cos_to_prev > 0.0f)) {
           // A first distant-emitter segment has no finite-distance squared

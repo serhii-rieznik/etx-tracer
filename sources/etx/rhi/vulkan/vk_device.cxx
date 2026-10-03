@@ -259,6 +259,7 @@ struct VKStagingBuffer {
 
 struct VKDevice::Impl {
   std::atomic<uint64_t> gpu_allocated_bytes = {0};
+  std::atomic<uint64_t> gpu_deferred_allocated_bytes = {0};
   std::atomic<uint64_t> gpu_buffer_allocated_bytes = {0};
   std::atomic<uint64_t> gpu_texture_allocated_bytes = {0};
   std::atomic<uint64_t> gpu_acceleration_structure_allocated_bytes = {0};
@@ -389,6 +390,7 @@ struct VKDevice::Impl {
 
   struct DeferredResource {
     enum class Type { Buffer, Texture, Sampler, AccelerationStructure, Pipeline, Shader } type;
+    uint64_t allocated_size = 0u;
     struct {
       VkBuffer buffer = VK_NULL_HANDLE;
       VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -455,12 +457,25 @@ struct VKDevice::Impl {
     staging_buffer.reset_frame(frame_index);
   }
 
+  void reserve_scene_resource_destruction(size_t additional) {
+    // Resource retirement must not allocate while unwinding a failed scene preparation.
+    const size_t live = buffers.size() + textures.size() + samplers.size() + acceleration_structures.size() + compute_pipelines.size() + graphics_pipelines.size();
+    for (auto& resources : deferred_resources) {
+      const size_t required = resources.size() + live + additional;
+      if (required > resources.capacity()) {
+        resources.reserve(std::max(required, resources.capacity() * 2u));
+      }
+    }
+  }
+
   void queue_deferred_destruction(const VKBufferData& data) {
     DeferredResource res;
     res.type = DeferredResource::Type::Buffer;
     res.vk.buffer = data.buffer;
     res.vk.memory = data.memory;
+    res.allocated_size = data.allocated_size;
     deferred_resources[current_frame_index].push_back(res);
+    gpu_deferred_allocated_bytes += res.allocated_size;
   }
 
   void queue_deferred_destruction(const VKTextureData& data) {
@@ -469,7 +484,9 @@ struct VKDevice::Impl {
     res.vk.image_view = data.image_view;
     res.vk.image = data.image;
     res.vk.memory = data.memory;
+    res.allocated_size = data.allocated_size;
     deferred_resources[current_frame_index].push_back(res);
+    gpu_deferred_allocated_bytes += res.allocated_size;
   }
 
   void queue_deferred_destruction(const VKSamplerData& data) {
@@ -513,6 +530,7 @@ struct VKDevice::Impl {
           }
           if (res.vk.memory != VK_NULL_HANDLE) {
             vkFreeMemory(device, res.vk.memory, nullptr);
+            gpu_deferred_allocated_bytes -= res.allocated_size;
           }
           break;
         }
@@ -525,6 +543,7 @@ struct VKDevice::Impl {
           }
           if (res.vk.memory != VK_NULL_HANDLE) {
             vkFreeMemory(device, res.vk.memory, nullptr);
+            gpu_deferred_allocated_bytes -= res.allocated_size;
           }
           break;
         }
@@ -1210,6 +1229,12 @@ RHIResult VKDevice::Impl::create_vulkan_buffer(const RHIBufferDesc& desc, VkBuff
   vkGetBufferMemoryRequirements(device, out_buffer, &mem_requirements);
 
   VkMemoryPropertyFlags mem_props = desc.host_visible ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+  if ((desc.host_visible) && (desc.prefer_host_cached)) {
+    const VkMemoryPropertyFlags cached_props = mem_props | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    if (find_vulkan_memory_type(physical_device, mem_requirements.memoryTypeBits, cached_props) != UINT32_MAX) {
+      mem_props = cached_props;
+    }
+  }
 
   VkMemoryAllocateFlags mem_flags = 0;
   if (vk_usage & VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT) {
@@ -1791,102 +1816,124 @@ void VKDevice::Impl::free_acceleration_structure_index(uint32_t index) {
 }
 
 RHICreateBindlessResult VKDevice::create_acceleration_structure(const RHIAccelerationStructureDesc& desc) {
-  if (_impl->ray_tracing_supported == false) {
-    return {RHIResult::UnsupportedFeature, {}};
-  }
-
-  VkAccelerationStructureBuildGeometryInfoKHR build_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
-  build_info.type = (desc.type == RHIAccelerationStructureType::BottomLevel) ? VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR : VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-  build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-  if (desc.allow_update) {
-    build_info.flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
-  }
-
-  VkAccelerationStructureBuildSizesInfoKHR size_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
-
-  std::vector<VkAccelerationStructureGeometryKHR> vk_geometries;
-  if (desc.type == RHIAccelerationStructureType::BottomLevel) {
-    if (desc.geometry_count == 0 || desc.geometries == nullptr) {
-      return {RHIResult::InvalidArgument, {}};
-    }
-
-    vk_geometries.resize(desc.geometry_count);
-    std::vector<uint32_t> max_primitive_counts(desc.geometry_count);
-
-    for (uint32_t i = 0; i < desc.geometry_count; ++i) {
-      const auto& src_geo = desc.geometries[i];
-      auto& vk_geo = vk_geometries[i];
-      vk_geo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-      vk_geo.flags = src_geo.is_opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
-      if (src_geo.type == RHIAccelerationStructureGeometryType::Triangles) {
-        vk_geo.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        vk_geo.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-        vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;  // Simplified, should ideally match src_geo.triangles.vertex_format
-        vk_geo.geometry.triangles.vertexStride = src_geo.triangles.vertex_stride;
-        vk_geo.geometry.triangles.maxVertex = src_geo.triangles.vertex_count;
-        vk_geo.geometry.triangles.indexType = (src_geo.triangles.index_type == RHIIndexType::UInt32) ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
-        max_primitive_counts[i] = src_geo.triangles.index_count / 3;
-      } else {
-        vk_geo.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
-        vk_geo.geometry.aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
-        vk_geo.geometry.aabbs.stride = src_geo.aabbs.stride;
-        max_primitive_counts[i] = src_geo.aabbs.count;
-      }
-    }
-
-    build_info.geometryCount = desc.geometry_count;
-    build_info.pGeometries = vk_geometries.data();
-    _impl->impl_vkGetAccelerationStructureBuildSizesKHR(_impl->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info, max_primitive_counts.data(), &size_info);
-  } else {
-    VkAccelerationStructureGeometryKHR instances_geo = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
-    instances_geo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-    instances_geo.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
-    instances_geo.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
-    instances_geo.geometry.instances.arrayOfPointers = VK_FALSE;
-
-    build_info.geometryCount = 1;
-    build_info.pGeometries = &instances_geo;
-    _impl->impl_vkGetAccelerationStructureBuildSizesKHR(_impl->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info, &desc.instance_count, &size_info);
-  }
-
-  RHIBufferDesc buffer_desc = {};
-  buffer_desc.size = size_info.accelerationStructureSize;
-  buffer_desc.usage = RHIBufferUsage::AccelerationStructureStorage | RHIBufferUsage::ShaderDeviceAddress;
-  auto buffer_res = create_buffer(buffer_desc);
-  if (buffer_res.result != RHIResult::Success) {
-    return {buffer_res.result, {}};
-  }
-
-  VkAccelerationStructureCreateInfoKHR create_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
-  create_info.buffer = _impl->buffers.get_data(_impl->buffers.get_index(buffer_res.handle)).buffer;
-  create_info.size = size_info.accelerationStructureSize;
-  create_info.type = build_info.type;
-
-  VkAccelerationStructureKHR vk_as = VK_NULL_HANDLE;
-  if (etx_vk_call(_impl->impl_vkCreateAccelerationStructureKHR(_impl->device, &create_info, nullptr, &vk_as)) != VK_SUCCESS) {
-    destroy_buffer(buffer_res.handle);
-    return {RHIResult::ValidationError, {}};
-  }
-
+  RHIBindlessHandle buffer = {};
   RHIBindlessHandle as_handle = {};
-  auto bindless = static_cast<VKBindlessManager*>(_impl->bindless_manager);
-  RHIResult reg_result = bindless->register_acceleration_structure_vk(vk_as, desc.type, as_handle);
-  if (reg_result != RHIResult::Success) {
-    _impl->impl_vkDestroyAccelerationStructureKHR(_impl->device, vk_as, nullptr);
-    destroy_buffer(buffer_res.handle);
-    return {reg_result, {}};
+  VkAccelerationStructureKHR vk_as = VK_NULL_HANDLE;
+  uint32_t index = UINT32_MAX;
+  try {
+    if (_impl->ray_tracing_supported == false) {
+      return {RHIResult::UnsupportedFeature, {}};
+    }
+    _impl->reserve_scene_resource_destruction(2u);
+
+    VkAccelerationStructureBuildGeometryInfoKHR build_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR};
+    build_info.type = (desc.type == RHIAccelerationStructureType::BottomLevel) ? VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR : VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    build_info.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    if (desc.allow_update) {
+      build_info.flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR;
+    }
+
+    VkAccelerationStructureBuildSizesInfoKHR size_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR};
+
+    std::vector<VkAccelerationStructureGeometryKHR> vk_geometries;
+    if (desc.type == RHIAccelerationStructureType::BottomLevel) {
+      if (desc.geometry_count == 0 || desc.geometries == nullptr) {
+        return {RHIResult::InvalidArgument, {}};
+      }
+
+      vk_geometries.resize(desc.geometry_count);
+      std::vector<uint32_t> max_primitive_counts(desc.geometry_count);
+
+      for (uint32_t i = 0; i < desc.geometry_count; ++i) {
+        const auto& src_geo = desc.geometries[i];
+        auto& vk_geo = vk_geometries[i];
+        vk_geo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+        vk_geo.flags = src_geo.is_opaque ? VK_GEOMETRY_OPAQUE_BIT_KHR : 0;
+        if (src_geo.type == RHIAccelerationStructureGeometryType::Triangles) {
+          vk_geo.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+          vk_geo.geometry.triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+          vk_geo.geometry.triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;  // Simplified, should ideally match src_geo.triangles.vertex_format
+          vk_geo.geometry.triangles.vertexStride = src_geo.triangles.vertex_stride;
+          vk_geo.geometry.triangles.maxVertex = src_geo.triangles.vertex_count;
+          vk_geo.geometry.triangles.indexType = (src_geo.triangles.index_type == RHIIndexType::UInt32) ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+          max_primitive_counts[i] = src_geo.triangles.index_count / 3;
+        } else {
+          vk_geo.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
+          vk_geo.geometry.aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
+          vk_geo.geometry.aabbs.stride = src_geo.aabbs.stride;
+          max_primitive_counts[i] = src_geo.aabbs.count;
+        }
+      }
+
+      build_info.geometryCount = desc.geometry_count;
+      build_info.pGeometries = vk_geometries.data();
+      _impl->impl_vkGetAccelerationStructureBuildSizesKHR(_impl->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info, max_primitive_counts.data(), &size_info);
+    } else {
+      VkAccelerationStructureGeometryKHR instances_geo = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR};
+      instances_geo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+      instances_geo.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+      instances_geo.geometry.instances.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR;
+      instances_geo.geometry.instances.arrayOfPointers = VK_FALSE;
+
+      build_info.geometryCount = 1;
+      build_info.pGeometries = &instances_geo;
+      _impl->impl_vkGetAccelerationStructureBuildSizesKHR(_impl->device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &build_info, &desc.instance_count, &size_info);
+    }
+
+    RHIBufferDesc buffer_desc = {};
+    buffer_desc.size = size_info.accelerationStructureSize;
+    buffer_desc.usage = RHIBufferUsage::AccelerationStructureStorage | RHIBufferUsage::ShaderDeviceAddress;
+    auto buffer_res = create_buffer(buffer_desc);
+    if (buffer_res.result != RHIResult::Success) {
+      return {buffer_res.result, {}};
+    }
+    buffer = buffer_res.handle;
+
+    VkAccelerationStructureCreateInfoKHR create_info = {VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR};
+    create_info.buffer = _impl->buffers.get_data(_impl->buffers.get_index(buffer_res.handle)).buffer;
+    create_info.size = size_info.accelerationStructureSize;
+    create_info.type = build_info.type;
+
+    if (etx_vk_call(_impl->impl_vkCreateAccelerationStructureKHR(_impl->device, &create_info, nullptr, &vk_as)) != VK_SUCCESS) {
+      destroy_buffer(buffer_res.handle);
+      return {RHIResult::ValidationError, {}};
+    }
+
+    auto bindless = static_cast<VKBindlessManager*>(_impl->bindless_manager);
+    RHIResult reg_result = bindless->register_acceleration_structure_vk(vk_as, desc.type, as_handle);
+    if (reg_result != RHIResult::Success) {
+      _impl->impl_vkDestroyAccelerationStructureKHR(_impl->device, vk_as, nullptr);
+      destroy_buffer(buffer_res.handle);
+      return {reg_result, {}};
+    }
+
+    index = _impl->acceleration_structures.allocate_index();
+    auto& as_data = _impl->acceleration_structures.get_data(index);
+    as_data.acceleration_structure = vk_as;
+    as_data.buffer = buffer_res.handle;
+    as_data.desc = desc;
+    as_data.build_scratch_size = desc.allow_update ? max(size_info.buildScratchSize, size_info.updateScratchSize) : size_info.buildScratchSize;
+    _impl->acceleration_structures.set_handle_to_index(as_handle, index);
+    _impl->as_to_buffer_map[as_handle] = buffer_res.handle;
+
+    return {RHIResult::Success, as_handle};
+  } catch (const std::bad_alloc&) {
+    if (as_handle.valid()) {
+      _impl->bindless_manager->unregister_acceleration_structure(as_handle);
+      _impl->acceleration_structures.remove_handle(as_handle);
+      _impl->as_to_buffer_map.erase(as_handle);
+    }
+    if (index != UINT32_MAX) {
+      _impl->acceleration_structures.free_index(index);
+    }
+    if (vk_as != VK_NULL_HANDLE) {
+      _impl->impl_vkDestroyAccelerationStructureKHR(_impl->device, vk_as, nullptr);
+    }
+    if (buffer.valid()) {
+      destroy_buffer(buffer);
+    }
+    return {RHIResult::OutOfMemory, {}};
   }
-
-  uint32_t index = _impl->acceleration_structures.allocate_index();
-  auto& as_data = _impl->acceleration_structures.get_data(index);
-  as_data.acceleration_structure = vk_as;
-  as_data.buffer = buffer_res.handle;
-  as_data.desc = desc;
-  as_data.build_scratch_size = desc.allow_update ? max(size_info.buildScratchSize, size_info.updateScratchSize) : size_info.buildScratchSize;
-  _impl->acceleration_structures.set_handle_to_index(as_handle, index);
-  _impl->as_to_buffer_map[as_handle] = buffer_res.handle;
-
-  return {RHIResult::Success, as_handle};
 }
 
 VkCommandBuffer VKDevice::Impl::acquire_command_buffer(uint32_t pool_index) {
@@ -2193,76 +2240,96 @@ VKDevice::~VKDevice() {
 }
 
 RHICreateBindlessResult VKDevice::create_buffer(const RHIBufferDesc& desc) {
-  if (_impl->device == VK_NULL_HANDLE) {
-    log::error("Vulkan device not initialized");
-    return {RHIResult::InvalidArgument, {}};
-  }
-
-  if (_impl->bindless_manager == nullptr) {
-    log::error("Bindless manager not available for buffer creation");
-    return {RHIResult::InvalidArgument, {}};
-  }
-
-  using BufferUsage = std::underlying_type<RHIBufferUsage>::type;
-  const BufferUsage usage = static_cast<BufferUsage>(desc.usage);
-  if ((usage & static_cast<BufferUsage>(RHIBufferUsage::Storage)) && (desc.size > _impl->properties.limits.maxStorageBufferRange)) {
-    log::error("Requested Vulkan storage buffer exceeds device maxStorageBufferRange (size=%llu limit=%u)", desc.size, _impl->properties.limits.maxStorageBufferRange);
-    return {RHIResult::InvalidArgument, {}};
-  }
-
   VkBuffer vk_handle = VK_NULL_HANDLE;
   VkDeviceMemory vk_memory = VK_NULL_HANDLE;
   uint64_t allocated_size = 0u;
-  RHIResult create_result = _impl->create_vulkan_buffer(desc, vk_handle, vk_memory, allocated_size);
-  if (create_result != RHIResult::Success) {
-    return {create_result, {}};
-  }
-
-  uint32_t index = _impl->buffers.allocate_index();
-  auto& buffer_data = _impl->buffers.get_data(index);
-  buffer_data.buffer = vk_handle;
-  buffer_data.memory = vk_memory;
-  buffer_data.desc = desc;
-  buffer_data.allocated_size = allocated_size;
-
-  // Register with bindless manager
   RHIBindlessHandle handle = {};
-  RHIResult reg_result = _impl->bindless_manager->register_buffer(buffer_data.buffer, RHIResourceType::Buffer, handle);
-  if (reg_result != RHIResult::Success) {
-    log::error("Failed to register buffer with bindless manager");
+  uint32_t index = UINT32_MAX;
+  try {
+    if (_impl->device == VK_NULL_HANDLE) {
+      log::error("Vulkan device not initialized");
+      return {RHIResult::InvalidArgument, {}};
+    }
 
-    if (vk_memory != VK_NULL_HANDLE) {
-      vkFreeMemory(_impl->device, vk_memory, nullptr);
-      vk_memory = VK_NULL_HANDLE;
-      if (allocated_size > 0u) {
-        _impl->gpu_allocated_bytes -= allocated_size;
+    if (_impl->bindless_manager == nullptr) {
+      log::error("Bindless manager not available for buffer creation");
+      return {RHIResult::InvalidArgument, {}};
+    }
+
+    using BufferUsage = std::underlying_type<RHIBufferUsage>::type;
+    const BufferUsage usage = static_cast<BufferUsage>(desc.usage);
+    if ((usage & static_cast<BufferUsage>(RHIBufferUsage::Storage)) && (desc.size > _impl->properties.limits.maxStorageBufferRange)) {
+      log::error("Requested Vulkan storage buffer exceeds device maxStorageBufferRange (size=%llu limit=%u)", desc.size, _impl->properties.limits.maxStorageBufferRange);
+      return {RHIResult::InvalidArgument, {}};
+    }
+    _impl->reserve_scene_resource_destruction(1u);
+
+    RHIResult create_result = _impl->create_vulkan_buffer(desc, vk_handle, vk_memory, allocated_size);
+    if (create_result != RHIResult::Success) {
+      return {create_result, {}};
+    }
+
+    index = _impl->buffers.allocate_index();
+    auto& buffer_data = _impl->buffers.get_data(index);
+    buffer_data.buffer = vk_handle;
+    buffer_data.memory = vk_memory;
+    buffer_data.desc = desc;
+    buffer_data.allocated_size = allocated_size;
+
+    // Register with bindless manager
+    RHIResult reg_result = _impl->bindless_manager->register_buffer(buffer_data.buffer, RHIResourceType::Buffer, handle);
+    if (reg_result != RHIResult::Success) {
+      log::error("Failed to register buffer with bindless manager");
+
+      if (vk_memory != VK_NULL_HANDLE) {
+        vkFreeMemory(_impl->device, vk_memory, nullptr);
+        vk_memory = VK_NULL_HANDLE;
+        if (allocated_size > 0u) {
+          _impl->gpu_allocated_bytes -= allocated_size;
+        }
       }
+      if (vk_handle != VK_NULL_HANDLE) {
+        vkDestroyBuffer(_impl->device, vk_handle, nullptr);
+        vk_handle = VK_NULL_HANDLE;
+      }
+
+      _impl->buffers.free_index(index);
+      return {reg_result, {}};
+    }
+
+    // Store the mapping
+    _impl->buffers.set_handle_to_index(handle, index);
+
+    const bool acceleration_structure = (usage & static_cast<BufferUsage>(RHIBufferUsage::AccelerationStructureStorage)) != 0u;
+    if (acceleration_structure) {
+      _impl->gpu_acceleration_structure_allocated_bytes += allocated_size;
+      ++_impl->gpu_acceleration_structure_allocation_count;
+    } else {
+      _impl->gpu_buffer_allocated_bytes += allocated_size;
+      ++_impl->gpu_buffer_allocation_count;
+    }
+    if (desc.host_visible) {
+      _impl->gpu_host_visible_allocated_bytes += allocated_size;
+    }
+
+    return {RHIResult::Success, handle};
+  } catch (const std::bad_alloc&) {
+    if (handle.valid()) {
+      _impl->bindless_manager->unregister_buffer(handle);
+      _impl->buffers.remove_handle(handle);
+    }
+    if (index != UINT32_MAX) {
+      _impl->buffers.free_index(index);
     }
     if (vk_handle != VK_NULL_HANDLE) {
       vkDestroyBuffer(_impl->device, vk_handle, nullptr);
-      vk_handle = VK_NULL_HANDLE;
     }
-
-    _impl->buffers.free_index(index);
-    return {reg_result, {}};
+    if (vk_memory != VK_NULL_HANDLE) {
+      vkFreeMemory(_impl->device, vk_memory, nullptr);
+      _impl->gpu_allocated_bytes -= allocated_size;
+    }
+    return {RHIResult::OutOfMemory, {}};
   }
-
-  // Store the mapping
-  _impl->buffers.set_handle_to_index(handle, index);
-
-  const bool acceleration_structure = (usage & static_cast<BufferUsage>(RHIBufferUsage::AccelerationStructureStorage)) != 0u;
-  if (acceleration_structure) {
-    _impl->gpu_acceleration_structure_allocated_bytes += allocated_size;
-    ++_impl->gpu_acceleration_structure_allocation_count;
-  } else {
-    _impl->gpu_buffer_allocated_bytes += allocated_size;
-    ++_impl->gpu_buffer_allocation_count;
-  }
-  if (desc.host_visible) {
-    _impl->gpu_host_visible_allocated_bytes += allocated_size;
-  }
-
-  return {RHIResult::Success, handle};
 }
 
 RHICreateBindlessResult VKDevice::create_texture(const RHITextureDesc& desc) {
@@ -3117,7 +3184,8 @@ RHIMemoryStats VKDevice::get_memory_statistics() const {
   }
 #endif
 
-  stats.gpu_allocated_bytes = _impl->gpu_allocated_bytes;
+  // Deferred resources retain their memory until the frame is reclaimed.
+  stats.gpu_allocated_bytes = _impl->gpu_allocated_bytes + _impl->gpu_deferred_allocated_bytes;
   stats.gpu_buffer_allocated_bytes = _impl->gpu_buffer_allocated_bytes;
   stats.gpu_texture_allocated_bytes = _impl->gpu_texture_allocated_bytes;
   stats.gpu_acceleration_structure_allocated_bytes = _impl->gpu_acceleration_structure_allocated_bytes;

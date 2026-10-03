@@ -376,7 +376,7 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   previous_vertex.pdf_from_next = wavefront_vertex_to_vertex_area_pdf(reverse_bsdf_pdf, current_vertex, previous_vertex);
   if ((from_camera == false) && (state.path_length == 1u) && (previous_vertex.emitter_index != kInvalidIndex)) {
     GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
-    if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_instance.emitter_class != EmitterClass::Area)) {
+    if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_access_is_local_class(emitter_instance.emitter_class) == false)) {
       previous_vertex.pdf_from_next = reverse_bsdf_pdf;
     }
   }

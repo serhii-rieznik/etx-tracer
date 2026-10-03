@@ -1959,7 +1959,7 @@ struct SceneRepresentationImpl {
   }
 
   ~SceneRepresentationImpl() {
-    cleanup();
+    release_scene();
     if ((rhi != nullptr) && scattering_gpu.initialized) {
       scattering::gpu_cleanup(*rhi, scattering_gpu);
     }
@@ -1998,6 +1998,11 @@ struct SceneRepresentationImpl {
   }
 
   void cleanup() {
+    release_scene();
+    init_default_values();
+  }
+
+  void release_scene() {
     if ((rhi != nullptr) && (energy_compensation_generation.pipeline.valid() || (energy_compensation_generation.pending_step != nullptr))) {
       cleanup_energy_compensation_generation(*rhi, energy_compensation_generation);
     }
@@ -2009,7 +2014,8 @@ struct SceneRepresentationImpl {
     medium_bounds_scratch.clear();
     medium_has_bounds_scratch.clear();
     medium_attachment_nodes_scratch.clear();
-    integrator_data = {};
+    integrator_data.selected = Integrator::Type::Invalid;
+    integrator_data.settings.clear();
     integrator_data_revision += 1u;
 
     active_camera = {};
@@ -2018,8 +2024,6 @@ struct SceneRepresentationImpl {
     active_camera.up = kWorldUp;
 
     build_camera(active_camera, {5.0f, 5.0f, 5.0f}, normalize(float3{0.0f, 0.0f, 0.0f} - float3{5.0f, 5.0f, 5.0f}), kWorldUp, {1280u, 720u}, 26.99f);
-
-    init_default_values();
   }
 
   float triangle_area(const Triangle& t) {

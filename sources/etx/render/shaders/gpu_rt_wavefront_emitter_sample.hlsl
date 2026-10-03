@@ -1,3 +1,4 @@
+
 bool wavefront_try_load_environment_emitter_state(out uint emitter_instance_count, out uint environment_emitter_count) {
   emitter_instance_count = 0u;
   environment_emitter_count = 0u;

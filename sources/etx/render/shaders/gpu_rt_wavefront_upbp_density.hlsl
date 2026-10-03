@@ -1112,7 +1112,7 @@ SpectralResponse upbp_local_emitter_radiance(uint emitter_index, SpectralQuery s
   GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
   GPUEmitterProfileABIData emitter_profile = (GPUEmitterProfileABIData)0;
   if ((try_load_emitter_instance(emitter_index, emitter_instance) == false) || (try_load_emitter_profile(emitter_instance.emitter_profile_index, emitter_profile) == false) ||
-      (emitter_instance.emitter_class != EmitterClass::Area)) {
+      (emitter_access_is_local_class(emitter_instance.emitter_class) == false)) {
     return spectral_response_zero(spect);
   }
   const TriangleData triangle_data = load_triangle(WAVEFRONT_RO_BUFFER(constants.scene.triangles), emitter_instance.triangle_index);
@@ -1184,7 +1184,7 @@ SpectralResponse upbp_distant_emitter_radiance(uint emitter_index, SpectralQuery
   GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
   GPUEmitterProfileABIData emitter_profile = (GPUEmitterProfileABIData)0;
   if ((try_load_emitter_instance(emitter_index, emitter_instance) == false) || (try_load_emitter_profile(emitter_instance.emitter_profile_index, emitter_profile) == false) ||
-      (emitter_instance.emitter_class == EmitterClass::Area)) {
+      emitter_access_is_local_class(emitter_instance.emitter_class)) {
     return spectral_response_zero(spect);
   }
 

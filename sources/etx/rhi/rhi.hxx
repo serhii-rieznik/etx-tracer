@@ -18,6 +18,7 @@ struct RHISubmitInfo {
   RHICommandBuffer command_buffer = {};
   std::vector<RHISemaphore> wait_semaphores;
   std::vector<RHISemaphore> signal_semaphores;
+  bool frame_completion = false;
 };
 
 struct RHIInitInfo {
@@ -244,7 +245,7 @@ struct RHIContext {
   RHICommandBuffer get_command_buffer();
   RHICommandBuffer get_async_command_buffer();
   void destroy_command_buffer(RHICommandBuffer cmd);
-  void submit_command_buffer(const RHISubmitInfo& info);
+  RHIResult submit_command_buffer(const RHISubmitInfo& info);
   void submit_frame_command_buffer(RHICommandBuffer cmd);
 
   void program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func);

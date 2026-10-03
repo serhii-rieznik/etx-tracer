@@ -340,6 +340,7 @@ struct VKContext::Impl {
   std::vector<RHISemaphore> image_available_semaphores;
   std::vector<RHISemaphore> render_finished_semaphores;
   std::vector<VkFence> in_flight_fences;
+  std::array<bool, kRHIMaxFrames> frame_fence_pending = {};
   std::vector<VkFence> swapchain_image_fences;
   std::vector<TemporaryFence> temporary_fences;
   uint32_t current_frame = 0;
@@ -353,6 +354,7 @@ struct VKContext::Impl {
   void destroy_swapchain();
   void create_sync_objects();
   void destroy_sync_objects();
+  void wait_for_frame_fences();
   VkFence acquire_temporary_fence();
   void release_temporary_fence(VkFence fence);
   void release_all_temporary_fences();
@@ -381,9 +383,7 @@ VKContext::~VKContext() {
   }
 
   if (_impl->device.get_vk_device() != VK_NULL_HANDLE) {
-    if (_impl->in_flight_fences.empty() == false) {
-      etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
-    }
+    _impl->wait_for_frame_fences();
 
     if (_impl->temporary_fences.empty() == false) {
       _impl->wait_for_used_temporary_fences();
@@ -552,9 +552,7 @@ void VKContext::present() {
   VkResult result = vkQueuePresentKHR(_impl->device.get_graphics_queue(), &present_info);
 
   if ((result == VK_ERROR_OUT_OF_DATE_KHR) || (result == VK_SUBOPTIMAL_KHR)) {
-    if (!_impl->in_flight_fences.empty()) {
-      etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
-    }
+    _impl->wait_for_frame_fences();
 
     _impl->destroy_swapchain();
     if (!_impl->create_swapchain(_impl->width, _impl->height)) {
@@ -602,11 +600,12 @@ void VKContext::begin_frame() {
   _impl->frame_submit_succeeded = false;
   _impl->current_swapchain_image = UINT32_MAX;
 
-  if (_impl->in_flight_fences.empty() == false) {
+  if (_impl->frame_fence_pending[_impl->current_frame]) {
     ETX_PROFILER_NAMED_SCOPE("vkWaitForFences");
     if (etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), 1, &_impl->in_flight_fences[_impl->current_frame], VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
       return;
     }
+    _impl->frame_fence_pending[_impl->current_frame] = false;
   }
 
   {
@@ -626,6 +625,10 @@ void VKContext::begin_frame() {
       if (same_pool == false) {
         continue;
       }
+
+      const VkFence submit_fence = pooled_command_buffer->submit_fence();
+      pooled_command_buffer->set_submitted(false);
+      _impl->release_temporary_fence(submit_fence);
 
       if (pooled_command_buffer->uses_timestamps()) {
         continue;
@@ -657,9 +660,7 @@ void VKContext::begin_frame() {
 
     if ((result == VK_ERROR_OUT_OF_DATE_KHR) || (result == VK_SUBOPTIMAL_KHR)) {
       ETX_PROFILER_NAMED_SCOPE("Re-create swapchain");
-      if (_impl->in_flight_fences.empty() == false) {
-        etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), static_cast<uint32_t>(_impl->in_flight_fences.size()), _impl->in_flight_fences.data(), VK_TRUE, UINT64_MAX));
-      }
+      _impl->wait_for_frame_fences();
 
       _impl->destroy_swapchain();
 
@@ -796,7 +797,12 @@ RHIResult VKContext::wait_for_command_buffer(RHICommandBuffer cmd) {
     return wait_idle();
   }
 
-  if (etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), 1, &fence, VK_TRUE, UINT64_MAX)) != VK_SUCCESS) {
+  const VkResult wait_result = etx_vk_call(vkWaitForFences(_impl->device.get_vk_device(), 1, &fence, VK_TRUE, UINT64_MAX));
+  if (wait_result != VK_SUCCESS) {
+    if (wait_result == VK_ERROR_DEVICE_LOST)
+      return RHIResult::DeviceLost;
+    if ((wait_result == VK_ERROR_OUT_OF_HOST_MEMORY) || (wait_result == VK_ERROR_OUT_OF_DEVICE_MEMORY))
+      return RHIResult::OutOfMemory;
     return RHIResult::ValidationError;
   }
 
@@ -829,6 +835,10 @@ RHIResult VKContext::query_command_buffer(RHICommandBuffer cmd) {
     return RHIResult::NotReady;
   }
   if (fence_status != VK_SUCCESS) {
+    if (fence_status == VK_ERROR_DEVICE_LOST)
+      return RHIResult::DeviceLost;
+    if ((fence_status == VK_ERROR_OUT_OF_HOST_MEMORY) || (fence_status == VK_ERROR_OUT_OF_DEVICE_MEMORY))
+      return RHIResult::OutOfMemory;
     return RHIResult::ValidationError;
   }
 
@@ -837,21 +847,21 @@ RHIResult VKContext::query_command_buffer(RHICommandBuffer cmd) {
   return RHIResult::Success;
 }
 
-void VKContext::submit_command_buffer(const RHISubmitInfo& info) {
+RHIResult VKContext::submit_command_buffer(const RHISubmitInfo& info) {
   VKCommandBuffer* vk_cmd_buf = _impl->command_buffer_pool.get_data_ptr(info.command_buffer);
   if (vk_cmd_buf == nullptr) {
     log::error("Submit failed: Invalid command buffer handle %llu", info.command_buffer.value);
-    return;
+    return RHIResult::InvalidHandle;
   }
 
   if (vk_cmd_buf->is_recording()) {
     log::error("Attempting to submit command buffer that is still recording - this is invalid");
-    return;
+    return RHIResult::ValidationError;
   }
 
   if (vk_cmd_buf->is_submitted()) {
     log::error("Attempting to submit a command buffer that has already been submitted");
-    return;
+    return RHIResult::ValidationError;
   }
 
   std::vector<VkSemaphore> wait_semaphores;
@@ -868,9 +878,9 @@ void VKContext::submit_command_buffer(const RHISubmitInfo& info) {
     }
   }
 
-  VkFence submit_fence = VK_NULL_HANDLE;
+  VkFence submit_fence = info.frame_completion ? _impl->in_flight_fences[_impl->current_frame] : VK_NULL_HANDLE;
   RHISemaphore current_render_complete = get_render_complete_semaphore();
-  bool frame_completion_submit = false;
+  bool frame_completion_submit = info.frame_completion;
 
   for (auto s : info.signal_semaphores) {
     if (s.valid()) {
@@ -888,16 +898,33 @@ void VKContext::submit_command_buffer(const RHISubmitInfo& info) {
   VkCommandBuffer vk_command_buffer = vk_cmd_buf->get_vk_command_buffer();
   if (vk_command_buffer == VK_NULL_HANDLE) {
     log::error("Invalid VkCommandBuffer");
-    return;
+    return RHIResult::InvalidHandle;
   }
 
   if (submit_fence == VK_NULL_HANDLE) {
     submit_fence = _impl->acquire_temporary_fence();
+    if (submit_fence == VK_NULL_HANDLE) {
+      return RHIResult::OutOfMemory;
+    }
   }
 
-  if (submit_fence != VK_NULL_HANDLE) {
-    etx_vk_call(vkResetFences(_impl->device.get_vk_device(), 1, &submit_fence));
-  }
+  const auto reject_submission = [&](VkResult result) {
+    _impl->release_temporary_fence(submit_fence);
+    if (frame_completion_submit) {
+      // The reset fence has no submission to signal it. Retire earlier frame work.
+      wait_idle();
+      for (VkFence& image_fence : _impl->swapchain_image_fences) {
+        if (image_fence == submit_fence)
+          image_fence = VK_NULL_HANDLE;
+      }
+    }
+    if (result == VK_ERROR_DEVICE_LOST)
+      return RHIResult::DeviceLost;
+    return ((result == VK_ERROR_OUT_OF_HOST_MEMORY) || (result == VK_ERROR_OUT_OF_DEVICE_MEMORY)) ? RHIResult::OutOfMemory : RHIResult::ValidationError;
+  };
+  const VkResult reset_result = etx_vk_call(vkResetFences(_impl->device.get_vk_device(), 1, &submit_fence));
+  if (reset_result != VK_SUCCESS)
+    return reject_submission(reset_result);
 
   VkSubmitInfo submit_info = {VK_STRUCTURE_TYPE_SUBMIT_INFO};
   submit_info.waitSemaphoreCount = static_cast<uint32_t>(wait_semaphores.size());
@@ -908,19 +935,23 @@ void VKContext::submit_command_buffer(const RHISubmitInfo& info) {
   submit_info.signalSemaphoreCount = static_cast<uint32_t>(signal_semaphores.size());
   submit_info.pSignalSemaphores = signal_semaphores.data();
 
-  if (etx_vk_call(vkQueueSubmit(_impl->device.get_graphics_queue(), 1, &submit_info, submit_fence)) != VK_SUCCESS) {
+  const VkResult submit_result = etx_vk_call(vkQueueSubmit(_impl->device.get_graphics_queue(), 1, &submit_info, submit_fence));
+  if (submit_result != VK_SUCCESS) {
     log::error("Failed to submit command buffer");
-    _impl->release_temporary_fence(submit_fence);
-    return;
+    return reject_submission(submit_result);
   }
 
-  if (frame_completion_submit && (_impl->current_swapchain_image < _impl->swapchain_image_fences.size())) {
-    _impl->swapchain_image_fences[_impl->current_swapchain_image] = submit_fence;
-    _impl->frame_submit_succeeded = true;
+  if (frame_completion_submit) {
+    _impl->frame_fence_pending[_impl->current_frame] = true;
+    if (_impl->current_swapchain_image < _impl->swapchain_image_fences.size()) {
+      _impl->swapchain_image_fences[_impl->current_swapchain_image] = submit_fence;
+      _impl->frame_submit_succeeded = true;
+    }
   }
 
   vk_cmd_buf->set_submit_fence(submit_fence);
   vk_cmd_buf->set_submitted(true);
+  return RHIResult::Success;
 }
 
 void VKContext::program_command_buffer(RHICommandBuffer cmd_handle, std::function<void(void)> func) {
@@ -1383,6 +1414,10 @@ void VKCommandBuffer::buffer_barrier(RHIBindlessHandle buffer, RHIResourceState 
   VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
 
   switch (old_state) {
+    case RHIResourceState::HostRead:
+      src_access |= VK_ACCESS_HOST_READ_BIT;
+      src_stage = VK_PIPELINE_STAGE_HOST_BIT;
+      break;
     case RHIResourceState::General:
       src_access |= VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
       src_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
@@ -1404,14 +1439,18 @@ void VKCommandBuffer::buffer_barrier(RHIBindlessHandle buffer, RHIResourceState 
       src_stage = VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
       break;
     case RHIResourceState::AccelerationStructure:
-      src_access |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-      src_stage = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+      src_access |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_SHADER_READ_BIT;
+      src_stage = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
       break;
     default:
       break;
   }
 
   switch (new_state) {
+    case RHIResourceState::HostRead:
+      dst_access |= VK_ACCESS_HOST_READ_BIT;
+      dst_stage = VK_PIPELINE_STAGE_HOST_BIT;
+      break;
     case RHIResourceState::General:
       dst_access |= VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
       dst_stage = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
@@ -1433,8 +1472,8 @@ void VKCommandBuffer::buffer_barrier(RHIBindlessHandle buffer, RHIResourceState 
       dst_stage = VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT;
       break;
     case RHIResourceState::AccelerationStructure:
-      dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
-      dst_stage = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+      dst_access |= VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_SHADER_READ_BIT;
+      dst_stage = VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
       break;
     default:
       break;
@@ -2712,6 +2751,13 @@ bool VKContext::Impl::create_swapchain(uint32_t width, uint32_t height) {
   return true;
 }
 
+void VKContext::Impl::wait_for_frame_fences() {
+  for (uint32_t frame = 0u; frame < in_flight_fences.size(); ++frame) {
+    if (frame_fence_pending[frame])
+      etx_vk_call(vkWaitForFences(device.get_vk_device(), 1u, &in_flight_fences[frame], VK_TRUE, UINT64_MAX));
+  }
+}
+
 void VKContext::Impl::create_sync_objects() {
   if ((image_available_semaphores.empty() == false) || (render_finished_semaphores.empty() == false) || (in_flight_fences.empty() == false)) {
     destroy_sync_objects();
@@ -2726,6 +2772,7 @@ void VKContext::Impl::create_sync_objects() {
   image_available_semaphores.resize(kRHIMaxFrames);
   render_finished_semaphores.resize(swapchain_images.empty() ? kRHIMaxFrames : swapchain_images.size());
   in_flight_fences.resize(kRHIMaxFrames);
+  frame_fence_pending.fill(false);
   swapchain_image_fences.assign(swapchain_images.size(), VK_NULL_HANDLE);
 
   for (size_t i = 0; i < kRHIMaxFrames; i++) {
@@ -2765,6 +2812,9 @@ void VKContext::Impl::destroy_sync_objects() {
 }
 
 VkFence VKContext::Impl::acquire_temporary_fence() {
+  if (temporary_fences.size() == temporary_fences.capacity()) {
+    temporary_fences.reserve((temporary_fences.capacity() * 2u) + 1u);
+  }
   VkFenceCreateInfo fence_info = {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
   VkFence fence = VK_NULL_HANDLE;
   if (etx_vk_call(vkCreateFence(device.get_vk_device(), &fence_info, nullptr, &fence)) != VK_SUCCESS) {
@@ -3088,7 +3138,7 @@ void VKCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
   // Ensure AS build writes are visible to subsequent AS builds or ray queries.
   VkMemoryBarrier as_barrier = {VK_STRUCTURE_TYPE_MEMORY_BARRIER};
   as_barrier.srcAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
-  as_barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+  as_barrier.dstAccessMask = VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
   vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &as_barrier, 0, nullptr, 0, nullptr);
 }
 

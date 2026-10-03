@@ -409,8 +409,11 @@ struct GPURaytracingRenderer : public Renderer {
   void destroy_acceleration_structures(RHIContext& ctx);
   bool build_acceleration_structures(RHIContext& ctx, SceneRepresentation& scene);
   bool refit_top_level_acceleration_structure(RHIContext& ctx, const SceneData& scene_data);
+  struct SceneUpload;
   bool upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer);
+  bool upload_scene_data(RHIContext& ctx, const SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer, SceneUpload& upload);
   bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
+  bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes, SceneUpload& upload);
   bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t path_capacity, uint32_t active_path_capacity, bool allow_light_history_shrink);
   bool ensure_upbp_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t global_path_count, uint32_t resident_light_capacity, uint32_t resident_camera_capacity,
     uint32_t camera_batch_index, uint32_t camera_batch_offset, uint32_t camera_batch_count);

@@ -291,18 +291,18 @@ RHIResult VKBindlessManager::Impl::register_resource(RHIResourceType type, uint3
     return RHIResult::OutOfMemory;
   }
 
-  ResourceEntry& entry = resource_array->at(descriptor_index);
+  ResourceEntry entry = resource_array->at(descriptor_index);
   entry.generation = (entry.generation + 1) & kRHIBindlessGenerationMask;
   entry.descriptor_index = descriptor_index;
   entry.type = type;
   entry.valid = true;
 
+  const RHIBindlessHandle handle = make_bindless_handle(type, entry.generation, descriptor_index);
+  handle_to_resource.emplace(handle, entry);
+  resource_array->at(descriptor_index) = entry;
   (*count_ptr)++;
-
   out_descriptor_index = descriptor_index;
-  out_handle = make_bindless_handle(type, entry.generation, descriptor_index);
-
-  handle_to_resource[out_handle] = entry;
+  out_handle = handle;
 
   return RHIResult::Success;
 }

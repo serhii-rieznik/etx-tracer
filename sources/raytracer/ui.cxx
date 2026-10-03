@@ -993,6 +993,11 @@ void UI::set_selection(SelectionKind kind, int32_t index, bool track_history) {
   }
   commit_name_edit(false);
 
+  if (_gizmo_was_using && callbacks.preview_interaction_finished) {
+    callbacks.preview_interaction_finished();
+  }
+  _gizmo_was_using = false;
+  finish_node_transform_editor_interaction();
   _selection = next;
   _resource_edit_status = SceneResourceEditStatus::Success;
   _resource_edit_status_kind = SelectionKind::None;
@@ -1280,7 +1285,7 @@ void UI::navigate_history(int32_t step) {
   }
 
   _selection_history_cursor = target;
-  const auto& state = _selection_history[_selection_history_cursor];
+  const auto state = _selection_history[_selection_history_cursor];
   set_selection(state.kind, state.index, false);
 }
 

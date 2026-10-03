@@ -314,6 +314,7 @@ enum class RHIResourceState : uint32_t {
   Present = 7,
   AccelerationStructure = 8,
   IndirectArgument = 9,
+  HostRead = 10,
 };
 
 enum class RHIResourceType : uint32_t {
@@ -405,6 +406,7 @@ struct RHIBufferDesc {
   uint64_t size = 0;
   RHIBufferUsage usage = RHIBufferUsage::Vertex;
   bool host_visible = false;
+  bool prefer_host_cached = false;
 };
 
 struct RHITextureDesc {

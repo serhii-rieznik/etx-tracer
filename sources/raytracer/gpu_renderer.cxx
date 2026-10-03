@@ -1956,24 +1956,16 @@ PackedChunkedBlobBuildResult build_packed_mediums_blob(const SceneData& scene_da
   return result;
 }
 
-GPUSceneGlobals build_scene_globals(const SceneData& scene_data, const Camera& camera, const PackedEmitterData& packed_emitters, const BoundingBox& transport_bounds) {
+GPUSceneGlobals build_scene_globals(const SceneData& scene_data, const Camera& camera, const PackedEmitterData* packed_emitters, const GPUSceneGlobals& previous,
+  const BoundingBox& transport_bounds) {
   ETX_PROFILER_SCOPE();
-
-  BoundingBox bbox = {};
-  {
-    ETX_PROFILER_NAMED_SCOPE("gpu_rt_compute_scene_bounds");
-    bbox = scene_data.compute_bounding_volumes();
-  }
-
+  const BoundingBox bbox = scene_data.compute_bounding_volumes();
   const SceneBoundingSphere transport_sphere = compute_transport_bounding_sphere(transport_bounds, camera, scene_data.has_exterior_medium_transport(camera));
 
-  GPUSceneGlobals globals = {};
+  GPUSceneGlobals globals = previous;
   globals.vertex_count = static_cast<uint32_t>(scene_data.vertices.pos.size());
   globals.triangle_count = static_cast<uint32_t>(scene_data.triangles.size());
   globals.mesh_count = static_cast<uint32_t>(scene_data.meshes.size());
-  globals.emitter_profile_count = static_cast<uint32_t>(packed_emitters.emitter_profiles.size());
-  globals.emitter_instance_count = static_cast<uint32_t>(packed_emitters.emitter_instances.size());
-  globals.active_emitter_count = static_cast<uint32_t>(packed_emitters.active_emitter_indices.size());
 
   globals.bounding_sphere_center = transport_sphere.center;
   globals.bounding_sphere_radius = transport_sphere.radius;
@@ -1995,9 +1987,14 @@ GPUSceneGlobals build_scene_globals(const SceneData& scene_data, const Camera& c
   globals.pixel_filter_image_index = scene_data.pixel_filter.image_index;
   globals.pixel_filter_radius = scene_data.pixel_filter.radius;
 
-  globals.environment_emitter_count = packed_emitters.environment_emitters.count;
-  for (uint32_t i = 0u; i < packed_emitters.environment_emitters.count; ++i) {
-    globals.environment_emitters[i] = packed_emitters.environment_emitters.emitters[i];
+  if (packed_emitters != nullptr) {
+    globals.emitter_profile_count = static_cast<uint32_t>(packed_emitters->emitter_profiles.size());
+    globals.emitter_instance_count = static_cast<uint32_t>(packed_emitters->emitter_instances.size());
+    globals.active_emitter_count = static_cast<uint32_t>(packed_emitters->active_emitter_indices.size());
+    globals.environment_emitter_count = packed_emitters->environment_emitters.count;
+    for (uint32_t i = 0u; i < packed_emitters->environment_emitters.count; ++i) {
+      globals.environment_emitters[i] = packed_emitters->environment_emitters.emitters[i];
+    }
   }
 
   return globals;
@@ -2025,7 +2022,290 @@ GPUSceneOptions build_scene_options(const SceneRepresentation& scene) {
   options.path_mode = static_cast<uint32_t>(gpu_integrator_mode_from_scene(scene));
   return options;
 }
+struct GPUBufferUploadBatch {
+  struct Copy {
+    RHIBindlessHandle destination;
+    const void* data;
+    uint64_t size;
+    uint64_t destination_offset;
+  };
+  RHIContext& context;
+  const RHIResourceState destination_state;
+  std::vector<Copy> copies;
+  RHIBindlessHandle staging;
+  RHICommandBuffer command;
+  uint64_t size = 0u;
+  bool submitted = false;
+  bool completed = false;
+  bool recording = false;
+  bool owns_command = true;
+
+  GPUBufferUploadBatch(RHIContext& ctx, size_t capacity, RHIResourceState state)
+    : context(ctx)
+    , destination_state(state) {
+    copies.reserve(capacity);
+  }
+
+  void add(RHIBindlessHandle destination, const void* data, uint64_t bytes, uint64_t destination_offset) {
+    copies.push_back({destination, data, bytes, destination_offset});
+    size = align_up(size, uint64_t{16u}) + bytes;
+  }
+
+  bool prepare() {
+    return prepare({});
+  }
+
+  bool prepare(RHICommandBuffer shared_command) {
+    auto& device = context.device();
+    const auto allocation = device.create_buffer({.size = size, .usage = RHIBufferUsage::TransferSrc, .host_visible = true});
+    if ((allocation.result != RHIResult::Success) || (allocation.handle.valid() == false))
+      return false;
+    staging = allocation.handle;
+    owns_command = shared_command.valid() == false;
+    command = owns_command ? context.get_async_command_buffer() : shared_command;
+    if (command.valid() == false)
+      return false;
+    if (owns_command) {
+      context.command_buffer_begin(command);
+      recording = true;
+    }
+    uint64_t offset = 0u;
+    for (size_t index = 0u; index < copies.size(); ++index) {
+      const Copy& copy = copies[index];
+      offset = align_up(offset, uint64_t{16u});
+      if (device.update_buffer(staging, copy.data, copy.size, offset) != RHIResult::Success)
+        return false;
+      // Position/index copies for one geometry buffer are consecutive.
+      if ((index == 0u) || (copies[index - 1u].destination != copy.destination))
+        context.cmd_buffer_barrier(command, copy.destination, RHIResourceState::Undefined, RHIResourceState::TransferDst);
+      context.cmd_copy_buffer(command, staging, copy.destination, copy.size, offset, copy.destination_offset);
+      if (((index + 1u) == copies.size()) || (copies[index + 1u].destination != copy.destination))
+        context.cmd_buffer_barrier(command, copy.destination, RHIResourceState::TransferDst, destination_state);
+      offset += copy.size;
+    }
+    return true;
+  }
+
+  RHIResult submit() {
+    context.command_buffer_end(command);
+    recording = false;
+    const RHIResult result = context.submit_command_buffer({command});
+    submitted = (result == RHIResult::Success);
+    return result;
+  }
+
+  RHIResult finish() {
+    const RHIResult result = context.wait_for_command_buffer(command);
+    if (result != RHIResult::Success) {
+      const RHIResult idle_result = context.wait_idle();
+      completed = true;
+      return (idle_result == RHIResult::Success) ? result : idle_result;
+    }
+    completed = true;
+    return result;
+  }
+
+  ~GPUBufferUploadBatch() {
+    if (command.valid() && owns_command) {
+      if (submitted && (completed == false))
+        finish();
+      if (recording)
+        context.command_buffer_end(command);
+      context.destroy_command_buffer(command);
+    }
+    if (staging.valid())
+      context.device().destroy_buffer(staging);
+  }
+};
 }  // namespace
+
+struct GPURaytracingRenderer::SceneUpload {
+  struct Linear {
+    RHIBindlessHandle* handle;
+    uint64_t* size;
+    uint32_t* descriptor;
+    RHIBindlessHandle previous_handle;
+    uint64_t previous_size;
+    uint32_t previous_descriptor;
+  };
+  struct Chunked {
+    RHIChunkedBufferState* state = nullptr;
+    RHIChunkedBufferState previous;
+  };
+  GPURaytracingRenderer& renderer;
+  RHIContext& context;
+  RHIDevice& device;
+  std::vector<std::vector<uint8_t>> payloads;
+  std::unique_ptr<GPUBufferUploadBatch> transfers;
+  const GPUScene previous_scene;
+  const GPUSceneGlobals previous_globals;
+  const BoundingBox previous_bounds;
+  const float previous_radius;
+  PackedEmitterTopology previous_topology;
+  std::array<Linear, 32u> linear;
+  uint32_t linear_count = 0u;
+  std::array<Chunked, 2u> chunked;
+  uint32_t chunked_count = 0u;
+  bool committed = false;
+
+  SceneUpload(GPURaytracingRenderer& r, RHIContext& ctx)
+    : renderer(r)
+    , context(ctx)
+    , device(ctx.device())
+    , previous_scene(r._gpu_scene)
+    , previous_globals(r._host_scene_globals)
+    , previous_bounds(r._host_transport_bounds)
+    , previous_radius(r._scene_bounding_sphere_radius)
+    , previous_topology(r._emitter_topology) {
+    payloads.reserve(linear.size());
+  }
+
+  void stage(RHIBindlessHandle& handle, uint64_t& size, uint32_t& descriptor) {
+    for (uint32_t index = 0u; index < linear_count; ++index) {
+      if (linear[index].handle == &handle) {
+        return;
+      }
+    }
+    linear[linear_count++] = {&handle, &size, &descriptor, handle, size, descriptor};
+    handle = {};
+    size = 0u;
+    descriptor = kInvalidDescriptorIndex;
+  }
+
+  template <typename T>
+  bool upload(const T* data, size_t count, RHIBufferUsage usage, RHIBindlessHandle& handle, uint64_t& size, uint32_t& descriptor, const char* name) {
+    stage(handle, size, descriptor);
+    if ((data == nullptr) || (count == 0u))
+      return true;
+    const uint64_t bytes = static_cast<uint64_t>(count) * sizeof(T);
+    payloads.emplace_back(bytes);
+    auto& payload = payloads.back();
+    std::memcpy(payload.data(), data, bytes);
+    const auto allocation = device.create_buffer({.size = bytes, .usage = usage});
+    if ((allocation.result != RHIResult::Success) || (allocation.handle.valid() == false)) {
+      log::error("GPU RT: failed to create '%s' buffer (%u)", name, static_cast<uint32_t>(allocation.result));
+      return false;
+    }
+    handle = allocation.handle;
+    size = bytes;
+    descriptor = get_bindless_descriptor_index(handle);
+    if (transfers == nullptr)
+      transfers = std::make_unique<GPUBufferUploadBatch>(context, linear.size(), RHIResourceState::ShaderReadOnly);
+    transfers->add(handle, payload.data(), bytes, 0u);
+    return true;
+  }
+
+  bool upload_chunked(const RHIChunkedBufferUploadData& data, RHIBufferUsage usage, RHIChunkedBufferState& state, const char* name) {
+    if (data.success == false)
+      return false;
+    const size_t chunk_count = data.payload_chunk_ranges.size();
+    for (const auto& range : data.payload_chunk_ranges) {
+      if ((range.offset > data.payload_data.size()) || (range.size > (data.payload_data.size() - range.offset))) {
+        log::error("GPU RT: invalid payload range for '%s'", name);
+        return false;
+      }
+    }
+    if ((chunk_count > 0u) && (data.chunk_indices_offset != kInvalidDescriptorIndex)) {
+      const uint64_t table_size = static_cast<uint64_t>(chunk_count) * sizeof(uint32_t);
+      if ((data.chunk_indices_offset > data.metadata.size()) || (table_size > (data.metadata.size() - data.chunk_indices_offset))) {
+        log::error("GPU RT: invalid chunk indices table for '%s'", name);
+        return false;
+      }
+    }
+    Chunked& entry = chunked[chunked_count++];
+    entry.state = &state;
+    entry.previous = std::move(state);
+    state = {};
+    state.chunk_buffers.resize(chunk_count);
+    state.chunk_buffer_sizes.resize(chunk_count);
+    auto metadata = data.metadata;
+    const auto upload_buffer = [&](const uint8_t* bytes, uint64_t byte_count, RHIBindlessHandle& handle, uint64_t& size) {
+      if (byte_count == 0u)
+        return true;
+      const auto allocation = device.create_buffer({.size = byte_count, .usage = usage | RHIBufferUsage::TransferDst});
+      if ((allocation.result != RHIResult::Success) || (allocation.handle.valid() == false)) {
+        log::error("GPU RT: failed to create '%s' payload buffer (%u)", name, static_cast<uint32_t>(allocation.result));
+        return false;
+      }
+      handle = allocation.handle;
+      size = byte_count;
+      payloads.emplace_back(bytes, bytes + byte_count);
+      if (transfers == nullptr)
+        transfers = std::make_unique<GPUBufferUploadBatch>(context, linear.size() + chunk_count + 1u, RHIResourceState::ShaderReadOnly);
+      transfers->add(handle, payloads.back().data(), byte_count, 0u);
+      return true;
+    };
+    for (size_t index = 0u; index < chunk_count; ++index) {
+      const auto& range = data.payload_chunk_ranges[index];
+      const uint8_t* bytes = range.size > 0u ? data.payload_data.data() + range.offset : nullptr;
+      if (upload_buffer(bytes, range.size, state.chunk_buffers[index], state.chunk_buffer_sizes[index]) == false)
+        return false;
+      if (data.chunk_indices_offset != kInvalidDescriptorIndex) {
+        const uint32_t descriptor = get_bindless_descriptor_index(state.chunk_buffers[index]);
+        std::memcpy(metadata.data() + data.chunk_indices_offset + (index * sizeof(uint32_t)), &descriptor, sizeof(descriptor));
+      }
+    }
+    if (upload_buffer(metadata.data(), metadata.size(), state.metadata_buffer, state.metadata_buffer_size) == false)
+      return false;
+    state.metadata_descriptor_index = get_bindless_descriptor_index(state.metadata_buffer);
+    return true;
+  }
+
+  bool finish() {
+    if (transfers == nullptr)
+      return true;
+    if (transfers->prepare() == false) {
+      log::error("GPU RT: failed to prepare scene metadata uploads");
+      return false;
+    }
+    RHIResult result = transfers->submit();
+    if (result == RHIResult::Success)
+      result = transfers->finish();
+    if (result == RHIResult::DeviceLost)
+      renderer.set_runtime_failure("GPU device lost during scene metadata upload");
+    if (result != RHIResult::Success) {
+      log::error("GPU RT: scene metadata upload failed (%u)", static_cast<uint32_t>(result));
+      return false;
+    }
+    return true;
+  }
+
+  void commit() {
+    committed = true;
+  }
+
+  ~SceneUpload() {
+    transfers.reset();
+    for (uint32_t index = 0u; index < linear_count; ++index) {
+      Linear& entry = linear[index];
+      const RHIBindlessHandle retired = committed ? entry.previous_handle : *entry.handle;
+      if (retired.valid()) {
+        device.destroy_buffer(retired);
+      }
+      if (committed == false) {
+        *entry.handle = entry.previous_handle;
+        *entry.size = entry.previous_size;
+        *entry.descriptor = entry.previous_descriptor;
+      }
+    }
+    for (uint32_t index = 0u; index < chunked_count; ++index) {
+      Chunked& entry = chunked[index];
+      if (committed) {
+        device.destroy_chunked_buffer(entry.previous);
+      } else {
+        device.destroy_chunked_buffer(*entry.state);
+        *entry.state = std::move(entry.previous);
+      }
+    }
+    if (committed == false) {
+      renderer._gpu_scene = previous_scene;
+      renderer._host_scene_globals = previous_globals;
+      renderer._host_transport_bounds = previous_bounds;
+      renderer._scene_bounding_sphere_radius = previous_radius;
+      renderer._emitter_topology = std::move(previous_topology);
+    }
+  }
+};
 
 GPURaytracingRenderer::GPURaytracingRenderer(TaskScheduler& s)
   : Renderer(s) {
@@ -8722,6 +9002,14 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
 }
 
 bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer) {
+  SceneUpload upload(*this, ctx);
+  if ((upload_scene_data(ctx, scene, vertex_positions_buffer, upload) == false) || (upload.finish() == false))
+    return false;
+  upload.commit();
+  return true;
+}
+
+bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, const SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer, SceneUpload& upload) {
   ETX_PROFILER_SCOPE();
   const auto total_begin = std::chrono::steady_clock::now();
   double packed_emitters_ms = 0.0;
@@ -8755,26 +9043,24 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentati
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_vertex_and_geometry_buffers");
     const auto geometry_buffers_begin = std::chrono::steady_clock::now();
-    upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.nrm.data(), data.vertices.nrm.size(), scene_buffer_usage, _vertex_normals_buffer,
-                       _vertex_normals_buffer_size, _gpu_scene.vertex_normals, "vertex_normals") &&
+    upload_success = upload.upload(data.vertices.nrm.data(), data.vertices.nrm.size(), scene_buffer_usage, _vertex_normals_buffer, _vertex_normals_buffer_size,
+                       _gpu_scene.vertex_normals, "vertex_normals") &&
                      upload_success;
-    upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.tan.data(), data.vertices.tan.size(), scene_buffer_usage, _vertex_tangents_buffer,
-                       _vertex_tangents_buffer_size, _gpu_scene.vertex_tangents, "vertex_tangents") &&
+    upload_success = upload.upload(data.vertices.tan.data(), data.vertices.tan.size(), scene_buffer_usage, _vertex_tangents_buffer, _vertex_tangents_buffer_size,
+                       _gpu_scene.vertex_tangents, "vertex_tangents") &&
                      upload_success;
-    upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.btn.data(), data.vertices.btn.size(), scene_buffer_usage, _vertex_bitangents_buffer,
-                       _vertex_bitangents_buffer_size, _gpu_scene.vertex_bitangents, "vertex_bitangents") &&
+    upload_success = upload.upload(data.vertices.btn.data(), data.vertices.btn.size(), scene_buffer_usage, _vertex_bitangents_buffer, _vertex_bitangents_buffer_size,
+                       _gpu_scene.vertex_bitangents, "vertex_bitangents") &&
                      upload_success;
-    upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.tex.data(), data.vertices.tex.size(), scene_buffer_usage, _vertex_texcoords_buffer,
-                       _vertex_texcoords_buffer_size, _gpu_scene.vertex_texcoords, "vertex_texcoords") &&
+    upload_success = upload.upload(data.vertices.tex.data(), data.vertices.tex.size(), scene_buffer_usage, _vertex_texcoords_buffer, _vertex_texcoords_buffer_size,
+                       _gpu_scene.vertex_texcoords, "vertex_texcoords") &&
                      upload_success;
-    upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.triangles.data(), packed_emitters.triangles.size(), scene_buffer_usage, _triangles_buffer,
-                       _triangles_buffer_size, _gpu_scene.triangles, "triangles") &&
+    upload_success = upload.upload(packed_emitters.triangles.data(), packed_emitters.triangles.size(), scene_buffer_usage, _triangles_buffer, _triangles_buffer_size,
+                       _gpu_scene.triangles, "triangles") &&
                      upload_success;
-    upload_success =
-      upload_or_update_linear_scene_buffer(device, data.meshes.data(), data.meshes.size(), scene_buffer_usage, _meshes_buffer, _meshes_buffer_size, _gpu_scene.meshes, "meshes") &&
-      upload_success;
-    upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.instances.data(), packed_emitters.instances.size(), scene_buffer_usage, _instances_buffer,
-                       _instances_buffer_size, _gpu_scene.instances, "instances") &&
+    upload_success = upload.upload(data.meshes.data(), data.meshes.size(), scene_buffer_usage, _meshes_buffer, _meshes_buffer_size, _gpu_scene.meshes, "meshes") && upload_success;
+    upload_success = upload.upload(packed_emitters.instances.data(), packed_emitters.instances.size(), scene_buffer_usage, _instances_buffer, _instances_buffer_size,
+                       _gpu_scene.instances, "instances") &&
                      upload_success;
     const auto geometry_buffers_end = std::chrono::steady_clock::now();
     geometry_buffers_ms = elapsed_ms(geometry_buffers_begin, geometry_buffers_end);
@@ -8783,20 +9069,19 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentati
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_material_and_emitter_buffers");
     const auto material_and_emitter_buffers_begin = std::chrono::steady_clock::now();
-    upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_profiles.data(), packed_emitters.emitter_profiles.size(), scene_buffer_usage,
-                       _emitter_profiles_buffer, _emitter_profiles_buffer_size, _gpu_scene.emitter_profiles, "emitter_profiles") &&
+    upload_success = upload.upload(packed_emitters.emitter_profiles.data(), packed_emitters.emitter_profiles.size(), scene_buffer_usage, _emitter_profiles_buffer,
+                       _emitter_profiles_buffer_size, _gpu_scene.emitter_profiles, "emitter_profiles") &&
                      upload_success;
-    upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_instances.data(), packed_emitters.emitter_instances.size(), scene_buffer_usage,
-                       _emitter_instances_buffer, _emitter_instances_buffer_size, _gpu_scene.emitter_instances, "emitter_instances") &&
-                     upload_success;
-    upload_success = upload_or_update_linear_scene_buffer(device, data.materials.data(), data.materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size,
-                       _gpu_scene.materials, "materials") &&
+    upload_success = upload.upload(packed_emitters.emitter_instances.data(), packed_emitters.emitter_instances.size(), scene_buffer_usage, _emitter_instances_buffer,
+                       _emitter_instances_buffer_size, _gpu_scene.emitter_instances, "emitter_instances") &&
                      upload_success;
     upload_success =
-      upload_or_update_linear_scene_buffer(device, data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer, _spectrums_buffer_size,
-        _gpu_scene.spectrums, "spectrums") &&
-      upload_or_update_linear_scene_buffer(device, data.energy_compensation_interfaces.data(), data.energy_compensation_interfaces.size(), scene_buffer_usage,
-        _energy_compensation_interfaces_buffer, _energy_compensation_interfaces_buffer_size, _gpu_scene.energy_compensation_interfaces, "energy_compensation_interfaces") &&
+      upload.upload(data.materials.data(), data.materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size, _gpu_scene.materials, "materials") &&
+      upload_success;
+    upload_success =
+      upload.upload(data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer, _spectrums_buffer_size, _gpu_scene.spectrums, "spectrums") &&
+      upload.upload(data.energy_compensation_interfaces.data(), data.energy_compensation_interfaces.size(), scene_buffer_usage, _energy_compensation_interfaces_buffer,
+        _energy_compensation_interfaces_buffer_size, _gpu_scene.energy_compensation_interfaces, "energy_compensation_interfaces") &&
       upload_success;
     const auto material_and_emitter_buffers_end = std::chrono::steady_clock::now();
     material_and_emitter_buffers_ms = elapsed_ms(material_and_emitter_buffers_begin, material_and_emitter_buffers_end);
@@ -8807,7 +9092,7 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentati
     const auto images_begin = std::chrono::steady_clock::now();
     auto images_blob = build_packed_images_blob(data);
     if (images_blob.success) {
-      const bool image_upload_success = device.upload_or_update_chunked_buffer(images_blob, scene_buffer_usage, _images_blob_state, "images_blob");
+      const bool image_upload_success = upload.upload_chunked(images_blob, scene_buffer_usage, _images_blob_state, "images_blob");
       if (image_upload_success) {
         _gpu_scene.images = _images_blob_state.metadata_descriptor_index;
       }
@@ -8825,7 +9110,7 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentati
     const auto mediums_begin = std::chrono::steady_clock::now();
     auto mediums_blob = build_packed_mediums_blob(data);
     if (mediums_blob.success) {
-      const bool medium_upload_success = device.upload_or_update_chunked_buffer(mediums_blob, scene_buffer_usage, _mediums_blob_state, "mediums_blob");
+      const bool medium_upload_success = upload.upload_chunked(mediums_blob, scene_buffer_usage, _mediums_blob_state, "mediums_blob");
       if (medium_upload_success) {
         _gpu_scene.mediums = _mediums_blob_state.metadata_descriptor_index;
       }
@@ -8842,12 +9127,12 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentati
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_scene_globals");
     const auto scene_globals_begin = std::chrono::steady_clock::now();
     _host_transport_bounds = data.compute_transport_bounding_volumes();
-    _host_scene_globals = build_scene_globals(data, scene.camera(), packed_emitters, _host_transport_bounds);
+    _host_scene_globals = build_scene_globals(data, scene.camera(), &packed_emitters, {}, _host_transport_bounds);
     const float3 geometry_center = 0.5f * (_host_scene_globals.bounding_box_min + _host_scene_globals.bounding_box_max);
     _scene_bounding_sphere_radius = length(_host_scene_globals.bounding_box_max - geometry_center);
-    upload_success = upload_or_update_linear_scene_buffer(device, &_host_scene_globals, size_t(1), scene_buffer_usage, _scene_globals_buffer, _scene_globals_buffer_size,
-                       _gpu_scene.scene_globals, "scene_globals") &&
-                     upload_success;
+    upload_success =
+      upload.upload(&_host_scene_globals, size_t(1), scene_buffer_usage, _scene_globals_buffer, _scene_globals_buffer_size, _gpu_scene.scene_globals, "scene_globals") &&
+      upload_success;
     const auto scene_globals_end = std::chrono::steady_clock::now();
     scene_globals_ms = elapsed_ms(scene_globals_begin, scene_globals_end);
   }
@@ -8856,9 +9141,8 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentati
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_scene_options");
     const auto scene_options_begin = std::chrono::steady_clock::now();
     GPUSceneOptions options = build_scene_options(scene);
-    upload_success = upload_or_update_linear_scene_buffer(device, &options, size_t(1), scene_buffer_usage, _scene_options_buffer, _scene_options_buffer_size,
-                       _gpu_scene.scene_options, "scene_options") &&
-                     upload_success;
+    upload_success =
+      upload.upload(&options, size_t(1), scene_buffer_usage, _scene_options_buffer, _scene_options_buffer_size, _gpu_scene.scene_options, "scene_options") && upload_success;
     const auto scene_options_end = std::chrono::steady_clock::now();
     scene_options_ms = elapsed_ms(scene_options_begin, scene_options_end);
   }
@@ -8867,7 +9151,7 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentati
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_upload_emitters_distribution");
     const auto emitters_distribution_begin = std::chrono::steady_clock::now();
     auto emitters_distribution = build_packed_emitter_distribution(packed_emitters);
-    upload_success = upload_or_update_linear_scene_buffer(device, emitters_distribution.data(), emitters_distribution.size(), scene_buffer_usage, _emitters_distribution_buffer,
+    upload_success = upload.upload(emitters_distribution.data(), emitters_distribution.size(), scene_buffer_usage, _emitters_distribution_buffer,
                        _emitters_distribution_buffer_size, _gpu_scene.emitters_distribution, "emitters_distribution") &&
                      upload_success;
     const auto emitters_distribution_end = std::chrono::steady_clock::now();
@@ -8878,6 +9162,14 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, SceneRepresentati
 }
 
 bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes) {
+  SceneUpload upload(*this, ctx);
+  if ((update_scene_data_partial(ctx, scene, changes, upload) == false) || (upload.finish() == false))
+    return false;
+  upload.commit();
+  return true;
+}
+
+bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes, SceneUpload& upload) {
   ETX_PROFILER_SCOPE();
 
   auto& device = ctx.device();
@@ -8888,50 +9180,49 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_direct_buffer_updates");
     if (changes[UpdateFlags::VerticesNrm]) {
-      upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.nrm.data(), data.vertices.nrm.size(), scene_buffer_usage, _vertex_normals_buffer,
-                         _vertex_normals_buffer_size, _gpu_scene.vertex_normals, "vertex_normals") &&
+      upload_success = upload.upload(data.vertices.nrm.data(), data.vertices.nrm.size(), scene_buffer_usage, _vertex_normals_buffer, _vertex_normals_buffer_size,
+                         _gpu_scene.vertex_normals, "vertex_normals") &&
                        upload_success;
     }
     if (changes[UpdateFlags::VerticesTan]) {
-      upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.tan.data(), data.vertices.tan.size(), scene_buffer_usage, _vertex_tangents_buffer,
-                         _vertex_tangents_buffer_size, _gpu_scene.vertex_tangents, "vertex_tangents") &&
+      upload_success = upload.upload(data.vertices.tan.data(), data.vertices.tan.size(), scene_buffer_usage, _vertex_tangents_buffer, _vertex_tangents_buffer_size,
+                         _gpu_scene.vertex_tangents, "vertex_tangents") &&
                        upload_success;
     }
     if (changes[UpdateFlags::VerticesBtn]) {
-      upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.btn.data(), data.vertices.btn.size(), scene_buffer_usage, _vertex_bitangents_buffer,
-                         _vertex_bitangents_buffer_size, _gpu_scene.vertex_bitangents, "vertex_bitangents") &&
+      upload_success = upload.upload(data.vertices.btn.data(), data.vertices.btn.size(), scene_buffer_usage, _vertex_bitangents_buffer, _vertex_bitangents_buffer_size,
+                         _gpu_scene.vertex_bitangents, "vertex_bitangents") &&
                        upload_success;
     }
     if (changes[UpdateFlags::VerticesTex]) {
-      upload_success = upload_or_update_linear_scene_buffer(device, data.vertices.tex.data(), data.vertices.tex.size(), scene_buffer_usage, _vertex_texcoords_buffer,
-                         _vertex_texcoords_buffer_size, _gpu_scene.vertex_texcoords, "vertex_texcoords") &&
+      upload_success = upload.upload(data.vertices.tex.data(), data.vertices.tex.size(), scene_buffer_usage, _vertex_texcoords_buffer, _vertex_texcoords_buffer_size,
+                         _gpu_scene.vertex_texcoords, "vertex_texcoords") &&
                        upload_success;
     }
     if (changes[UpdateFlags::Meshes]) {
-      upload_success = upload_or_update_linear_scene_buffer(device, data.meshes.data(), data.meshes.size(), scene_buffer_usage, _meshes_buffer, _meshes_buffer_size,
-                         _gpu_scene.meshes, "meshes") &&
-                       upload_success;
+      upload_success =
+        upload.upload(data.meshes.data(), data.meshes.size(), scene_buffer_usage, _meshes_buffer, _meshes_buffer_size, _gpu_scene.meshes, "meshes") && upload_success;
     }
     if (changes[UpdateFlags::Materials]) {
-      upload_success = upload_or_update_linear_scene_buffer(device, data.materials.data(), data.materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size,
-                         _gpu_scene.materials, "materials") &&
-                       upload_success;
+      upload_success =
+        upload.upload(data.materials.data(), data.materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size, _gpu_scene.materials, "materials") &&
+        upload_success;
     }
     if (changes[UpdateFlags::Spectra]) {
-      upload_success = upload_or_update_linear_scene_buffer(device, data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer,
-                         _spectrums_buffer_size, _gpu_scene.spectrums, "spectrums") &&
-                       upload_success;
+      upload_success =
+        upload.upload(data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer, _spectrums_buffer_size, _gpu_scene.spectrums, "spectrums") &&
+        upload_success;
     }
     if (changes[UpdateFlags::EnergyCompensationInterfaces]) {
       upload_success =
-        upload_or_update_linear_scene_buffer(device, data.energy_compensation_interfaces.data(), data.energy_compensation_interfaces.size(), scene_buffer_usage,
-          _energy_compensation_interfaces_buffer, _energy_compensation_interfaces_buffer_size, _gpu_scene.energy_compensation_interfaces, "energy_compensation_interfaces") &&
+        upload.upload(data.energy_compensation_interfaces.data(), data.energy_compensation_interfaces.size(), scene_buffer_usage, _energy_compensation_interfaces_buffer,
+          _energy_compensation_interfaces_buffer_size, _gpu_scene.energy_compensation_interfaces, "energy_compensation_interfaces") &&
         upload_success;
     }
     if (changes[UpdateFlags::Images]) {
       auto images_blob = build_packed_images_blob(data);
       if (images_blob.success) {
-        const bool image_upload_success = device.upload_or_update_chunked_buffer(images_blob, scene_buffer_usage, _images_blob_state, "images_blob");
+        const bool image_upload_success = upload.upload_chunked(images_blob, scene_buffer_usage, _images_blob_state, "images_blob");
         if (image_upload_success) {
           _gpu_scene.images = _images_blob_state.metadata_descriptor_index;
         }
@@ -8944,7 +9235,7 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
     if (changes[UpdateFlags::Mediums] || changes[UpdateFlags::Transforms]) {
       auto mediums_blob = build_packed_mediums_blob(data);
       if (mediums_blob.success) {
-        const bool medium_upload_success = device.upload_or_update_chunked_buffer(mediums_blob, scene_buffer_usage, _mediums_blob_state, "mediums_blob");
+        const bool medium_upload_success = upload.upload_chunked(mediums_blob, scene_buffer_usage, _mediums_blob_state, "mediums_blob");
         if (medium_upload_success) {
           _gpu_scene.mediums = _mediums_blob_state.metadata_descriptor_index;
         }
@@ -8968,7 +9259,7 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
                                      changes[UpdateFlags::Images] || changes[UpdateFlags::Mediums] || changes[UpdateFlags::PixelFilter];
 
   PackedEmitterData packed_emitters = {};
-  if (packed_emitters_changed || scene_globals_changed) {
+  if (packed_emitters_changed) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_build_packed_emitters");
     packed_emitters = transform_only_packing ? build_packed_emitters_for_transforms(data, _emitter_topology) : build_packed_emitters(data, _emitter_topology);
   }
@@ -8976,26 +9267,26 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_dependent_buffer_updates");
     if (changes[UpdateFlags::Triangles] || changes[UpdateFlags::Emitters]) {
-      upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.triangles.data(), packed_emitters.triangles.size(), scene_buffer_usage, _triangles_buffer,
-                         _triangles_buffer_size, _gpu_scene.triangles, "triangles") &&
+      upload_success = upload.upload(packed_emitters.triangles.data(), packed_emitters.triangles.size(), scene_buffer_usage, _triangles_buffer, _triangles_buffer_size,
+                         _gpu_scene.triangles, "triangles") &&
                        upload_success;
     }
 
     if (packed_emitters_changed) {
-      upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.instances.data(), packed_emitters.instances.size(), scene_buffer_usage, _instances_buffer,
-                         _instances_buffer_size, _gpu_scene.instances, "instances") &&
+      upload_success = upload.upload(packed_emitters.instances.data(), packed_emitters.instances.size(), scene_buffer_usage, _instances_buffer, _instances_buffer_size,
+                         _gpu_scene.instances, "instances") &&
                        upload_success;
 
-      upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_profiles.data(), packed_emitters.emitter_profiles.size(), scene_buffer_usage,
-                         _emitter_profiles_buffer, _emitter_profiles_buffer_size, _gpu_scene.emitter_profiles, "emitter_profiles") &&
+      upload_success = upload.upload(packed_emitters.emitter_profiles.data(), packed_emitters.emitter_profiles.size(), scene_buffer_usage, _emitter_profiles_buffer,
+                         _emitter_profiles_buffer_size, _gpu_scene.emitter_profiles, "emitter_profiles") &&
                        upload_success;
 
-      upload_success = upload_or_update_linear_scene_buffer(device, packed_emitters.emitter_instances.data(), packed_emitters.emitter_instances.size(), scene_buffer_usage,
-                         _emitter_instances_buffer, _emitter_instances_buffer_size, _gpu_scene.emitter_instances, "emitter_instances") &&
+      upload_success = upload.upload(packed_emitters.emitter_instances.data(), packed_emitters.emitter_instances.size(), scene_buffer_usage, _emitter_instances_buffer,
+                         _emitter_instances_buffer_size, _gpu_scene.emitter_instances, "emitter_instances") &&
                        upload_success;
 
       auto emitters_distribution = build_packed_emitter_distribution(packed_emitters);
-      upload_success = upload_or_update_linear_scene_buffer(device, emitters_distribution.data(), emitters_distribution.size(), scene_buffer_usage, _emitters_distribution_buffer,
+      upload_success = upload.upload(emitters_distribution.data(), emitters_distribution.size(), scene_buffer_usage, _emitters_distribution_buffer,
                          _emitters_distribution_buffer_size, _gpu_scene.emitters_distribution, "emitters_distribution") &&
                        upload_success;
     }
@@ -9004,21 +9295,20 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
   if (scene_globals_changed) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_update_scene_globals");
     _host_transport_bounds = data.compute_transport_bounding_volumes();
-    _host_scene_globals = build_scene_globals(data, scene.camera(), packed_emitters, _host_transport_bounds);
+    _host_scene_globals = build_scene_globals(data, scene.camera(), packed_emitters_changed ? &packed_emitters : nullptr, _host_scene_globals, _host_transport_bounds);
     const float3 geometry_center = 0.5f * (_host_scene_globals.bounding_box_min + _host_scene_globals.bounding_box_max);
     // Keep density-kernel scale independent of the camera-dependent transport domain.
     _scene_bounding_sphere_radius = length(_host_scene_globals.bounding_box_max - geometry_center);
-    upload_success = upload_or_update_linear_scene_buffer(device, &_host_scene_globals, size_t(1), scene_buffer_usage, _scene_globals_buffer, _scene_globals_buffer_size,
-                       _gpu_scene.scene_globals, "scene_globals") &&
-                     upload_success;
+    upload_success =
+      upload.upload(&_host_scene_globals, size_t(1), scene_buffer_usage, _scene_globals_buffer, _scene_globals_buffer_size, _gpu_scene.scene_globals, "scene_globals") &&
+      upload_success;
   }
 
   if (changes[UpdateFlags::Options]) {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_partial_update_scene_options");
     GPUSceneOptions options = build_scene_options(scene);
-    upload_success = upload_or_update_linear_scene_buffer(device, &options, size_t(1), scene_buffer_usage, _scene_options_buffer, _scene_options_buffer_size,
-                       _gpu_scene.scene_options, "scene_options") &&
-                     upload_success;
+    upload_success =
+      upload.upload(&options, size_t(1), scene_buffer_usage, _scene_options_buffer, _scene_options_buffer_size, _gpu_scene.scene_options, "scene_options") && upload_success;
   }
 
   return upload_success;

@@ -500,6 +500,10 @@ void RenderContext::end_frame() {
   if (!valid())
     return;
 
+  if (_private->imgui_enabled) {
+    ImGui::EndFrame();
+  }
+
   const RuntimeOutputTarget output_target = _private->runtime_output.acquire_target(_private->rhi_context);
   if ((output_target.valid() == false) || (output_target.width == 0u) || (output_target.height == 0u)) {
     _private->rhi_context.command_buffer_end(_private->rhi_cmd);

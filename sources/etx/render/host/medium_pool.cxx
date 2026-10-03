@@ -147,6 +147,13 @@ struct MediumPoolImpl {
     if ((duplicate.grid.density_image_index != kInvalidIndex) && (duplicate.grid.density_image_index < image_pool.array_size())) {
       duplicate.grid.density_image_index = image_pool.add_copy(duplicate.grid.density_image_index);
       duplicate.density_view = image_pool.get(duplicate.grid.density_image_index).pixels.r32;
+    } else if (source.density_data.valid()) {
+      duplicate.grid.density_image_index = kInvalidIndex;
+      duplicate.density_buffer = buffer_pool.create(source.density_data.byte_size, "duplicated density");
+      duplicate.density_data = buffer_pool.allocate(duplicate.density_buffer, source.density_data.byte_size, alignof(float));
+      if (buffer_pool.write(duplicate.density_data, buffer_pool.map(source.density_data), source.density_data.byte_size) == false)
+        return kInvalidIndex;
+      duplicate.density_view = buffer_pool.view_as_array<float>(duplicate.density_data);
     } else {
       duplicate.grid.density_image_index = kInvalidIndex;
       duplicate.density_view = {};

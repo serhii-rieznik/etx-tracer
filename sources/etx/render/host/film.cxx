@@ -104,7 +104,15 @@ Film::~Film() {
 
 void Film::allocate(const uint2& dim) {
   if (_private->dimensions != dim) {
-    _private->dimensions = {max(1u, dim.x), max(1u, dim.y)};
+    const uint2 dimensions = {max(1u, dim.x), max(1u, dim.y)};
+    const uint64_t pixel_count = 1llu * dimensions.x * dimensions.y;
+    std::array<std::vector<float3>, StorageLayerCount> storage_buffers;
+    for (auto& buffer : storage_buffers) {
+      buffer.resize(pixel_count);
+    }
+    std::vector<InternalData> internal_data(pixel_count);
+    std::vector<float4> output_data(pixel_count);
+    _private->dimensions = dimensions;
     if ((_private->render_window_size.x > _private->dimensions.x) || (_private->render_window_size.y > _private->dimensions.y) ||
         (_private->render_window_origin.x >= _private->dimensions.x) || (_private->render_window_origin.y >= _private->dimensions.y) ||
         (_private->render_window_size.x > (_private->dimensions.x - _private->render_window_origin.x)) ||
@@ -113,14 +121,11 @@ void Film::allocate(const uint2& dim) {
       _private->render_window_size = _private->dimensions;
     }
 
-    for (auto& buffer : _private->storage_buffers) {
-      buffer.clear();
-      buffer.resize(1llu * _private->dimensions.x * _private->dimensions.y);
+    for (uint32_t index = 0u; index < StorageLayerCount; ++index) {
+      _private->storage_buffers[index].swap(storage_buffers[index]);
     }
-    _private->internal_data.clear();
-    _private->internal_data.resize(1llu * _private->dimensions.x * _private->dimensions.y);
-    _private->output_data.clear();
-    _private->output_data.resize(1llu * _private->dimensions.x * _private->dimensions.y);
+    _private->internal_data.swap(internal_data);
+    _private->output_data.swap(output_data);
 
     float3* albedo = _private->storage_buffers[StorageAlbedo].data();
     float3* normals = _private->storage_buffers[StorageNormals].data();

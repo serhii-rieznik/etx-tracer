@@ -35,7 +35,7 @@
   if (try_load_emitter_instance(hit.emitter_index, emitter_instance) == false) {
     return;
   }
-  if (emitter_instance.emitter_class != EmitterClass::Area) {
+  if (emitter_access_is_local_class(emitter_instance.emitter_class) == false) {
     return;
   }
 

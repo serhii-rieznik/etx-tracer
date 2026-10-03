@@ -34,9 +34,8 @@ struct ObjectIndexPool {
 
     auto& info = _info[_head];
     ETX_ASSERT(info.alive == 0);
-    info.alive = 1;
-
     new (_objects + _head) T(std::forward<Args>(args)...);
+    info.alive = 1;
 
     auto result = _head;
     _head = info.next;

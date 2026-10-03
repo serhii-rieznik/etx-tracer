@@ -565,15 +565,16 @@ void RHIContext::destroy_command_buffer(RHICommandBuffer cmd) {
   });
 }
 
-void RHIContext::submit_command_buffer(const RHISubmitInfo& info) {
-  dispatch_context(_backend, _impl, [&](auto* context) {
-    context->submit_command_buffer(info);
+RHIResult RHIContext::submit_command_buffer(const RHISubmitInfo& info) {
+  return dispatch_context(_backend, _impl, [&](auto* context) {
+    return context->submit_command_buffer(info);
   });
 }
 
 void RHIContext::submit_frame_command_buffer(RHICommandBuffer cmd) {
   RHISubmitInfo submit_info = {};
   submit_info.command_buffer = cmd;
+  submit_info.frame_completion = true;
   if (has_swapchain()) {
     submit_info.wait_semaphores.push_back(get_image_acquired_semaphore());
   }

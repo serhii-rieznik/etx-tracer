@@ -295,8 +295,6 @@ void SceneData::clear(TaskScheduler& scheduler) {
   json_file_name.clear();
   geometry_file_name.clear();
   materials_file_name.clear();
-  images.init(1024u);
-  mediums.init(1024u);
 }
 
 void SceneData::swap_contents(SceneData& other) {

@@ -80,6 +80,10 @@ struct VKResourcePool {
       free_indices.pop_back();
       generations[index] = ((generations[index] + 1) & 0x0FFFFFFF);  // Increment generation on reuse
     } else {
+      const size_t capacity = (data.size() < data.capacity()) ? data.capacity() : std::max(data.size() + 1u, data.capacity() * 2u);
+      free_indices.reserve(capacity);
+      generations.reserve(capacity);
+      data.reserve(capacity);
       index = static_cast<uint32_t>(data.size());
       data.emplace_back();
       generations.push_back(0);
@@ -203,7 +207,7 @@ struct VKContext {
   RHIResult wait_for_command_buffer(RHICommandBuffer cmd);
   RHIResult query_command_buffer(RHICommandBuffer cmd);
 
-  void submit_command_buffer(const RHISubmitInfo& info);
+  RHIResult submit_command_buffer(const RHISubmitInfo& info);
 
   void program_command_buffer(RHICommandBuffer cmd, std::function<void(void)> func);
 

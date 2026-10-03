@@ -4,6 +4,7 @@
 #include <etx/render/host/tasks.hxx>
 
 #include <TaskScheduler.hxx>
+#include <atomic>
 #include <mutex>
 
 #define ETX_ALWAYS_SINGLE_THREAD 0
@@ -19,7 +20,19 @@ namespace etx {
 
 struct TaskWrapper : public enki::ITaskSet {
   Task* task = nullptr;
-  bool executed = false;
+  std::atomic<bool> executed = false;
+  bool background = false;
+  enki::TaskSetPartition pinned_range = {0u, 1u};
+
+  struct PinnedTask : public enki::IPinnedTask {
+    TaskWrapper& owner;
+    PinnedTask(TaskWrapper& wrapper)
+      : owner(wrapper) {
+    }
+    void Execute() override {
+      owner.ExecuteRange(owner.pinned_range, threadNum);
+    }
+  } pinned{*this};
 
   TaskWrapper(Task* t, uint32_t range, uint32_t min_size)
     : enki::ITaskSet(range, min_size)
@@ -27,8 +40,12 @@ struct TaskWrapper : public enki::ITaskSet {
   }
 
   void ExecuteRange(enki::TaskSetPartition range_, uint32_t threadnum_) override {
-    executed = true;
+    executed.store(true, std::memory_order_release);
     task->execute_range(range_.start, range_.end, threadnum_);
+  }
+
+  enki::ICompletable* completable() {
+    return background ? static_cast<enki::ICompletable*>(&pinned) : this;
   }
 };
 
@@ -52,6 +69,34 @@ struct TaskSchedulerImpl {
   std::map<uint32_t, uint32_t> task_to_function;
   std::mutex task_pool_lock;
   bool shutdown_requested = false;
+
+  Task::Handle schedule_function(uint64_t range, FunctionTask::F func, bool background) {
+    TaskWrapper* task = nullptr;
+    uint32_t task_handle = Task::InvalidHandle;
+    {
+      std::scoped_lock lock(task_pool_lock);
+      const uint32_t func_task_handle = function_task_pool.alloc(std::move(func));
+      auto& func_task = function_task_pool.get(func_task_handle);
+      try {
+        task_handle = task_pool.alloc(&func_task, range, 1u);
+        task = &task_pool.get(task_handle);
+        task->background = background;
+        task_to_function.emplace(task_handle, func_task_handle);
+      } catch (const std::bad_alloc&) {
+        if (task_handle != Task::InvalidHandle)
+          task_pool.free(task_handle);
+        function_task_pool.free(func_task_handle);
+        throw;
+      }
+    }
+    if (background) {
+      task->pinned.threadNum = scheduler.GetNumTaskThreads() - 1u;
+      scheduler.AddPinnedTask(&task->pinned);
+    } else {
+      scheduler.AddTaskSetToPipe(task);
+    }
+    return {task_handle};
+  }
 
   TaskSchedulerImpl() {
     task_pool.init(1024u);
@@ -104,26 +149,45 @@ Task::Handle TaskScheduler::schedule(uint64_t range, Task* t) {
 }
 
 Task::Handle TaskScheduler::schedule(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
-  TaskWrapper* task = nullptr;
-  uint32_t task_handle = Task::InvalidHandle;
-  {
-    std::scoped_lock lock(_private->task_pool_lock);
-    const uint32_t func_task_handle = _private->function_task_pool.alloc(func);
-    auto& func_task = _private->function_task_pool.get(func_task_handle);
+  return _private->schedule_function(range, std::move(func), false);
+}
 
-    task_handle = _private->task_pool.alloc(&func_task, range, 1u);
-    task = &_private->task_pool.get(task_handle);
-
-    _private->task_to_function[task_handle] = func_task_handle;
-  }
-  _private->scheduler.AddTaskSetToPipe(task);
-
-  return {task_handle};
+Task::Handle TaskScheduler::schedule_background(std::function<void(uint32_t, uint32_t, uint32_t)> func) {
+  return _private->schedule_function(1u, std::move(func), true);
 }
 
 void TaskScheduler::execute(uint64_t range, Task* t) {
   auto handle = schedule(range, t);
   wait_and_release(handle);
+}
+
+void TaskScheduler::execute_background(uint64_t range, Task* t) {
+  std::vector<Task::Handle> handles;
+  handles.reserve(range);
+  try {
+    const uint32_t first_worker = _private->scheduler.GetConfig().numExternalTaskThreads + 1u;
+    const uint32_t worker_count = _private->scheduler.GetConfig().numTaskThreadsToCreate;
+    for (uint32_t index = 0u; index < range; ++index) {
+      TaskWrapper* task = nullptr;
+      Task::Handle handle;
+      {
+        std::scoped_lock lock(_private->task_pool_lock);
+        handle.data = _private->task_pool.alloc(t, 1u, 1u);
+        task = &_private->task_pool.get(handle.data);
+        task->background = true;
+        task->pinned_range = {index, index + 1u};
+        task->pinned.threadNum = first_worker + (index % worker_count);
+      }
+      handles.push_back(handle);
+      _private->scheduler.AddPinnedTask(&task->pinned);
+    }
+  } catch (const std::bad_alloc&) {
+    for (auto& handle : handles)
+      wait_and_release(handle);
+    throw;
+  }
+  for (auto& handle : handles)
+    wait_and_release(handle);
 }
 
 void TaskScheduler::execute(uint64_t range, std::function<void(uint32_t, uint32_t, uint32_t)> func) {
@@ -145,7 +209,7 @@ bool TaskScheduler::completed(Task::Handle handle) {
     std::scoped_lock lock(_private->task_pool_lock);
     task_wrapper = &_private->task_pool.get(handle.data);
   }
-  return task_wrapper->executed && task_wrapper->GetIsComplete();
+  return task_wrapper->executed.load(std::memory_order_acquire) && task_wrapper->completable()->GetIsComplete();
 }
 
 void TaskScheduler::wait_task(const Task::Handle& handle) {
@@ -158,7 +222,7 @@ void TaskScheduler::wait_task(const Task::Handle& handle) {
     std::scoped_lock lock(_private->task_pool_lock);
     task_wrapper = &_private->task_pool.get(handle.data);
   }
-  _private->scheduler.WaitforTask(task_wrapper);
+  _private->scheduler.WaitforTask(task_wrapper->completable());
 }
 
 void TaskScheduler::release(Task::Handle& handle) {
@@ -194,8 +258,11 @@ void TaskScheduler::restart(Task::Handle handle) {
     std::scoped_lock lock(_private->task_pool_lock);
     task_wrapper = &_private->task_pool.get(handle.data);
   }
-  _private->scheduler.WaitforTask(task_wrapper);
-  _private->scheduler.AddTaskSetToPipe(task_wrapper);
+  _private->scheduler.WaitforTask(task_wrapper->completable());
+  if (task_wrapper->background)
+    _private->scheduler.AddPinnedTask(&task_wrapper->pinned);
+  else
+    _private->scheduler.AddTaskSetToPipe(task_wrapper);
 }
 
 void TaskScheduler::shutdown() {
