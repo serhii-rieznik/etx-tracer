@@ -3,6 +3,8 @@
 #include <etx/render/host/scene_global.hxx>
 #include <etx/render/access/emitter_access_shared.hxx>
 #include <etx/render/shared/scene.hxx>
+#include <etx/render/access/bsdf_resource_cpu.hxx>
+#include <etx/render/interop/thermal_surface_shared.hxx>
 #include <etx/render/interop/directional_emission_shared.hxx>
 
 namespace etx {
@@ -220,22 +222,16 @@ uint32_t emitter_external_medium_index(const Emitter& em_inst) {
   return scene.emitter_profiles[em_inst.profile].medium_index;
 }
 
-SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const float2& uv, const float3& emitter_normal, const float3& direction,
+SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const Vertex& vertex, const float3& emitter_normal, const float3& direction,
   float& pdf_area, float& pdf_dir, float& pdf_dir_out) {
   const auto& scene = scene_global_get();
-  const auto& em = scene.emitter_profiles[em_inst.profile];
   ETX_ASSERT(em_inst.is_local());
-
-  float collimation = 0.0f;
-  if (em_inst.triangle_index != kInvalidIndex) {
-    const auto& tri = scene.triangles[em_inst.triangle_index];
-    const auto& material = scene.materials[tri.material_index];
-    collimation = material.emission_collimation;
-  }
+  const auto& tri = scene.triangles[em_inst.triangle_index];
+  const auto& material = scene.materials[tri.material_index];
 
   const float cos_t = max(0.0f, dot(emitter_normal, direction));
-  const float exponent = scene_math_shared_collimation_to_exponent(collimation);
-  pdf_dir = scene_math_shared_collimated_direction_pdf(cos_t, exponent);
+  const float exponent = thermal_surface_sampling_exponent(material);
+  pdf_dir = scene_math_shared_collimated_direction_pdf(cos_t, exponent) * thermal_surface_side_probability(material);
 
   if (pdf_dir <= 0.0f) {
     return {spect, 0.0f};
@@ -247,8 +243,9 @@ SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const Spectr
   pdf_dir_out = pdf_dir * pdf_area;
   ETX_ASSERT(pdf_dir_out > 0.0f);
 
-  const float emission_scale = scene_math_shared_collimated_emission_scale(cos_t, exponent);
-  return apply_image(spect, em.emission, uv) * emission_scale;
+  const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
+  return SpectralResponse(
+    thermal_surface_combined_radiance(make_bsdf_resource_cpu_context(scene), spect, material, vertex.tex, dot(geo_normal, direction), abs(dot(vertex.nrm, direction))));
 }
 
 SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir) {
@@ -332,7 +329,8 @@ SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuer
       const Material& material = scene.materials[tri.material_index];
       const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
 
-      if (dot(geo_normal, query.target_position - query.source_position) >= 0.0f) {
+      const bool two_sided_thermal = (material.thermal_rgb_image_index != kInvalidIndex) && (material.two_sided != 0u);
+      if ((two_sided_thermal == false) && (dot(geo_normal, query.target_position - query.source_position) >= 0.0f)) {
         return {spect, 0.0f};
       }
       pdf_area = emitter_pdf_area_local(em_inst);
@@ -340,13 +338,14 @@ SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuer
       float3 dp = query.source_position - query.target_position;
       float distance_squared = dot(dp, dp);
       if (distance_squared > 0.0f) {
-        const float cos_t = dot(dp, geo_normal) / sqrtf(distance_squared);
+        const float signed_cosine = dot(dp, geo_normal) / sqrtf(distance_squared);
+        const float cos_t = two_sided_thermal ? abs(signed_cosine) : signed_cosine;
         if (cos_t > kEpsilon) {
-          const float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
+          const float exponent = thermal_surface_sampling_exponent(material);
           pdf_dir = pdf_area * distance_squared / cos_t;
-          pdf_dir_out = pdf_area * scene_math_shared_collimated_direction_pdf(cos_t, exponent);
-          const float emission_scale = scene_math_shared_collimated_emission_scale(cos_t, exponent);
-          return apply_image(spect, em.emission, query.uv) * emission_scale;
+          pdf_dir_out = pdf_area * scene_math_shared_collimated_direction_pdf(cos_t, exponent) * thermal_surface_side_probability(material);
+          const float shading_cosine = abs(dot(query.shading_normal, dp)) / sqrtf(distance_squared);
+          return SpectralResponse(thermal_surface_combined_radiance(make_bsdf_resource_cpu_context(scene), spect, material, query.uv, signed_cosine, shading_cosine));
         }
       }
 
@@ -493,11 +492,16 @@ EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spec
       result.normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
       result.direction = normalize(result.origin - from_point);
       result.instance_index = em_inst.instance_index;
+      const Material& material = scene.materials[tri.material_index];
+      if ((thermal_surface_side_probability(material) == 0.5f) && (dot(result.normal, -result.direction) < 0.0f)) {
+        result.normal *= -1.0f;
+      }
 
       EmitterRadianceQuery q = {
         .source_position = from_point,
         .target_position = result.origin,
         .uv = vertex.tex,
+        .shading_normal = vertex.nrm,
       };
 
       result.value = emitter_get_radiance(em_inst, spect, q, result.pdf_area, result.pdf_dir, result.pdf_dir_out);
@@ -572,8 +576,11 @@ EmitterSample sample_emission_from_emitter(const Emitter& em_inst, const Spectra
       }
       result.origin = vertex.pos;
       result.normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
-      result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, scene_math_shared_collimation_to_exponent(material.emission_collimation));
-      result.value = emitter_evaluate_out_local(em_inst, spect, vertex.tex, result.normal, result.direction, result.pdf_area, result.pdf_dir, result.pdf_dir_out);
+      if ((thermal_surface_side_probability(material) == 0.5f) && (smp.next() < 0.5f)) {
+        result.normal *= -1.0f;
+      }
+      result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, thermal_surface_sampling_exponent(material));
+      result.value = emitter_evaluate_out_local(em_inst, spect, vertex, result.normal, result.direction, result.pdf_area, result.pdf_dir, result.pdf_dir_out);
       break;
     }
 

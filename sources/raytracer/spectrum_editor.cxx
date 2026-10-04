@@ -54,6 +54,8 @@ uint32_t* SpectrumTarget::spectrum_slot(SceneData& scene) const {
       return &medium.absorption_index;
     if (channel == Channel::Scattering)
       return &medium.scattering_index;
+    if (channel == Channel::Emission)
+      return &medium.emission_index;
     return nullptr;
   }
   if (emitter_index != kInvalidIndex) {

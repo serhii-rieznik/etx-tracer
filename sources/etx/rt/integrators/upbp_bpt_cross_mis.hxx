@@ -131,7 +131,7 @@ inline UPBPSurfaceMISWeights upbp_bpt_nee_cross_technique_weights(const UPBPBPTN
   }
 
   const double direct_density = static_cast<double>(input.emitter_sample.pdf_sample) * input.emitter_sample.pdf_dir;
-  const double w_light = input.emitter_sample.is_delta ? 0.0 : input.camera_scattering.pdf_forward / direct_density;
+  const double w_light = input.emitter_sample.is_delta ? 0.0 : input.camera_scattering.pdf_forward * std::exp(input.connection_segment->log_transport_pdf_forward) / direct_density;
   const double camera_event_density = camera_vertex.cls == UPBPVertexClass::Medium ? std::exp(camera_vertex.log_medium_event_density) : 1.0;
   const double reverse_ray_pdf = std::exp(input.connection_segment->log_transport_pdf_reverse) * camera_event_density;
   const double sin_theta = upbp_medium_phase_sine(camera_vertex.intersection.w_i, direction_to_light);

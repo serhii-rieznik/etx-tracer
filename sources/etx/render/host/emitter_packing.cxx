@@ -139,6 +139,9 @@ PackedEmitterData build_packed_emitters_impl(const SceneData& scene_data, const 
   }
 
   result.emitter_profiles = scene_data.emitter_profiles;
+  for (EmitterProfile& profile : result.emitter_profiles) {
+    profile.medium_index = scene_data.transport_medium_index(profile.medium_index);
+  }
   update_directional_profile_data(result.emitter_profiles);
 
   {
@@ -274,6 +277,7 @@ PackedEmitterData build_packed_emitters_impl(const SceneData& scene_data, const 
           if (profile.emission.spectrum_index != kInvalidIndex) {
             emitter.spectrum_weight = safe_spectrum_luminance(scene_data, profile.emission.spectrum_index);
           }
+          emitter.spectrum_weight += material.thermal_emission_weight;
 
           const float3 v0 = transform_point(resolved.object_to_world, scene_data.vertices.pos[triangle.i[0]]);
           const float3 v1 = transform_point(resolved.object_to_world, scene_data.vertices.pos[triangle.i[1]]);

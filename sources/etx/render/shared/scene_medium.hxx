@@ -1,6 +1,7 @@
 #pragma once
 
 #include <etx/render/interop/medium_phase_shared.hxx>
+#include <etx/render/interop/thermal_radiation_shared.hxx>
 #include <etx/render/shared/medium.hxx>
 
 namespace etx {
@@ -33,6 +34,7 @@ ETX_SHARED_INLINE SpectralResponse medium_transmittance_shared_to_spectral_respo
 
 #include <etx/render/interop/medium_transmittance_shared.hxx>
 #include <etx/render/interop/medium_sample_shared.hxx>
+#include <etx/render/interop/thermal_medium_shared.hxx>
 
 ETX_SHARED_INLINE uint32_t sample_spectrum_component(const SpectralQuery spect, const SpectralResponse& albedo, const SpectralResponse& throughput, const float rnd,
   SpectralResponse& pdf) {
@@ -71,6 +73,33 @@ ETX_SHARED_INLINE SpectralResponse medium_scattering(const Medium& medium, const
 
 ETX_SHARED_INLINE SpectralResponse medium_extinction(const Medium& medium, const SpectralQuery spect) {
   return medium_absorption(medium, spect) + medium_scattering(medium, spect);
+}
+
+ETX_SHARED_INLINE SpectralResponse medium_emission_radiance(const Medium& medium, const SpectralQuery spect, Sampler& sampler, const float3& origin, const float3& direction,
+  float distance) {
+  if ((medium.thermal_source_index == kInvalidIndex) && ((medium.emission_flags & Medium::EmissionEnabled) == 0u)) {
+    return {spect, 0.0f};
+  }
+  if ((medium.cls == Medium::Homogeneous) && (distance >= kMaxFloat) && ((medium.emission_flags & Medium::EmissionRequiresBoundedRegion) != 0u)) {
+    if (medium.emission_failure != nullptr) {
+      medium.emission_failure->store(true, std::memory_order_relaxed);
+    }
+    return {spect, 0.0f};
+  }
+  const SpectralResponse source = medium_load_spectrum_or_zero(medium.thermal_source_index, spect);
+  const SpectralResponse emission = medium_load_spectrum_or_zero(medium.emission_index, spect);
+  const SpectralResponse extinction = medium_extinction(medium, spect);
+  MediumSharedContext context = make_medium_shared_context(medium, sampler);
+  bool valid = true;
+  const SpectralResponse authored = medium_authored_segment_radiance(context, spect, emission, extinction, origin, direction, distance, valid);
+  const SpectralResponse result = authored + SpectralResponse(thermal_medium_segment_radiance(context, spect, source, extinction, origin, direction, distance));
+  if ((valid == false) || (result.valid() == false)) {
+    if (medium.emission_failure != nullptr) {
+      medium.emission_failure->store(true, std::memory_order_relaxed);
+    }
+    return {spect, 0.0f};
+  }
+  return result;
 }
 
 ETX_SHARED_INLINE MediumInstance make_medium_instance(const Medium& medium, const SpectralQuery spect, uint32_t index) {

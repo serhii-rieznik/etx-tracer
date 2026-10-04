@@ -1241,6 +1241,9 @@ void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vecto
   apply_field(before.emission_collimation, after.emission_collimation, [](Material& material, const float value) {
     material.emission_collimation = value;
   });
+  apply_field(before.temperature_kelvin, after.temperature_kelvin, [](Material& material, const float value) {
+    material.temperature_kelvin = value;
+  });
   apply_field(before.energy_compensation_interface_index, after.energy_compensation_interface_index, [](Material& material, const uint32_t value) {
     material.energy_compensation_interface_index = value;
   });
@@ -2869,6 +2872,19 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   with_section(
     4, "Emission",
     [&]() {
+      float temperature_kelvin = material.temperature_kelvin;
+      const bool temperature_mixed = material_values_mixed([](const Material& value) {
+        return value.temperature_kelvin;
+      });
+      ImGui::TextUnformatted("Temperature (K)");
+      full_width_item();
+      if (mixed_control(temperature_mixed, [&]() {
+            return ImGui::DragFloat("##material_temperature_kelvin", &temperature_kelvin, 1.0f, 0.0f, 40000.0f, temperature_mixed ? "mixed" : "%.1f", ImGuiSliderFlags_AlwaysClamp);
+          })) {
+        material.temperature_kelvin = temperature_kelvin;
+        changed = true;
+      }
+
       float collimation = material.emission_collimation;
       const bool collimation_mixed = material_values_mixed([](const Material& value) {
         return value.emission_collimation;
@@ -2935,6 +2951,8 @@ bool UI::build_medium(SceneRepresentation& scene_rep, uint32_t medium_index, Med
     SpectrumSource::Kind::Coefficient, false);
   spectrum_control(scene_rep, "Scattering", {{.spectrum_index = m.scattering_index, .channel = SpectrumTarget::Channel::Scattering, .medium_index = medium_index}},
     SpectrumSource::Kind::Coefficient, false);
+  spectrum_control(scene_rep, "Emission / m", {{.spectrum_index = m.emission_index, .channel = SpectrumTarget::Channel::Emission, .medium_index = medium_index}},
+    SpectrumSource::Kind::Emission, false);
 
   ImGui::TextUnformatted("Anisotropy");
   full_width_item();

@@ -1,9 +1,6 @@
 #include "gpu_rt_wavefront_common.hlsl"
 
 [numthreads(8, 8, 1)] void wavefront_init_camera_path_0_main(uint3 dtid : SV_DispatchThreadID) {
-  if (scene_path_mode_is_light_tracing()) {
-    return;
-  }
   if (constants.camera_buffer_index == kInvalidIndex) {
     return;
   }
@@ -62,6 +59,9 @@
   state.path_length = 1u;
   state.pixel_index = output_pixel_index;
   state.flags = GPUWavefrontPathFlags::Valid | GPUWavefrontPathFlags::Connectible | GPUWavefrontPathFlags::From_camera;
+  if (scene_path_mode_is_light_tracing()) {
+    state.flags |= GPUWavefrontPathFlags::Camera_source_prefix;
+  }
   state.path_source = PathSource::Camera;
   state.sampler_seed = seed;
   state.pixel = camera_space_pixel;

@@ -14,6 +14,7 @@
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/bsdf_energy_compensation_lut.hxx>
+#include <etx/render/host/thermal_preparation.hxx>
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/host/scene_serialization.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
@@ -1305,6 +1306,7 @@ nlohmann::json serialize_scene_spectral_overrides(const SceneData& data, const s
       {"name", entry.id},
       {"absorption", spectrum_reference(medium.absorption_index, "medium absorption")},
       {"scattering", spectrum_reference(medium.scattering_index, "medium scattering")},
+      {"emission", spectrum_reference(medium.emission_index, "medium emission")},
     });
   }
 
@@ -1468,6 +1470,9 @@ bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& dat
     }
     Medium& medium = data.mediums.get(mapping->second);
     if ((resolve_reference(serialized["absorption"], medium.absorption_index) == false) || (resolve_reference(serialized["scattering"], medium.scattering_index) == false)) {
+      return false;
+    }
+    if (serialized.contains("emission") && (resolve_reference(serialized["emission"], medium.emission_index) == false)) {
       return false;
     }
   }
@@ -1970,6 +1975,11 @@ struct SceneRepresentationImpl {
   void init_default_values() {
     data.defaults.black_spectrum = data.add_spectrum(SpectralDistribution::rgb_reflectance({0.0f, 0.0f, 0.0f}));
     data.defaults.white_spectrum = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+    SpectrumSource white_source = {};
+    white_source.mode = SpectrumSource::Mode::Color;
+    white_source.color = {1.0f, 1.0f, 1.0f};
+    white_source.base = data.spectrum_values[data.defaults.white_spectrum];
+    data.spectrum_sources.emplace(data.defaults.white_spectrum, std::move(white_source));
     data.defaults.rayleigh_spectrum = data.add_spectrum(scattering::rayleigh_spectrum());
     data.defaults.mie_spectrum = data.add_spectrum(scattering::mie_spectrum());
     data.defaults.ozone_spectrum = data.add_spectrum(scattering::ozone_spectrum());
@@ -2073,11 +2083,11 @@ struct SceneRepresentationImpl {
         }
         if (mtl.reflectance.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+          mtl.reflectance.spectrum_index = data.copy_spectrum(data.defaults.white_spectrum);
         }
         if (mtl.scattering.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          mtl.scattering.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+          mtl.scattering.spectrum_index = data.copy_spectrum(data.defaults.white_spectrum);
         }
         if (mtl.subsurface.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
@@ -2141,45 +2151,6 @@ struct SceneRepresentationImpl {
         }
       }
     });
-  }
-
-  void validate_mediums() {
-    // Clamp medium densities to prevent extremely small mean free paths
-    for (uint32_t i = 0; i < data.mediums.array_size(); ++i) {
-      const Medium& medium = data.mediums.get(i);
-
-      if (medium.absorption_index == kInvalidIndex || medium.absorption_index >= data.spectrum_values.size()) {
-        continue;
-      }
-
-      if (medium.scattering_index == kInvalidIndex || medium.scattering_index >= data.spectrum_values.size()) {
-        continue;
-      }
-
-      SpectralDistribution& absorption = data.spectrum_values[medium.absorption_index];
-      SpectralDistribution& scattering = data.spectrum_values[medium.scattering_index];
-
-      float max_absorption = absorption.maximum_spectral_power();
-      float max_scattering = scattering.maximum_spectral_power();
-
-      float max_extinction = max_absorption + max_scattering;
-      if (max_extinction <= 0.0f) {
-        continue;
-      }
-
-      constexpr float kMinMeanFreePathAbsolute = 0.01f;  // Minimum mean free path in absolute units
-      float max_allowed_extinction = 1.0f / kMinMeanFreePathAbsolute;
-
-      if (max_extinction <= max_allowed_extinction) {
-        continue;
-      }
-
-      float scale_factor = max_allowed_extinction / max_extinction;
-
-      // Scale both spectra by the same factor to preserve ratios
-      absorption.scale(scale_factor);
-      scattering.scale(scale_factor);
-    }
   }
 
   void validate_normals(std::vector<bool>& referenced_vertices, bool& has_invalid_tangents) {
@@ -2914,8 +2885,8 @@ uint32_t SceneRepresentation::add_material(const char* name) {
   uint32_t index = _private->data.add_material(name);
   auto& mat = _private->data.materials[index];
   mat.cls = MaterialClass::Diffuse;
-  mat.reflectance.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
-  mat.scattering.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+  mat.reflectance.spectrum_index = _private->data.copy_spectrum(_private->data.defaults.white_spectrum);
+  mat.scattering.spectrum_index = _private->data.copy_spectrum(_private->data.defaults.white_spectrum);
   mat.emission.spectrum_index = _private->data.add_spectrum(SpectralDistribution::constant(0.0f));
   mat.subsurface.spectrum_index = _private->data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
   mat.int_ior.cls = SpectralDistribution::Dielectric;
@@ -2999,12 +2970,7 @@ std::string SceneRepresentation::rename_material(uint32_t index, const char* nam
 }
 
 uint32_t SceneRepresentation::add_medium(const char* name) {
-  SpectralDistribution absorption_spectrum = SpectralDistribution::constant(0.0f);
-  SpectralDistribution scattering_spectrum = SpectralDistribution::constant(1.0f);
-  uint32_t absorption_index = _private->data.add_spectrum(absorption_spectrum);
-  uint32_t scattering_index = _private->data.add_spectrum(scattering_spectrum);
-  std::string id = name && name[0] ? name : ("medium-" + std::to_string(_private->data.mediums.array_size()));
-  return _private->data.mediums.add(Medium::Homogeneous, id, nullptr, absorption_index, scattering_index, 0.0f, true);
+  return _private->data.add_medium(Medium::Homogeneous, name, nullptr, SpectralDistribution::constant(0.0f), SpectralDistribution::constant(1.0f), 0.0f, true);
 }
 
 SceneResourceEditResult SceneRepresentation::create_medium(const char* name) {
@@ -3032,6 +2998,7 @@ SceneResourceEditResult SceneRepresentation::duplicate_medium(uint32_t index) {
   Medium& duplicate = scene_data.mediums.get(duplicate_index);
   duplicate.absorption_index = clone_spectrum(scene_data, duplicate.absorption_index);
   duplicate.scattering_index = clone_spectrum(scene_data, duplicate.scattering_index);
+  duplicate.emission_index = clone_spectrum(scene_data, duplicate.emission_index);
   const BoundingBox authored_bounds = index < _private->medium_authored_bounds.size() ? _private->medium_authored_bounds[index] : duplicate.bounds;
   _private->medium_authored_bounds.push_back(authored_bounds);
   return {.status = SceneResourceEditStatus::Success, .resource_index = duplicate_index};
@@ -4328,10 +4295,13 @@ void SceneRepresentationImpl::set_scattering_rhi(RHIContext& rhi_context) {
 }
 
 bool SceneRepresentationImpl::ensure_energy_compensation_interfaces() {
-  if ((rhi != nullptr) && rhi->valid()) {
-    return etx::ensure_energy_compensation_interfaces(data, scheduler, *rhi);
+  const bool scattering_ready =
+    ((rhi != nullptr) && rhi->valid()) ? etx::ensure_energy_compensation_interfaces(data, scheduler, *rhi) : etx::ensure_energy_compensation_interfaces(data, scheduler);
+  if ((scattering_ready == false) || (prepare_thermal_materials(data, active_camera.medium_index) == false)) {
+    return false;
   }
-  return etx::ensure_energy_compensation_interfaces(data, scheduler);
+  create_area_emitters_from_materials();
+  return true;
 }
 
 bool SceneRepresentationImpl::begin_energy_compensation_interface_preparation() {
@@ -4368,7 +4338,8 @@ EnergyCompensationPreparationState SceneRepresentationImpl::poll_energy_compensa
     return energy_compensation_preparation_state;
   }
 
-  if (result == EnergyCompensationGenerationResult::Complete) {
+  if ((result == EnergyCompensationGenerationResult::Complete) && prepare_thermal_materials(data, active_camera.medium_index)) {
+    create_area_emitters_from_materials();
     energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
     return energy_compensation_preparation_state;
   }
@@ -5806,6 +5777,12 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if ((std::fabs(scattering.x) >= kEpsilon) || (std::fabs(scattering.y) >= kEpsilon) || (std::fabs(scattering.z) >= kEpsilon)) {
       materials_stream << "scattering " << scattering.x << " " << scattering.y << " " << scattering.z << "\n";
     }
+    if (medium.emission_index != kInvalidIndex) {
+      const float3 emission = impl->data.spectrum_values[medium.emission_index].integrated();
+      if ((emission.x > 0.0f) || (emission.y > 0.0f) || (emission.z > 0.0f)) {
+        materials_stream << "emission " << emission.x << " " << emission.y << " " << emission.z << "\n";
+      }
+    }
     if (std::fabs(medium.phase_function_g) >= kEpsilon) {
       materials_stream << "anisotropy " << medium.phase_function_g << "\n";
     }
@@ -6050,6 +6027,9 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
 
     materials_stream << "newmtl " << serialized_name << "\n";
     materials_stream << "material class " << material_class_to_string(material.cls) << "\n";
+    if (material.temperature_kelvin > 0.0f) {
+      materials_stream << "temperature " << material.temperature_kelvin << "\n";
+    }
 
     write_spectrum_line(materials_stream, "Kd", material.scattering.spectrum_index, true);
     if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Translucent) || (material.transmission.value.x > kEpsilon)) {
@@ -6378,13 +6358,8 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   }
 
   validate_materials();
-  validate_mediums();
 
   generate_pixel_sampler_image(pixel_filter_radius);
-
-  if (ensure_energy_compensation_interfaces() == false) {
-    return false;
-  }
 
   data.images.load_images(scheduler);
 
@@ -6405,6 +6380,10 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
 
     validate_tangents(referenced_vertices, has_invalid_tangents || force_tangents);
     log::warning("Tangents validated: %.2f sec", m.lap());
+  }
+
+  if (ensure_energy_compensation_interfaces() == false) {
+    return false;
   }
 
   setup_atmosphere_references();
@@ -6492,11 +6471,8 @@ void SceneRepresentationImpl::create_area_emitters_from_materials() {
       continue;
 
     const Material& mtl = data.materials[tri.material_index];
-    if (mtl.emission.spectrum_index == kInvalidIndex)
-      continue;
-
-    float spectrum_weight = data.spectrum_values[mtl.emission.spectrum_index].luminance();
-    if (spectrum_weight <= kEpsilon)
+    const float spectrum_weight = (mtl.emission.spectrum_index < data.spectrum_values.size()) ? data.spectrum_values[mtl.emission.spectrum_index].luminance() : 0.0f;
+    if ((spectrum_weight <= kEpsilon) && (mtl.thermal_emission_weight <= 0.0f))
       continue;
 
     // Get or create emitter profile for this material

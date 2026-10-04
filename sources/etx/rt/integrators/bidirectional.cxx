@@ -206,6 +206,7 @@ struct CPUBidirectionalImpl : public Task {
   bool enable_connect_vertices = true;
   bool enable_mis = true;
   bool enable_blue_noise = true;
+  bool enable_medium_emission = false;
   bool mode_locked = false;
 
   using Mode = BDPTMode;
@@ -237,6 +238,7 @@ struct CPUBidirectionalImpl : public Task {
     uint2 pixel = {};
     uint32_t iteration = 0;
     bool use_blue_noise = false;
+    bool camera_source_prefix = true;
   };
 
   CPUBidirectionalImpl(Raytracing& r, std::atomic<Integrator::State>* st)
@@ -275,7 +277,7 @@ struct CPUBidirectionalImpl : public Task {
       GBuffer gbuffer = {};
       SpectralResponse result = {spect, 0.0f};
 
-      if (mode != Mode::LightTracing) {
+      if ((mode != Mode::LightTracing) || enable_medium_emission || enable_direct_hit) {
         const float2 pixel_sample = camera_smp.next_2d();
         float2 uv = film.sample(rt.scene().pixel_sampler, pixel, pixel_sample, camera_smp.next_2d());
         result = build_camera_path(camera_smp, spect, uv, path_data, gbuffer, pixel, status.current_iteration);
@@ -433,7 +435,7 @@ struct CPUBidirectionalImpl : public Task {
         auto splat = connect_light_to_camera(smp, path_data, curr, prev, payload.spect, camera_sample);
         rt.film().submit(splat.to_rgb_estimate(), camera_sample.uv);
       }
-    } else if (payload.mode == PathSource::Camera) {
+    } else if ((payload.mode == PathSource::Camera) && (mode != Mode::LightTracing)) {
       smp.push_fixed(smp_fixed.x, smp_fixed.y, smp_fixed.z);
       if (curr.connectible) {
         payload.result += connect_camera_to_light(curr, prev, smp, path_data, payload.spect);
@@ -443,6 +445,9 @@ struct CPUBidirectionalImpl : public Task {
       if (curr.connectible) {
         payload.result += connect_camera_to_light_path(curr, prev, smp, payload.spect, path_data);
       }
+    } else if ((payload.mode == PathSource::Camera) && payload.camera_source_prefix) {
+      // A direct or delta-only camera prefix has no light-tracing connection strategy.
+      payload.result += direct_hit_area_emitter(curr, prev, path_data, payload.spect, smp, false);
     }
   }
 
@@ -493,6 +498,7 @@ struct CPUBidirectionalImpl : public Task {
     phase_sample.w_o = w_o;
     phase_sample.pdf = pdf_fwd;
     update_scatter_mis_state(first_interaction, pdf_bck, phase_sample, curr, payload);
+    payload.camera_source_prefix = false;
   }
 
   InteractionResult handle_surface(const Intersection& a_intersection, const EmitterSample& emitter_sample, const bool first_interaction, Payload& payload, Ray& ray, Sampler& smp,
@@ -516,7 +522,7 @@ struct CPUBidirectionalImpl : public Task {
       payload.medium_index = (dot(geo_normal, ray.d) < 0.0f) ? m.int_medium : m.ext_medium;
       payload.path_distance += a_intersection.t;
       ray.o = shading_pos(scene, tri, a_intersection.barycentric, ray.d, a_intersection.instance_index);
-      ray.min_t = kRayEpsilon;
+      ray.min_t = kMinNormalFloat;
       ray.max_t = kMaxFloat;
       return InteractionResult::Continue;
     }
@@ -610,6 +616,9 @@ struct CPUBidirectionalImpl : public Task {
     record_path_vertex(payload, path_data, curr, prev);
     connect(payload, smp, {rnd_em_sample.x, rnd_em_sample.y, rnd_support.y}, path_data, curr, prev);
     update_scatter_mis_state(first_interaction, rev_bsdf_pdf, bsdf_sample, curr, payload);
+    if (curr.connectible) {
+      payload.camera_source_prefix = false;
+    }
 
     return terminate_path ? InteractionResult::Break : (subsurface_path ? InteractionResult::SampleSubsurface : InteractionResult::NextIteration);
   }
@@ -622,12 +631,15 @@ struct CPUBidirectionalImpl : public Task {
     Break,
   };
 
-  StepResult regular_step(const Ray& ray, Sampler& smp, Intersection& intersection, MediumSample& medium_sample, Payload& payload) const {
+  StepResult regular_step(const Ray& ray, Sampler& smp, Intersection& intersection, MediumSample& medium_sample, Payload& payload, uint32_t path_length) const {
     const auto& scene = rt.scene();
     bool found_intersection = rt.trace(scene, ray, intersection, smp);
 
     if (payload.medium_index != kInvalidIndex) {
       const auto& m = scene.mediums[payload.medium_index];
+      if ((payload.mode == PathSource::Camera) && (path_length >= scene.options.min_path_length) && (path_length <= scene.options.max_path_length)) {
+        payload.result += payload.throughput * medium_emission_radiance(m, payload.spect, smp, ray.o, ray.d, found_intersection ? intersection.t : kMaxFloat);
+      }
       medium_sample = sample_medium(m, payload.spect, payload.throughput, smp, ray.o, ray.d, found_intersection ? intersection.t : kMaxFloat);
       spectral_response_mul_assign(payload.throughput, medium_sample.weight);
       ETX_VALIDATE(payload.throughput);
@@ -758,7 +770,7 @@ struct CPUBidirectionalImpl : public Task {
       auto step = StepResult::Nothing;
 
       if (subsurface_material == kInvalidIndex) {
-        step = regular_step(ray, smp, intersection, medium_sample, payload);
+        step = regular_step(ray, smp, intersection, medium_sample, payload, path_length + 1u);
       } else {
         step = subsurface_step(subsurface_material, ray, smp, intersection, payload, path_data, curr, prev);
       }
@@ -796,7 +808,7 @@ struct CPUBidirectionalImpl : public Task {
         }
 
         should_break = result == InteractionResult::Break;
-      } else if (enable_direct_hit && (mode != Mode::LightTracing) && (payload.mode == PathSource::Camera)) {
+      } else if (enable_direct_hit && ((mode != Mode::LightTracing) || payload.camera_source_prefix) && (payload.mode == PathSource::Camera)) {
         curr = PathVertex{PathVertex::Class::Emitter};
         curr.medium = {.index = payload.medium_index};
         curr.throughput = payload.throughput;
@@ -1040,6 +1052,9 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   float mis_weight_direct_hit(const PathVertex& z_curr, const float emitter_position_pdf, const float emitter_direction_pdf) const {
+    if (mode == Mode::LightTracing) {
+      return 1.0f;
+    }
     const float competing_density = z_curr.pdf.d_vcm * emitter_position_pdf + z_curr.pdf.d_vc * emitter_direction_pdf;
     ETX_VALIDATE(competing_density);
     return 1.0f / (1.0f + competing_density);
@@ -1067,6 +1082,7 @@ struct CPUBidirectionalImpl : public Task {
       .source_position = z_prev.intersection.pos,
       .target_position = z_curr.intersection.pos,
       .uv = z_curr.intersection.tex,
+      .shading_normal = z_curr.intersection.nrm,
       .directly_visible = directly_visible,
     };
 
@@ -1241,7 +1257,7 @@ struct CPUBidirectionalImpl : public Task {
     float direction_scale = camera_clip_direction_scale(camera, camera_sample.direction);
     float near_extent = (camera.clip_near > 0.0f) ? camera.clip_near / direction_scale : 0.0f;
     float far_extent = (camera.clip_far > 0.0f) ? camera.clip_far / direction_scale : kMaxFloat;
-    if ((len < near_extent) || (len > far_extent)) {
+    if ((y_curr.is_surface_interaction() && (len < near_extent)) || (len > far_extent)) {
       return {spect, 0.0f};
     }
 
@@ -1266,8 +1282,7 @@ struct CPUBidirectionalImpl : public Task {
     ETX_VALIDATE(splat);
 
     if (splat.is_zero() == false) {
-      float3 clip_pos = y_curr.intersection.pos + camera_sample.direction * fmaxf(0.0f, len - near_extent);
-      splat *= local_transmittance(spect, smp, y_curr, clip_pos);
+      splat *= local_transmittance(spect, smp, y_curr, camera_sample.position);
     }
 
     camera_sample.uv = splat_uv;
@@ -1308,6 +1323,11 @@ struct CPUBidirectionalImpl : public Task {
     enable_connect_vertices = scene.strategy_enabled(Scene::Strategy::ConnectVertices);
     enable_mis = scene.multiple_importance_sampling();
     enable_blue_noise = scene.blue_noise();
+    enable_medium_emission = false;
+    for (uint32_t i = 0u; i < scene.mediums.count; ++i) {
+      const Medium& medium = scene.mediums[i];
+      enable_medium_emission |= (medium.thermal_source_index != kInvalidIndex) || ((medium.emission_flags & Medium::EmissionEnabled) != 0u);
+    }
     for (auto& path_data : per_thread_path_data) {
       path_data.emitter_path.reserve(2llu + rt.scene().options.max_path_length);
     }

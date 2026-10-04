@@ -1103,8 +1103,8 @@ GPUUPBPBeamReference upbp_load_bb1d_beam_reference(uint descriptor_index, uint i
   return result;
 }
 
-SpectralResponse upbp_local_emitter_radiance(uint emitter_index, SpectralQuery spect, float3 source_position, float3 target_position, float2 uv, bool directly_visible,
-  out float pdf_area, out float pdf_dir, out float pdf_dir_out) {
+SpectralResponse upbp_local_emitter_radiance(uint emitter_index, SpectralQuery spect, float3 source_position, float3 target_position, float2 uv, float3 shading_normal,
+  bool directly_visible, out float pdf_area, out float pdf_dir, out float pdf_dir_out) {
   (void)directly_visible;
   pdf_area = 0.0f;
   pdf_dir = 0.0f;
@@ -1122,7 +1122,8 @@ SpectralResponse upbp_local_emitter_radiance(uint emitter_index, SpectralQuery s
     return spectral_response_zero(spect);
   }
   const float3 target_delta = target_position - source_position;
-  if (dot(geo_normal, target_delta) >= 0.0f) {
+  const bool two_sided_thermal = (material.thermal_rgb_image_index != kInvalidIndex) && (material.two_sided != 0u);
+  if ((two_sided_thermal == false) && (dot(geo_normal, target_delta) >= 0.0f)) {
     return spectral_response_zero(spect);
   }
   pdf_area = emitter_instance.triangle_area > 0.0f ? rcp(emitter_instance.triangle_area) : 0.0f;
@@ -1130,13 +1131,14 @@ SpectralResponse upbp_local_emitter_radiance(uint emitter_index, SpectralQuery s
   if ((pdf_area <= 0.0f) || (distance_squared <= 0.0f)) {
     return spectral_response_zero(spect);
   }
-  const float cosine = max(0.0f, dot(-target_delta, geo_normal)) * rsqrt(distance_squared);
-  const float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
+  const float signed_cosine = dot(-target_delta, geo_normal) * rsqrt(distance_squared);
+  const float cosine = two_sided_thermal ? abs(signed_cosine) : max(0.0f, signed_cosine);
+  const float exponent = thermal_surface_sampling_exponent(material);
   if (cosine > kEpsilon) {
     pdf_dir = pdf_area * distance_squared / cosine;
-    pdf_dir_out = pdf_area * scene_math_shared_collimated_direction_pdf(cosine, exponent);
-    const float emission_scale = scene_math_shared_collimated_emission_scale(cosine, exponent);
-    return spectral_response_mul(evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, uv, spect), emission_scale);
+    pdf_dir_out = pdf_area * scene_math_shared_collimated_direction_pdf(cosine, exponent) * thermal_surface_side_probability(material);
+    const float shading_cosine = abs(dot(-target_delta, shading_normal)) * rsqrt(distance_squared);
+    return thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, uv, signed_cosine, shading_cosine);
   }
   return spectral_response_zero(spect);
 }
@@ -1295,7 +1297,8 @@ void upbp_evaluate_environment_direct_hit(uint path_index, GPUWavefrontResources
         const bool previous_delta = (endpoint.arrival_weights.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
         const float log_shared = previous_delta ? kUPBPLogZero : log(emitter_selection_pdf) + log(pdf_area) + endpoint.arrival_weights.log_d_shared;
         mis_weight = upbp_surface_mis_weight(upbp_bpt_direct_hit_cross_technique_weights(resources.iteration, endpoint.arrival_weights, log_shared,
-          log(emitter_selection_pdf) + log(pdf_dir_out) + log_reverse_ray_pdf), 0.0f);
+                                               log(emitter_selection_pdf) + log(pdf_dir_out) + log_reverse_ray_pdf),
+          0.0f);
       }
     } else if (upbp_camera_prefix_is_specular(resources, endpoint)) {
       mis_weight = 1.0f;
@@ -1358,7 +1361,7 @@ void upbp_evaluate_direct_hit_dispatch(uint dispatch_index) {
   float pdf_dir = 0.0f;
   float pdf_dir_out = 0.0f;
   const SpectralResponse radiance = upbp_local_emitter_radiance(emitter_vertex.emitter_index, spect, previous.position, emitter_vertex.position, emitter_vertex.texcoord,
-    emitter_vertex.path_length <= 1u, pdf_area, pdf_dir, pdf_dir_out);
+    emitter_vertex.normal, emitter_vertex.path_length <= 1u, pdf_area, pdf_dir, pdf_dir_out);
   if (spectral_response_is_zero(radiance) || (pdf_area <= 0.0f) || (pdf_dir <= 0.0f) || (pdf_dir_out <= 0.0f)) {
     return;
   }

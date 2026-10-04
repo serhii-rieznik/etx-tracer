@@ -48,6 +48,7 @@ struct MediumPoolImpl {
     medium.local_bounds = medium.bounds;
 
     if ((volume_file != nullptr) && (strlen(volume_file) > 0)) {
+      medium.cls = Medium::Heterogeneous;
       float max_density = 0.0f;
       uint3 dimensions = {};
       auto density = load_density_grid(volume_file, dimensions);
@@ -64,9 +65,6 @@ struct MediumPoolImpl {
         medium.density_view = density_image.pixels.r32;
         ETX_CRITICAL(medium.density_view.a != nullptr);
         medium.grid.dimensions = dimensions;
-        medium.cls = Medium::Heterogeneous;
-      } else {
-        medium.cls = Medium::Homogeneous;
       }
     } else {
       medium.set_grid_type(DensityGrid::Type::Texture3D);
@@ -261,9 +259,12 @@ struct MediumPoolImpl {
 
     auto accessor = grid->getAccessor();
     const auto& grid_bbox = grid->indexBBox();
+    if (grid_bbox.empty()) {
+      return;
+    }
     const auto& box_min = grid_bbox.min();
     const auto& box_max = grid_bbox.max();
-    auto dim = box_max - box_min;
+    const auto dim = box_max - box_min + nanovdb::Coord(1);
     d.x = static_cast<uint32_t>(dim.x());
     d.y = static_cast<uint32_t>(dim.y());
     d.z = static_cast<uint32_t>(dim.z());
@@ -282,9 +283,9 @@ struct MediumPoolImpl {
     double avg_val = 0.0f;
     uint64_t value_count = 0;
     nanovdb::Coord c = {};
-    for (c.z() = box_min.z(); c.z() < box_max.z(); ++c.z()) {
-      for (c.y() = box_min.y(); c.y() < box_max.y(); ++c.y()) {
-        for (c.x() = box_min.x(); c.x() < box_max.x(); ++c.x()) {
+    for (c.z() = box_min.z(); c.z() <= box_max.z(); ++c.z()) {
+      for (c.y() = box_min.y(); c.y() <= box_max.y(); ++c.y()) {
+        for (c.x() = box_min.x(); c.x() <= box_max.x(); ++c.x()) {
           float val = accessor.getValue(c);
           if (val > 0.0f) {
             min_val = min(min_val, val);
@@ -297,11 +298,11 @@ struct MediumPoolImpl {
         }
       }
     }
-    avg_val /= float(value_count);
+    avg_val = (value_count > 0u) ? (avg_val / double(value_count)) : 0.0;
 
     log::info("Density values range: %.5f ... %.5f ... %.5f", min_val, avg_val, max_val);
-    if ((value_count == 0) || (min_val == kMaxFloat) || ((max_val - min_val) <= kEpsilon) || (avg_val <= kEpsilon)) {
-      log::warning("Density is zero or too small, clearing...");
+    if (value_count == 0u) {
+      log::warning("Density is zero, clearing...");
       d = {};
       density.clear();
       density.shrink_to_fit();

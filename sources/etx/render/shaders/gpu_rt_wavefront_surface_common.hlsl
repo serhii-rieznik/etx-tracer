@@ -242,7 +242,7 @@ SpectralResponse wavefront_compute_environment_direct_hit_contribution(SpectralQ
   }
 
   float mis_weight = 1.0f;
-  if (scene_multiple_importance_sampling_enabled() && (state.path_length > 1u) && (scene_path_mode_is_path_tracing() == false)) {
+  if (scene_multiple_importance_sampling_enabled() && (state.path_length > 1u) && (scene_path_mode_is_path_tracing() == false) && (scene_path_mode_is_light_tracing() == false)) {
     float2 emitter_pdfs = wavefront_environment_emitter_pdf(state.ray.d, previous_vertex);
     mis_weight = 1.0f / (1.0f + state.forward_pdf * emitter_pdfs.y + wavefront_connection_mis(state) * emitter_pdfs.x * emitter_pdfs.y);
   }
@@ -269,11 +269,11 @@ void wavefront_path_tracing_update_refractive_depth(inout GPUWavefrontPathState 
 }
 
 uint wavefront_path_state_persistent_flags(GPUWavefrontPathState state) {
-  return state.flags & GPUWavefrontPathFlags::Depth_limit_reached_while_refractive;
+  return state.flags & (GPUWavefrontPathFlags::Depth_limit_reached_while_refractive | GPUWavefrontPathFlags::Camera_source_prefix);
 }
 
 SpectralResponse wavefront_evaluate_local_direct_hit_radiance(uint emitter_index, SpectralQuery spect, float3 source_position, float3 target_position, float2 uv,
-  bool directly_visible, out float pdf_area, out float pdf_dir, out float pdf_dir_out) {
+  float3 shading_normal, bool directly_visible, out float pdf_area, out float pdf_dir, out float pdf_dir_out) {
   (void)directly_visible;
   pdf_area = 0.0f;
   pdf_dir = 0.0f;
@@ -296,7 +296,8 @@ SpectralResponse wavefront_evaluate_local_direct_hit_radiance(uint emitter_index
   }
 
   float3 target_delta = target_position - source_position;
-  if (dot(geo_normal, target_delta) >= 0.0f) {
+  const bool two_sided_thermal = (material.thermal_rgb_image_index != kInvalidIndex) && (material.two_sided != 0u);
+  if ((two_sided_thermal == false) && (dot(geo_normal, target_delta) >= 0.0f)) {
     return spectral_response_zero(spect);
   }
 
@@ -308,13 +309,14 @@ SpectralResponse wavefront_evaluate_local_direct_hit_radiance(uint emitter_index
   float3 dp = source_position - target_position;
   float distance_squared = dot(dp, dp);
   if (distance_squared > 0.0f) {
-    const float cosine = max(0.0f, dot(dp, geo_normal)) / sqrt(distance_squared);
+    const float signed_cosine = dot(dp, geo_normal) / sqrt(distance_squared);
+    const float cosine = two_sided_thermal ? abs(signed_cosine) : max(0.0f, signed_cosine);
     if (cosine > kEpsilon) {
-      const float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
+      const float exponent = thermal_surface_sampling_exponent(material);
       pdf_dir = pdf_area * distance_squared / cosine;
-      pdf_dir_out = pdf_area * scene_math_shared_collimated_direction_pdf(cosine, exponent);
-      const float emission_scale = scene_math_shared_collimated_emission_scale(cosine, exponent);
-      return spectral_response_mul(evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, uv, spect), emission_scale);
+      pdf_dir_out = pdf_area * scene_math_shared_collimated_direction_pdf(cosine, exponent) * thermal_surface_side_probability(material);
+      const float shading_cosine = abs(dot(dp, shading_normal)) / sqrt(distance_squared);
+      return thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, uv, signed_cosine, shading_cosine);
     }
   }
 
@@ -340,14 +342,14 @@ SpectralResponse wavefront_compute_local_direct_hit_contribution(SpectralQuery s
   float pdf_dir = 0.0f;
   float pdf_dir_out = 0.0f;
   SpectralResponse emitter_value = wavefront_evaluate_local_direct_hit_radiance(emitter_index, spect, previous_vertex.position, current_vertex.position, current_vertex.texcoord,
-    directly_visible, pdf_area, pdf_dir, pdf_dir_out);
+    current_vertex.normal, directly_visible, pdf_area, pdf_dir, pdf_dir_out);
   (void)pdf_dir_out;
   if (pdf_dir <= 0.0f) {
     return spectral_response_zero(spect);
   }
 
   float mis_weight = 1.0f;
-  if ((scene_multiple_importance_sampling_enabled()) && (camera_path_length > 1u)) {
+  if (scene_multiple_importance_sampling_enabled() && (scene_path_mode_is_light_tracing() == false) && (camera_path_length > 1u)) {
     bool previous_connectible = wavefront_path_vertex_connectible(previous_vertex);
     if (scene_path_mode_is_path_tracing()) {
       float p_connect = emitter_discrete_pdf(emitter_index) * pdf_dir;
@@ -388,7 +390,7 @@ float wavefront_medium_connect_camera_weight(Camera camera, CameraFilmSampleShar
   float current_from_camera_dir = camera_shared_film_pdf_out(camera, camera_sample.position, current_vertex.position);
   float current_from_camera = wavefront_convert_solid_angle_pdf_to_area(current_from_camera_dir, camera_sample.position, current_vertex.position, false, float3(0.0f, 0.0f, 0.0f));
 
-  float reverse_phase_pdf = gpu_medium_phase_function(medium_access, -camera_sample.direction, current_vertex.w_i);
+  float reverse_phase_pdf = gpu_medium_phase_function(medium_access, camera_sample.direction, current_vertex.w_i);
   float adjacent_connection = current_vertex.forward_pdf;
   if (scene_path_mode_uses_bdpt_fast() && (path_meta.light_path_length != 1u)) {
     adjacent_connection = 0.0f;
@@ -470,7 +472,7 @@ void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_i
 #if ETX_UPBP
   if (upbp) {
     mis_weight = 1.0f;
-    scattering_pdf_reverse = gpu_medium_phase_function(medium_access, -camera_sample.direction, current_vertex.w_i);
+    scattering_pdf_reverse = gpu_medium_phase_function(medium_access, camera_sample.direction, current_vertex.w_i);
     camera_area_density = wavefront_convert_solid_angle_pdf_to_area(camera_sample.pdf_dir_out, camera_sample.position, current_vertex.position, false, float3(0.0f, 0.0f, 0.0f));
   }
 #endif
@@ -479,11 +481,7 @@ void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_i
     return;
   }
 
-  float len = length(camera_sample.position - current_vertex.position);
-  float direction_scale = camera_shared_clip_direction_scale(camera, camera_sample.direction);
-  float near_extent = (camera.clip_near > 0.0f) ? (camera.clip_near / direction_scale) : 0.0f;
-  float3 clip_pos = current_vertex.position + camera_sample.direction * max(0.0f, len - near_extent);
-  float3 shadow_delta = clip_pos - current_vertex.position;
+  float3 shadow_delta = camera_sample.position - current_vertex.position;
   float shadow_distance = length(shadow_delta);
   if (shadow_distance <= kRayEpsilon) {
     return;
@@ -494,7 +492,7 @@ void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_i
   task.shadow_ray.d = shadow_delta / shadow_distance;
   task.shadow_ray.min_t = kRayEpsilon;
   task.shadow_ray.max_t = shadow_distance;
-  task.shadow_target = clip_pos;
+  task.shadow_target = camera_sample.position;
   task.contribution = contribution;
   task.mis_weight = upbp ? phase_value : mis_weight;
   task.upbp_scattering_pdf_reverse_bits = asuint(scattering_pdf_reverse);
@@ -553,8 +551,8 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
 
     const bool direct_hit_path_length_enabled =
       scene_path_mode_is_path_tracing() || ((state.path_length >= load_scene_options_min_path_length()) && (state.path_length <= load_scene_options_max_path_length()));
-    if (from_camera && (scene_path_mode_is_light_tracing() == false) && (scene_path_mode_is_upbp() == false) && scene_strategy_enabled(kSceneStrategyDirectHit) &&
-        direct_hit_path_length_enabled) {
+    if (from_camera && ((scene_path_mode_is_light_tracing() == false) || ((state.flags & GPUWavefrontPathFlags::Camera_source_prefix) != 0u)) &&
+        (scene_path_mode_is_upbp() == false) && scene_strategy_enabled(kSceneStrategyDirectHit) && direct_hit_path_length_enabled) {
       GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, state.path_length - 1u));
       if (wavefront_path_vertex_valid(previous_vertex)) {
         if (scene_path_mode_is_path_tracing() == false) {

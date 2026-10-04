@@ -343,6 +343,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Emitter& emitter, cons
     .target_position = intersection.pos,
     .direction = state.ray.d,
     .uv = intersection.tex,
+    .shading_normal = intersection.nrm,
     .directly_visible = state.total_path_depth == 1,
   };
 
@@ -431,11 +432,15 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_camera_state(const uint2& coord, con
   return state;
 }
 
-ETX_SHARED_INLINE MediumSample vcm_try_sampling_medium(const Scene& scene, VCMPathState& state, float max_t) {
+ETX_SHARED_INLINE MediumSample vcm_try_sampling_medium(const Scene& scene, VCMPathState& state, float max_t, PathSource source) {
   if (state.medium_index == kInvalidIndex)
     return {};
 
-  auto medium_sample = sample_medium(scene.mediums[state.medium_index], state.spect, state.throughput, state.sampler, state.ray.o, state.ray.d, max_t);
+  const Medium& medium = scene.mediums[state.medium_index];
+  if ((source == PathSource::Camera) && (state.total_path_depth >= scene.options.min_path_length) && (state.total_path_depth <= scene.options.max_path_length)) {
+    state.gathered += state.throughput * medium_emission_radiance(medium, state.spect, state.sampler, state.ray.o, state.ray.d, max_t);
+  }
+  auto medium_sample = sample_medium(medium, state.spect, state.throughput, state.sampler, state.ray.o, state.ray.d, max_t);
   spectral_response_mul_assign(state.throughput, medium_sample.weight);
 
   ETX_VALIDATE(state.throughput);
@@ -508,7 +513,7 @@ ETX_SHARED_INLINE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSo
   state.medium_index = new_medium;
   state.ray.o = shading_pos(scene, tri, intersection.barycentric, state.ray.d, intersection.instance_index);
   state.ray.max_t = kMaxFloat;
-  state.ray.min_t = kRayEpsilon;
+  state.ray.min_t = kMinNormalFloat;
   continue_tracing = true;
   return true;
 }
@@ -577,10 +582,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
     ETX_VALIDATE(reverse_pdf);
   }
 
-  float len = length(camera_sample.position - origin);
-  float direction_scale = camera_clip_direction_scale(camera, camera_sample.direction);
-  float3 clip_pos = origin + camera_sample.direction * fmaxf(0.0f, len - camera.clip_near / direction_scale);
-  auto tr = vcm_transmittance(rt, scene, state, origin, clip_pos);
+  auto tr = vcm_transmittance(rt, scene, state, origin, camera_sample.position);
   if (tr.is_zero()) {
     return {};
   }
@@ -1031,7 +1033,7 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   Intersection intersection = {};
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
   // Try sampling medium BEFORE allocating per-event samples to match BDPT ordering
-  MediumSample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
+  MediumSample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat, PathSource::Camera);
   if (medium_sample_sampled_medium(medium_sample)) {
     // Allocate samples AFTER medium sampling to match BDPT
     float2 rnd_bsdf = state.sampler.next_2d();
@@ -1196,7 +1198,7 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
   bool found_intersection = rt.trace(scene, state.ray, intersection, state.sampler);
 
   LightStepResult result = {};
-  MediumSample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat);
+  MediumSample medium_sample = vcm_try_sampling_medium(scene, state, found_intersection ? intersection.t : kMaxFloat, PathSource::Light);
   if (medium_sample_sampled_medium(medium_sample)) {
     // Allocate samples AFTER medium sampling to match BDPT
     float2 rnd_bsdf = state.sampler.next_2d();        // Phase function sampling

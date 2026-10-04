@@ -317,9 +317,9 @@ ETX_SHARED_INLINE SpectralQuery spectral_response_as_query(ETX_IN(SpectralRespon
 
 ETX_SHARED_INLINE bool spectral_response_is_zero(ETX_IN(SpectralResponse, value)) {
   if (spectral_response_is_spectral(value) == false) {
-    return (value.integrated.x <= kEpsilon) && (value.integrated.y <= kEpsilon) && (value.integrated.z <= kEpsilon);
+    return (value.integrated.x <= 0.0f) && (value.integrated.y <= 0.0f) && (value.integrated.z <= 0.0f);
   }
-  return value.value <= kEpsilon;
+  return value.value <= 0.0f;
 }
 
 ETX_SHARED_INLINE SpectralResponse spectral_response_make(float wavelength, float spectral_val) {

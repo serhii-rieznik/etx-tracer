@@ -16,6 +16,7 @@ struct GPUWavefrontPathFlags {
     Surface_vertex = 1u << 7u,
     Medium_vertex = 1u << 8u,
     Depth_limit_reached_while_refractive = 1u << 9u,
+    Camera_source_prefix = 1u << 10u,
   };
 };
 

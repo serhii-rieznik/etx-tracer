@@ -100,7 +100,8 @@ bool upbp_track_connection_interval(uint medium_index, float3 origin, float3 dir
     return false;
   }
   const SpectralResponse extinction_base = spectral_response_add(scattering_base, absorption_base);
-  const float majorant = spectral_response_maximum(extinction_base);
+  const float density_majorant = ((medium_access.medium_class == Medium::Homogeneous) || medium_access_has_grid_data(medium_access)) ? 1.0f : 0.0f;
+  const float majorant = spectral_response_maximum(extinction_base) * density_majorant;
   if ((majorant < 0.0f) || (isfinite(majorant) == false)) {
     return false;
   }
@@ -400,7 +401,8 @@ bool upbp_track_interval(GPUUPBPResources resources, bool from_camera, uint path
     return false;
   }
   const SpectralResponse extinction_base = spectral_response_add(scattering_base, absorption_base);
-  const float majorant = spectral_response_maximum(extinction_base);
+  const float density_majorant = ((medium_access.medium_class == Medium::Homogeneous) || medium_access_has_grid_data(medium_access)) ? 1.0f : 0.0f;
+  const float majorant = spectral_response_maximum(extinction_base) * density_majorant;
   if ((majorant < 0.0f) || (isfinite(majorant) == false)) {
     return false;
   }

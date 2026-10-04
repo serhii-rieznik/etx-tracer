@@ -56,6 +56,7 @@ struct CPURaytracingRenderer : public Renderer {
 
   void set_output_dimensions(RHIContext& ctx, const uint2& dim);
   void on_scene_changed(SceneRepresentation& scene) override;
+  void on_camera_changed(SceneRepresentation& scene) override;
   void on_scene_transforms_changed(SceneRepresentation& scene) override;
 
   Integrator* current_integrator() const;

@@ -203,6 +203,27 @@ struct SceneData {
   std::vector<Medium> mediums_vector;
   std::vector<Scene::EnergyCompensationInterface> energy_compensation_interfaces;
   std::unordered_map<uint64_t, uint32_t> energy_compensation_interface_cache;
+  struct ThermalSurfaceResources {
+    uint64_t input_hash = 0u;
+    uint64_t scattering_input_hash = 0u;
+    uint32_t rgb_image_index = kInvalidIndex;
+    uint32_t conductor_image_index = kInvalidIndex;
+    float conductor_average_albedo = 0.0f;
+    float emission_weight = 0.0f;
+  };
+  std::unordered_map<uint32_t, ThermalSurfaceResources> thermal_surface_resources;
+  struct ThermalMediumState {
+    uint32_t base_medium_index = kInvalidIndex;
+    uint32_t source_spectrum_index = kInvalidIndex;
+    float temperature_kelvin = 0.0f;
+  };
+  struct ThermalMediumResources {
+    uint64_t input_hash = 0u;
+    uint32_t source_spectrum_index = kInvalidIndex;
+  };
+  std::vector<ThermalMediumState> thermal_medium_states;
+  std::unordered_map<uint32_t, ThermalMediumResources> thermal_medium_resources;
+  uint32_t thermal_unit_spectrum_index = kInvalidIndex;
   SceneHierarchy hierarchy;
 
   BufferPool buffer_pool;
@@ -235,6 +256,10 @@ struct SceneData {
   uint64_t compute_transforms_hash() const;
   uint64_t compute_instance_transforms_hash() const;
   SceneHashes compute_hashes() const;
+  void copy_transport_materials(std::vector<Material>& target) const;
+  size_t transport_medium_count() const;
+  Medium transport_medium(size_t index) const;
+  uint32_t transport_medium_index(uint32_t index) const;
 
   void clear(TaskScheduler& scheduler);
   void swap_contents(SceneData& other);

@@ -38,7 +38,7 @@ struct SceneLimits {
 
 ETX_STATIC_CONST uint32_t kTriangleStride = 32u;
 
-ETX_STATIC_CONST uint32_t kMaterialStride = 288u;
+ETX_STATIC_CONST uint32_t kMaterialStride = 320u;
 ETX_STATIC_CONST uint32_t kMaterialReflectanceSpectrumIndexOffset = 0u;
 ETX_STATIC_CONST uint32_t kMaterialReflectanceImageIndexOffset = 4u;
 ETX_STATIC_CONST uint32_t kMaterialScatteringSpectrumIndexOffset = 16u;
@@ -85,6 +85,13 @@ ETX_STATIC_CONST uint32_t kMaterialOpacityOffset = 272u;
 ETX_STATIC_CONST uint32_t kMaterialEmissionCollimationOffset = 276u;
 ETX_STATIC_CONST uint32_t kMaterialEnergyCompensationInterfaceIndexOffset = 280u;
 ETX_STATIC_CONST uint32_t kMaterialConductorEnergyCompensationInterfaceIndexOffset = 284u;
+ETX_STATIC_CONST uint32_t kMaterialTemperatureKelvinOffset = 288u;
+ETX_STATIC_CONST uint32_t kMaterialThermalRGBImageIndexOffset = 292u;
+ETX_STATIC_CONST uint32_t kMaterialThermalConductorAverageAlbedoOffset = 296u;
+ETX_STATIC_CONST uint32_t kMaterialThermalEnergyCompensationInterfaceIndexOffset = 300u;
+ETX_STATIC_CONST uint32_t kMaterialThermalEmissionWeightOffset = 304u;
+ETX_STATIC_CONST uint32_t kMaterialThermalIntMediumIndexOffset = 308u;
+ETX_STATIC_CONST uint32_t kMaterialThermalConductorImageIndexOffset = 312u;
 
 ETX_STATIC_CONST uint32_t kEmitterStride = 32u;
 ETX_STATIC_CONST uint32_t kEmitterClassOffset = 0u;
@@ -173,7 +180,7 @@ ETX_STATIC_CONST uint32_t kMediumBlobHeaderMediumsOffset = 4u;
 ETX_STATIC_CONST uint32_t kMediumBlobHeaderDataChunkCountOffset = 8u;
 ETX_STATIC_CONST uint32_t kMediumBlobHeaderDataChunkIndicesOffset = 12u;
 
-ETX_STATIC_CONST uint32_t kMediumStride = 224u;
+ETX_STATIC_CONST uint32_t kMediumStride = 240u;
 ETX_STATIC_CONST uint32_t kMediumGridDimensionsOffset = 0u;
 ETX_STATIC_CONST uint32_t kMediumGridTypeOffset = 12u;
 ETX_STATIC_CONST uint32_t kMediumGridNoiseTypeOffset = 16u;
@@ -203,6 +210,9 @@ ETX_STATIC_CONST uint32_t kMediumWorldToObjectRow1Offset = 160u;
 ETX_STATIC_CONST uint32_t kMediumWorldToObjectRow2Offset = 176u;
 ETX_STATIC_CONST uint32_t kMediumLocalBoundsMinOffset = 192u;
 ETX_STATIC_CONST uint32_t kMediumLocalBoundsMaxOffset = 208u;
+ETX_STATIC_CONST uint32_t kMediumThermalSourceIndexOffset = 224u;
+ETX_STATIC_CONST uint32_t kMediumEmissionIndexOffset = 228u;
+ETX_STATIC_CONST uint32_t kMediumEmissionFlagsOffset = 232u;
 
 ETX_STATIC_CONST uint32_t kSceneOptionsMinPathLengthOffset = 0u;
 ETX_STATIC_CONST uint32_t kSceneOptionsMaxPathLengthOffset = 4u;

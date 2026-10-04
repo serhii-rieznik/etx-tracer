@@ -5,6 +5,7 @@
 #include <etx/render/shared/buffer_view.hxx>
 #include <etx/render/shared/sampler.hxx>
 #include <etx/render/shared/density_grid.hxx>
+#include <atomic>
 
 namespace etx {
 
@@ -17,6 +18,10 @@ struct ETX_ALIGNED Medium {
     Homogeneous = ::Medium::Homogeneous,
     Heterogeneous = ::Medium::Heterogeneous,
   };
+  enum : uint32_t {
+    EmissionEnabled = ::Medium::EmissionEnabled,
+    EmissionRequiresBoundedRegion = ::Medium::EmissionRequiresBoundedRegion,
+  };
 
   MediumGrid grid = {};
   BoundingBox bounds = {};
@@ -27,6 +32,10 @@ struct ETX_ALIGNED Medium {
   Class cls = Homogeneous;
   AffineTransform world_to_object = {};
   BoundingBox local_bounds = {};
+  uint32_t thermal_source_index = kInvalidIndex;
+  uint32_t emission_index = kInvalidIndex;
+  uint32_t emission_flags = 0u;
+  std::atomic<bool>* emission_failure = nullptr;
 
   ArrayView<float> density_view;
   BufferHandle density_buffer = {};

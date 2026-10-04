@@ -5,6 +5,57 @@
 #include <etx/render/host/gpu_asset_descriptor.hxx>
 
 namespace etx {
+void SceneData::copy_transport_materials(std::vector<Material>& target) const {
+  target = materials;
+  for (Material& material : target) {
+    if ((material.temperature_kelvin > 0.0f) && (material.cls == MaterialClass::Dielectric)) {
+      material.reflectance.spectrum_index = thermal_unit_spectrum_index;
+      material.scattering.spectrum_index = thermal_unit_spectrum_index;
+    }
+    if (material.thermal_int_medium_index != kInvalidIndex) {
+      material.int_medium = material.thermal_int_medium_index;
+    }
+    material.ext_medium = transport_medium_index(material.ext_medium);
+  }
+}
+
+size_t SceneData::transport_medium_count() const {
+  return mediums_vector.size() + thermal_medium_states.size();
+}
+
+Medium SceneData::transport_medium(size_t index) const {
+  if (index < mediums_vector.size()) {
+    return mediums_vector[index];
+  }
+  const ThermalMediumState& state = thermal_medium_states[index - mediums_vector.size()];
+  Medium result = mediums_vector[state.base_medium_index];
+  result.thermal_source_index = state.source_spectrum_index;
+  return result;
+}
+
+uint32_t SceneData::transport_medium_index(uint32_t index) const {
+  if (index == kInvalidIndex) {
+    return index;
+  }
+  uint32_t result = index;
+  float temperature = 0.0f;
+  bool found = false;
+  for (const Material& material : materials) {
+    const bool enters_medium = (material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Boundary) || (material.cls == MaterialClass::Translucent) ||
+                               (material.subsurface_cls != SubsurfaceMaterial::Disabled);
+    if ((material.int_medium != index) || (enters_medium == false)) {
+      continue;
+    }
+    if (found && (temperature != material.temperature_kelvin)) {
+      return kInvalidIndex;
+    }
+    found = true;
+    temperature = material.temperature_kelvin;
+    result = (material.thermal_int_medium_index != kInvalidIndex) ? material.thermal_int_medium_index : index;
+  }
+  return result;
+}
+
 namespace {
 
 uint64_t hash_payload_view(const BufferPool& buffer_pool, BufferView view, uint64_t seed) {
@@ -39,6 +90,9 @@ uint64_t hash_mediums_struct_and_payload(const SceneData& scene_data) {
     const ::Medium interop_medium = make_gpu_medium_descriptor(medium);
     result = etx_hash64_continue(&interop_medium, sizeof(::Medium), result);
     result = hash_payload_view(scene_data.buffer_pool, medium.density_data, result);
+  }
+  for (const auto& state : scene_data.thermal_medium_states) {
+    result = etx_hash64_continue(&state, sizeof(state), result);
   }
   return result;
 }
@@ -284,6 +338,10 @@ void SceneData::clear(TaskScheduler& scheduler) {
   mediums_vector.clear();
   energy_compensation_interfaces.clear();
   energy_compensation_interface_cache.clear();
+  thermal_surface_resources.clear();
+  thermal_medium_states.clear();
+  thermal_medium_resources.clear();
+  thermal_unit_spectrum_index = kInvalidIndex;
   hierarchy.clear();
   spectrum_names.clear();
   material_mapping.clear();
@@ -315,6 +373,10 @@ void SceneData::swap_contents(SceneData& other) {
   swap(mediums_vector, other.mediums_vector);
   swap(energy_compensation_interfaces, other.energy_compensation_interfaces);
   swap(energy_compensation_interface_cache, other.energy_compensation_interface_cache);
+  swap(thermal_surface_resources, other.thermal_surface_resources);
+  swap(thermal_medium_states, other.thermal_medium_states);
+  swap(thermal_medium_resources, other.thermal_medium_resources);
+  swap(thermal_unit_spectrum_index, other.thermal_unit_spectrum_index);
   swap(hierarchy, other.hierarchy);
   swap(buffer_pool, other.buffer_pool);
   images.swap_contents(other.images);
@@ -413,9 +475,9 @@ uint32_t SceneData::add_spectrum() {
 }
 
 uint32_t SceneData::add_spectrum(const SpectralDistribution& spd) {
-  uint32_t i = add_spectrum();
-  spectrum_values[i] = spd;
-  return i;
+  char buffer[64] = {};
+  snprintf(buffer, sizeof(buffer), "##spectrum%04u", uint32_t(spectrum_names.size()));
+  return add_spectrum(buffer, spd);
 }
 
 uint32_t SceneData::find_spectrum(const char* id) const {
@@ -576,7 +638,11 @@ uint32_t SceneData::add_medium(Medium::Class cls, const char* name, const char* 
   uint32_t scattering_index = add_spectrum(s_t);
 
   std::string id = name && name[0] ? name : ("medium-" + std::to_string(mediums.array_size()));
-  return mediums.add(cls, id, volume_file, absorption_index, scattering_index, g, explicit_connections);
+  const uint32_t index = mediums.add(cls, id, volume_file, absorption_index, scattering_index, g, explicit_connections);
+  if (mediums.get(index).emission_index == kInvalidIndex) {
+    mediums.get(index).emission_index = add_spectrum(SpectralDistribution::constant(0.0f));
+  }
+  return index;
 }
 
 uint32_t SceneData::add_atmosphere_emitter(const AtmosphereEmitterParameters& params) {

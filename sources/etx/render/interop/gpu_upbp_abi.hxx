@@ -7,7 +7,7 @@ ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveWeightsStride = 36u;
 ETX_STATIC_CONST uint32_t kGPUUPBPRecursiveStateStride = 64u;
 ETX_STATIC_CONST uint32_t kGPUUPBPVertexStride = 336u;
 ETX_STATIC_CONST uint32_t kGPUUPBPPathStateStride = 96u;
-ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexStride = 176u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexStride = 192u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTPathStateStride = 16u;
 ETX_STATIC_CONST uint32_t kGPUUPBPSegmentStride = 64u;
 ETX_STATIC_CONST uint32_t kGPUUPBPIntervalStride = 128u;
@@ -108,6 +108,7 @@ ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexEmitterIndexOffset = 144u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexBarycentricOffset = 148u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexScatterPdfForwardOffset = 156u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexInlineExtinctionOffset = 160u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexIncidentMediumIndexOffset = 176u;
 
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTPathStateLastVertexIndexOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTPathStateGlobalPathIndexOffset = 4u;

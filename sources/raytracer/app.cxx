@@ -1323,11 +1323,10 @@ SceneResourceEditResult RTApplication::on_medium_added() {
 
   const SceneResourceEditResult result = scene.create_medium(nullptr);
   if (result.succeeded()) {
-    mark_scene_dirty();
-    scene.update_medium_bounds();
-    notify_scene_might_have_changed();
+    _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+    on_medium_changed(result.resource_index);
   }
-  if (cpu_was_running) {
+  if (cpu_was_running && (result.succeeded() == false)) {
     cpu_renderer.restart();
   }
   return result;
@@ -1341,11 +1340,10 @@ SceneResourceEditResult RTApplication::on_medium_duplicated(uint32_t index) {
 
   const SceneResourceEditResult result = scene.duplicate_medium(index);
   if (result.succeeded()) {
-    mark_scene_dirty();
-    scene.update_medium_bounds();
-    notify_scene_might_have_changed();
+    _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+    on_medium_changed(result.resource_index);
   }
-  if (cpu_was_running) {
+  if (cpu_was_running && (result.succeeded() == false)) {
     cpu_renderer.restart();
   }
   return result;
@@ -1359,11 +1357,10 @@ SceneResourceEditResult RTApplication::on_medium_deleted(uint32_t index) {
 
   const SceneResourceEditResult result = scene.delete_medium(index);
   if (result.succeeded()) {
-    mark_scene_dirty();
-    scene.update_medium_bounds();
-    notify_scene_might_have_changed();
+    _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+    on_medium_changed(kInvalidIndex);
   }
-  if (cpu_was_running) {
+  if (cpu_was_running && (result.succeeded() == false)) {
     cpu_renderer.restart();
   }
   return result;
@@ -1385,10 +1382,13 @@ std::string RTApplication::on_medium_renamed(uint32_t index, const std::string& 
 }
 
 void RTApplication::on_medium_changed(uint32_t index) {
-  (void)index;
-  mark_scene_dirty();
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+  _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
   scene.update_medium_bounds();
-  notify_scene_might_have_changed();
+  on_material_changed(index);
 }
 
 SceneEditResult RTApplication::on_mesh_material_changed(uint32_t node_index, uint32_t mesh_index, uint32_t material_index, bool make_unique) {

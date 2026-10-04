@@ -105,19 +105,23 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
       return true;
     }
 
-    if (dot(geo_normal, dp) >= 0.0f) {
+    const bool two_sided_thermal = (material.thermal_rgb_image_index != kInvalidIndex) && (material.two_sided != 0u);
+    if ((two_sided_thermal == false) && (dot(geo_normal, dp) >= 0.0f)) {
       return true;
     }
 
-    const float cosine = max(0.0f, dot(geo_normal, -sample_value.direction));
+    const float signed_cosine = dot(geo_normal, -sample_value.direction);
+    if (two_sided_thermal && (signed_cosine < 0.0f)) {
+      sample_value.normal = -geo_normal;
+    }
+    const float cosine = two_sided_thermal ? abs(signed_cosine) : max(0.0f, signed_cosine);
     if (cosine > kEpsilon) {
-      const float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
-      const float direction_pdf = scene_math_shared_collimated_direction_pdf(cosine, exponent);
+      const float exponent = thermal_surface_sampling_exponent(material);
+      const float direction_pdf = scene_math_shared_collimated_direction_pdf(cosine, exponent) * thermal_surface_side_probability(material);
       sample_value.pdf_dir = sample_value.pdf_area * distance_squared / cosine;
       sample_value.pdf_dir_out = sample_value.pdf_area * direction_pdf;
-      const float emission_scale = scene_math_shared_collimated_emission_scale(cosine, exponent);
       sample_value.value =
-        spectral_response_mul(evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, vertex.tex, spect), emission_scale);
+        thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, vertex.tex, signed_cosine, abs(dot(vertex.nrm, -sample_value.direction)));
     }
     return true;
   }
@@ -223,18 +227,20 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
       return false;
     }
 
-    const float exponent = scene_math_shared_collimation_to_exponent(material.emission_collimation);
+    const float exponent = thermal_surface_sampling_exponent(material);
     sample_value.origin = vertex.pos;
     sample_value.normal = geo_normal;
-    sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), geo_normal, exponent);
+    if ((thermal_surface_side_probability(material) == 0.5f) && (rnd01(seed) < 0.5f)) {
+      sample_value.normal = -geo_normal;
+    }
+    sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), sample_value.normal, exponent);
     sample_value.image_uv = vertex.tex;
     sample_value.pdf_area = (emitter_instance.triangle_area > 0.0f) ? (1.0f / emitter_instance.triangle_area) : 0.0f;
-    const float cosine = max(0.0f, dot(geo_normal, sample_value.direction));
-    sample_value.pdf_dir = scene_math_shared_collimated_direction_pdf(cosine, exponent);
+    const float cosine = max(0.0f, dot(sample_value.normal, sample_value.direction));
+    sample_value.pdf_dir = scene_math_shared_collimated_direction_pdf(cosine, exponent) * thermal_surface_side_probability(material);
     sample_value.pdf_dir_out = sample_value.pdf_area * sample_value.pdf_dir;
-    const float emission_scale = scene_math_shared_collimated_emission_scale(cosine, exponent);
-    sample_value.value =
-      spectral_response_mul(evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, vertex.tex, spect), emission_scale);
+    sample_value.value = thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, vertex.tex, dot(geo_normal, sample_value.direction),
+      abs(dot(vertex.nrm, sample_value.direction)));
     sample_value.is_delta = 0u;
     sample_value.is_distant = 0u;
     return sample_value.pdf_dir > 0.0f;

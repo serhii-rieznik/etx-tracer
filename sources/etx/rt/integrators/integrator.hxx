@@ -78,11 +78,11 @@ struct Integrator {
   }
 
   virtual bool failed() const {
-    return false;
+    return rt.medium_emission_failed();
   }
 
   virtual const char* failure_reason() const {
-    return "";
+    return rt.medium_emission_failed() ? Raytracing::kMediumEmissionFailure : "";
   }
 
   virtual PathProgress path_progress() const {
@@ -120,7 +120,7 @@ struct Integrator {
   }
 
   bool can_run() const {
-    return rt.scene().committed();
+    return rt.scene().committed() && (rt.medium_emission_failed() == false);
   }
 
   State state() const {
@@ -162,6 +162,7 @@ struct IntegratorThread {
   void request_scene_check(SceneUpdateScope scope);
   void suppress_next_scene_commit_run();
   bool scene_changes_pending() const;
+  const char* scene_failure_reason() const;
   uint64_t scene_revision() const;
 
  private:

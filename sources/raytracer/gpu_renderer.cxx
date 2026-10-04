@@ -14,11 +14,13 @@
 #include <etx/render/host/gpu_asset_descriptor.hxx>
 #include <etx/render/host/emitter_packing.hxx>
 #include <etx/render/host/scene_representation.hxx>
+#include <etx/render/host/thermal_preparation.hxx>
 #include <etx/render/host/tasks.hxx>
 #include <etx/render/shared/density_grid.hxx>
 #include <etx/rt/integrators/upbp_iteration.hxx>
 #include <etx/rt/integrators/upbp_options.hxx>
 #include <etx/rt/shared/bdpt_mode.hxx>
+#include <etx/rt/rt.hxx>
 #include <etx/rt/shared/vcm_radius.hxx>
 #include <bluenoise.hxx>
 #include <algorithm>
@@ -698,10 +700,21 @@ GPUIntegratorMode gpu_integrator_mode_from_bdpt_mode(BDPTMode mode) {
   }
 }
 
+bool scene_has_authored_medium_emission(const SceneData& data) {
+  return std::any_of(data.mediums_vector.begin(), data.mediums_vector.end(), [](const Medium& medium) {
+    return (medium.emission_flags & Medium::EmissionEnabled) != 0u;
+  });
+}
+
 GPUIntegratorSelection gpu_integrator_selection_from_scene(const SceneRepresentation& scene) {
   GPUIntegratorSelection result = {};
   const auto& integrator_data = scene.integrator_data();
   result.integrator_type = integrator_data.selected;
+  const bool camera_source_path = ((scene.data().options.strategy_flags & Scene::Strategy::DirectHit) != 0u) || scene_has_authored_medium_emission(scene.data()) ||
+                                  std::any_of(scene.data().materials.begin(), scene.data().materials.end(), [](const Material& material) {
+                                    return (material.temperature_kelvin > 0.0f) && (material.int_medium != kInvalidIndex) &&
+                                           ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Boundary));
+                                  });
 
   if (integrator_data.selected == Integrator::Type::PathTracing) {
     result.requested_bdpt_mode = BDPTMode::PathTracing;
@@ -725,15 +738,14 @@ GPUIntegratorSelection gpu_integrator_selection_from_scene(const SceneRepresenta
       return result;
     }
 
-    const bool enable_camera_path = bidirectional_mode != BDPTMode::LightTracing;
+    const bool enable_camera_path = (bidirectional_mode != BDPTMode::LightTracing) || camera_source_path;
     const bool enable_light_path = bidirectional_mode != BDPTMode::PathTracing;
     result.features = gpu_integrator_features_from_scene_strategies(scene.data(), enable_camera_path, enable_light_path);
     if (bidirectional_mode == BDPTMode::PathTracing) {
       result.features &= ~(GPUIntegratorFeatures::LightPath | GPUIntegratorFeatures::ConnectToCamera | GPUIntegratorFeatures::ConnectVertices |
                            GPUIntegratorFeatures::MergeVertices | GPUIntegratorFeatures::VCMMis);
     } else if (bidirectional_mode == BDPTMode::LightTracing) {
-      result.features &= ~(GPUIntegratorFeatures::CameraPath | GPUIntegratorFeatures::DirectHit | GPUIntegratorFeatures::ConnectToLight | GPUIntegratorFeatures::ConnectVertices |
-                           GPUIntegratorFeatures::MergeVertices | GPUIntegratorFeatures::VCMMis);
+      result.features &= ~(GPUIntegratorFeatures::ConnectToLight | GPUIntegratorFeatures::ConnectVertices | GPUIntegratorFeatures::MergeVertices | GPUIntegratorFeatures::VCMMis);
     } else if (bidirectional_mode == BDPTMode::BDPTFast) {
       result.features &= ~(GPUIntegratorFeatures::ConnectVertices | GPUIntegratorFeatures::MergeVertices | GPUIntegratorFeatures::VCMMis);
     } else if (bidirectional_mode == BDPTMode::BDPTFull) {
@@ -825,7 +837,8 @@ GPUIntegratorSelection gpu_integrator_selection_from_scene(const SceneRepresenta
   if ((integrator_data.selected != Integrator::Type::Invalid) && (integrator_data.selected != Integrator::Type::PathTracing)) {
     result.supported = false;
     result.mode = gpu_integrator_mode_from_scene_strategies(scene.data());
-    result.features = gpu_integrator_features_from_scene_strategies(scene.data(), result.mode != GPUIntegratorMode::LightTracing, result.mode != GPUIntegratorMode::PathTracing);
+    result.features = gpu_integrator_features_from_scene_strategies(scene.data(), (result.mode != GPUIntegratorMode::LightTracing) || camera_source_path,
+      result.mode != GPUIntegratorMode::PathTracing);
     if (result.mode == GPUIntegratorMode::BDPTFast) {
       result.features &= ~(GPUIntegratorFeatures::ConnectVertices | GPUIntegratorFeatures::MergeVertices | GPUIntegratorFeatures::VCMMis);
     }
@@ -833,7 +846,8 @@ GPUIntegratorSelection gpu_integrator_selection_from_scene(const SceneRepresenta
   }
 
   result.mode = gpu_integrator_mode_from_scene_strategies(scene.data());
-  result.features = gpu_integrator_features_from_scene_strategies(scene.data(), result.mode != GPUIntegratorMode::LightTracing, result.mode != GPUIntegratorMode::PathTracing);
+  result.features = gpu_integrator_features_from_scene_strategies(scene.data(), (result.mode != GPUIntegratorMode::LightTracing) || camera_source_path,
+    result.mode != GPUIntegratorMode::PathTracing);
   if (result.mode == GPUIntegratorMode::BDPTFast) {
     result.features &= ~(GPUIntegratorFeatures::ConnectVertices | GPUIntegratorFeatures::MergeVertices | GPUIntegratorFeatures::VCMMis);
   }
@@ -1882,7 +1896,7 @@ PackedChunkedBlobBuildResult build_packed_mediums_blob(const SceneData& scene_da
 
   PackedChunkedBlobBuildResult result = {};
   GPUMediumBlobHeader header = {};
-  const uint64_t medium_count_u64 = scene_data.mediums.array_size();
+  const uint64_t medium_count_u64 = scene_data.transport_medium_count();
   if (medium_count_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
     log::error("GPU RT: medium count exceeds 32-bit ABI limit (%llu)", medium_count_u64);
     result.success = false;
@@ -1894,9 +1908,8 @@ PackedChunkedBlobBuildResult build_packed_mediums_blob(const SceneData& scene_da
   std::vector<::Medium> packed_mediums(header.medium_count);
   ChunkedBlobPayloadBuilder payload_builder = {};
 
-  const auto* mediums = scene_data.mediums.as_array();
   for (uint32_t i = 0u; i < header.medium_count; ++i) {
-    const auto& src = mediums[i];
+    const Medium src = scene_data.transport_medium(i);
     auto& dst = packed_mediums[i];
 
     PackedPayloadLocation density_payload = {};
@@ -5282,6 +5295,7 @@ void GPURaytracingRenderer::destroy_acceleration_structures(RHIContext& ctx) {
 
 void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) {
   ETX_PROFILER_SCOPE();
+  const bool check_medium_emission_failures = scene_has_authored_medium_emission(scene.data());
   if (_initialized && scene.valid() && is_running() && pipelines_valid() && (_scene_update_scope == SceneUpdateScope::None) &&
       (_wavefront_render_step == WavefrontRenderStep::UPBPEvaluateDensity) && (scene.integrator_data_revision() == _current_integrator_data_revision) &&
       (scene.energy_compensation_interface_preparation_status().state != EnergyCompensationPreparationState::Preparing)) {
@@ -5289,6 +5303,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     // Any change takes the normal path below, which retires all readers before uploads.
     Camera camera = scene.camera();
     build_camera(camera, scene.camera().position, scene.camera().direction, scene.camera().up, scaled_render_dimensions(scene.camera().film_size), get_camera_fov(scene.camera()));
+    camera.medium_index = scene.data().transport_medium_index(camera.medium_index);
     if ((xxh64(&camera, sizeof(camera)) == _current_camera_hash) && (scene.data().compute_hashes().compare(_current_scene_hashes).any() == false)) {
       advance_density_dispatches(ctx);
       if (_runtime_failed || (_density_dispatch_count > 0u) || (_upbp.density_query_work_index < _upbp.density_query_work.size())) {
@@ -5437,7 +5452,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         scene.data().images.load_images(scheduler);
         refresh_hashes = true;
       }
-      if (full_update_requested || changes[UpdateFlags::AnyMaterials]) {
+      if (full_update_requested || changes[UpdateFlags::AnyMaterials] || changes[UpdateFlags::Mediums]) {
         if (scene.ensure_energy_compensation_interfaces() == false) {
           set_runtime_failure("Failed to ensure BSDF energy-compensation interfaces before GPU render commit");
           request_scene_update();
@@ -5460,6 +5475,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   Camera camera = scene_camera;
   const uint2 render_film_dimensions = scaled_render_dimensions(scene_camera.film_size);
   build_camera(camera, scene_camera.position, scene_camera.direction, scene_camera.up, render_film_dimensions, get_camera_fov(scene_camera));
+  camera.medium_index = scene.data().transport_medium_index(camera.medium_index);
   const uint64_t new_integrator_data_revision = scene.integrator_data_revision();
   const bool integrator_settings_changed = _integrator_data_revision_initialized && (new_integrator_data_revision != _current_integrator_data_revision);
   const uint64_t new_camera_hash = xxh64(&camera, sizeof(camera));
@@ -6651,7 +6667,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           const bool queue_readback_due = (((path_iteration + 1u) % batch_queue_readback_interval) == 0u) || (continue_paths == false) || render_step_budget_end;
           const bool deferred_camera_light_terminal_step =
             phase_light_before_camera && enable_camera_path && enable_light_path && (_wavefront_camera_phase_initialized == false) && (continue_paths == false);
-          const bool copy_queue_counts = (continue_paths && queue_readback_due) || deferred_camera_light_terminal_step;
+          const bool copy_queue_counts = (continue_paths && queue_readback_due) || deferred_camera_light_terminal_step || check_medium_emission_failures;
           const bool copy_light_vertex_count = store_complete_light_history && (_wavefront_light_queue_count > 0u) && queue_readback_due;
           const RHIBindlessHandle next_camera_queue_buffer = ((path_iteration & 1u) == 0u) ? _camera_queue_b_buffer : _camera_queue_a_buffer;
           const RHIBindlessHandle next_light_queue_buffer = ((path_iteration & 1u) == 0u) ? _light_queue_b_buffer : _light_queue_a_buffer;
@@ -6937,7 +6953,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           if (finish_trace_bounce) {
             _wavefront_connect_light_history_bounces = 0u;
           }
-          if (queue_readback_due) {
+          if (queue_readback_due || (finish_trace_bounce && copy_queue_counts)) {
             trace_step_result = wait_and_destroy_submitted_commands("trace bounce submit");
           }
 
@@ -6961,6 +6977,12 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               const RHIResult read_result = device.read_buffer(_camera_queue_count_readback_buffer, &queue_header, static_cast<uint64_t>(sizeof(queue_header)));
               if (read_result != RHIResult::Success) {
                 set_runtime_failure("GPU RT failed to read the camera queue count (" + std::to_string(static_cast<uint32_t>(read_result)) + ")");
+                _wavefront_camera_queue_count = 0u;
+                _wavefront_light_queue_count = 0u;
+                return;
+              }
+              if (queue_header.pad1 != 0u) {
+                set_runtime_failure(Raytracing::kMediumEmissionFailure);
                 _wavefront_camera_queue_count = 0u;
                 _wavefront_light_queue_count = 0u;
                 return;
@@ -8608,13 +8630,25 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
 void GPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
   _scene_valid = scene.valid();
+  on_camera_changed(scene);
   Renderer::on_scene_changed(scene);
   restart_render_after_change();
+}
+
+void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
+  if (thermal_medium_binding_valid(scene.data(), scene.camera().medium_index) == false) {
+    set_runtime_failure(kThermalCameraBindingFailure);
+  } else if ((_runtime_failure_reason == kThermalCameraBindingFailure) || (_runtime_failure_reason == Raytracing::kMediumEmissionFailure)) {
+    reset_runtime_failure();
+    set_preparation_ready();
+  }
+  Renderer::on_camera_changed(scene);
 }
 
 void GPURaytracingRenderer::on_scene_transforms_changed(SceneRepresentation& scene) {
   ETX_PROFILER_SCOPE();
   _scene_valid = scene.valid();
+  on_camera_changed(scene);
   Renderer::on_scene_transforms_changed(scene);
 }
 
@@ -9075,8 +9109,10 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, const SceneRepres
     upload_success = upload.upload(packed_emitters.emitter_instances.data(), packed_emitters.emitter_instances.size(), scene_buffer_usage, _emitter_instances_buffer,
                        _emitter_instances_buffer_size, _gpu_scene.emitter_instances, "emitter_instances") &&
                      upload_success;
+    std::vector<Material> transport_materials;
+    data.copy_transport_materials(transport_materials);
     upload_success =
-      upload.upload(data.materials.data(), data.materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size, _gpu_scene.materials, "materials") &&
+      upload.upload(transport_materials.data(), transport_materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size, _gpu_scene.materials, "materials") &&
       upload_success;
     upload_success =
       upload.upload(data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer, _spectrums_buffer_size, _gpu_scene.spectrums, "spectrums") &&
@@ -9204,8 +9240,10 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
         upload.upload(data.meshes.data(), data.meshes.size(), scene_buffer_usage, _meshes_buffer, _meshes_buffer_size, _gpu_scene.meshes, "meshes") && upload_success;
     }
     if (changes[UpdateFlags::Materials]) {
+      std::vector<Material> transport_materials;
+      data.copy_transport_materials(transport_materials);
       upload_success =
-        upload.upload(data.materials.data(), data.materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size, _gpu_scene.materials, "materials") &&
+        upload.upload(transport_materials.data(), transport_materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size, _gpu_scene.materials, "materials") &&
         upload_success;
     }
     if (changes[UpdateFlags::Spectra]) {
@@ -9352,7 +9390,7 @@ bool build_raytracer_shader_package(const std::filesystem::path& output_path, co
   };
   constexpr PackageIntegratorConfiguration integrator_configurations[] = {
     {GPUIntegratorMode::PathTracing, all_camera_features},
-    {GPUIntegratorMode::LightTracing, all_light_features},
+    {GPUIntegratorMode::LightTracing, all_light_features | GPUIntegratorFeatures::CameraPath | GPUIntegratorFeatures::DirectHit},
     {GPUIntegratorMode::BDPTFast, all_camera_features | all_light_features},
     {GPUIntegratorMode::BDPTFull, all_camera_features | all_light_features | GPUIntegratorFeatures::ConnectVertices},
     {GPUIntegratorMode::VCM,

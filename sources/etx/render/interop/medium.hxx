@@ -55,6 +55,10 @@ struct ETX_ALIGNED Medium {
     Homogeneous,
     Heterogeneous,
   };
+  enum : uint32_t {
+    EmissionEnabled = 1u,
+    EmissionRequiresBoundedRegion = 2u,
+  };
 
   MediumGrid grid ETX_INIT({});
   BoundingBox bounds ETX_INIT({});
@@ -65,6 +69,9 @@ struct ETX_ALIGNED Medium {
   Class cls ETX_INIT(Homogeneous);
   AffineTransform world_to_object ETX_INIT({});
   BoundingBox local_bounds ETX_INIT({});
+  uint32_t thermal_source_index ETX_INIT(kInvalidIndex);
+  uint32_t emission_index ETX_INIT(kInvalidIndex);
+  uint32_t emission_flags ETX_INIT(0u);
 };
 
 ETX_SHARED_INLINE float3 medium_transform_point(ETX_IN(AffineTransform, transform), ETX_IN(float3, position)) {

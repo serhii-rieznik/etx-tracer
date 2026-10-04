@@ -122,6 +122,13 @@ ETX_SHARED_INLINE Material gpu_abi_load_material_full(ByteAddressBuffer buffer, 
   result.normal_scale = gpu_abi_load_f32(buffer, base_offset + kMaterialNormalScaleOffset);
   result.opacity = gpu_abi_load_f32(buffer, base_offset + kMaterialOpacityOffset);
   result.emission_collimation = gpu_abi_load_f32(buffer, base_offset + kMaterialEmissionCollimationOffset);
+  result.temperature_kelvin = gpu_abi_load_f32(buffer, base_offset + kMaterialTemperatureKelvinOffset);
+  result.thermal_rgb_image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialThermalRGBImageIndexOffset);
+  result.thermal_conductor_average_albedo = gpu_abi_load_f32(buffer, base_offset + kMaterialThermalConductorAverageAlbedoOffset);
+  result.thermal_energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialThermalEnergyCompensationInterfaceIndexOffset);
+  result.thermal_emission_weight = gpu_abi_load_f32(buffer, base_offset + kMaterialThermalEmissionWeightOffset);
+  result.thermal_int_medium_index = gpu_abi_load_u32(buffer, base_offset + kMaterialThermalIntMediumIndexOffset);
+  result.thermal_conductor_image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialThermalConductorImageIndexOffset);
   result.energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialEnergyCompensationInterfaceIndexOffset);
   result.conductor_energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialConductorEnergyCompensationInterfaceIndexOffset);
   return result;

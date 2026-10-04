@@ -306,7 +306,14 @@ struct SceneSerializationImpl {
         static_cast<float>(atof(params[1])),
         static_cast<float>(atof(params[2])),
       });
-      return data.add_spectrum(SpectralDistribution::rgb_reflectance(value));
+      SpectrumSource source = {};
+      source.mode = SpectrumSource::Mode::Color;
+      source.kind = SpectrumSource::Kind::Reflectance;
+      source.color = value;
+      source.generate();
+      const uint32_t index = data.add_spectrum(source.output());
+      data.spectrum_sources.emplace(index, std::move(source));
+      return index;
     }
 
     return 0u;
@@ -1276,6 +1283,13 @@ struct SceneSerializationImpl {
       s_a = SpectralDistribution::rgb_reflectance(absorption);
     }
 
+    SpectralDistribution emission = SpectralDistribution::constant(0.0f);
+    if (get_param(material, "emission")) {
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      emission = load_illuminant_spectrum(data, buffer);
+    }
+
     bool explicit_connections = true;
     if (get_param(material, "enclosed")) {
       explicit_connections = false;
@@ -1366,13 +1380,15 @@ struct SceneSerializationImpl {
       uint32_t medium_handle = data.mediums.add_noise(Medium::Heterogeneous, name, noise_type, absorption_index, scattering_index, anisotropy, explicit_connections, noise_scale,
         noise_octaves, noise_lacunarity, noise_persistence, noise_seed, noise_power, noise_offset);
       Medium& medium = data.mediums.get(medium_handle);
+      medium.emission_index = data.add_spectrum(emission);
       medium.grid.noise_sharpness = noise_sharpness;
       medium.grid.noise_enable_border_fade = noise_border_fade;
       medium.grid.noise_border_fade_distance = noise_border_fade_distance;
       return;
     }
 
-    data.add_medium(cls, name.c_str(), volume_path.c_str(), s_a, s_t, anisotropy, explicit_connections);
+    const uint32_t medium_index = data.add_medium(cls, name.c_str(), volume_path.c_str(), s_a, s_t, anisotropy, explicit_connections);
+    data.spectrum_values[data.mediums.get(medium_index).emission_index] = emission;
   }
 
   void parse_directional_light(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
@@ -1702,6 +1718,7 @@ struct SceneSerializationImpl {
     mtl.cls = MaterialClass::Diffuse;
     mtl.emission = {};
     mtl.emission_collimation = 0.0f;
+    mtl.temperature_kelvin = 0.0f;
 
     bool base_applied = false;
     if (get_param(material, "base")) {
@@ -1709,6 +1726,18 @@ struct SceneSerializationImpl {
       if (i != material_mapping.end()) {
         mtl = data.materials[i->second];
         base_applied = true;
+      }
+    }
+
+    if (get_param(material, "temperature")) {
+      char* end = nullptr;
+      mtl.temperature_kelvin = strtof(_data_buffer, &end);
+      const bool has_value = end != _data_buffer;
+      while ((*end != '\0') && std::isspace(static_cast<unsigned char>(*end))) {
+        ++end;
+      }
+      if ((has_value == false) || (*end != '\0')) {
+        mtl.temperature_kelvin = std::numeric_limits<float>::quiet_NaN();
       }
     }
 

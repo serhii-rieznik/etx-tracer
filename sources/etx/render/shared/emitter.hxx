@@ -134,6 +134,7 @@ struct EmitterRadianceQuery {
   float3 target_position = {};
   float3 direction = {};
   float2 uv = {};
+  float3 shading_normal = {};
   bool directly_visible = false;
 };
 

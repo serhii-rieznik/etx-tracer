@@ -34,6 +34,9 @@ ETX_SHARED_INLINE MediumAccess medium_access_cpu_make(ETX_IN(Medium, medium), ui
   result.medium_class = static_cast<uint32_t>(medium.cls);
   result.absorption_spectrum_index = medium.absorption_index;
   result.scattering_spectrum_index = medium.scattering_index;
+  result.thermal_source_spectrum_index = medium.thermal_source_index;
+  result.emission_spectrum_index = medium.emission_index;
+  result.emission_flags = medium.emission_flags;
   result.phase_function_g = medium.phase_function_g;
   result.enable_explicit_connections = medium.enable_explicit_connections;
   result.world_to_object = medium.world_to_object;

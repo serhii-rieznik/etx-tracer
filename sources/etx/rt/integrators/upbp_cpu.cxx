@@ -647,9 +647,10 @@ struct CPUUPBPImpl {
       for (uint32_t medium_index = 0u; medium_index < rt.scene().mediums.count; ++medium_index) {
         prepared_mediums[medium_index] = upbp_prepare_medium(rt.scene().mediums[medium_index], iteration.spect);
       }
-      light_paths.resize(static_cast<size_t>(iteration.light_subpath_count));
-      light_weights.resize(static_cast<size_t>(iteration.light_subpath_count));
-      light_splats.resize(static_cast<size_t>(iteration.light_subpath_count));
+      const size_t sampled_light_path_count = emitter_distribution_has_values() ? static_cast<size_t>(iteration.light_subpath_count) : 0u;
+      light_paths.resize(sampled_light_path_count);
+      light_weights.resize(sampled_light_path_count);
+      light_splats.resize(sampled_light_path_count);
     } catch (const std::bad_alloc&) {
       fail("UPBP failed to allocate fixed light-path storage");
       *state = Integrator::State::Stopped;
@@ -688,7 +689,11 @@ struct CPUUPBPImpl {
     stage = Stage::Light;
     stage_time.reset();
     live_report_time.reset();
-    task_handle = rt.scheduler().schedule(iteration.light_subpath_count, &light_task);
+    if (light_paths.empty()) {
+      complete_light_stage();
+    } else {
+      task_handle = rt.scheduler().schedule(iteration.light_subpath_count, &light_task);
+    }
   }
 
   void build_light_paths(const uint32_t begin, const uint32_t end, const uint32_t thread_id) {
@@ -1347,8 +1352,8 @@ struct CPUUPBPImpl {
       }
       finish_camera_phase(CameraTimingRecursiveMIS);
 
-      SpectralResponse value{measurement.spect, 0.0f};
-      if (measurement.mis.enabled(UPBPTechnique::BPT) || scene.strategy_enabled(Scene::Strategy::DirectHit)) {
+      SpectralResponse value = camera.subpath.thermal_radiance;
+      if ((light_paths.empty() == false) && (measurement.mis.enabled(UPBPTechnique::BPT) || scene.strategy_enabled(Scene::Strategy::DirectHit))) {
         begin_camera_phase();
         const uint32_t light_path_index =
           measurement.light_subpath_count == measurement.camera_subpath_count
@@ -1557,11 +1562,11 @@ const char* CPUUPBP::status_str() const {
 }
 
 bool CPUUPBP::failed() const {
-  return _private->failed.load();
+  return _private->failed.load() || Integrator::failed();
 }
 
 const char* CPUUPBP::failure_reason() const {
-  return _private->status_string();
+  return Integrator::failed() ? Integrator::failure_reason() : _private->status_string();
 }
 
 Integrator::PathProgress CPUUPBP::path_progress() const {

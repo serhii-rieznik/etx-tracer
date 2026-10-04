@@ -1,6 +1,7 @@
 #include "cpu_renderer.hxx"
 
 #include <etx/core/log.hxx>
+#include <etx/render/host/thermal_preparation.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
 
 #include <algorithm>
@@ -89,8 +90,14 @@ RendererStatus CPURaytracingRenderer::status() const {
     .mode = RendererMode::CPURaytracing,
   };
   result.output_stale = display_texture().valid() && (_last_uploaded_completed_iterations == 0u);
+  const char* scene_failure_reason = _integrator_thread.scene_failure_reason();
+  if (scene_failure_reason != nullptr) {
+    result.state = RendererStatusState::Failed;
+    result.message = scene_failure_reason;
+    return result;
+  }
   const Integrator* integrator = current_integrator();
-  if ((integrator == nullptr) || (integrator->can_run() == false)) {
+  if ((integrator == nullptr) || ((integrator->can_run() == false) && (integrator->failed() == false))) {
     if (_runtime_failure_reason.empty() == false) {
       result.state = RendererStatusState::Failed;
       result.message = _runtime_failure_reason;
@@ -157,7 +164,7 @@ RendererStatus CPURaytracingRenderer::status() const {
 
 RendererControlState CPURaytracingRenderer::control_state() const {
   const Integrator* integrator = current_integrator();
-  if ((integrator == nullptr) || (integrator->can_run() == false) || (_runtime_failure_reason.empty() == false)) {
+  if ((integrator == nullptr) || (integrator->can_run() == false) || (_runtime_failure_reason.empty() == false) || (_integrator_thread.scene_failure_reason() != nullptr)) {
     return {};
   }
 
@@ -205,6 +212,10 @@ void CPURaytracingRenderer::finish() {
 
 void CPURaytracingRenderer::restart() {
   _integrator_thread.stop(Integrator::Stop::Immediate);
+  if (_runtime_failure_reason.empty() == false) {
+    stop_render_timing();
+    return;
+  }
   _raytracing.film().set_pixel_size(render_pixel_size());
   _raytracing.film().clear(Film::ClearEverything);
   _last_uploaded_completed_iterations = 0u;
@@ -216,10 +227,20 @@ void CPURaytracingRenderer::restart() {
 }
 
 void CPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
-  (void)scene;
+  on_camera_changed(scene);
   _integrator_thread.request_scene_check(SceneUpdateScope::Full);
   _last_uploaded_completed_iterations = 0u;
   start_render_timing();
+}
+
+void CPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
+  if (thermal_medium_binding_valid(scene.data(), scene.camera().medium_index) == false) {
+    stop();
+    _runtime_failure_reason = kThermalCameraBindingFailure;
+  } else if (_runtime_failure_reason == kThermalCameraBindingFailure) {
+    _runtime_failure_reason.clear();
+  }
+  Renderer::on_camera_changed(scene);
 }
 
 void CPURaytracingRenderer::on_scene_transforms_changed(SceneRepresentation& scene) {

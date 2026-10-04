@@ -373,6 +373,7 @@ struct ETX_ALIGNED GPUUPBPBPTVertex {
   float2 barycentric ETX_INIT({});
   float scatter_pdf_forward ETX_INIT(0.0f);
   GPUWavefrontCompactSpectralResponse inline_extinction ETX_INIT({});
+  uint32_t incident_medium_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED GPUUPBPBPTPathState {

@@ -93,7 +93,7 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
     return power_heuristic(sampling_pdf, direct_pdf);
   }
 
-  float reverse_phase_pdf = gpu_medium_phase_function(medium_access, -emitter_sample.direction, current_vertex.w_i);
+  float reverse_phase_pdf = gpu_medium_phase_function(medium_access, emitter_sample.direction, current_vertex.w_i);
   float w_light = (emitter_sample.is_delta != 0u) ? 0.0f : wavefront_safe_div(phase_value, sampling_pdf);
   float emitter_cosine = abs(dot(emitter_sample.direction, emitter_sample.normal));
   float density_ratio = wavefront_safe_div(emitter_sample.pdf_dir * emitter_cosine, emitter_sample.pdf_dir_out);
@@ -241,7 +241,7 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
             light_cosine, upbp_w_light, upbp_emission_to_direct_ratio) == false) {
         return;
       }
-      upbp_reverse_phase_pdf = gpu_medium_phase_function(medium_access, -emitter_sample.direction, current_vertex.w_i);
+      upbp_reverse_phase_pdf = gpu_medium_phase_function(medium_access, emitter_sample.direction, current_vertex.w_i);
       mis_weight = 1.0f;
     }
 #endif

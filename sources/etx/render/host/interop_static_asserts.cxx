@@ -115,6 +115,14 @@ static_assert(offsetof(Material, int_medium) == kMaterialIntMediumOffset, "Mater
 static_assert(offsetof(Material, ext_medium) == kMaterialExtMediumOffset, "Material::ext_medium offset changed");
 static_assert(offsetof(Material, opacity) == kMaterialOpacityOffset, "Material::opacity offset changed");
 static_assert(offsetof(Material, emission_collimation) == kMaterialEmissionCollimationOffset, "Material::emission_collimation offset changed");
+static_assert(offsetof(Material, temperature_kelvin) == kMaterialTemperatureKelvinOffset, "Material::temperature_kelvin offset changed");
+static_assert(offsetof(Material, thermal_rgb_image_index) == kMaterialThermalRGBImageIndexOffset, "Material::thermal_rgb_image_index offset changed");
+static_assert(offsetof(Material, thermal_conductor_average_albedo) == kMaterialThermalConductorAverageAlbedoOffset, "Material::thermal_conductor_average_albedo offset changed");
+static_assert(offsetof(Material, thermal_emission_weight) == kMaterialThermalEmissionWeightOffset, "Material::thermal_emission_weight offset changed");
+static_assert(offsetof(Material, thermal_int_medium_index) == kMaterialThermalIntMediumIndexOffset, "Material::thermal_int_medium_index offset changed");
+static_assert(offsetof(Material, thermal_conductor_image_index) == kMaterialThermalConductorImageIndexOffset, "Material::thermal_conductor_image_index offset changed");
+static_assert(offsetof(Material, thermal_energy_compensation_interface_index) == kMaterialThermalEnergyCompensationInterfaceIndexOffset,
+  "Material::thermal_energy_compensation_interface_index offset changed");
 static_assert(offsetof(Material, energy_compensation_interface_index) == kMaterialEnergyCompensationInterfaceIndexOffset,
   "Material::energy_compensation_interface_index offset changed");
 static_assert(offsetof(Material, conductor_energy_compensation_interface_index) == kMaterialConductorEnergyCompensationInterfaceIndexOffset,
@@ -170,6 +178,9 @@ static_assert(std::is_standard_layout_v<Medium>, "Medium must stay standard layo
 static_assert(alignof(MediumGrid) == 16, "MediumGrid alignment must match HLSL packing");
 static_assert(alignof(Medium) == 16, "Medium alignment must match HLSL packing");
 static_assert(sizeof(Medium) == kMediumStride, "Medium size changed; update shared ABI");
+static_assert(offsetof(Medium, thermal_source_index) == kMediumThermalSourceIndexOffset, "Medium::thermal_source_index offset changed");
+static_assert(offsetof(Medium, emission_index) == kMediumEmissionIndexOffset, "Medium::emission_index offset changed");
+static_assert(offsetof(Medium, emission_flags) == kMediumEmissionFlagsOffset, "Medium::emission_flags offset changed");
 static_assert(offsetof(MediumGrid, dimensions) == kMediumGridDimensionsOffset, "MediumGrid::dimensions offset changed");
 static_assert(offsetof(MediumGrid, type) == kMediumGridTypeOffset, "MediumGrid::type offset changed");
 static_assert(offsetof(MediumGrid, noise_type) == kMediumGridNoiseTypeOffset, "MediumGrid::noise_type offset changed");

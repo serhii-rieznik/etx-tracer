@@ -37,6 +37,7 @@ struct RaytracingImpl {
 
   Scene scene = {};
   uint32_t sample_limit = 0u;
+  std::atomic<bool> medium_emission_failure = false;
   RTCDevice rt_device = {};
   RTCScene rt_scene = {};
   std::vector<RTCScene> mesh_scenes = {};
@@ -100,7 +101,9 @@ struct RaytracingImpl {
 
   void commit(const SceneData& scene_data, const Camera& camera, const UpdateFlags& update_flags) {
     ETX_PROFILER_SCOPE();
+    medium_emission_failure.store(false, std::memory_order_relaxed);
     internal_data.camera = camera;
+    internal_data.camera.medium_index = scene_data.transport_medium_index(camera.medium_index);
 
     if (update_flags[UpdateFlags::AnyGeometry] || update_flags[UpdateFlags::AnyMaterials] || update_flags[UpdateFlags::Emitters] || update_flags[UpdateFlags::Images] ||
         update_flags[UpdateFlags::Mediums] || update_flags[UpdateFlags::EnergyCompensationInterfaces] || update_flags[UpdateFlags::PixelFilter] ||
@@ -123,6 +126,9 @@ struct RaytracingImpl {
     scene.bounding_sphere_radius = transport_sphere.radius;
     scene.emission_half_extent = transport_sphere.emission_half_extent;
     film.allocate(internal_data.camera.film_size);
+    for (Medium& medium : internal_data.mediums) {
+      medium.emission_failure = &medium_emission_failure;
+    }
     scene.options.properties[Scene::Properties::Committed] = true;
     scene_global_publish(this, &scene);
   }
@@ -182,7 +188,7 @@ struct RaytracingImpl {
       internal_data.meshes = scene_data.meshes;
     }
     if (update_flags[UpdateFlags::Materials]) {
-      internal_data.materials = scene_data.materials;
+      scene_data.copy_transport_materials(internal_data.materials);
     }
     if (update_flags[UpdateFlags::Spectra]) {
       internal_data.spectrums = scene_data.spectrum_values;
@@ -247,13 +253,13 @@ struct RaytracingImpl {
       }
     }
     if (update_flags[UpdateFlags::Mediums]) {
-      const Medium* mediums = scene_data.mediums.as_array();
-      const uint64_t medium_count = scene_data.mediums.array_size();
+      const uint64_t medium_count = scene_data.transport_medium_count();
       if (medium_count > 0u) {
-        internal_data.mediums.assign(mediums, mediums + medium_count);
+        internal_data.mediums.resize(medium_count);
         internal_data.medium_density_storage.clear();
         internal_data.medium_density_storage.resize(medium_count);
         for (uint64_t medium_index = 0u; medium_index < medium_count; ++medium_index) {
+          internal_data.mediums[medium_index] = scene_data.transport_medium(medium_index);
           Medium& medium = internal_data.mediums[medium_index];
           if ((medium.density_view.a != nullptr) && (medium.density_view.count > 0u)) {
             std::vector<float>& density = internal_data.medium_density_storage[medium_index];
@@ -472,6 +478,10 @@ uint32_t Raytracing::sample_limit() const {
 
 void Raytracing::set_sample_limit(uint32_t sample_limit) {
   _private->sample_limit = sample_limit;
+}
+
+bool Raytracing::medium_emission_failed() const {
+  return _private->medium_emission_failure.load(std::memory_order_relaxed);
 }
 
 void Raytracing::commit(const SceneData& scene_data, const Camera& camera, const UpdateFlags& changes) {

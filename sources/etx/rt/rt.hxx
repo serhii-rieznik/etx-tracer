@@ -11,6 +11,7 @@ struct SceneData;
 struct UpdateFlags;
 
 struct Raytracing {
+  static constexpr const char* kMediumEmissionFailure = "Medium emission is divergent or outside the numeric range; bound the emitting region or provide absorption";
   Raytracing(TaskScheduler&, Film&);
   ~Raytracing();
 
@@ -25,6 +26,7 @@ struct Raytracing {
   float geometry_bounding_sphere_radius() const;
   uint32_t sample_limit() const;
   void set_sample_limit(uint32_t sample_limit);
+  bool medium_emission_failed() const;
   void commit(const SceneData& scene_data, const Camera& camera, const UpdateFlags& changes);
 
   bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;

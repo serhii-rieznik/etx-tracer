@@ -29,7 +29,7 @@ float wavefront_surface_shading_pdf_environment(float3 direction, bool target_is
 
 bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inout uint medium_index, inout uint seed, out TraceSurfaceResult result);
 bool wavefront_trace_path_state(bool from_camera, uint path_index, RayDesc ray, SpectralQuery spect, SpectralResponse throughput, inout uint medium_index, inout uint seed,
-  out TraceSurfaceResult result);
+  out TraceSurfaceResult result, out SpectralResponse thermal_radiance);
 bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, out TraceSurfaceResult result, out bool boundary_hit, out uint boundary_medium_index);
 SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary, float3 ray_dir, uint instance_index);
 float3 wavefront_trace_surface_shading_position(TraceSurfaceResult surface_hit, float3 outgoing_direction);
@@ -919,7 +919,8 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
 }
 
 bool wavefront_trace_path_state(bool from_camera, uint path_index, RayDesc ray, SpectralQuery spect, SpectralResponse throughput, inout uint medium_index, inout uint seed,
-  out TraceSurfaceResult result) {
+  out TraceSurfaceResult result, out SpectralResponse thermal_radiance) {
+  thermal_radiance = spectral_response_zero(spect);
   result = (TraceSurfaceResult)0;
   result.medium_index = medium_index;
   result.triangle_index = kInvalidIndex;
@@ -955,15 +956,10 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, RayDesc ray, 
 
   while (true) {
     RayDesc segment_ray = (RayDesc)0;
-    segment_ray.Origin = current_origin;
+    segment_ray.Origin = ray.Origin;
     segment_ray.Direction = ray.Direction;
-    segment_ray.TMin = (traveled_distance == 0.0f) ? ray.TMin : kRayEpsilon;
-    if (ray.TMax >= kMaxFloat) {
-      segment_ray.TMax = ray.TMax;
-    } else {
-      float remaining_distance = max(0.0f, ray.TMax - traveled_distance);
-      segment_ray.TMax = max(segment_ray.TMin, remaining_distance);
-    }
+    segment_ray.TMin = (traveled_distance == 0.0f) ? ray.TMin : asfloat(asuint(traveled_distance) + 1u);
+    segment_ray.TMax = ray.TMax;
 
     TraceSurfaceResult segment_hit = (TraceSurfaceResult)0;
     bool boundary_hit = false;
@@ -978,12 +974,28 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, RayDesc ray, 
       found_hit = wavefront_trace_closest_surface_or_boundary(segment_ray, seed, segment_hit, boundary_hit, boundary_medium);
     }
 
-    float segment_distance = found_hit ? segment_hit.hit_t : segment_ray.TMax;
+    float segment_distance = (found_hit ? segment_hit.hit_t : segment_ray.TMax) - traveled_distance;
+    bool unbounded_transport = from_camera;
 #if ETX_UPBP
-    if (record_upbp && (found_hit == false) && (segment_ray.TMax >= (0.5f * kMaxFloat))) {
-      segment_distance = upbp_distance_to_scene_sphere_exit(current_origin, ray.Direction);
-    }
+    unbounded_transport = unbounded_transport || (record_upbp && (segment_ray.TMax >= (0.5f * kMaxFloat)));
 #endif
+    if ((found_hit == false) && unbounded_transport) {
+      MediumAccessGPUContext access_context =
+        make_medium_access_gpu_context(constants.scene.mediums, constants.scene.images, constants.scene.spectrums, constants.scene.spectral_values);
+      MediumAccess medium_access = (MediumAccess)0;
+      const bool infinite_homogeneous_medium = medium_access_try_load(access_context, ray_medium_index, medium_access) && (medium_access.medium_class == Medium::Homogeneous) &&
+                                               ((spectral_response_maximum(medium_access_load_extinction_spectral(access_context, medium_access, spect)) > 0.0f) ||
+                                                 ((medium_access.emission_flags & Medium::EmissionRequiresBoundedRegion) != 0u));
+      if (infinite_homogeneous_medium) {
+        // Camera far clipping limits geometry, not an unbounded medium's transport.
+        segment_distance = kMaxFloat;
+      }
+#if ETX_UPBP
+      else if (record_upbp && (segment_ray.TMax >= (0.5f * kMaxFloat))) {
+        segment_distance = upbp_distance_to_scene_sphere_exit(current_origin, ray.Direction);
+      }
+#endif
+    }
     if ((segment_distance <= 0.0f) || (isfinite(segment_distance) == false)) {
 #if ETX_UPBP
       if (record_upbp) {
@@ -1002,6 +1014,18 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, RayDesc ray, 
       return false;
     }
     SpectralResponse segment_throughput = spectral_response_mul(throughput, result.transmittance);
+    if (from_camera) {
+      bool source_valid = true;
+      const SpectralResponse source = medium_segment_emission_radiance(ray_medium_index, current_origin, ray.Direction, segment_distance, spect, seed, source_valid);
+      if (source_valid == false) {
+        uint ignored;
+        // Camera-queue padding reports source failures through the existing queue readback.
+        WAVEFRONT_RW_BUFFER(wavefront_queue_next_descriptor(true)).InterlockedOr(kGPUWavefrontQueuePad1Offset, 1u, ignored);
+        result.transmittance = spectral_response_zero(spect);
+        return false;
+      }
+      thermal_radiance = spectral_response_add(thermal_radiance, spectral_response_mul(segment_throughput, source));
+    }
     MediumSample medium_sample = (MediumSample)0;
     bool sampled_medium = false;
 #if ETX_UPBP
@@ -1053,7 +1077,7 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, RayDesc ray, 
     if (boundary_hit == false) {
       result = segment_hit;
       result.transmittance = accumulated_transmittance;
-      result.hit_t = traveled_distance + segment_hit.hit_t;
+      result.hit_t = segment_hit.hit_t;
       result.medium_index = ray_medium_index;
       medium_index = ray_medium_index;
       return true;
@@ -1084,13 +1108,12 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, RayDesc ray, 
     rnd01(seed);
     rnd01(seed);
 
-    traveled_distance += segment_hit.hit_t;
+    traveled_distance = segment_hit.hit_t;
     if ((ray.TMax < kMaxFloat) && (traveled_distance >= ray.TMax)) {
       return false;
     }
 
-    const float boundary_side = dot(segment_hit.surface_point.geo_normal, ray.Direction) >= 0.0f ? 1.0f : -1.0f;
-    current_origin = offset_ray(segment_hit.surface_point.vertex.pos, segment_hit.surface_point.geo_normal * boundary_side);
+    current_origin = ray.Origin + ray.Direction * traveled_distance;
     ray_medium_index = boundary_medium;
   }
 }
@@ -1122,12 +1145,17 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
   uint medium_index = state.medium_index;
   uint seed = state.sampler_seed;
   TraceSurfaceResult trace_result = (TraceSurfaceResult)0;
+  SpectralResponse thermal_radiance = spectral_response_zero(state.spect);
   bool hit_found = false;
   if (subsurface_active) {
     hit_found = wavefront_trace_subsurface_path_state(from_camera, path_index, ray, state.spect, state.throughput, seed, subsurface_state, trace_result);
     wavefront_store_subsurface_state(subsurface_state_buffer, path_index, subsurface_state);
   } else {
-    hit_found = wavefront_trace_path_state(from_camera, path_index, ray, state.spect, state.throughput, medium_index, seed, trace_result);
+    hit_found = wavefront_trace_path_state(from_camera, path_index, ray, state.spect, state.throughput, medium_index, seed, trace_result, thermal_radiance);
+  }
+  if (from_camera && (state.path_length >= load_scene_options_min_path_length()) && (state.path_length <= load_scene_options_max_path_length()) &&
+      (spectral_response_is_zero(thermal_radiance) == false)) {
+    wavefront_film_add(state.pixel_index, wavefront_spectral_estimate(thermal_radiance, state.spect));
   }
   state.medium_index = medium_index;
   state.sampler_seed = seed;

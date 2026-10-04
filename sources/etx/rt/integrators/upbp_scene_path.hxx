@@ -28,6 +28,7 @@ enum class UPBPSceneSegmentFailure : uint8_t {
 
 struct UPBPSceneSegmentResult {
   UPBPTransportSegmentRecord segment = {};
+  SpectralResponse thermal_radiance = {};
   Intersection intersection = {};
   MediumTrackingEvent medium_event = {};
   uint32_t active_medium_index = kInvalidIndex;
@@ -36,8 +37,8 @@ struct UPBPSceneSegmentResult {
   MediumTrackingFailure medium_failure = MediumTrackingFailure::None;
 
   bool valid() const {
-    const bool absorbed_without_interval = (terminal == UPBPSceneSegmentTerminal::Absorb) && segment.intervals.empty() &&
-                                           (segment.failure == MediumTrackingFailure::None) && segment.weight.is_zero();
+    const bool absorbed_without_interval =
+      (terminal == UPBPSceneSegmentTerminal::Absorb) && segment.intervals.empty() && (segment.failure == MediumTrackingFailure::None) && segment.weight.is_zero();
     return (failure == UPBPSceneSegmentFailure::None) && (terminal != UPBPSceneSegmentTerminal::Failure) && (absorbed_without_interval || segment.valid());
   }
 };
@@ -84,10 +85,11 @@ bool upbp_trace_with_medium_origin_retry(const Ray& ray, TraceFunction&& trace, 
 }
 
 inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, const SpectralQuery spect, Sampler& intersection_sampler, Sampler& medium_sampler,
-  const Ray& input_ray, const uint32_t initial_medium_index, const uint32_t maximum_boundary_count, const uint32_t maximum_null_events_per_interval,
+  const Ray& input_ray, const uint32_t initial_medium_index, const uint32_t maximum_boundary_count, const uint32_t maximum_null_events_per_interval, PathSource source,
   UPBPSceneSegmentResult& result) {
   result = {};
   result.segment.reset(spect);
+  result.thermal_radiance = {spect, 0.0f};
   result.active_medium_index = initial_medium_index;
 
   const float direction_length_squared = dot(input_ray.d, input_ray.d);
@@ -99,7 +101,8 @@ inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, co
 
   Ray ray = input_ray;
   const bool bounded_segment = input_ray.max_t < 0.5f * kMaxFloat;
-  const float3 segment_target = bounded_segment ? input_ray.o + input_ray.d * input_ray.max_t : float3{};
+  float traveled_distance = 0.0f;
+  float3 interval_origin = input_ray.o;
   for (;;) {
     Intersection intersection = {};
     const Sampler initial_intersection_sampler = intersection_sampler;
@@ -112,9 +115,17 @@ inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, co
         intersection_sampler = initial_intersection_sampler;
       },
       intersection);
-    float interval_distance = found_intersection ? intersection.t : ray.max_t;
-    if ((found_intersection == false) && (ray.max_t >= 0.5f * kMaxFloat)) {
-      interval_distance = upbp_distance_to_scene_sphere_exit(ray.o, ray.d, scene.bounding_sphere_center, scene.bounding_sphere_radius);
+    float interval_distance = (found_intersection ? intersection.t : ray.max_t) - traveled_distance;
+    if ((found_intersection == false) && ((source == PathSource::Camera) || (ray.max_t >= (0.5f * kMaxFloat)))) {
+      const bool infinite_homogeneous_medium = (result.active_medium_index < scene.mediums.count) && (scene.mediums[result.active_medium_index].cls == Medium::Homogeneous) &&
+                                               ((medium_extinction(scene.mediums[result.active_medium_index], spect).maximum() > 0.0f) ||
+                                                 ((scene.mediums[result.active_medium_index].emission_flags & Medium::EmissionRequiresBoundedRegion) != 0u));
+      if (infinite_homogeneous_medium) {
+        // Camera far clipping limits geometry, not an unbounded medium's transport.
+        interval_distance = kMaxFloat;
+      } else if (ray.max_t >= (0.5f * kMaxFloat)) {
+        interval_distance = upbp_distance_to_scene_sphere_exit(ray.o, ray.d, scene.bounding_sphere_center, scene.bounding_sphere_radius) - traveled_distance;
+      }
     }
     if ((interval_distance <= 0.0f) || (std::isfinite(interval_distance) == false)) {
       result.failure = UPBPSceneSegmentFailure::InvalidIntervalDistance;
@@ -129,15 +140,18 @@ inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, co
       }
 
       const Medium& medium = scene.mediums[result.active_medium_index];
-      if (upbp_track_medium_segment(medium, spect, medium_sampler, ray.o, ray.d, interval_distance, result.active_medium_index, maximum_null_events_per_interval, interval) ==
-          false) {
+      if (source == PathSource::Camera) {
+        result.thermal_radiance += result.segment.weight * medium_emission_radiance(medium, spect, intersection_sampler, interval_origin, ray.d, interval_distance);
+      }
+      if (upbp_track_medium_segment(medium, spect, medium_sampler, interval_origin, ray.d, interval_distance, result.active_medium_index, maximum_null_events_per_interval,
+            interval) == false) {
         result.segment.failure = interval.failure;
         result.failure = UPBPSceneSegmentFailure::MediumTracking;
         result.medium_failure = interval.failure;
         return false;
       }
     } else {
-      interval = upbp_vacuum_interval(spect, ray.o, ray.d, interval_distance);
+      interval = upbp_vacuum_interval(spect, interval_origin, ray.d, interval_distance);
     }
 
     if (found_intersection && (interval.terminal_event == MediumTrackingEventType::Scatter)) {
@@ -187,11 +201,11 @@ inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, co
     const Triangle& triangle = scene.triangles[intersection.triangle_index];
     const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, triangle, intersection.instance_index);
     result.active_medium_index = (dot(geometric_normal, ray.d) < 0.0f) ? material.int_medium : material.ext_medium;
-    const float normal_direction = dot(geometric_normal, ray.d) >= 0.0f ? 1.0f : -1.0f;
-    ray.o = offset_ray(intersection.pos, geometric_normal * normal_direction);
-    ray.min_t = kRayEpsilon;
-    ray.max_t = bounded_segment ? dot(segment_target - ray.o, ray.d) : ray.max_t - intersection.t;
-    if (ray.max_t <= kRayEpsilon) {
+    // Boundaries preserve the ray; a normal offset can cross an adjacent face near an edge.
+    traveled_distance = intersection.t;
+    interval_origin = input_ray.o + input_ray.d * traveled_distance;
+    ray.min_t = std::nextafter(traveled_distance, kMaxFloat);
+    if (ray.min_t >= ray.max_t) {
       if (bounded_segment) {
         result.terminal = UPBPSceneSegmentTerminal::Miss;
         return true;
@@ -200,6 +214,13 @@ inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, co
       return false;
     }
   }
+}
+
+inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, const SpectralQuery spect, Sampler& intersection_sampler, Sampler& medium_sampler,
+  const Ray& input_ray, const uint32_t initial_medium_index, const uint32_t maximum_boundary_count, const uint32_t maximum_null_events_per_interval,
+  UPBPSceneSegmentResult& result) {
+  return upbp_walk_scene_segment(rt, scene, spect, intersection_sampler, medium_sampler, input_ray, initial_medium_index, maximum_boundary_count, maximum_null_events_per_interval,
+    PathSource::Undefined, result);
 }
 
 }  // namespace etx

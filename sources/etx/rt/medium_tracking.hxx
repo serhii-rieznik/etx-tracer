@@ -65,8 +65,8 @@ ETX_SHARED_INLINE float medium_tracking_majorant(const MediumTrackingInput& inpu
   return (input.scattering + input.absorption).maximum() * input.density_majorant;
 }
 
-ETX_SHARED_INLINE float medium_tracking_density_majorant(const Medium&) {
-  return 1.0f;
+ETX_SHARED_INLINE float medium_tracking_density_majorant(const Medium& medium) {
+  return ((medium.cls == Medium::Homogeneous) || medium.has_grid_data()) ? 1.0f : 0.0f;
 }
 
 ETX_SHARED_INLINE MediumTrackingInput make_medium_tracking_input(const Medium& medium, const SpectralQuery spect) {

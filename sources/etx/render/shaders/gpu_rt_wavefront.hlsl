@@ -713,6 +713,10 @@ bool wavefront_sample_emitter_to_point(uint light_sampling_mode, SpectralQuery s
     sample_value.barycentric = random_barycentric(float2(rnd01(seed), rnd01(seed)));
     Vertex vertex = wavefront_interpolate_vertex(tri, sample_value.barycentric);
     vertex = scene_instance_transform_vertex(load_scene_instance(emitter_instance.instance_index), vertex);
+    Material material = (Material)0;
+    if (try_load_material_full(tri.material_index, material) == false) {
+      return false;
+    }
     sample_value.origin = vertex.pos;
     sample_value.normal = normalize(vertex.nrm);
     sample_value.direction = normalize(sample_value.origin - from_point);
@@ -721,6 +725,20 @@ bool wavefront_sample_emitter_to_point(uint light_sampling_mode, SpectralQuery s
     sample_value.pdf_dir = max(0.0f, dot(sample_value.normal, sample_value.direction)) * kInvPi;
     sample_value.pdf_dir_out = sample_value.pdf_area * sample_value.pdf_dir;
     sample_value.value = evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, vertex.tex, spect);
+    if (material.thermal_rgb_image_index != kInvalidIndex) {
+      const float3 geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(emitter_instance.instance_index), tri.geo_n);
+      const float signed_cosine = dot(geo_normal, -sample_value.direction);
+      const float cosine = (material.two_sided != 0u) ? abs(signed_cosine) : max(0.0f, signed_cosine);
+      const float distance_squared = dot(sample_value.origin - from_point, sample_value.origin - from_point);
+      sample_value.normal = (signed_cosine < 0.0f) ? -geo_normal : geo_normal;
+      if ((cosine <= kEpsilon) || (distance_squared <= kEpsilon)) {
+        return false;
+      }
+      sample_value.pdf_dir = sample_value.pdf_area * distance_squared / cosine;
+      sample_value.pdf_dir_out = sample_value.pdf_area * cosine * kInvPi * thermal_surface_side_probability(material);
+      sample_value.value =
+        thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, vertex.tex, signed_cosine, abs(dot(vertex.nrm, -sample_value.direction)));
+    }
     sample_value.is_delta = 0u;
     sample_value.is_distant = 0u;
     return sample_value.pdf_dir > 0.0f;
@@ -806,6 +824,23 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
     sample_value.pdf_dir = max(0.0f, dot(sample_value.normal, sample_value.direction)) * kInvPi;
     sample_value.pdf_dir_out = sample_value.pdf_area * sample_value.pdf_dir;
     sample_value.value = evaluate_emission_spectral_source(emitter_profile.emission_spectrum_index, emitter_profile.emission_image_index, vertex.tex, spect);
+    Material material = (Material)0;
+    if (try_load_material_full(tri.material_index, material) == false) {
+      return false;
+    }
+    if (material.thermal_rgb_image_index != kInvalidIndex) {
+      const float3 geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(emitter_instance.instance_index), tri.geo_n);
+      sample_value.normal = geo_normal;
+      if ((thermal_surface_side_probability(material) == 0.5f) && (rnd01(seed) < 0.5f)) {
+        sample_value.normal = -sample_value.normal;
+      }
+      sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), sample_value.normal, 0.0f);
+      const float cosine = max(0.0f, dot(sample_value.normal, sample_value.direction));
+      sample_value.pdf_dir = cosine * kInvPi * thermal_surface_side_probability(material);
+      sample_value.pdf_dir_out = sample_value.pdf_area * sample_value.pdf_dir;
+      sample_value.value = thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, vertex.tex, dot(geo_normal, sample_value.direction),
+        abs(dot(vertex.nrm, sample_value.direction)));
+    }
     sample_value.is_delta = 0u;
     sample_value.is_distant = 0u;
     return sample_value.pdf_dir > 0.0f;
@@ -1320,7 +1355,8 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
   if (from_camera && scene_strategy_enabled(kSceneStrategyDirectHit) && (state.path_length >= load_scene_options_min_path_length()) &&
       (state.path_length <= load_scene_options_max_path_length()) && (hit.emitter_index != kInvalidIndex)) {
     wavefront_film_add(state.pixel_index,
-      wavefront_spectral_estimate(spectral_response_mul(state.throughput, gpu_evaluate_local_emission_spectral(hit.emitter_index, hit.vertex.tex, state.spect)), state.spect));
+      wavefront_spectral_estimate(
+        spectral_response_mul(state.throughput, gpu_evaluate_local_emission_spectral(hit.emitter_index, hit.vertex.tex, hit.vertex.nrm, -state.ray.d, state.spect)), state.spect));
   }
 
   wavefront_write_vertex(from_camera, path_index, state, hit);

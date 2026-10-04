@@ -288,11 +288,11 @@ const Integrator::Status& CPUVCM::status() const {
 }
 
 bool CPUVCM::failed() const {
-  return _private->failure != nullptr;
+  return (_private->failure != nullptr) || Integrator::failed();
 }
 
 const char* CPUVCM::failure_reason() const {
-  return _private->failure != nullptr ? _private->failure : "";
+  return _private->failure != nullptr ? _private->failure : Integrator::failure_reason();
 }
 
 }  // namespace etx

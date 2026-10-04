@@ -240,12 +240,8 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   if (wavefront_connect_camera_valid_spectral_response(contribution) == false) {
     return;
   }
-  float direction_scale = camera_shared_clip_direction_scale(input_value.camera, input_value.camera_sample.direction);
-  float near_extent = (input_value.camera.clip_near > 0.0f) ? input_value.camera.clip_near / direction_scale : 0.0f;
   float3 shadow_origin = wavefront_surface_shading_position(input_value.hit, input_value.camera_sample.direction);
-  float surface_len = length(input_value.camera_sample.position - shadow_origin);
-  float3 clip_pos = shadow_origin + input_value.camera_sample.direction * max(0.0f, surface_len - near_extent);
-  float3 shadow_delta = clip_pos - shadow_origin;
+  float3 shadow_delta = input_value.camera_sample.position - shadow_origin;
   float shadow_distance = length(shadow_delta);
   if (shadow_distance <= kRayEpsilon) {
     return;
@@ -256,7 +252,7 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   task.shadow_ray.d = shadow_delta / shadow_distance;
   task.shadow_ray.min_t = kRayEpsilon;
   task.shadow_ray.max_t = shadow_distance;
-  task.shadow_target = clip_pos;
+  task.shadow_target = input_value.camera_sample.position;
   task.contribution = contribution;
   task.mis_weight = upbp ? bsdf_eval.pdf : mis_weight;
   task.upbp_scattering_pdf_reverse_bits = asuint(scattering_pdf_reverse);

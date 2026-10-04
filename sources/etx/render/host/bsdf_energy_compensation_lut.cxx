@@ -23,7 +23,7 @@ namespace etx {
 
 namespace {
 
-constexpr uint32_t kEnergyCompensationGeneratorVersion = 27u;
+constexpr uint32_t kEnergyCompensationGeneratorVersion = 28u;
 constexpr uint32_t kEnergyCompensationConductorLutSize = kBSDFEnergyCompensationConductorLutSize;
 constexpr uint32_t kEnergyCompensationDielectricLutSize = kBSDFEnergyCompensationDielectricLutSize;
 constexpr uint32_t kEnergyCompensationConductorSampleCount = 2048u;
@@ -802,7 +802,8 @@ SpectralDirectionalAlbedoResult integrate_conductor_directional(const SpectralQu
       const float raw_specular_pdf = vndf_pdf / max(kEpsilon, 4.0f * dot(w_o, m));
       const BSDFEnergyCompensatedLobe lobe = bsdf_energy_compensated_conductor_base_lobe(spect, w_i, w_o, alpha, ext_ior, int_ior, thinfilm, texture);
       if ((raw_specular_pdf > kEpsilon) && (lobe.pdf > kEpsilon)) {
-        result.albedo += lobe.bsdf.integrated / raw_specular_pdf;
+        const float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
+        result.albedo += albedo / raw_specular_pdf;
         const float lambda_o = bsdf_external_ray_info_make(w_o, alpha2).Lambda;
         const float d = bsdf_external_d_ggx(m, alpha2);
         const float g2 = 1.0f / (1.0f + lambda_i + lambda_o);
@@ -857,7 +858,8 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
     if (w_o_r.z > 0.0f) {
       const auto lobe = bsdf_energy_compensated_dielectric_base_lobe(spect, w_i, w_o_r, alpha, ext_ior, int_ior, thinfilm, texture);
       if ((fresnel_probability > kEpsilon) && (lobe.pdf > kEpsilon)) {
-        result.branch_albedo[incident_side] += lobe.bsdf.integrated * (fresnel_probability / lobe.pdf);
+        const float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
+        result.branch_albedo[incident_side] += albedo * (fresnel_probability / lobe.pdf);
         result.branch_visible_probability[incident_side] += fresnel_probability;
       }
     }
@@ -869,7 +871,8 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
         const auto lobe = bsdf_energy_compensated_dielectric_base_lobe(spect, w_i, w_o_t, alpha, ext_ior, int_ior, thinfilm, texture);
         const float transmission_probability = 1.0f - fresnel_probability;
         if ((transmission_probability > kEpsilon) && (lobe.pdf > kEpsilon)) {
-          result.branch_albedo[opposite_side] += lobe.bsdf.integrated * (transmission_probability / lobe.pdf);
+          const float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
+          result.branch_albedo[opposite_side] += albedo * (transmission_probability / lobe.pdf);
           result.branch_visible_probability[opposite_side] += transmission_probability;
         }
       }
@@ -2139,16 +2142,18 @@ bool ensure_energy_compensation_interfaces_impl(SceneData& data, TaskScheduler& 
   bool result = true;
   const uint32_t cache_mode = data.options.properties[Scene::Properties::Spectral] ? kBSDFEnergyCompensationCacheModeSpectralScalar : kBSDFEnergyCompensationCacheModeIntegratedRGB;
   const std::vector<Scene::EnergyCompensationInterface> previous_interfaces = data.energy_compensation_interfaces;
-  std::vector<uint2> previous_material_interfaces;
+  std::vector<uint3> previous_material_interfaces;
   previous_material_interfaces.reserve(data.materials.size());
   for (const Material& material : data.materials) {
-    previous_material_interfaces.push_back({material.energy_compensation_interface_index, material.conductor_energy_compensation_interface_index});
+    previous_material_interfaces.push_back(
+      {material.energy_compensation_interface_index, material.conductor_energy_compensation_interface_index, material.thermal_energy_compensation_interface_index});
   }
 
   data.energy_compensation_interfaces.clear();
   for (Material& material : data.materials) {
     material.energy_compensation_interface_index = kInvalidIndex;
     material.conductor_energy_compensation_interface_index = kInvalidIndex;
+    material.thermal_energy_compensation_interface_index = kInvalidIndex;
   }
 
   for (Material& material : data.materials) {
@@ -2183,6 +2188,11 @@ bool ensure_energy_compensation_interfaces_impl(SceneData& data, TaskScheduler& 
     result = bind_energy_compensation_interface(data, material, material_class, cache_mode, previous_interfaces, interface_cache, scheduler, rhi, &gpu_pipeline,
                material.energy_compensation_interface_index) &&
              result;
+    if ((material.cls == MaterialClass::Conductor) && (material.temperature_kelvin > 0.0f)) {
+      result = bind_energy_compensation_interface(data, material, MaterialClass::Conductor, kBSDFEnergyCompensationCacheModeSpectralScalar, previous_interfaces, interface_cache,
+                 scheduler, rhi, &gpu_pipeline, material.thermal_energy_compensation_interface_index) &&
+               result;
+    }
   }
 
   if ((rhi != nullptr) && gpu_pipeline.pipeline.valid()) {
@@ -2199,6 +2209,7 @@ bool ensure_energy_compensation_interfaces_impl(SceneData& data, TaskScheduler& 
     for (uint32_t material_index = 0u; material_index < data.materials.size(); ++material_index) {
       data.materials[material_index].energy_compensation_interface_index = previous_material_interfaces[material_index].x;
       data.materials[material_index].conductor_energy_compensation_interface_index = previous_material_interfaces[material_index].y;
+      data.materials[material_index].thermal_energy_compensation_interface_index = previous_material_interfaces[material_index].z;
     }
   } else {
     for (const auto& [hash, index] : data.energy_compensation_interface_cache) {
@@ -2607,7 +2618,7 @@ EnergyCompensationGenerationResult generate_energy_compensation_interfaces_step(
       if (material.cls == MaterialClass::OpenPBR) {
         Material dielectric_material = material;
         dielectric_material.cls = MaterialClass::Dielectric;
-        if (callback(dielectric_material, MaterialClass::Dielectric) == false) {
+        if (callback(dielectric_material, MaterialClass::Dielectric, cache_mode) == false) {
           return false;
         }
 
@@ -2616,7 +2627,7 @@ EnergyCompensationGenerationResult generate_energy_compensation_interfaces_step(
         conductor_material.int_ior.cls = SpectralDistribution::Conductor;
         conductor_material.int_ior.eta_index = data.defaults.conductor_eta;
         conductor_material.int_ior.k_index = data.defaults.conductor_k;
-        if (callback(conductor_material, MaterialClass::Conductor) == false) {
+        if (callback(conductor_material, MaterialClass::Conductor, cache_mode) == false) {
           return false;
         }
         continue;
@@ -2627,8 +2638,13 @@ EnergyCompensationGenerationResult generate_energy_compensation_interfaces_step(
       }
 
       const uint32_t material_class = (material.cls == MaterialClass::Plastic) ? MaterialClass::Dielectric : material.cls;
-      if (callback(material, material_class) == false) {
+      if (callback(material, material_class, cache_mode) == false) {
         return false;
+      }
+      if ((material.cls == MaterialClass::Conductor) && (material.temperature_kelvin > 0.0f) && (cache_mode != kBSDFEnergyCompensationCacheModeSpectralScalar)) {
+        if (callback(material, MaterialClass::Conductor, kBSDFEnergyCompensationCacheModeSpectralScalar) == false) {
+          return false;
+        }
       }
     }
     return true;
@@ -2637,10 +2653,10 @@ EnergyCompensationGenerationResult generate_energy_compensation_interfaces_step(
   if (context.initialized == false) {
     std::unordered_set<uint64_t> counted_interfaces;
     uint32_t total_steps = 0u;
-    visit_interfaces([&](const Material& material, uint32_t material_class) {
-      const uint64_t hash = hash_material_interface(data, material, material_class, cache_mode);
+    visit_interfaces([&](const Material& material, uint32_t material_class, uint32_t interface_cache_mode) {
+      const uint64_t hash = hash_material_interface(data, material, material_class, interface_cache_mode);
       if (counted_interfaces.insert(hash).second) {
-        total_steps += pending_cache_file_step_count(material, material_class, cache_mode, interface_paths(material_class, hash));
+        total_steps += pending_cache_file_step_count(material, material_class, interface_cache_mode, interface_paths(material_class, hash));
       }
       return true;
     });
@@ -2655,13 +2671,14 @@ EnergyCompensationGenerationResult generate_energy_compensation_interfaces_step(
   };
   std::unordered_set<uint64_t> generated_interfaces;
   CacheGenerationStepResult generation_result = CacheGenerationStepResult::Complete;
-  visit_interfaces([&](const Material& material, uint32_t material_class) {
-    const uint64_t hash = hash_material_interface(data, material, material_class, cache_mode);
+  visit_interfaces([&](const Material& material, uint32_t material_class, uint32_t interface_cache_mode) {
+    const uint64_t hash = hash_material_interface(data, material, material_class, interface_cache_mode);
     if (generated_interfaces.insert(hash).second == false) {
       return true;
     }
 
-    generation_result = ensure_cache_file_gpu_async_step(rhi, pipeline, scheduler, data, material, material_class, cache_mode, interface_paths(material_class, hash), context);
+    generation_result =
+      ensure_cache_file_gpu_async_step(rhi, pipeline, scheduler, data, material, material_class, interface_cache_mode, interface_paths(material_class, hash), context);
     return generation_result == CacheGenerationStepResult::Complete;
   });
   context.pipeline = pipeline.pipeline;

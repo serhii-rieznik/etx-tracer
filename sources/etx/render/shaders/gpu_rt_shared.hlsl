@@ -25,6 +25,7 @@
 #include <interop/sampler_policy.hxx>
 #include <interop/sampler.hxx>
 #include <interop/bsdf_dispatch_shared.hxx>
+#include <interop/thermal_surface_shared.hxx>
 #include <interop/medium_density_shared.hxx>
 #include <interop/medium_phase_shared.hxx>
 #include <interop/surface_point_shared.hxx>
@@ -386,6 +387,53 @@ float medium_shared_density(inout MediumSharedContext context, float3 world_pos)
 
 #include <interop/medium_transmittance_shared.hxx>
 #include <interop/medium_sample_shared.hxx>
+#include <interop/thermal_medium_shared.hxx>
+
+SpectralResponse medium_segment_emission_radiance(uint medium_index, float3 origin, float3 direction, float distance, SpectralQuery spect, inout uint seed, out bool valid) {
+  valid = true;
+  const SpectralResponse zero = spectral_response_zero(spect);
+  if ((distance <= 0.0f) || (scene_gpu_has_medium_spectrum_buffers(constants.scene.mediums, constants.scene.spectrums) == false)) {
+    return zero;
+  }
+  MediumAccessGPUContext access_context =
+    make_medium_access_gpu_context(constants.scene.mediums, constants.scene.images, constants.scene.spectrums, constants.scene.spectral_values);
+  ETX_ZERO_INIT(MediumAccess, medium_access);
+  if ((medium_access_try_load(access_context, medium_index, medium_access) == false) ||
+      ((medium_access.thermal_source_spectrum_index == kInvalidIndex) && ((medium_access.emission_flags & Medium::EmissionEnabled) == 0u))) {
+    return zero;
+  }
+  if ((medium_access.medium_class == Medium::Homogeneous) && (distance >= kMaxFloat) && ((medium_access.emission_flags & Medium::EmissionRequiresBoundedRegion) != 0u)) {
+    valid = false;
+    return zero;
+  }
+  ByteAddressBuffer spectrum_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.spectrums)];
+  SpectrumAccessGPUContext spectrum_context = make_spectrum_access_gpu_context(spectrum_buffer, constants.scene.spectrums, constants.scene.spectral_values);
+  SpectralResponse source = zero;
+  if (medium_access.thermal_source_spectrum_index != kInvalidIndex) {
+    source = spectrum_access_evaluate(spectrum_context, medium_access.thermal_source_spectrum_index, spect);
+  }
+  SpectralResponse emission = zero;
+  if ((medium_access.emission_flags & Medium::EmissionEnabled) != 0u) {
+    emission = spectrum_access_evaluate(spectrum_context, medium_access.emission_spectrum_index, spect);
+  }
+  const SpectralResponse extinction = medium_access_load_extinction_spectral(access_context, medium_access, spect);
+  MediumSharedContext medium_context;
+  medium_context.access_context = access_context;
+  medium_context.medium_access = medium_access;
+  medium_context.seed = seed;
+  medium_context.medium_class = medium_access.medium_class;
+  medium_context.has_grid_data = medium_access_has_grid_data(access_context, medium_access) ? 1u : 0u;
+  medium_context.bounds_min = medium_access.bounds_min;
+  medium_context.bounds_max = medium_access.bounds_max;
+  const SpectralResponse authored = medium_authored_segment_radiance(medium_context, spect, emission, extinction, origin, direction, distance, valid);
+  const SpectralResponse result = spectral_response_add(authored, thermal_medium_segment_radiance(medium_context, spect, source, extinction, origin, direction, distance));
+  valid = valid && (spectral_query_is_spectral(spect) ? isfinite(result.value) : all(isfinite(result.integrated)));
+  seed = medium_context.seed;
+  if (valid == false) {
+    return zero;
+  }
+  return result;
+}
 
 MediumSample sample_medium_gpu(MediumAccess medium_access, SpectralQuery spect, SpectralResponse throughput, SpectralResponse scattering_value, SpectralResponse absorption_value,
   float3 pos, float3 w_i, float max_t, inout uint seed) {
@@ -981,7 +1029,7 @@ float3 evaluate_local_emission_integrated(uint emitter_index, float2 uv) {
   return evaluate_emission_integrated_source(access.emission_spectrum_index, access.emission_image_index, uv);
 }
 
-SpectralResponse evaluate_local_emission_spectral(uint emitter_index, float2 uv, SpectralQuery spect) {
+SpectralResponse evaluate_local_emission_spectral(uint emitter_index, float2 uv, float3 shading_normal, float3 outgoing_direction, SpectralQuery spect) {
   SpectralResponse zero_value = spectral_response_zero(spect);
   EmitterAccessGPUContext context = make_scene_emitter_access_gpu_context();
   ETX_ZERO_INIT(EmitterAccess, access);
@@ -989,7 +1037,24 @@ SpectralResponse evaluate_local_emission_spectral(uint emitter_index, float2 uv,
     return zero_value;
   }
 
-  return evaluate_emission_spectral_source(access.emission_spectrum_index, access.emission_image_index, uv, spect);
+  GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
+  if (try_load_emitter_instance(emitter_index, emitter_instance) == false) {
+    return zero_value;
+  }
+  TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
+  Material material = (Material)0;
+  if (try_load_material_full(tri.material_index, material) == false) {
+    return zero_value;
+  }
+  if (material.thermal_rgb_image_index == kInvalidIndex) {
+    return evaluate_emission_spectral_source(access.emission_spectrum_index, access.emission_image_index, uv, spect);
+  }
+  const float3 geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(emitter_instance.instance_index), tri.geo_n);
+  const float signed_cosine = dot(geo_normal, outgoing_direction);
+  if ((signed_cosine <= 0.0f) && (material.two_sided == 0u)) {
+    return zero_value;
+  }
+  return thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, uv, signed_cosine, abs(dot(shading_normal, outgoing_direction)));
 }
 
 float3 evaluate_distant_emission_integrated(uint emitter_index, float3 direction) {
@@ -1255,8 +1320,8 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
 
 #endif
 
-[noinline] SpectralResponse gpu_evaluate_local_emission_spectral(uint emitter_index, float2 uv, SpectralQuery spect) {
-  return evaluate_local_emission_spectral(emitter_index, uv, spect);
+[noinline] SpectralResponse gpu_evaluate_local_emission_spectral(uint emitter_index, float2 uv, float3 shading_normal, float3 outgoing_direction, SpectralQuery spect) {
+  return evaluate_local_emission_spectral(emitter_index, uv, shading_normal, outgoing_direction, spect);
 }
 
   [noinline] SpectralResponse gpu_evaluate_distant_emission_spectral_all(float3 direction, SpectralQuery spect) {

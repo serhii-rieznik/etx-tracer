@@ -192,7 +192,7 @@ bool image_evaluate_gpu_try_rgba_3d(ImageEvaluateGPUContext context, uint image_
     return false;
   }
 
-  if ((image_access.format != (uint)Image::Format::RGBA32F) || (image_access.size.z == 0u)) {
+  if (((image_access.format != (uint)Image::Format::RGBA32F) && (image_access.format != (uint)Image::Format::R32F)) || (image_access.size.z == 0u)) {
     return false;
   }
 

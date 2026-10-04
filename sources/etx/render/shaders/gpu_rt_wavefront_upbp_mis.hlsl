@@ -376,8 +376,8 @@ bool upbp_prepare_recursive_departure(GPUUPBPVertex vertex, GPUUPBPIteration ite
   return valid;
 }
 
-UPBPGPUSurfaceMISWeights upbp_bpt_nee_cross_technique_weights(GPUUPBPIteration iteration, GPUUPBPVertex camera_vertex, float3 direction_to_light, float w_light, float emission_to_direct_ratio,
-  float scattering_pdf_reverse, float connection_log_transport_pdf_reverse) {
+UPBPGPUSurfaceMISWeights upbp_bpt_nee_cross_technique_weights(GPUUPBPIteration iteration, GPUUPBPVertex camera_vertex, float3 direction_to_light, float w_light,
+  float emission_to_direct_ratio, float scattering_pdf_reverse, float connection_log_transport_pdf_forward, float connection_log_transport_pdf_reverse) {
   if ((iteration.technique_mask & GPUUPBPTechnique::BPT) == 0u) {
     return (UPBPGPUSurfaceMISWeights)0;
   }
@@ -387,7 +387,7 @@ UPBPGPUSurfaceMISWeights upbp_bpt_nee_cross_technique_weights(GPUUPBPIteration i
   if ((w_light < 0.0f) || (emission_to_direct_ratio <= 0.0f) || (scattering_pdf_reverse < 0.0f)) {
     return (UPBPGPUSurfaceMISWeights)0;
   }
-  const float log_w_light = upbp_log_positive(w_light);
+  const float log_w_light = upbp_log_product(upbp_log_positive(w_light), connection_log_transport_pdf_forward);
   const float log_camera_event_density = upbp_vertex_is_medium(camera_vertex) ? camera_vertex.log_medium_event_density : 0.0f;
   const float log_reverse_ray_pdf = connection_log_transport_pdf_reverse + log_camera_event_density;
   if (isfinite(log_reverse_ray_pdf) == false) {
@@ -400,9 +400,9 @@ UPBPGPUSurfaceMISWeights upbp_bpt_nee_cross_technique_weights(GPUUPBPIteration i
 }
 
 float upbp_bpt_nee_cross_technique_weight(GPUUPBPIteration iteration, GPUUPBPVertex camera_vertex, float3 direction_to_light, float w_light, float emission_to_direct_ratio,
-  float scattering_pdf_reverse, float connection_log_transport_pdf_reverse) {
+  float scattering_pdf_reverse, float connection_log_transport_pdf_forward, float connection_log_transport_pdf_reverse) {
   return upbp_surface_mis_weight(upbp_bpt_nee_cross_technique_weights(iteration, camera_vertex, direction_to_light, w_light, emission_to_direct_ratio, scattering_pdf_reverse,
-                                   connection_log_transport_pdf_reverse),
+                                   connection_log_transport_pdf_forward, connection_log_transport_pdf_reverse),
     0.0f);
 }
 

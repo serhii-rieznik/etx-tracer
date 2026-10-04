@@ -108,12 +108,14 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ET
   uint32_t medium_class = context.medium_class;
 
   if (medium_class == ETX_MEDIUM_SAMPLE_SHARED_MEDIUM_TYPE::Homogeneous) {
-    float t = 0.0f;
     ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_RESPONSE pdf = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE(spect, 0.0f);
-    while (t < kRayEpsilon) {
-      uint32_t channel = medium_sample_shared_sample_spectrum_component(spect, albedo, throughput, medium_shared_rnd(context), pdf);
-      float sample_t = medium_sample_shared_response_component(extinction_value, channel);
-      t = (sample_t > 0.0f) ? (-medium_shared_log(1.0f - medium_shared_rnd(context)) / sample_t) : max_t;
+    const uint32_t channel = medium_sample_shared_sample_spectrum_component(spect, albedo, throughput, medium_shared_rnd(context), pdf);
+    const float sample_t = medium_sample_shared_response_component(extinction_value, channel);
+    float t = max_t;
+    if (sample_t > 0.0f) {
+      do {
+        t = -medium_shared_log(1.0f - medium_shared_rnd(context)) / sample_t;
+      } while (t <= 0.0f);
     }
 
     t = min(t, max_t);
@@ -145,7 +147,11 @@ ETX_SHARED_INLINE ETX_MEDIUM_SAMPLE_SHARED_SAMPLE medium_sample_shared_sample(ET
   if (medium_class == ETX_MEDIUM_SAMPLE_SHARED_MEDIUM_TYPE::Heterogeneous) {
     float max_sigma = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAXIMUM(extinction_value);
     if ((max_sigma <= 0.0f) || (context.has_grid_data == 0u)) {
-      return medium_sample_shared_zero_sample(spect, pos + w_i * max_t, 0.0f);
+      ETX_ZERO_INIT(ETX_MEDIUM_SAMPLE_SHARED_SAMPLE, result);
+      result.weight = ETX_MEDIUM_SAMPLE_SHARED_SPECTRAL_MAKE(spect, 1.0f);
+      result.pos = pos + w_i * max_t;
+      result.sampled_medium_t = 0.0f;
+      return result;
     }
 
     float3 bounds_min = context.bounds_min;

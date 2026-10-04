@@ -2,9 +2,6 @@
 
 [numthreads(64, 1, 1)] void wavefront_camera_direct_hit_accumulate_main(uint3 dtid : SV_DispatchThreadID) {
   const uint dispatch_index = dtid.x;
-  if (scene_path_mode_is_light_tracing()) {
-    return;
-  }
   if (scene_strategy_enabled(kSceneStrategyDirectHit) == false) {
     return;
   }
@@ -18,6 +15,9 @@
 
   uint path_index = wavefront_queue_load(queue_descriptor, dispatch_index);
   GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, path_index);
+  if (scene_path_mode_is_light_tracing() && ((state.flags & GPUWavefrontPathFlags::Camera_source_prefix) == 0u)) {
+    return;
+  }
   GPUWavefrontHit hit = wavefront_load_hit(resources.camera_hit_buffer, path_index);
   GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
   if ((wavefront_hit_valid(hit) == false) || wavefront_hit_is_miss(hit)) {

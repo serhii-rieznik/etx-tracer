@@ -182,6 +182,7 @@ inline bool upbp_evaluate_bpt_camera_path(const Raytracing& rt, const Scene& sce
           .source_position = previous.position,
           .target_position = emitter_vertex.position,
           .uv = emitter_vertex.intersection.tex,
+          .shading_normal = emitter_vertex.intersection.nrm,
           .directly_visible = camera_vertex_count <= 2u,
         };
         float pdf_area = 0.0f;

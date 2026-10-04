@@ -104,4 +104,11 @@ struct ETX_ALIGNED Material {
   float emission_collimation ETX_INIT(0.0f);
   uint32_t energy_compensation_interface_index ETX_INIT(kInvalidIndex);
   uint32_t conductor_energy_compensation_interface_index ETX_INIT(kInvalidIndex);
+  float temperature_kelvin ETX_INIT(0.0f);
+  uint32_t thermal_rgb_image_index ETX_INIT(kInvalidIndex);
+  float thermal_conductor_average_albedo ETX_INIT(0.0f);
+  uint32_t thermal_energy_compensation_interface_index ETX_INIT(kInvalidIndex);
+  float thermal_emission_weight ETX_INIT(0.0f);
+  uint32_t thermal_int_medium_index ETX_INIT(kInvalidIndex);
+  uint32_t thermal_conductor_image_index ETX_INIT(kInvalidIndex);
 };

@@ -33,7 +33,7 @@
     }
     GPUUPBPVertex camera_vertex = upbp_load_vertex(upbp_resources.vertex_buffer, path_state.last_vertex_index);
     mis_weight = upbp_bpt_nee_cross_technique_weight(upbp_resources.iteration, camera_vertex, task.shadow_ray.d, task.mis_weight, asfloat(task.upbp_auxiliary1_bits),
-      asfloat(task.upbp_scattering_pdf_reverse_bits), asfloat(result_value.upbp_log_transport_pdf_reverse_bits));
+      asfloat(task.upbp_scattering_pdf_reverse_bits), asfloat(result_value.upbp_log_transport_pdf_forward_bits), asfloat(result_value.upbp_log_transport_pdf_reverse_bits));
     if (mis_weight <= 0.0f) {
       return;
     }

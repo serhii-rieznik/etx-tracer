@@ -173,6 +173,7 @@ struct GPURaytracingRenderer : public Renderer {
   }
 
   void on_scene_changed(SceneRepresentation& scene) override;
+  void on_camera_changed(SceneRepresentation& scene) override;
   void on_scene_transforms_changed(SceneRepresentation& scene) override;
 
  private:

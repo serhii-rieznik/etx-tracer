@@ -124,12 +124,30 @@ inline double upbp_emitter_direction_pdf(const Scene& scene, const SpectralQuery
     .source_position = next_vertex.position,
     .target_position = emitter_vertex.position,
     .uv = emitter_vertex.intersection.tex,
+    .shading_normal = emitter_vertex.intersection.nrm,
   };
   float pdf_area = 0.0f;
   float pdf_dir = 0.0f;
   float pdf_dir_out = 0.0f;
   (void)emitter_get_radiance(emitter, spect, query, pdf_area, pdf_dir, pdf_dir_out);
   return pdf_area > 0.0f ? pdf_dir_out / pdf_area : 0.0;
+}
+
+inline bool upbp_joined_edge_geometry(const UPBPJoinedPath& path, uint32_t edge_index, float3& direction, double& distance_squared) {
+  const UPBPPathVertexRecord& from = *path.vertices[edge_index];
+  const UPBPPathVertexRecord& to = *path.vertices[edge_index + 1u];
+  direction = to.position - from.position;
+  distance_squared = static_cast<double>(dot(direction, direction));
+  if (distance_squared > 0.0) {
+    direction /= sqrtf(static_cast<float>(distance_squared));
+    return std::isfinite(distance_squared);
+  }
+  // A positive sampled interval can have identical rounded endpoints; retain its sampled measure and direction.
+  const UPBPJoinedPathEdge& edge = path.edges[edge_index];
+  const double distance = edge.segment->distance;
+  distance_squared = distance * distance;
+  direction = edge.reversed ? -to.sampled_direction : from.sampled_direction;
+  return (distance > 0.0) && std::isfinite(distance_squared) && (fabsf(dot(direction, direction) - 1.0f) <= 1.0e-4f);
 }
 
 inline bool upbp_build_joined_path_probability(const Raytracing& rt, const Scene& scene, const SpectralQuery spect, const UPBPJoinedPath& path, Sampler& sampler,
@@ -169,13 +187,12 @@ inline bool upbp_build_joined_path_probability(const Raytracing& rt, const Scene
   for (uint32_t edge_index = 0u; edge_index < path.edges.size(); ++edge_index) {
     const UPBPPathVertexRecord& from = *path.vertices[edge_index];
     const UPBPPathVertexRecord& to = *path.vertices[edge_index + 1u];
-    float3 direction = to.position - from.position;
-    const double distance_squared = static_cast<double>(dot(direction, direction));
-    if ((distance_squared <= 0.0) || (std::isfinite(distance_squared) == false)) {
+    float3 direction = {};
+    double distance_squared = 0.0;
+    if (upbp_joined_edge_geometry(path, edge_index, direction, distance_squared) == false) {
       result.failure = UPBPPathProbabilityFailure::DegenerateEdge;
       return false;
     }
-    direction /= sqrtf(static_cast<float>(distance_squared));
 
     double forward_direction_pdf = 0.0;
     if (edge_index == 0u) {
@@ -187,8 +204,12 @@ inline bool upbp_build_joined_path_probability(const Raytracing& rt, const Scene
         forward_direction_pdf = from.scatter_pdf_reverse;
       }
     } else {
-      const UPBPPathVertexRecord& previous = *path.vertices[edge_index - 1u];
-      const float3 incoming_direction = normalize(from.position - previous.position);
+      float3 incoming_direction = {};
+      double previous_distance_squared = 0.0;
+      if (upbp_joined_edge_geometry(path, edge_index - 1u, incoming_direction, previous_distance_squared) == false) {
+        result.failure = UPBPPathProbabilityFailure::DegenerateEdge;
+        return false;
+      }
       forward_direction_pdf = upbp_direction_pdf(scene, spect, from, PathSource::Light, incoming_direction, direction, sampler);
     }
 
@@ -204,8 +225,13 @@ inline bool upbp_build_joined_path_probability(const Raytracing& rt, const Scene
         reverse_direction_pdf = to.scatter_pdf_forward;
       }
     } else {
-      const UPBPPathVertexRecord& next = *path.vertices[edge_index + 2u];
-      const float3 incoming_direction = normalize(to.position - next.position);
+      float3 outgoing_direction = {};
+      double next_distance_squared = 0.0;
+      if (upbp_joined_edge_geometry(path, edge_index + 1u, outgoing_direction, next_distance_squared) == false) {
+        result.failure = UPBPPathProbabilityFailure::DegenerateEdge;
+        return false;
+      }
+      const float3 incoming_direction = -outgoing_direction;
       reverse_direction_pdf = upbp_direction_pdf(scene, spect, to, PathSource::Camera, incoming_direction, -direction, sampler);
     }
     const UPBPJoinedPathEdge& joined_edge = path.edges[edge_index];
@@ -233,7 +259,7 @@ inline void upbp_apply_bpt_strategy_constraints(const Scene& scene, const uint32
   for (UPBPBPTStrategyProbability& strategy : strategies) {
     const uint32_t camera_vertex_count = path_vertex_count - strategy.light_vertex_count;
     const bool enabled = strategy.light_vertex_count == 0u   ? scene.strategy_enabled(Scene::Strategy::DirectHit)
-                         : strategy.light_vertex_count == 1u ? scene.strategy_enabled(Scene::Strategy::ConnectToLight)
+                         : strategy.light_vertex_count == 1u ? ((camera_vertex_count > 1u) && scene.strategy_enabled(Scene::Strategy::ConnectToLight))
                          : camera_vertex_count == 1u         ? scene.strategy_enabled(Scene::Strategy::ConnectToCamera)
                                                              : scene.strategy_enabled(Scene::Strategy::ConnectVertices);
     strategy.applicable = strategy.applicable && enabled && valid_path_length;
@@ -594,6 +620,7 @@ inline bool upbp_evaluate_direct_area_hit(const Raytracing& rt, const Scene& sce
     .source_position = previous.position,
     .target_position = emitter_vertex.position,
     .uv = emitter_vertex.intersection.tex,
+    .shading_normal = emitter_vertex.intersection.nrm,
     .directly_visible = camera_vertex_count <= 2u,
   };
   float pdf_area = 0.0f;

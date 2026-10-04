@@ -82,6 +82,9 @@ ETX_SHARED_INLINE ::Medium make_gpu_medium_descriptor(const Medium& medium, Pack
   result.cls = medium.cls;
   result.world_to_object = medium.world_to_object;
   result.local_bounds = medium.local_bounds;
+  result.thermal_source_index = medium.thermal_source_index;
+  result.emission_index = medium.emission_index;
+  result.emission_flags = medium.emission_flags;
   return result;
 }
 

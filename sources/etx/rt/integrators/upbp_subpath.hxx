@@ -28,6 +28,7 @@ struct UPBPSubpathBuildInput {
 struct UPBPSubpathBuildResult {
   UPBPPathRecord path = {};
   SpectralResponse throughput = {};
+  SpectralResponse thermal_radiance = {};
   Ray terminal_ray = {};
   uint32_t active_medium_index = kInvalidIndex;
   UPBPSceneSegmentTerminal terminal = UPBPSceneSegmentTerminal::Failure;
@@ -220,6 +221,7 @@ inline UPBPPathVertexRecord upbp_make_emitter_endpoint(const Scene& scene, const
 inline void upbp_reset_subpath_build_result(UPBPSubpathBuildResult& result, const uint32_t maximum_physical_vertices, const uint32_t initial_capacity) {
   result.path.reset(maximum_physical_vertices, initial_capacity);
   result.throughput = {};
+  result.thermal_radiance = {};
   result.terminal_ray = {};
   result.active_medium_index = kInvalidIndex;
   result.terminal = UPBPSceneSegmentTerminal::Failure;
@@ -233,6 +235,7 @@ inline bool upbp_build_subpath(const Raytracing& rt, const Scene& scene, const U
   const uint32_t initial_capacity = input.source == PathSource::Camera ? kCameraPathInitialCapacity : 0u;
   upbp_reset_subpath_build_result(result, input.maximum_physical_vertices, initial_capacity);
   result.throughput = initial_throughput;
+  result.thermal_radiance = {input.spect, 0.0f};
   result.terminal_ray = initial_ray;
   result.active_medium_index = initial_medium_index;
 
@@ -275,7 +278,7 @@ inline bool upbp_build_subpath(const Raytracing& rt, const Scene& scene, const U
     const bool segment_valid =
       inside_subsurface ? upbp_walk_subsurface_segment(rt, scene, subsurface_state, path_sampler, medium_sampler, ray, input.maximum_null_events_per_interval, scene_segment)
                         : upbp_walk_scene_segment(rt, scene, input.spect, path_sampler, medium_sampler, ray, result.active_medium_index, remaining_boundary_count,
-                            input.maximum_null_events_per_interval, scene_segment);
+                            input.maximum_null_events_per_interval, input.source, scene_segment);
     if (segment_valid == false) {
       result.segment_failure = scene_segment.failure;
       result.failure = UPBPSubpathFailure::SegmentTraversal;
@@ -287,6 +290,9 @@ inline bool upbp_build_subpath(const Raytracing& rt, const Scene& scene, const U
       subsurface_state.active = false;
     }
 
+    if ((inside_subsurface == false) && ((physical_depth + 1u) >= scene.options.min_path_length) && ((physical_depth + 1u) <= scene.options.max_path_length)) {
+      result.thermal_radiance += result.throughput * scene_segment.thermal_radiance;
+    }
     result.throughput *= scene_segment.segment.weight;
     result.active_medium_index = scene_segment.active_medium_index;
     result.terminal = scene_segment.terminal;

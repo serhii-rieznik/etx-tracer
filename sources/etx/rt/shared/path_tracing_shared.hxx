@@ -186,7 +186,11 @@ ETX_SHARED_INLINE MediumSample try_sampling_medium(const Scene& scene, PTRayPayl
     return {};
   }
 
-  auto medium_sample = sample_medium(scene.mediums[payload.medium], payload.spect, payload.throughput, payload.smp, payload.ray.o, payload.ray.d, max_t);
+  const Medium& medium = scene.mediums[payload.medium];
+  if ((payload.path_length >= scene.options.min_path_length) && (payload.path_length <= scene.options.max_path_length)) {
+    payload.accumulated += payload.throughput * medium_emission_radiance(medium, payload.spect, payload.smp, payload.ray.o, payload.ray.d, max_t);
+  }
+  auto medium_sample = sample_medium(medium, payload.spect, payload.throughput, payload.smp, payload.ray.o, payload.ray.d, max_t);
   spectral_response_mul_assign(payload.throughput, medium_sample.weight);
   ETX_VALIDATE(payload.throughput);
   return medium_sample;
@@ -269,6 +273,7 @@ ETX_SHARED_INLINE void handle_direct_emitter(const Scene& scene, const Triangle&
     .source_position = payload.ray.o,
     .target_position = intersection.pos,
     .uv = intersection.tex,
+    .shading_normal = intersection.nrm,
     .directly_visible = payload.path_length == 1,
   };
 
@@ -292,7 +297,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
     payload.medium = (dot(intersection.nrm, payload.ray.d) < 0.0f) ? mat.int_medium : mat.ext_medium;
     payload.ray.o = shading_pos(scene, tri, intersection.barycentric, payload.ray.d, intersection.instance_index);
     payload.ray.max_t = kMaxFloat;
-    payload.ray.min_t = kRayEpsilon;
+    payload.ray.min_t = kMinNormalFloat;
     return true;
   }
 

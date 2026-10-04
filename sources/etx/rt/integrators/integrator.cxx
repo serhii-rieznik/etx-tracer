@@ -10,7 +10,10 @@ struct IntegratorThreadImpl {
   SceneRepresentation& scene_representation;
   Raytracing& raytracing;
   SceneHashes current_scene_hashes = {};
+  SceneHashes failed_scene_hashes = {};
   uint64_t current_camera_hash = 0;
+  uint64_t failed_camera_hash = 0;
+  const char* scene_failure_reason = nullptr;
   uint64_t scene_revision = 0u;
   Integrator* integrator = nullptr;
   Integrator::State latest_state = Integrator::State::Stopped;
@@ -28,7 +31,16 @@ struct IntegratorThreadImpl {
   void reset_scene_hashes() {
     current_scene_hashes = {};
     current_camera_hash = 0;
+    scene_failure_reason = nullptr;
     scene_update_scope.store(SceneUpdateScope::Full);
+  }
+
+  void fail_scene_preparation(const char* reason) {
+    scene_failure_reason = reason;
+    failed_scene_hashes = scene_representation.data().compute_hashes();
+    const auto& camera = scene_representation.camera();
+    failed_camera_hash = xxh64(&camera, sizeof(camera));
+    log::error("%s", reason);
   }
 
   void request_scene_check(SceneUpdateScope requested_scope) {
@@ -38,12 +50,22 @@ struct IntegratorThreadImpl {
   }
 
   void check_and_commit_scene_changes() {
-    const SceneUpdateScope pending_scope = scene_update_scope.exchange(SceneUpdateScope::None);
+    SceneUpdateScope pending_scope = scene_update_scope.exchange(SceneUpdateScope::None);
     if (scene_representation.energy_compensation_interface_preparation_status().state == EnergyCompensationPreparationState::Preparing) {
       if (pending_scope != SceneUpdateScope::None) {
         request_scene_check(pending_scope);
       }
       return;
+    }
+
+    if (scene_failure_reason != nullptr) {
+      const SceneHashes hashes = scene_representation.data().compute_hashes();
+      const auto& camera = scene_representation.camera();
+      const uint64_t camera_hash = xxh64(&camera, sizeof(camera));
+      if ((pending_scope == SceneUpdateScope::None) && (hashes.compare(failed_scene_hashes).any() == false) && (camera_hash == failed_camera_hash)) {
+        return;
+      }
+      pending_scope = SceneUpdateScope::Full;
     }
 
     const bool camera_only_update = pending_scope == SceneUpdateScope::Camera;
@@ -75,8 +97,7 @@ struct IntegratorThreadImpl {
     if (scoped_transform_update == false) {
       bool dependencies_updated = false;
       if (scene_representation.synchronize_render_dependencies(changes, full_update_requested, dependencies_updated) == false) {
-        log::error("Failed to synchronize derived scene state before CPU render commit");
-        request_scene_check(SceneUpdateScope::Full);
+        fail_scene_preparation("Failed to synchronize derived scene state before CPU render commit");
         return;
       }
 
@@ -89,10 +110,9 @@ struct IntegratorThreadImpl {
         scene_representation.data().images.load_images(raytracing.scheduler());
         refresh_hashes = true;
       }
-      if (full_update_requested || changes[UpdateFlags::AnyMaterials]) {
+      if (full_update_requested || changes[UpdateFlags::AnyMaterials] || changes[UpdateFlags::Mediums]) {
         if (scene_representation.ensure_energy_compensation_interfaces() == false) {
-          log::error("Failed to ensure BSDF energy-compensation interfaces before CPU render commit");
-          request_scene_check(SceneUpdateScope::Full);
+          fail_scene_preparation("Failed to prepare material scattering and thermal emission before CPU render commit");
           return;
         }
         refresh_hashes = true;
@@ -103,6 +123,7 @@ struct IntegratorThreadImpl {
         changes = new_hashes.compare(current_scene_hashes);
       }
     }
+    scene_failure_reason = nullptr;
     current_scene_hashes = new_hashes;
 
     const bool suppress_run = (pending_scope != SceneUpdateScope::None) && suppress_scene_commit_run.exchange(false);
@@ -172,7 +193,7 @@ const Integrator::Status& IntegratorThread::status() const {
 }
 
 void IntegratorThread::run() {
-  if (_private->integrator == nullptr) {
+  if ((_private->integrator == nullptr) || (_private->scene_failure_reason != nullptr)) {
     return;
   }
   _private->integrator->run();
@@ -205,7 +226,11 @@ void IntegratorThread::suppress_next_scene_commit_run() {
 }
 
 bool IntegratorThread::scene_changes_pending() const {
-  return _private->scene_update_scope.load() != SceneUpdateScope::None;
+  return (_private->scene_update_scope.load() != SceneUpdateScope::None) || (_private->scene_failure_reason != nullptr);
+}
+
+const char* IntegratorThread::scene_failure_reason() const {
+  return _private->scene_failure_reason;
 }
 
 uint64_t IntegratorThread::scene_revision() const {

@@ -9,6 +9,9 @@ struct ETX_ALIGNED MediumAccess {
   uint32_t medium_class ETX_INIT(Medium::Homogeneous);
   uint32_t absorption_spectrum_index ETX_INIT(kInvalidIndex);
   uint32_t scattering_spectrum_index ETX_INIT(kInvalidIndex);
+  uint32_t thermal_source_spectrum_index ETX_INIT(kInvalidIndex);
+  uint32_t emission_spectrum_index ETX_INIT(kInvalidIndex);
+  uint32_t emission_flags ETX_INIT(0u);
   float phase_function_g ETX_INIT(0.0f);
   uint32_t enable_explicit_connections ETX_INIT(1u);
   AffineTransform world_to_object ETX_INIT({});
