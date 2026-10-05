@@ -58,6 +58,7 @@ struct GPUWavefrontSubsurfaceFlags {
   enum : uint32_t {
     Active = 1u << 0u,
     InlineMedium = 1u << 1u,
+    CorrelatedOrigin = 1u << 2u,
   };
 };
 
@@ -213,7 +214,7 @@ struct ETX_ALIGNED GPUWavefrontSubsurfaceState {
   uint32_t scatter_material_index ETX_INIT(kInvalidIndex);
   uint32_t flags ETX_INIT(0u);
   float phase_function_g ETX_INIT(0.0f);
-  uint32_t reserved0 ETX_INIT(0u);
+  float packing ETX_INIT(0.0f);
   uint32_t reserved1 ETX_INIT(0u);
   uint32_t reserved2 ETX_INIT(0u);
 };

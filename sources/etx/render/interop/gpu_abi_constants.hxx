@@ -38,7 +38,7 @@ struct SceneLimits {
 
 ETX_STATIC_CONST uint32_t kTriangleStride = 32u;
 
-ETX_STATIC_CONST uint32_t kMaterialStride = 320u;
+ETX_STATIC_CONST uint32_t kMaterialStride = 336u;
 ETX_STATIC_CONST uint32_t kMaterialReflectanceSpectrumIndexOffset = 0u;
 ETX_STATIC_CONST uint32_t kMaterialReflectanceImageIndexOffset = 4u;
 ETX_STATIC_CONST uint32_t kMaterialScatteringSpectrumIndexOffset = 16u;
@@ -92,6 +92,8 @@ ETX_STATIC_CONST uint32_t kMaterialThermalEnergyCompensationInterfaceIndexOffset
 ETX_STATIC_CONST uint32_t kMaterialThermalEmissionWeightOffset = 304u;
 ETX_STATIC_CONST uint32_t kMaterialThermalIntMediumIndexOffset = 308u;
 ETX_STATIC_CONST uint32_t kMaterialThermalConductorImageIndexOffset = 312u;
+ETX_STATIC_CONST uint32_t kMaterialSubsurfacePackingOffset = 316u;
+ETX_STATIC_CONST uint32_t kMaterialSubsurfaceAnisotropyOffset = 320u;
 
 ETX_STATIC_CONST uint32_t kEmitterStride = 32u;
 ETX_STATIC_CONST uint32_t kEmitterClassOffset = 0u;
@@ -247,3 +249,4 @@ ETX_STATIC_CONST uint32_t kSceneGlobalsEmissionHalfExtentOffset = 400u;
 
 ETX_STATIC_CONST uint32_t kGPUSpectralValuesRGBEstimateScaleOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUSpectralValuesDataOffset = 16u;
+ETX_STATIC_CONST uint32_t kGPUSpectralValuesWavelengthOffset = 12u;

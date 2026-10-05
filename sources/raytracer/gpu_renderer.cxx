@@ -710,6 +710,13 @@ GPUIntegratorSelection gpu_integrator_selection_from_scene(const SceneRepresenta
   GPUIntegratorSelection result = {};
   const auto& integrator_data = scene.integrator_data();
   result.integrator_type = integrator_data.selected;
+  if ((result.integrator_type != Integrator::Type::PathTracing) && std::any_of(scene.data().materials.begin(), scene.data().materials.end(), [](const Material& material) {
+        return (material.subsurface_cls != SubsurfaceMaterial::Disabled) && (material.subsurface_packing > 0.0f);
+      })) {
+    result.supported = false;
+    result.unsupported_reason = "exclusion SSS requires Path Tracing; bidirectional and merging densities are not supported";
+    return result;
+  }
   const bool camera_source_path = ((scene.data().options.strategy_flags & Scene::Strategy::DirectHit) != 0u) || scene_has_authored_medium_emission(scene.data()) ||
                                   std::any_of(scene.data().materials.begin(), scene.data().materials.end(), [](const Material& material) {
                                     return (material.temperature_kelvin > 0.0f) && (material.int_medium != kInvalidIndex) &&
@@ -1373,7 +1380,7 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
     case GPURaytracingRenderer::PipelineStage::UPBPDirectHit:
       return mode == GPUIntegratorMode::UPBP;
     case GPURaytracingRenderer::PipelineStage::PrepareSpectralValues:
-      return ((mode == GPUIntegratorMode::VCM) || (mode == GPUIntegratorMode::UPBP)) && (spectral_mode == static_cast<uint32_t>(GPUSpectralMode::Spectral));
+      return (mode != GPUIntegratorMode::PathTracing) && (spectral_mode == static_cast<uint32_t>(GPUSpectralMode::Spectral));
     case GPURaytracingRenderer::PipelineStage::PrepareSample:
     case GPURaytracingRenderer::PipelineStage::SwapQueues:
     case GPURaytracingRenderer::PipelineStage::FinalizeSample:
@@ -1387,12 +1394,13 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
 uint32_t build_material_compile_mask(const SceneData& scene_data) {
   uint32_t result = 0u;
   for (const auto& material : scene_data.materials) {
-    result |= material_compile_bit(material.cls);
+    const uint32_t boundary_class = material_boundary_class(material.cls, material.subsurface_cls);
+    result |= material_compile_bit(boundary_class);
     const float maximum_roughness = std::max(material.roughness.value.x, material.roughness.value.y);
     if ((material.cls == MaterialClass::Conductor) && (maximum_roughness > kDeltaAlphaTreshold)) {
       result |= kMaterialCompileConnectibleConductor;
     }
-    if ((material.cls == MaterialClass::Dielectric) && (maximum_roughness > kDeltaAlphaTreshold)) {
+    if ((boundary_class == MaterialClass::Dielectric) && (maximum_roughness > kDeltaAlphaTreshold)) {
       result |= kMaterialCompileConnectibleDielectric;
     }
   }
@@ -2387,10 +2395,12 @@ void GPURaytracingRenderer::reset_render_window() {
 
 void GPURaytracingRenderer::reset_runtime_failure() {
   _runtime_failed = false;
+  _configuration_failed = false;
   _runtime_failure_reason.clear();
 }
 
 void GPURaytracingRenderer::set_runtime_failure(std::string message) {
+  _configuration_failed = false;
   const bool report_failure = (_runtime_failed == false) || (_runtime_failure_reason != message);
   if (_runtime_failed == false) {
     preserve_render_statistics();
@@ -2402,6 +2412,11 @@ void GPURaytracingRenderer::set_runtime_failure(std::string message) {
   }
   _runtime_failed = true;
   set_preparation_failed(_runtime_failure_reason, "Failed");
+}
+
+void GPURaytracingRenderer::set_configuration_failure(std::string message) {
+  set_runtime_failure(std::move(message));
+  _configuration_failed = true;
 }
 
 void GPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
@@ -2429,11 +2444,11 @@ void GPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
   log::info("GPU UPBP beam index: %s", _use_compute_upbp_beam_grid ? "compute grid" : "acceleration structure");
 
   if (integrator_selection.supported == false) {
-    set_runtime_failure(gpu_integrator_selection_error_message(integrator_selection));
+    set_configuration_failure(gpu_integrator_selection_error_message(integrator_selection));
     return;
   }
   if (gpu_material_compile_mask_supported(_material_compile_mask) == false) {
-    set_runtime_failure(gpu_material_compile_mask_error_message(_material_compile_mask));
+    set_configuration_failure(gpu_material_compile_mask_error_message(_material_compile_mask));
     return;
   }
 
@@ -3289,13 +3304,13 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
 
   const GPUIntegratorSelection integrator_selection = gpu_integrator_selection_from_scene(scene);
   if (integrator_selection.supported == false) {
-    set_runtime_failure(gpu_integrator_selection_error_message(integrator_selection));
+    set_configuration_failure(gpu_integrator_selection_error_message(integrator_selection));
     return;
   }
 
   const uint32_t material_compile_mask = build_material_compile_mask(scene.data());
   if (gpu_material_compile_mask_supported(material_compile_mask) == false) {
-    set_runtime_failure(gpu_material_compile_mask_error_message(material_compile_mask));
+    set_configuration_failure(gpu_material_compile_mask_error_message(material_compile_mask));
     return;
   }
 
@@ -3998,6 +4013,7 @@ RHIResult GPURaytracingRenderer::finish_density_dispatch(RHIContext& ctx, bool w
     }
     _density_dispatches[--_density_dispatch_count] = {};
     if (result != RHIResult::Success) {
+      log::error("GPU UPBP %s density dispatch failed (%u)", pipeline_stage_to_string(dispatch.stage), static_cast<uint32_t>(result));
       if (wait == false) {
         return result;
       }
@@ -5372,7 +5388,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const bool spectral_mode_changed = (_spectral_mode != new_spectral_mode);
   const bool pipeline_configuration_changed = integrator_mode_changed || integrator_features_changed || material_compile_mask_changed || spectral_mode_changed;
   const bool missing_pipelines = (_preparation_state == RendererPreparationState::Ready) && (pipelines_valid() == false);
-  const bool failed_preparation_can_retry = (_preparation_state == RendererPreparationState::Failed) && (_preparation_canceled == false) && (_runtime_failed == false);
+  const bool failed_preparation_can_retry =
+    (_preparation_state == RendererPreparationState::Failed) && (_preparation_canceled == false) && ((_runtime_failed == false) || _configuration_failed);
   const bool material_configuration_supported = gpu_material_compile_mask_supported(new_material_compile_mask);
   const bool should_request_prepare =
     integrator_selection.supported && material_configuration_supported && (pipeline_configuration_changed || missing_pipelines || failed_preparation_can_retry);
@@ -5392,11 +5409,11 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   }
 
   if (integrator_selection.supported == false) {
-    set_runtime_failure(gpu_integrator_selection_error_message(integrator_selection));
+    set_configuration_failure(gpu_integrator_selection_error_message(integrator_selection));
     return;
   }
   if (material_configuration_supported == false) {
-    set_runtime_failure(gpu_material_compile_mask_error_message(new_material_compile_mask));
+    set_configuration_failure(gpu_material_compile_mask_error_message(new_material_compile_mask));
     return;
   }
   if (_runtime_failed) {
@@ -5849,7 +5866,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const RHITexture render_output_texture = _output_texture;
   RHIResourceState& render_output_texture_state = _output_texture_state;
 
-  const bool use_spectral_values = (vcm_mode || upbp_mode) && (_spectral_mode == static_cast<uint32_t>(GPUSpectralMode::Spectral));
+  const bool use_spectral_values =
+    (static_cast<GPUIntegratorMode>(_integrator_mode) != GPUIntegratorMode::PathTracing) && (_spectral_mode == static_cast<uint32_t>(GPUSpectralMode::Spectral));
   if (use_spectral_values) {
     const uint32_t spectrum_count = static_cast<uint32_t>(scene.data().spectrum_values.size());
     const uint64_t spectral_values_size = static_cast<uint64_t>(kGPUSpectralValuesDataOffset) + static_cast<uint64_t>(spectrum_count) * sizeof(float);
@@ -6723,6 +6741,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                     dispatch_stage_material_indirect(cmd, PipelineStage::LightContinuePrepareThinfilm, false, kGPUWavefrontMaterialQueueThinfilm, path_iteration);
                   }
                 }
+                // Both directions update the shared path metadata for each path index.
+                barrier_wavefront_buffers(cmd);
                 if (_wavefront_camera_queue_count > 0u) {
                   if (has_various_continue) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::CameraContinuePrepareDiffuse, true, kGPUWavefrontMaterialQueueVarious, path_iteration);

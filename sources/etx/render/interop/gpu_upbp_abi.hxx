@@ -109,6 +109,7 @@ ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexBarycentricOffset = 148u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexScatterPdfForwardOffset = 156u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexInlineExtinctionOffset = 160u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexIncidentMediumIndexOffset = 176u;
+ETX_STATIC_CONST uint32_t kGPUUPBPBPTVertexOutgoingMediumIndexOffset = 180u;
 
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTPathStateLastVertexIndexOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBPTPathStateGlobalPathIndexOffset = 4u;

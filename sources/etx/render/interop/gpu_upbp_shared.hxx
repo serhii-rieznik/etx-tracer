@@ -45,6 +45,7 @@ struct GPUUPBPIntervalFlags {
     Absorb = 1u << 4u,
     InlineMedium = 1u << 5u,
     RecomputeTracking = 1u << 6u,
+    Subsurface = 1u << 7u,
   };
 };
 
@@ -75,6 +76,7 @@ struct GPUUPBPRecursiveWeightFlags {
   enum : uint32_t {
     PreviousInMedium = 1u << 0u,
     PreviousDelta = 1u << 1u,
+    PreviousNonConnectible = 1u << 2u,
   };
 };
 
@@ -275,6 +277,7 @@ struct GPUUPBPDensityBeamFlags {
     Valid = 1u << 0u,
     ScaleDSharedByDistance = 1u << 1u,
     PreviousDelta = 1u << 2u,
+    PreviousNonConnectible = 1u << 3u,
   };
 };
 
@@ -374,6 +377,7 @@ struct ETX_ALIGNED GPUUPBPBPTVertex {
   float scatter_pdf_forward ETX_INIT(0.0f);
   GPUWavefrontCompactSpectralResponse inline_extinction ETX_INIT({});
   uint32_t incident_medium_index ETX_INIT(kInvalidIndex);
+  uint32_t outgoing_medium_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED GPUUPBPBPTPathState {

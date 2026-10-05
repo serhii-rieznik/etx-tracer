@@ -38,6 +38,7 @@ struct UPBPPreparedBeam {
   uint32_t tracking_event_count = 0u;
   bool scale_d_shared_by_distance = false;
   bool previous_delta = false;
+  bool previous_connectible = true;
   bool valid = false;
 };
 
@@ -369,6 +370,7 @@ inline bool upbp_prepare_beam(const UPBPPathRecord& path, const UPBPRecursivePat
   const UPBPRecursiveState& departure = path_weights.departures[beam.source_vertex_index];
   result.d_shared = departure.weights.d_shared;
   result.previous_delta = departure.weights.previous_delta;
+  result.previous_connectible = departure.weights.previous_connectible;
   result.source_throughput = source.outgoing_throughput;
   result.transport_at_origin.weight = SpectralResponse{segment->weight.as_query(), 1.0f};
   for (uint32_t interval_index = 0u; interval_index < beam.transport_interval_index; ++interval_index) {
@@ -460,6 +462,7 @@ ETX_UPBP_FORCE_INLINE bool upbp_complete_prepared_partial_medium_arrival(const U
   weights.ray_sample_reverse_pdf_inverse = reverse_pdf_inverse;
   weights.ray_sample_forward_ratio = 1.0 / query_real_event_density;
   weights.previous_delta = prepared.previous_delta;
+  weights.previous_connectible = prepared.previous_connectible;
   return std::isfinite(weights.d_shared) && (std::isfinite(weights.d_pde_base) && std::isfinite(weights.d_surface));
 }
 

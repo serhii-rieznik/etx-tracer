@@ -803,6 +803,7 @@ bool validate_zero_reverse_scattering_density() {
   path.vertices.resize(2u);
   etx::UPBPPathVertexRecord& vertex = path.vertices[1u];
   vertex.cls = etx::UPBPVertexClass::Medium;
+  vertex.connectible = true;
   vertex.intersection.w_i = {0.0f, 1.0f, 0.0f};
   vertex.sampled_direction = {1.0f, 0.0f, 0.0f};
   vertex.scatter_pdf_forward = 0.5f;

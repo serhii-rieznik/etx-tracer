@@ -76,7 +76,8 @@ bool prepare_medium_emission(SceneData& data) {
       }
     }
     for (const Material& material : data.materials) {
-      if ((material.int_medium == index) && (material.subsurface_cls != SubsurfaceMaterial::Disabled)) {
+      const bool mapped_coated_medium = (material.cls == MaterialClass::Plastic) && (material.subsurface_packing == 0.0f);
+      if ((material.int_medium == index) && (material.subsurface_cls != SubsurfaceMaterial::Disabled) && (mapped_coated_medium == false)) {
         log::error("Emissive medium %u is unsupported by the subsurface diffusion model", index);
         return false;
       }

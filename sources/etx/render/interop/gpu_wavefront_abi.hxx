@@ -142,6 +142,7 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStateMediumIndexOffset = 100u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStateScatterMaterialIndexOffset = 104u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStateFlagsOffset = 108u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStatePhaseFunctionGOffset = 112u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStatePackingOffset = 116u;
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontDirectLightSampleStride = 160u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontDirectLightSampleValueOffset = 0u;

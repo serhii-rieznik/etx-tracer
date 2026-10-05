@@ -121,6 +121,8 @@ static_assert(offsetof(Material, thermal_conductor_average_albedo) == kMaterialT
 static_assert(offsetof(Material, thermal_emission_weight) == kMaterialThermalEmissionWeightOffset, "Material::thermal_emission_weight offset changed");
 static_assert(offsetof(Material, thermal_int_medium_index) == kMaterialThermalIntMediumIndexOffset, "Material::thermal_int_medium_index offset changed");
 static_assert(offsetof(Material, thermal_conductor_image_index) == kMaterialThermalConductorImageIndexOffset, "Material::thermal_conductor_image_index offset changed");
+static_assert(offsetof(Material, subsurface_packing) == kMaterialSubsurfacePackingOffset, "Material::subsurface_packing offset changed");
+static_assert(offsetof(Material, subsurface_anisotropy) == kMaterialSubsurfaceAnisotropyOffset, "Material::subsurface_anisotropy offset changed");
 static_assert(offsetof(Material, thermal_energy_compensation_interface_index) == kMaterialThermalEnergyCompensationInterfaceIndexOffset,
   "Material::thermal_energy_compensation_interface_index offset changed");
 static_assert(offsetof(Material, energy_compensation_interface_index) == kMaterialEnergyCompensationInterfaceIndexOffset,

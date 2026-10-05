@@ -2,56 +2,16 @@
 
 #include "gpu_rt_wavefront_surface_common.hlsl"
 
-#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
+#if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC))
 # include "gpu_rt_wavefront_trace_common.hlsl"
 #endif
 
-#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
-void wavefront_subsurface_remap_channel(float color, float scattering_distance, out float albedo, out float extinction, out float scattering) {
-  const float a = 1.826052378200f;
-  const float b = 4.985111943850f + 0.12735595943800f;
-  const float c = 1.096861024240f;
-  const float d = 0.496310210422f;
-  const float e = 4.231902997010f + 0.00310603949088f;
-  const float f = 2.406029994080f;
-  const float k_min_scattering = 1.0f / 1024.0f;
-
-  color = max(0.0f, color);
-  float blend = pow(color, 0.25f);
-  albedo = (1.0f - blend) * a * pow(atan(b * color), c) + blend * d * pow(atan(e * color), f);
-  albedo = clamp(albedo, 0.0f, 1.0f - kEpsilon);
-  extinction = 1.0f / max(scattering_distance, k_min_scattering);
-  scattering = extinction * albedo;
-}
-
-void wavefront_subsurface_remap(SpectralQuery spect, SpectralResponse color, SpectralResponse distances, out SpectralResponse albedo, out SpectralResponse extinction,
-  out SpectralResponse scattering) {
-  if (spectral_query_is_spectral(spect)) {
-    float albedo_value = 0.0f;
-    float extinction_value = 0.0f;
-    float scattering_value = 0.0f;
-    wavefront_subsurface_remap_channel(color.value, distances.value, albedo_value, extinction_value, scattering_value);
-    albedo = spectral_response_make(spect, albedo_value);
-    extinction = spectral_response_make(spect, extinction_value);
-    scattering = spectral_response_make(spect, scattering_value);
-    return;
-  }
-
-  float3 albedo_secondary = float3(0.0f, 0.0f, 0.0f);
-  float3 extinction_secondary = float3(0.0f, 0.0f, 0.0f);
-  float3 scattering_secondary = float3(0.0f, 0.0f, 0.0f);
-  wavefront_subsurface_remap_channel(color.integrated.x, distances.integrated.x, albedo_secondary.x, extinction_secondary.x, scattering_secondary.x);
-  wavefront_subsurface_remap_channel(color.integrated.y, distances.integrated.y, albedo_secondary.y, extinction_secondary.y, scattering_secondary.y);
-  wavefront_subsurface_remap_channel(color.integrated.z, distances.integrated.z, albedo_secondary.z, extinction_secondary.z, scattering_secondary.z);
-
-  albedo = spectral_response_make(spect, albedo_secondary);
-  extinction = spectral_response_make(spect, extinction_secondary);
-  scattering = spectral_response_make(spect, scattering_secondary);
-}
-
+#if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC))
 bool wavefront_subsurface_random_walk_applicable(Material material, BSDFSample bsdf_sample) {
-  return (material.subsurface_cls != SubsurfaceMaterial::Disabled) && ((bsdf_sample.properties & BSDFSample::Reflection) != 0u) &&
-         ((bsdf_sample.properties & BSDFSample::Diffuse) != 0u);
+  const bool coated = material.cls == MaterialClass::Plastic;
+  return (material.subsurface_cls != SubsurfaceMaterial::Disabled) &&
+         (coated ? ((bsdf_sample.properties & (BSDFSample::Reflection | BSDFSample::Transmission)) != 0u)
+                 : (((bsdf_sample.properties & BSDFSample::Reflection) != 0u) && ((bsdf_sample.properties & BSDFSample::Diffuse) != 0u)));
 }
 #endif
 
@@ -122,7 +82,7 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     return;
   }
 
-  if (wavefront_surface_continue_stage_matches_material(material.cls) == false) {
+  if (wavefront_surface_continue_stage_matches_material(material_boundary_class(material.cls, material.subsurface_cls)) == false) {
     return;
   }
 
@@ -178,7 +138,7 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     bsdf_sample = wavefront_surface_continue_stage_bsdf_sample(make_scene_bsdf_resource_gpu_context(), bsdf_data, material, bsdf_sampler);
     bsdf_sampler_pop_fixed(bsdf_sampler);
   }
-  bool sample_valid = bsdf_sample_valid(bsdf_sample);
+  bool sample_valid = bsdf_sample_valid(bsdf_sample) && scene_math_shared_scattering_direction_valid(hit.vertex.nrm, hit.geo_normal, state.ray.d, bsdf_sample.w_o);
   bool sample_direction_valid = sample_valid ? gpu_valid_direction(bsdf_sample.w_o) : true;
   bool sample_finite = sample_direction_valid && gpu_valid_spectral_response(bsdf_sample.weight) && isfinite(bsdf_sample.pdf) && isfinite(bsdf_sample.eta);
   if (sample_finite == false) {
@@ -190,10 +150,18 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
 
   bool subsurface_medium_walk = false;
   GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;
-#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
-  if (sample_valid && wavefront_subsurface_random_walk_applicable(material, bsdf_sample)) {
-    ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
-    uint scatter_material_index = scene_gpu_load_u32(scene_globals, kSceneGlobalsDefaultSubsurfaceScatterMaterialOffset);
+#if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC))
+  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+  const uint scatter_material_index = scene_gpu_load_u32(scene_globals, kSceneGlobalsDefaultSubsurfaceScatterMaterialOffset);
+  if (sample_valid && (hit.material_index == scatter_material_index) && ((bsdf_sample.properties & BSDFSample::Transmission) != 0u)) {
+    const GPUWavefrontSubsurfaceState exit_state = wavefront_load_subsurface_state(wavefront_subsurface_state_buffer(resources, from_camera), path_index);
+    ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
+    bsdf_sample.medium_index = gpu_abi_load_u32(material_buffer, exit_state.material_index * kMaterialStride + kMaterialExtMediumOffset);
+  }
+  const bool coated_subsurface = material.cls == MaterialClass::Plastic;
+  const bool into_subsurface = coated_subsurface ? (dot(hit.vertex.nrm, bsdf_sample.w_o) < 0.0f) : true;
+  const bool mapped_coated_medium = coated_subsurface && (material.int_medium != kInvalidIndex) && (material.subsurface_packing == 0.0f);
+  if (sample_valid && into_subsurface && (mapped_coated_medium == false) && wavefront_subsurface_random_walk_applicable(material, bsdf_sample)) {
     Material scatter_material = (Material)0;
     if (try_load_material_full(scatter_material_index, scatter_material) == false) {
       state.reserved0 = 0u;
@@ -202,60 +170,73 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
       return;
     }
 
-    subsurface_state.material_index = hit.material_index;
-    subsurface_state.medium_index = material.int_medium;
-    subsurface_state.scatter_material_index = scatter_material_index;
-    subsurface_state.flags = GPUWavefrontSubsurfaceFlags::Active;
-    subsurface_state.phase_function_g = 0.0f;
-
-    if (material.int_medium == kInvalidIndex) {
-      SpectralResponse color = apply_image(state.spect, material.scattering, hit.vertex.tex);
-      SpectralResponse distances = apply_image(state.spect, material.subsurface, hit.vertex.tex);
-      wavefront_subsurface_remap(state.spect, color, distances, subsurface_state.albedo, subsurface_state.extinction, subsurface_state.scattering);
-      subsurface_state.flags |= GPUWavefrontSubsurfaceFlags::InlineMedium;
+    const bool inside_coating = coated_subsurface && (dot(hit.vertex.nrm, state.ray.d) > 0.0f);
+    if (inside_coating) {
+      subsurface_state = wavefront_load_subsurface_state(wavefront_subsurface_state_buffer(resources, from_camera), path_index);
+    }
+    const bool cached_inline_bulk =
+      inside_coating && (subsurface_state.material_index == hit.material_index) && ((subsurface_state.flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u);
+    if (cached_inline_bulk) {
+      subsurface_state.flags = GPUWavefrontSubsurfaceFlags::Active | GPUWavefrontSubsurfaceFlags::InlineMedium;
     } else {
-      MediumAccess medium_access = (MediumAccess)0;
-      if (wavefront_try_load_medium(material.int_medium, medium_access) == false) {
+      subsurface_state.material_index = hit.material_index;
+      subsurface_state.medium_index = material.int_medium;
+      subsurface_state.scatter_material_index = coated_subsurface ? hit.material_index : scatter_material_index;
+      subsurface_state.flags = GPUWavefrontSubsurfaceFlags::Active;
+      subsurface_state.phase_function_g = material.subsurface_anisotropy;
+      subsurface_state.packing = material.subsurface_packing;
+
+      if (material.int_medium == kInvalidIndex) {
+        SpectralResponse color = apply_image(state.spect, material.scattering, hit.vertex.tex);
+        SpectralResponse distances = apply_image(state.spect, material.subsurface, hit.vertex.tex);
+        wavefront_subsurface_remap(state.spect, color, distances, subsurface_state.albedo, subsurface_state.extinction, subsurface_state.scattering);
+        subsurface_state.flags |= GPUWavefrontSubsurfaceFlags::InlineMedium;
+      } else {
+        MediumAccess medium_access = (MediumAccess)0;
+        if (wavefront_try_load_medium(material.int_medium, medium_access) == false) {
+          state.reserved0 = 0u;
+          state.flags = 0u;
+          wavefront_store_path_state(state_descriptor, path_index, state);
+          return;
+        }
+        subsurface_state.phase_function_g = medium_access.phase_function_g;
+        subsurface_state.scattering = gpu_medium_scattering(medium_access, state.spect);
+        SpectralResponse absorption = gpu_medium_absorption(medium_access, state.spect);
+        subsurface_state.extinction = spectral_response_add(subsurface_state.scattering, absorption);
+        subsurface_state.albedo = medium_sample_shared_calculate_albedo(state.spect, subsurface_state.scattering, subsurface_state.extinction);
+      }
+    }
+
+    uint subsurface_state_buffer = wavefront_subsurface_state_buffer(resources, from_camera);
+    if (subsurface_state_buffer == kInvalidIndex) {
+      state.reserved0 = 0u;
+      state.flags = 0u;
+      wavefront_store_path_state(state_descriptor, path_index, state);
+      return;
+    }
+
+    if (coated_subsurface == false) {
+      float3 subsurface_direction = (material.subsurface_path == SubsurfaceMaterial::DiffusePath)
+                                      ? sample_cosine_distribution(float2(rnd01(bsdf_sampler.seed), rnd01(bsdf_sampler.seed)), -hit.vertex.nrm, 1.0f)
+                                      : normalize(state.ray.d);
+      float subsurface_pdf = abs(dot(subsurface_direction, hit.vertex.nrm)) * kInvPi;
+      if ((gpu_valid_direction(subsurface_direction) == false) || (subsurface_pdf <= 0.0f)) {
         state.reserved0 = 0u;
         state.flags = 0u;
         wavefront_store_path_state(state_descriptor, path_index, state);
         return;
       }
-      subsurface_state.phase_function_g = medium_access.phase_function_g;
-      subsurface_state.scattering = gpu_medium_scattering(medium_access, state.spect);
-      SpectralResponse absorption = gpu_medium_absorption(medium_access, state.spect);
-      subsurface_state.extinction = spectral_response_add(subsurface_state.scattering, absorption);
-      subsurface_state.albedo = medium_sample_shared_calculate_albedo(state.spect, subsurface_state.scattering, subsurface_state.extinction);
-    }
 
-    uint subsurface_state_buffer = wavefront_subsurface_state_buffer(resources, from_camera);
-    if ((subsurface_state_buffer == kInvalidIndex) || spectral_response_is_zero(subsurface_state.extinction)) {
-      state.reserved0 = 0u;
-      state.flags = 0u;
-      wavefront_store_path_state(state_descriptor, path_index, state);
-      return;
+      bsdf_sample.w_o = subsurface_direction;
+      bsdf_sample.weight = spectral_response_make(state.spect, 1.0f);
+      bsdf_sample.pdf = subsurface_pdf;
+      bsdf_sample.eta = 1.0f;
+      bsdf_sample.medium_index = material.int_medium;
+      bsdf_sample.properties = BSDFSample::Transmission | BSDFSample::Diffuse | BSDFSample::MediumChanged;
+      hit.material_index = scatter_material_index;
+      material = scatter_material;
     }
-
-    float3 subsurface_direction = (material.subsurface_path == SubsurfaceMaterial::DiffusePath)
-                                    ? sample_cosine_distribution(float2(rnd01(bsdf_sampler.seed), rnd01(bsdf_sampler.seed)), -hit.vertex.nrm, 1.0f)
-                                    : normalize(state.ray.d);
-    float subsurface_pdf = abs(dot(subsurface_direction, hit.vertex.nrm)) * kInvPi;
-    if ((gpu_valid_direction(subsurface_direction) == false) || (subsurface_pdf <= 0.0f)) {
-      state.reserved0 = 0u;
-      state.flags = 0u;
-      wavefront_store_path_state(state_descriptor, path_index, state);
-      return;
-    }
-
     wavefront_store_subsurface_state(subsurface_state_buffer, path_index, subsurface_state);
-    bsdf_sample.w_o = subsurface_direction;
-    bsdf_sample.weight = spectral_response_make(state.spect, 1.0f);
-    bsdf_sample.pdf = subsurface_pdf;
-    bsdf_sample.eta = 1.0f;
-    bsdf_sample.medium_index = material.int_medium;
-    bsdf_sample.properties = BSDFSample::Transmission | BSDFSample::Diffuse | BSDFSample::MediumChanged;
-    hit.material_index = scatter_material_index;
-    material = scatter_material;
     subsurface_medium_walk = true;
   }
 #endif
@@ -279,6 +260,7 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
 #if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
   GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
 #endif
+  sample_valid = sample_valid && scene_math_shared_scattering_direction_valid(hit.vertex.nrm, hit.geo_normal, state.ray.d, bsdf_sample.w_o);
   bool current_connectible = bsdf_sample_is_delta(bsdf_sample) == false;
 #if ETX_WAVEFRONT_PATH_TRACING_ONLY
   bool previous_connectible = (previous_vertex_flags & GPUWavefrontVertexFlags::Connectible) != 0u;
@@ -349,6 +331,10 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     upbp_vertex.flags = GPUUPBPVertexFlags::Surface | GPUUPBPVertexFlags::DensityConnectible;
     upbp_vertex.flags |= current_connectible ? GPUUPBPVertexFlags::Connectible : GPUUPBPVertexFlags::Delta;
     upbp_vertex.flags |= hit.emitter_index != kInvalidIndex ? GPUUPBPVertexFlags::Emitter : 0u;
+    if ((current_vertex.inline_medium_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) {
+      upbp_vertex.inline_extinction = upbp_pack_spectral_response(current_vertex.inline_medium_extinction);
+      upbp_vertex.flags |= GPUUPBPVertexFlags::InlineMedium;
+    }
     if (upbp_append_physical_vertex(upbp_resources, from_camera, path_index, upbp_path_state, upbp_vertex) == false) {
       if (upbp_terminate_degenerate_arrival(upbp_resources, from_camera, path_index, upbp_path_state)) {
         state.reserved0 = 0u;

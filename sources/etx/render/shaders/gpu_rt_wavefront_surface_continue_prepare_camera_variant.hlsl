@@ -20,8 +20,8 @@
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_PLASTIC)
 # include <interop/bsdf_plastic_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS  MaterialClass::Plastic
-# define ETX_STAGE_BSDF_SAMPLE bsdf_plastic_sample
-# define ETX_STAGE_BSDF_PDF    bsdf_plastic_pdf
+# define ETX_STAGE_BSDF_SAMPLE bsdf_plastic_opaque_sample
+# define ETX_STAGE_BSDF_PDF    bsdf_plastic_opaque_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
 # if ETX_ENABLE_OPENPBR_STAGE
 #  include <interop/bsdf_openpbr_shared.hxx>

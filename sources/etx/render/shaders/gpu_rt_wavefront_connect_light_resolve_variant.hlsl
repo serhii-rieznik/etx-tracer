@@ -22,8 +22,8 @@
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_PLASTIC)
 # include <interop/bsdf_plastic_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Plastic
-# define ETX_STAGE_BSDF_EVAL  bsdf_plastic_evaluate
-# define ETX_STAGE_BSDF_PDF   bsdf_plastic_pdf
+# define ETX_STAGE_BSDF_EVAL  bsdf_plastic_opaque_evaluate
+# define ETX_STAGE_BSDF_PDF   bsdf_plastic_opaque_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
 # include <interop/bsdf_energy_compensated_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Conductor

@@ -15,6 +15,7 @@ struct UPBPRecursiveVertexWeights {
   double ray_sample_reverse_ratio = 0.0;
   bool previous_in_medium = false;
   bool previous_delta = false;
+  bool previous_connectible = true;
 
   double bpt(const double surface_factor) const {
     return d_bpt_base + surface_factor * d_surface;
@@ -286,7 +287,7 @@ inline bool upbp_prepare_recursive_departure(const Scene& scene, const UPBPPathR
     state.failure_vertex_index = vertex_index;
     return false;
   }
-  const bool bpt_previous = (state.weights.previous_delta == false) && (vertex.delta == false);
+  const bool bpt_previous = (state.weights.previous_delta == false) && state.weights.previous_connectible && (vertex.delta == false) && vertex.connectible;
   state.d_bpt_a = cosine / forward_pdf;
   if (vertex.delta) {
     state.d_bpt_b = cosine * state.weights.d_bpt_base / state.weights.ray_sample_reverse_pdf_inverse;
@@ -302,6 +303,7 @@ inline bool upbp_prepare_recursive_departure(const Scene& scene, const UPBPPathR
   state.weights.d_shared = 1.0 / forward_pdf;
   state.weights.previous_in_medium = vertex.cls == UPBPVertexClass::Medium;
   state.weights.previous_delta = vertex.delta;
+  state.weights.previous_connectible = vertex.connectible;
 
   const float3 incoming_direction = vertex.intersection.w_i;
   const double cosine_directions = static_cast<double>(dot(incoming_direction, vertex.sampled_direction));

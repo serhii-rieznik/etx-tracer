@@ -203,7 +203,9 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   wavefront_store_path_state(input_value.resources.light_state_buffer, input_value.path_index, input_value.state);
 #endif
 
-  if ((bsdf_eval_valid(bsdf_eval) == false) || (wavefront_connect_camera_valid_spectral_response(bsdf_eval.bsdf) == false)) {
+  if ((scene_math_shared_scattering_direction_valid(input_value.current_vertex.normal, input_value.current_vertex.geo_normal, input_value.current_vertex.w_i,
+         input_value.camera_sample.direction) == false) ||
+      (bsdf_eval_valid(bsdf_eval) == false) || (wavefront_connect_camera_valid_spectral_response(bsdf_eval.bsdf) == false)) {
     return;
   }
 
@@ -259,6 +261,21 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   task.upbp_camera_area_density_bits = asuint(camera_area_density);
   task.pixel_index = pixel_index;
   task.medium_index = ((bsdf_eval.properties & BSDFSample::MediumChanged) != 0u) ? bsdf_eval.medium_index : input_value.hit.medium_index;
+  task.inline_medium_extinction = input_value.current_vertex.inline_medium_extinction;
+  task.inline_medium_flags = input_value.current_vertex.inline_medium_flags;
+  if (wavefront_path_vertex_is_surface(input_value.current_vertex) && (input_value.material.cls == MaterialClass::Plastic) &&
+      (input_value.material.subsurface_cls != SubsurfaceMaterial::Disabled)) {
+    const bool into_body = dot(input_value.current_vertex.geo_normal, input_value.camera_sample.direction) < 0.0f;
+    task.medium_index = into_body ? input_value.material.int_medium : input_value.material.ext_medium;
+    task.inline_medium_flags = into_body ? task.inline_medium_flags : 0u;
+  }
+  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+  if (input_value.current_vertex.material_index == scene_gpu_load_u32(scene_globals, kSceneGlobalsDefaultSubsurfaceScatterMaterialOffset)) {
+    const bool reflection =
+      (dot(input_value.current_vertex.geo_normal, input_value.current_vertex.w_i) * dot(input_value.current_vertex.geo_normal, input_value.camera_sample.direction)) < 0.0f;
+    task.medium_index = reflection ? input_value.hit.medium_index : input_value.current_vertex.medium_index;
+    task.inline_medium_flags = reflection ? 0u : task.inline_medium_flags;
+  }
   task.flags = GPUWavefrontPointConnectionTaskFlags::Ready;
   task.flags |= (input_value.current_vertex.flags & GPUWavefrontVertexFlags::Medium) != 0u ? GPUWavefrontPointConnectionTaskFlags::SourceMedium : 0u;
   task.path_index = input_value.path_index;

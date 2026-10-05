@@ -487,6 +487,7 @@ GPUWavefrontSubsurfaceState wavefront_load_subsurface_state(uint descriptor_inde
   result.scatter_material_index = buffer.Load(base_offset + kGPUWavefrontSubsurfaceStateScatterMaterialIndexOffset);
   result.flags = buffer.Load(base_offset + kGPUWavefrontSubsurfaceStateFlagsOffset);
   result.phase_function_g = asfloat(buffer.Load(base_offset + kGPUWavefrontSubsurfaceStatePhaseFunctionGOffset));
+  result.packing = asfloat(buffer.Load(base_offset + kGPUWavefrontSubsurfaceStatePackingOffset));
   return result;
 }
 
@@ -501,6 +502,7 @@ void wavefront_store_subsurface_state(uint descriptor_index, uint index, GPUWave
   buffer.Store(base_offset + kGPUWavefrontSubsurfaceStateScatterMaterialIndexOffset, state.scatter_material_index);
   buffer.Store(base_offset + kGPUWavefrontSubsurfaceStateFlagsOffset, state.flags);
   buffer.Store(base_offset + kGPUWavefrontSubsurfaceStatePhaseFunctionGOffset, asuint(state.phase_function_g));
+  buffer.Store(base_offset + kGPUWavefrontSubsurfaceStatePackingOffset, asuint(state.packing));
 }
 
 void wavefront_store_direct_light_sample(uint descriptor_index, uint index, GPUWavefrontDirectLightSample sample_value) {
@@ -944,7 +946,9 @@ float3 wavefront_spectral_estimate(SpectralResponse value, SpectralQuery spect) 
 SpectralQuery wavefront_vcm_iteration_spectral_query() {
   SpectralQuery spect = spectral_query_sample();
   if (scene_uses_spectral_mode()) {
-    spect = spectral_query_progressive_sample(constants.sample_index, load_scene_options_random_seed());
+    ByteAddressBuffer spectral_values = bindless_buffers[NonUniformResourceIndex(constants.scene.spectral_values)];
+    spect.wavelength = asfloat(spectral_values.Load(kGPUSpectralValuesWavelengthOffset));
+    spect.flags = SpectralFlags::Spectral;
   }
   return spect;
 }
@@ -1279,6 +1283,56 @@ uint wavefront_light_vertex_append(GPUWavefrontResources resources) {
   return vertex_slot;
 }
 
+void wavefront_subsurface_remap_channel(float color, float scattering_distance, out float albedo, out float extinction, out float scattering) {
+  const float a = 1.826052378200f;
+  const float b = 4.985111943850f + 0.12735595943800f;
+  const float c = 1.096861024240f;
+  const float d = 0.496310210422f;
+  const float e = 4.231902997010f + 0.00310603949088f;
+  const float f = 2.406029994080f;
+  const float k_min_scattering = 1.0f / 1024.0f;
+
+  color = max(0.0f, color);
+  float blend = pow(color, 0.25f);
+  albedo = (1.0f - blend) * a * pow(atan(b * color), c) + blend * d * pow(atan(e * color), f);
+  albedo = clamp(albedo, 0.0f, 1.0f - kEpsilon);
+  extinction = 1.0f / max(scattering_distance, k_min_scattering);
+  scattering = extinction * albedo;
+}
+
+void wavefront_subsurface_remap(SpectralQuery spect, SpectralResponse color, SpectralResponse distances, out SpectralResponse albedo, out SpectralResponse extinction,
+  out SpectralResponse scattering) {
+  if (spectral_query_is_spectral(spect)) {
+    float albedo_value = 0.0f;
+    float extinction_value = 0.0f;
+    float scattering_value = 0.0f;
+    wavefront_subsurface_remap_channel(color.value, distances.value, albedo_value, extinction_value, scattering_value);
+    albedo = spectral_response_make(spect, albedo_value);
+    extinction = spectral_response_make(spect, extinction_value);
+    scattering = spectral_response_make(spect, scattering_value);
+    return;
+  }
+
+  float3 albedo_secondary = float3(0.0f, 0.0f, 0.0f);
+  float3 extinction_secondary = float3(0.0f, 0.0f, 0.0f);
+  float3 scattering_secondary = float3(0.0f, 0.0f, 0.0f);
+  wavefront_subsurface_remap_channel(color.integrated.x, distances.integrated.x, albedo_secondary.x, extinction_secondary.x, scattering_secondary.x);
+  wavefront_subsurface_remap_channel(color.integrated.y, distances.integrated.y, albedo_secondary.y, extinction_secondary.y, scattering_secondary.y);
+  wavefront_subsurface_remap_channel(color.integrated.z, distances.integrated.z, albedo_secondary.z, extinction_secondary.z, scattering_secondary.z);
+
+  albedo = spectral_response_make(spect, albedo_secondary);
+  extinction = spectral_response_make(spect, extinction_secondary);
+  scattering = spectral_response_make(spect, scattering_secondary);
+}
+
+bool wavefront_coated_subsurface_connections_enabled(GPUWavefrontPathVertex vertex) {
+  if ((wavefront_path_vertex_is_subsurface(vertex) == false) || ((scene_path_mode_is_vcm() || scene_path_mode_is_bdpt_full()) == false)) {
+    return false;
+  }
+  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
+  return gpu_abi_load_u32(material_buffer, vertex.material_index * kMaterialStride + kMaterialClassOffset) == MaterialClass::Plastic;
+}
+
 void wavefront_write_vertex(bool from_camera, uint path_index, inout GPUWavefrontPathState state, GPUWavefrontHit hit) {
   GPUWavefrontResources resources = wavefront_load_resources();
   uint vertex_slot = from_camera ? wavefront_camera_vertex_slot(path_index, state.path_length)
@@ -1316,6 +1370,29 @@ void wavefront_write_vertex(bool from_camera, uint path_index, inout GPUWavefron
   }
   if ((state.flags & GPUWavefrontPathFlags::Delta) != 0u) {
     vertex.flags |= GPUWavefrontVertexFlags::Delta;
+  }
+
+  ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
+  const uint material_offset = hit.material_index * kMaterialStride;
+  if ((gpu_abi_load_u32(material_buffer, material_offset + kMaterialClassOffset) == MaterialClass::Plastic) &&
+      (gpu_abi_load_u32(material_buffer, material_offset + kMaterialSubsurfaceClassOffset) != SubsurfaceMaterial::Disabled) &&
+      (gpu_abi_load_u32(material_buffer, material_offset + kMaterialIntMediumOffset) == kInvalidIndex)) {
+    Material material = (Material)0;
+    if (try_load_material_full(hit.material_index, material)) {
+      GPUWavefrontSubsurfaceState body_state = (GPUWavefrontSubsurfaceState)0;
+      if (dot(hit.vertex.nrm, state.ray.d) > 0.0f) {
+        body_state = wavefront_load_subsurface_state(wavefront_subsurface_state_buffer(resources, from_camera), path_index);
+      }
+      if ((body_state.material_index == hit.material_index) && ((body_state.flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u)) {
+        vertex.inline_medium_extinction = body_state.extinction;
+      } else {
+        SpectralResponse albedo = (SpectralResponse)0;
+        SpectralResponse scattering = (SpectralResponse)0;
+        wavefront_subsurface_remap(state.spect, apply_image(state.spect, material.scattering, hit.vertex.tex), apply_image(state.spect, material.subsurface, hit.vertex.tex),
+          albedo, vertex.inline_medium_extinction, scattering);
+      }
+      vertex.inline_medium_flags = GPUWavefrontSubsurfaceFlags::InlineMedium;
+    }
   }
 
   uint descriptor_index = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;

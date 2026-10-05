@@ -389,6 +389,7 @@ GPUWavefrontSubsurfaceState wavefront_load_subsurface_state(uint descriptor_inde
   result.scatter_material_index = buffer.Load(base_offset + kGPUWavefrontSubsurfaceStateScatterMaterialIndexOffset);
   result.flags = buffer.Load(base_offset + kGPUWavefrontSubsurfaceStateFlagsOffset);
   result.phase_function_g = asfloat(buffer.Load(base_offset + kGPUWavefrontSubsurfaceStatePhaseFunctionGOffset));
+  result.packing = asfloat(buffer.Load(base_offset + kGPUWavefrontSubsurfaceStatePackingOffset));
   return result;
 }
 
@@ -403,6 +404,7 @@ void wavefront_store_subsurface_state(uint descriptor_index, uint index, GPUWave
   buffer.Store(base_offset + kGPUWavefrontSubsurfaceStateScatterMaterialIndexOffset, state.scatter_material_index);
   buffer.Store(base_offset + kGPUWavefrontSubsurfaceStateFlagsOffset, state.flags);
   buffer.Store(base_offset + kGPUWavefrontSubsurfaceStatePhaseFunctionGOffset, asuint(state.phase_function_g));
+  buffer.Store(base_offset + kGPUWavefrontSubsurfaceStatePackingOffset, asuint(state.packing));
 }
 
 void wavefront_store_direct_light_sample(uint descriptor_index, uint index, GPUWavefrontDirectLightSample sample_value) {

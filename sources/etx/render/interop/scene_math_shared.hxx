@@ -2,6 +2,13 @@
 
 #include "surface_point_shared.hxx"
 
+ETX_SHARED_INLINE bool scene_math_shared_scattering_direction_valid(ETX_IN(float3, shading_normal), ETX_IN(float3, geometric_normal), ETX_IN(float3, incoming_direction),
+  ETX_IN(float3, outgoing_direction)) {
+  const float shading_product = dot(shading_normal, incoming_direction) * dot(shading_normal, outgoing_direction);
+  const float geometric_product = dot(geometric_normal, incoming_direction) * dot(geometric_normal, outgoing_direction);
+  return (shading_product != 0.0f) && (geometric_product != 0.0f) && ((shading_product > 0.0f) == (geometric_product > 0.0f));
+}
+
 ETX_SHARED_INLINE float scene_math_shared_collimation_to_exponent(float normalized) {
   float t = saturate(normalized);
   float one_minus_t = 1.0f - t;

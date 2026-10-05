@@ -2,6 +2,7 @@
 
 #include <etx/render/interop/interop.hxx>
 #include <etx/render/interop/sampler_policy.hxx>
+#include <etx/render/interop/subsurface_free_path_shared.hxx>
 #include <etx/render/shared/scene.hxx>
 
 namespace etx {
@@ -62,12 +63,11 @@ inline SpectralResponse safe_mul(const SpectralResponse& a, const SpectralRespon
 
 template <class RT>
 ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, const Intersection& in_intersection, const RT& rt, Sampler& smp, Gather& result) {
-  constexpr uint32_t kMaxIterations = 1024u;
   result = {};
 
   const auto& mat = scene.materials[in_intersection.material_index];
 
-  float anisotropy = 0.0f;
+  float anisotropy = mat.subsurface_anisotropy;
   SpectralResponse extinction = {spect};
   SpectralResponse scattering = {spect};
   SpectralResponse albedo = {spect};
@@ -88,50 +88,64 @@ ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, c
 
   Ray ray = {};
   ray.d = mat.subsurface_path == SubsurfaceMaterial::DiffusePath ? sample_cosine_distribution(smp.next_2d(), -in_intersection.nrm, 1.0f) : in_intersection.w_i;
-  ray.min_t = kRayEpsilon;
+  ray.min_t = 0.0f;
   ray.o = shading_pos(scene, scene.triangles[in_intersection.triangle_index], in_intersection.barycentric, ray.d, in_intersection.instance_index);
   ray.max_t = kMaxFloat;
 
   SpectralResponse throughput = {spect, 1.0f};
-  for (uint32_t i = 0; i < kMaxIterations; ++i) {
-    SpectralResponse pdf = {};
-    uint32_t channel = sample_spectrum_component(spect, albedo, throughput, smp.next(), pdf);
-    float scattering_distance = extinction.component(channel);
-
-    ray.max_t = scattering_distance > 0.0f ? (-logf(1.0f - smp.next()) / scattering_distance) : kMaxFloat;
-    ETX_VALIDATE(ray.max_t);
-
-    if ((i == 0) && (ray.max_t <= kRayEpsilon)) {
-      return GatherResult::Failed;
-    }
-
+  for (uint32_t i = 0u;; ++i) {
     Intersection local_i;
     Ray exit_ray = ray;
     exit_ray.max_t = kMaxFloat;
     if (rt.trace_material(scene, exit_ray, in_intersection.material_index, local_i, smp) == false) {
       return GatherResult::Failed;
     }
+    SpectralResponse channel_weight = albedo;
+    if ((mat.subsurface_packing > 0.0f) && (spectral_query_is_spectral(spect) == false)) {
+      channel_weight.integrated = {
+        subsurface_free_path_channel_weight(extinction.integrated.x, mat.subsurface_packing, i != 0u, local_i.t, albedo.integrated.x),
+        subsurface_free_path_channel_weight(extinction.integrated.y, mat.subsurface_packing, i != 0u, local_i.t, albedo.integrated.y),
+        subsurface_free_path_channel_weight(extinction.integrated.z, mat.subsurface_packing, i != 0u, local_i.t, albedo.integrated.z),
+      };
+    }
+    SpectralResponse pdf = {};
+    const uint32_t channel = sample_spectrum_component(spect, channel_weight, throughput, smp.next(), pdf);
+    const float scattering_distance = extinction.component(channel);
+    ray.max_t = subsurface_free_path_sample(scattering_distance, mat.subsurface_packing, i != 0u, smp.next());
+    ETX_VALIDATE(ray.max_t);
     const bool intersection_found = local_i.t <= ray.max_t;
     if (intersection_found) {
       ray.max_t = local_i.t;
     }
 
-    SpectralResponse tr = spectrum_exp(-ray.max_t * extinction);
+    SpectralResponse tr{spect};
+    SpectralResponse density{spect};
+    if (spectral_query_is_spectral(spect)) {
+      const SubsurfaceFreePath flight = subsurface_free_path_evaluate(extinction.value, mat.subsurface_packing, i != 0u, ray.max_t);
+      tr.value = flight.survival;
+      density.value = flight.density;
+    } else {
+      const SubsurfaceFreePath x = subsurface_free_path_evaluate(extinction.integrated.x, mat.subsurface_packing, i != 0u, ray.max_t);
+      const SubsurfaceFreePath y = subsurface_free_path_evaluate(extinction.integrated.y, mat.subsurface_packing, i != 0u, ray.max_t);
+      const SubsurfaceFreePath z = subsurface_free_path_evaluate(extinction.integrated.z, mat.subsurface_packing, i != 0u, ray.max_t);
+      tr.integrated = {x.survival, y.survival, z.survival};
+      density.integrated = {x.density, y.density, z.density};
+    }
     ETX_VALIDATE(tr);
 
-    pdf *= intersection_found ? tr : safe_mul(tr, extinction);
+    pdf *= intersection_found ? tr : density;
     ETX_VALIDATE(pdf);
 
     if (pdf.is_zero())
       return GatherResult::Failed;
 
-    SpectralResponse weight = intersection_found ? tr : safe_mul(tr, scattering);
+    SpectralResponse weight = intersection_found ? tr : safe_mul(density, albedo);
     ETX_VALIDATE(weight);
 
     throughput *= weight / pdf.sum();
     ETX_VALIDATE(throughput);
 
-    if (throughput.maximum() <= kEpsilon)
+    if (throughput.is_zero())
       return GatherResult::Failed;
 
     if (intersection_found) {
@@ -143,12 +157,14 @@ ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, c
       return GatherResult::Succeeded;
     }
 
+    if (random_continue(i, scene.options.random_path_termination, 1.0f, smp, throughput) == false) {
+      return GatherResult::Failed;
+    }
+
     auto prev_dir = ray.d;
     ray.o = ray.o + ray.d * ray.max_t;
     ray.d = sample_phase_function(prev_dir, anisotropy, smp.next_2d());
   }
-
-  return GatherResult::Failed;
 }
 
 }  // namespace subsurface
@@ -223,14 +239,14 @@ ETX_SHARED_INLINE void handle_sampled_medium(const Scene& scene, const MediumSam
   payload.ray.o = medium_sample.pos;
   payload.ray.d = w_o;
   payload.ray.max_t = kMaxFloat;
-  payload.ray.min_t = kRayEpsilon;
+  payload.ray.min_t = 0.0f;
   payload.path_length += 1;
   ETX_CHECK_FINITE(payload.ray.d);
 }
 
 ETX_SHARED_INLINE SpectralResponse evaluate_light(const Scene& scene, const Intersection& intersection, const Raytracing& rt, const Material& mat, const uint32_t medium,
   const SpectralQuery spect, const EmitterSample& emitter_sample, Sampler& smp, bool mis) {
-  if (emitter_sample.pdf_dir == 0.0f) {
+  if ((emitter_sample.pdf_dir == 0.0f) || (scattering_direction_valid(scene, intersection, intersection.w_i, emitter_sample.direction) == false)) {
     return {spect, 0.0f};
   }
 
@@ -339,7 +355,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
     return false;
   }
 
-  if (bsdf_sample.valid() == false) {
+  if ((bsdf_sample.valid() == false) || (scattering_direction_valid(scene, intersection, intersection.w_i, bsdf_sample.w_o) == false)) {
     return false;
   }
 
@@ -379,7 +395,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
 
   if (subsurface_sampled) {
     const auto& out_intersection = ss_gather.intersection;
-    payload.ray.d = sample_cosine_distribution(rnd_bsdf, out_intersection.nrm, 1.0f);
+    payload.ray.d = sample_cosine_distribution(payload.smp.next_2d(), out_intersection.nrm, 1.0f);
     payload.throughput *= ss_gather.weight;
     payload.sampled_bsdf_pdf = fabsf(dot(payload.ray.d, out_intersection.nrm)) / kPi;
     payload.mis_weight = true;

@@ -117,10 +117,10 @@ inline bool upbp_make_subsurface_state(const Scene& scene, const SpectralQuery s
     subsurface::remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
     result.tracking.scattering = scattering;
     result.tracking.absorption = extinction - scattering;
-    result.medium = {.extinction = extinction, .anisotropy = 0.0f, .index = kInvalidIndex};
+    result.medium = {.extinction = extinction, .anisotropy = material.subsurface_anisotropy, .index = kInvalidIndex};
   }
-  result.active = medium_tracking_majorant(result.tracking) > 0.0f;
-  return result.active;
+  result.active = true;
+  return true;
 }
 
 inline bool upbp_walk_subsurface_segment(const Raytracing& rt, const Scene& scene, const UPBPSubsurfaceState& subsurface_state, Sampler& intersection_sampler,
@@ -180,7 +180,9 @@ inline bool upbp_walk_subsurface_segment(const Raytracing& rt, const Scene& scen
     result.terminal = UPBPSceneSegmentTerminal::Absorb;
   } else {
     result.intersection = exit_intersection;
-    result.intersection.material_index = scene.defaults.subsurface_scatter_material;
+    if (scene.materials[subsurface_state.material_index].cls != MaterialClass::Plastic) {
+      result.intersection.material_index = scene.defaults.subsurface_scatter_material;
+    }
     result.terminal = UPBPSceneSegmentTerminal::Surface;
   }
   return true;
@@ -369,29 +371,47 @@ inline bool upbp_build_subpath(const Raytracing& rt, const Scene& scene, const U
         return true;
       };
       const Material& material = scene.materials[intersection.material_index];
+      const bool coated_subsurface = (material.cls == MaterialClass::Plastic) && (material.subsurface_cls != SubsurfaceMaterial::Disabled);
+      if (coated_subsurface && (inside_subsurface == false)) {
+        if (upbp_make_subsurface_state(scene, input.spect, material, intersection, subsurface_state) == false) {
+          result.failure = UPBPSubpathFailure::InvalidScatteringSample;
+          return false;
+        }
+        subsurface_state.active = false;
+      }
       const BSDFData bsdf_data = {input.spect, result.active_medium_index, input.source, intersection, intersection.w_i};
       BSDFSample sample = bsdf::sample(bsdf_data, material, path_sampler);
       if (sample.valid() == false) {
         return append_terminal_surface();
       }
 
-      const bool subsurface_path = (exiting_subsurface == false) && (material.subsurface_cls != SubsurfaceMaterial::Disabled) &&
-                                   ((sample.properties & BSDFSample::Reflection) != 0u) && ((sample.properties & BSDFSample::Diffuse) != 0u);
+      if (exiting_subsurface && ((sample.properties & BSDFSample::Transmission) != 0u)) {
+        sample.medium_index = scene.materials[subsurface_state.material_index].ext_medium;
+      }
+
+      const bool subsurface_path =
+        (material.subsurface_cls != SubsurfaceMaterial::Disabled) &&
+        (coated_subsurface ? ((material.int_medium == kInvalidIndex) &&
+                               ((sample.properties & ((dot(intersection.nrm, intersection.w_i) > 0.0f) ? BSDFSample::Reflection : BSDFSample::Transmission)) != 0u))
+                           : ((exiting_subsurface == false) && ((sample.properties & BSDFSample::Reflection) != 0u) && ((sample.properties & BSDFSample::Diffuse) != 0u)));
       if (subsurface_path) {
-        if (upbp_make_subsurface_state(scene, input.spect, material, intersection, subsurface_state) == false) {
+        if ((coated_subsurface == false) && (exiting_subsurface == false) && (upbp_make_subsurface_state(scene, input.spect, material, intersection, subsurface_state) == false)) {
           result.failure = UPBPSubpathFailure::InvalidScatteringSample;
           return false;
         }
-        const bool diffuse_path = material.subsurface_path == SubsurfaceMaterial::DiffusePath;
-        sample.w_o = diffuse_path ? sample_cosine_distribution(path_sampler.next_2d(), -intersection.nrm, 1.0f) : intersection.w_i;
-        sample.weight = SpectralResponse{input.spect, 1.0f};
-        sample.pdf = fabsf(dot(sample.w_o, intersection.nrm)) / kPi;
-        sample.eta = 1.0f;
-        sample.medium_index = subsurface_state.medium.index;
-        sample.properties = BSDFSample::Transmission | BSDFSample::Diffuse | BSDFSample::MediumChanged;
-        if (sample.pdf <= 0.0f) {
-          result.failure = UPBPSubpathFailure::InvalidScatteringSample;
-          return false;
+        subsurface_state.active = true;
+        if (coated_subsurface == false) {
+          const bool diffuse_path = material.subsurface_path == SubsurfaceMaterial::DiffusePath;
+          sample.w_o = diffuse_path ? sample_cosine_distribution(path_sampler.next_2d(), -intersection.nrm, 1.0f) : intersection.w_i;
+          sample.weight = SpectralResponse{input.spect, 1.0f};
+          sample.pdf = fabsf(dot(sample.w_o, intersection.nrm)) / kPi;
+          sample.eta = 1.0f;
+          sample.medium_index = subsurface_state.medium.index;
+          sample.properties = BSDFSample::Transmission | BSDFSample::Diffuse | BSDFSample::MediumChanged;
+          if (sample.pdf <= 0.0f) {
+            result.failure = UPBPSubpathFailure::InvalidScatteringSample;
+            return false;
+          }
         }
       }
 
@@ -402,7 +422,7 @@ inline bool upbp_build_subpath(const Raytracing& rt, const Scene& scene, const U
       vertex.position = intersection.pos;
       vertex.sampled_direction = sample.w_o;
       vertex.intersection = intersection;
-      if (subsurface_path) {
+      if (subsurface_path && (coated_subsurface == false)) {
         vertex.intersection.material_index = scene.defaults.subsurface_scatter_material;
       }
       vertex.scatter_pdf_forward = sample.pdf;
@@ -413,7 +433,7 @@ inline bool upbp_build_subpath(const Raytracing& rt, const Scene& scene, const U
       vertex.connectible = (sample.properties & BSDFSample::Delta) == 0u;
       vertex.delta = (sample.properties & BSDFSample::Delta) != 0u;
       vertex.outgoing_medium_index = ((sample.properties & BSDFSample::MediumChanged) != 0u) ? sample.medium_index : result.active_medium_index;
-      if (subsurface_path) {
+      if (subsurface_path || coated_subsurface) {
         vertex.medium = subsurface_state.medium;
       } else if (vertex.outgoing_medium_index != kInvalidIndex) {
         vertex.medium = make_medium_instance(scene.mediums[vertex.outgoing_medium_index], input.spect, vertex.outgoing_medium_index);

@@ -41,14 +41,9 @@
     seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
   }
   uint seed = scene_random_domain_seed(seed_pixel_index, constants.sample_index, kSamplerRandomDomainLightPathRoot);
-  SpectralQuery spect = spectral_query_sample();
-  if (scene_path_mode_is_vcm() || scene_path_mode_is_upbp()) {
-    spect = wavefront_vcm_iteration_spectral_query();
-    if (scene_uses_spectral_mode()) {
-      rnd01(seed);
-    }
-  } else if (scene_uses_spectral_mode()) {
-    spect = spectral_query_spectral_sample(rnd01(seed));
+  const SpectralQuery spect = wavefront_vcm_iteration_spectral_query();
+  if (scene_uses_spectral_mode()) {
+    rnd01(seed);
   }
 #if ETX_UPBP
   if (upbp_linear_dispatch) {

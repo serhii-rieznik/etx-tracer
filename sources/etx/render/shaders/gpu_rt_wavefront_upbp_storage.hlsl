@@ -268,6 +268,7 @@ GPUUPBPVertex upbp_load_bpt_light_vertex(GPUUPBPResources resources, uint index)
   result.scatter_pdf_forward = asfloat(buffer.Load(base_offset + kGPUUPBPBPTVertexScatterPdfForwardOffset));
   result.inline_extinction.payload = wavefront_load_float4(buffer, base_offset + kGPUUPBPBPTVertexInlineExtinctionOffset);
   result.incident_medium_index = buffer.Load(base_offset + kGPUUPBPBPTVertexIncidentMediumIndexOffset);
+  result.outgoing_medium_index = buffer.Load(base_offset + kGPUUPBPBPTVertexOutgoingMediumIndexOffset);
   return result;
 }
 
@@ -295,6 +296,7 @@ void upbp_store_bpt_light_vertex(uint descriptor_index, uint index, GPUUPBPVerte
   buffer.Store(base_offset + kGPUUPBPBPTVertexScatterPdfForwardOffset, asuint(value.scatter_pdf_forward));
   wavefront_store_float4(buffer, base_offset + kGPUUPBPBPTVertexInlineExtinctionOffset, value.inline_extinction.payload);
   buffer.Store(base_offset + kGPUUPBPBPTVertexIncidentMediumIndexOffset, value.incident_medium_index);
+  buffer.Store(base_offset + kGPUUPBPBPTVertexOutgoingMediumIndexOffset, value.outgoing_medium_index);
 }
 
 GPUUPBPPathState upbp_load_bpt_light_path_state(uint descriptor_index, uint index) {

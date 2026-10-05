@@ -33,7 +33,7 @@ struct BSDFPlasticIncidentTerms {
   float specular_probability ETX_INIT(0.0f);
 };
 
-ETX_SHARED_NOINLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+ETX_SHARED_NOINLINE float bsdf_plastic_opaque_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler));
 
 ETX_SHARED_NOINLINE float bsdf_plastic_pdf_prepared(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_IN(float3, local_w_i),
@@ -374,8 +374,8 @@ ETX_SHARED_NOINLINE BSDFEval bsdf_plastic_evaluate_prepared(ETX_IN(BSDFResourceC
   return bsdf_plastic_evaluate_prepared_impl(context, data, material, local_w_i, local_w_o, roughness, alpha, substrate, reflectance, ext_ior, int_ior, thinfilm, incident_terms);
 }
 
-ETX_SHARED_NOINLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
-  ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_NOINLINE BSDFEval bsdf_plastic_opaque_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction),
+  ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   const bool thinfilm_enabled = bsdf_resource_thinfilm_enabled(material.thinfilm);
   float2 roughness = float2(0.0f, 0.0f);
   if (thinfilm_enabled) {
@@ -410,7 +410,7 @@ ETX_SHARED_NOINLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, c
   return bsdf_plastic_evaluate_prepared(context, data, material, local_w_i, local_w_o, roughness, alpha, substrate, reflectance, ext_ior, int_ior, thinfilm, thinfilm_lut_value);
 }
 
-ETX_SHARED_NOINLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+ETX_SHARED_NOINLINE BSDFSample bsdf_plastic_opaque_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   const bool thinfilm_enabled = bsdf_resource_thinfilm_enabled(material.thinfilm);
   float2 roughness = float2(0.0f, 0.0f);
   if (thinfilm_enabled) {
@@ -534,7 +534,7 @@ ETX_SHARED_NOINLINE float bsdf_plastic_pdf_prepared(ETX_IN(BSDFResourceContext, 
   return bsdf_plastic_pdf_prepared_impl(data, local_w_i, local_w_o, roughness, ext_ior, int_ior, thinfilm, incident_terms);
 }
 
-ETX_SHARED_NOINLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+ETX_SHARED_NOINLINE float bsdf_plastic_opaque_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   const bool thinfilm_enabled = bsdf_resource_thinfilm_enabled(material.thinfilm);
@@ -571,13 +571,36 @@ ETX_SHARED_NOINLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context),
 }
 
 ETX_SHARED_INLINE bool bsdf_plastic_is_delta(ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler)) {
-  (void)material;
-  (void)tex;
-  (void)sampler;
+  if (bsdf_plastic_has_subsurface(material)) {
+    return bsdf_dielectric_energy_compensated_is_delta(material, tex, sampler);
+  }
   return false;
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_plastic_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
+}
+
+ETX_SHARED_NOINLINE BSDFEval bsdf_plastic_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
+  if (bsdf_plastic_has_subsurface(material)) {
+    return bsdf_dielectric_energy_compensated_evaluate(context, data, outgoing_direction, material, sampler);
+  }
+  return bsdf_plastic_opaque_evaluate(context, data, outgoing_direction, material, sampler);
+}
+
+ETX_SHARED_NOINLINE BSDFSample bsdf_plastic_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  if (bsdf_plastic_has_subsurface(material)) {
+    return bsdf_dielectric_energy_compensated_sample(context, data, material, sampler);
+  }
+  return bsdf_plastic_opaque_sample(context, data, material, sampler);
+}
+
+ETX_SHARED_NOINLINE float bsdf_plastic_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
+  ETX_INOUT(Sampler, sampler)) {
+  if (bsdf_plastic_has_subsurface(material)) {
+    return bsdf_dielectric_energy_compensated_pdf(context, data, outgoing_direction, material, sampler);
+  }
+  return bsdf_plastic_opaque_pdf(context, data, outgoing_direction, material, sampler);
 }

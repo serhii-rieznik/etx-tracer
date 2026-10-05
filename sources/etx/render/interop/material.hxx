@@ -111,4 +111,10 @@ struct ETX_ALIGNED Material {
   float thermal_emission_weight ETX_INIT(0.0f);
   uint32_t thermal_int_medium_index ETX_INIT(kInvalidIndex);
   uint32_t thermal_conductor_image_index ETX_INIT(kInvalidIndex);
+  float subsurface_packing ETX_INIT(0.0f);
+  float subsurface_anisotropy ETX_INIT(0.0f);
 };
+
+ETX_SHARED_INLINE uint32_t material_boundary_class(uint32_t material_class, uint32_t subsurface_class) {
+  return ((material_class == MaterialClass::Plastic) && (subsurface_class != SubsurfaceMaterial::Disabled)) ? MaterialClass::Dielectric : material_class;
+}

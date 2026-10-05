@@ -96,6 +96,9 @@ struct PathVertex {
     float eval_pdf = 0.0f;
     if (curr.is_surface_interaction()) {
       ETX_ASSERT(material != nullptr);
+      if (scattering_direction_valid(scene_global_get(), curr.intersection, w_i, w_o) == false) {
+        return 0.0f;
+      }
       eval_pdf = bsdf::pdf({spect, kInvalidIndex, path_source, curr.intersection, w_i}, w_o, *material, smp);
       ETX_VALIDATE(eval_pdf);
     } else if (curr.is_medium_interaction()) {
@@ -139,6 +142,9 @@ struct PathVertex {
 
     if (is_surface_interaction()) {
       ETX_ASSERT(material != nullptr);
+      if (scene_math_shared_scattering_direction_valid(intersection.nrm, geo_n, intersection.w_i, w_o) == false) {
+        return Result{{spect, 0.0f}, 0.0f};
+      }
       BSDFEval eval = bsdf::evaluate({spect, kInvalidIndex, mode, intersection, intersection.w_i}, w_o, *material, smp);
       ETX_VALIDATE(eval.bsdf);
       if (mode == PathSource::Light) {
@@ -234,6 +240,8 @@ struct CPUBidirectionalImpl : public Task {
     float d_vc = 0.0f;
     float path_distance = 0.0f;
     uint32_t medium_index = kInvalidIndex;
+    MediumInstance subsurface_medium = {};
+    SpectralResponse subsurface_albedo = {};
     PathSource mode = PathSource::Undefined;
     uint2 pixel = {};
     uint32_t iteration = 0;
@@ -485,7 +493,7 @@ struct CPUBidirectionalImpl : public Task {
 
     ray.o = medium_sample_pos;
     ray.d = w_o;
-    ray.min_t = kRayEpsilon;
+    ray.min_t = 0.0f;
     ray.max_t = kMaxFloat;
 
     record_path_vertex(payload, path_data, curr, prev);
@@ -502,7 +510,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   InteractionResult handle_surface(const Intersection& a_intersection, const EmitterSample& emitter_sample, const bool first_interaction, Payload& payload, Ray& ray, Sampler& smp,
-    PathData& path_data, PathVertex& curr, PathVertex& prev, GBuffer& gbuffer, bool subsurface_exit) const {
+    PathData& path_data, PathVertex& curr, PathVertex& prev, GBuffer& gbuffer, const uint32_t subsurface_exit_material) const {
     const auto& scene = rt.scene();
 
     float2 rnd_bsdf = smp.next_2d();
@@ -539,11 +547,20 @@ struct CPUBidirectionalImpl : public Task {
     auto bsdf_sample = bsdf::sample(bsdf_data, scene.materials[a_intersection.material_index], smp);
     smp.pop_fixed();
 
+    if ((subsurface_exit_material != kInvalidIndex) && ((bsdf_sample.properties & BSDFSample::Transmission) != 0u)) {
+      bsdf_sample.medium_index = scene.materials[subsurface_exit_material].ext_medium;
+    }
+
     ETX_VALIDATE(bsdf_sample.weight);
 
-    bool subsurface_path = (subsurface_exit == false) &&                                                                       //
-                           (scene.materials[a_intersection.material_index].subsurface_cls != SubsurfaceMaterial::Disabled) &&  //
-                           (bsdf_sample.properties & BSDFSample::Reflection) && (bsdf_sample.properties & BSDFSample::Diffuse);
+    const auto& surface_material = scene.materials[a_intersection.material_index];
+    const bool coated_subsurface = surface_material.cls == MaterialClass::Plastic;
+    const bool mapped_coated_medium = coated_subsurface && (surface_material.int_medium != kInvalidIndex) && (surface_material.subsurface_packing == 0.0f);
+    const bool subsurface_path =
+      (surface_material.subsurface_cls != SubsurfaceMaterial::Disabled) && (mapped_coated_medium == false) &&
+      (coated_subsurface
+          ? ((bsdf_sample.properties & ((dot(a_intersection.nrm, a_intersection.w_i) > 0.0f) ? BSDFSample::Reflection : BSDFSample::Transmission)) != 0u)
+          : ((subsurface_exit_material == kInvalidIndex) && ((bsdf_sample.properties & BSDFSample::Reflection) != 0u) && ((bsdf_sample.properties & BSDFSample::Diffuse) != 0u)));
 
     uint32_t material_index = a_intersection.material_index;
 
@@ -553,32 +570,55 @@ struct CPUBidirectionalImpl : public Task {
 
     if (subsurface_path) {
       const auto& sss_material = scene.materials[a_intersection.material_index];
-      material_index = scene.defaults.subsurface_scatter_material;
-      medium_instance.index = sss_material.int_medium;
-
-      if (medium_instance.index == kInvalidIndex) {
-        medium_instance = subsurface_to_medium_instance(material_index, payload, a_intersection);
+      material_index = coated_subsurface ? a_intersection.material_index : scene.defaults.subsurface_scatter_material;
+      if (subsurface_exit_material == kInvalidIndex) {
+        if (sss_material.int_medium == kInvalidIndex) {
+          const auto color = apply_image(payload.spect, sss_material.scattering, a_intersection.tex);
+          const auto distances = apply_image(payload.spect, sss_material.subsurface, a_intersection.tex);
+          SpectralResponse extinction{payload.spect};
+          SpectralResponse scattering{payload.spect};
+          payload.subsurface_albedo = {payload.spect};
+          subsurface::remap(color.integrated, distances.integrated, payload.subsurface_albedo.integrated, extinction.integrated, scattering.integrated);
+          subsurface::remap_channel(color.value, distances.value, payload.subsurface_albedo.value, extinction.value, scattering.value);
+          payload.subsurface_medium = {.extinction = extinction, .anisotropy = sss_material.subsurface_anisotropy, .index = kInvalidIndex};
+        } else {
+          const auto& medium = scene.mediums[sss_material.int_medium];
+          payload.subsurface_medium = make_medium_instance(medium, payload.spect, sss_material.int_medium);
+          payload.subsurface_albedo = calculate_albedo(payload.spect, medium_scattering(medium, payload.spect), SpectralResponse{payload.subsurface_medium.extinction});
+        }
       }
+      medium_instance = payload.subsurface_medium;
 
-      const bool diffuse_transmission = sss_material.subsurface_path == SubsurfaceMaterial::DiffusePath;
-      auto w_o = diffuse_transmission ? sample_cosine_distribution(smp.next_2d(), -a_intersection.nrm, 1.0f) : a_intersection.w_i;
+      if (coated_subsurface == false) {
+        const bool diffuse_transmission = sss_material.subsurface_path == SubsurfaceMaterial::DiffusePath;
+        auto w_o = diffuse_transmission ? sample_cosine_distribution(smp.next_2d(), -a_intersection.nrm, 1.0f) : a_intersection.w_i;
 
-      bsdf_sample.w_o = w_o;
-      bsdf_sample.weight = {payload.spect, 1.0f};
-      bsdf_sample.pdf = fabsf(dot(w_o, a_intersection.nrm)) / kPi;
-      bsdf_sample.eta = 1.0f;
-      bsdf_sample.medium_index = medium_instance.index;
-      bsdf_sample.properties = BSDFSample::Transmission | BSDFSample::Diffuse | BSDFSample::MediumChanged;
+        bsdf_sample.w_o = w_o;
+        bsdf_sample.weight = {payload.spect, 1.0f};
+        bsdf_sample.pdf = fabsf(dot(w_o, a_intersection.nrm)) / kPi;
+        bsdf_sample.eta = 1.0f;
+        bsdf_sample.medium_index = medium_instance.index;
+        bsdf_sample.properties = BSDFSample::Transmission | BSDFSample::Diffuse | BSDFSample::MediumChanged;
+      }
     }
 
     path_data.camera_path_size += uint32_t(payload.mode == PathSource::Camera);
     path_data.emitter_path_size += uint32_t(payload.mode == PathSource::Light);
+
+    if (scattering_direction_valid(scene, a_intersection, a_intersection.w_i, bsdf_sample.w_o) == false) {
+      bsdf_sample = {};
+    }
 
     curr = PathVertex{PathVertex::Class::Surface, a_intersection};
     curr.material = scene.materials[material_index].cls;
     curr.throughput = payload.throughput;
     curr.intersection.material_index = material_index;
     curr.medium = medium_instance;
+    if (coated_subsurface && (surface_material.subsurface_cls != SubsurfaceMaterial::Disabled) && (surface_material.int_medium == kInvalidIndex)) {
+      curr.medium.extinction = ((subsurface_exit_material == kInvalidIndex) && (subsurface_path == false))
+                                 ? subsurface_to_medium_instance(a_intersection.material_index, payload.spect, a_intersection).extinction
+                                 : payload.subsurface_medium.extinction;
+    }
     curr.pdf.bsdf_sample_next = bsdf_sample.pdf;
     curr.connectible = (bsdf_sample.properties & BSDFSample::Delta) == 0;
 
@@ -651,77 +691,62 @@ struct CPUBidirectionalImpl : public Task {
     return found_intersection ? StepResult::IntersectionFound : StepResult::Nothing;
   }
 
-  MediumInstance subsurface_to_medium_instance(const uint32_t subsurface_material, const Payload& payload, const Intersection& intersection) const {
+  MediumInstance subsurface_to_medium_instance(const uint32_t subsurface_material, const SpectralQuery spect, const Intersection& intersection) const {
     const auto& scene = rt.scene();
     const auto& mat = scene.materials[subsurface_material];
-    auto color = apply_image(payload.spect, mat.scattering, intersection.tex);
-    auto distances = apply_image(payload.spect, mat.subsurface, intersection.tex);
+    auto color = apply_image(spect, mat.scattering, intersection.tex);
+    auto distances = apply_image(spect, mat.subsurface, intersection.tex);
 
-    SpectralResponse extinction = {payload.spect};
-    SpectralResponse scattering = {payload.spect};
-    SpectralResponse albedo = {payload.spect};
+    SpectralResponse extinction = {spect};
+    SpectralResponse scattering = {spect};
+    SpectralResponse albedo = {spect};
     subsurface::remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
     subsurface::remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
 
     return {
       .extinction = extinction,
+      .anisotropy = mat.subsurface_anisotropy,
       .index = kInvalidIndex,
     };
   }
 
   StepResult subsurface_step(const uint32_t subsurface_material, Ray& ray, Sampler& smp, Intersection& intersection, Payload& payload, PathData& path_data, PathVertex& curr,
-    PathVertex& prev) const {
+    PathVertex& prev, uint32_t& path_length) const {
     const auto& scene = rt.scene();
 
-    SpectralResponse extinction = {payload.spect};
-    SpectralResponse scattering = {payload.spect};
-    SpectralResponse albedo = {payload.spect};
-
     const auto& mat = scene.materials[subsurface_material];
+    const MediumInstance medium_instance = payload.subsurface_medium;
+    const SpectralResponse extinction{medium_instance.extinction};
+    const SpectralResponse albedo = payload.subsurface_albedo;
 
-    MediumInstance medium_instance = {
-      .index = mat.int_medium,
-    };
-
-    if (mat.int_medium == kInvalidIndex) {
-      auto color = apply_image(payload.spect, mat.scattering, intersection.tex);
-      auto distances = apply_image(payload.spect, mat.subsurface, intersection.tex);
-      subsurface::remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
-      subsurface::remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
-      medium_instance = {.extinction = extinction, .index = kInvalidIndex};
-    } else {
-      const Medium& medium = scene.mediums[mat.int_medium];
-      medium_instance = make_medium_instance(medium, payload.spect, mat.int_medium);
-      scattering = medium_scattering(medium, payload.spect);
-      auto absorption = medium_absorption(medium, payload.spect);
-      extinction = scattering + absorption;
-      albedo = calculate_albedo(payload.spect, scattering, extinction);
-    }
-
-    for (uint32_t counter = 0; running() && (counter < 1024u); ++counter) {
+    for (uint32_t counter = 0u; running() && (path_length < scene.options.max_path_length); ++counter) {
       prev = curr;
-
-      SpectralResponse pdf = {};
-
-      ray.max_t = 0.0f;
-      while (running() && (ray.max_t < kRayEpsilon)) {
-        uint32_t channel = sample_spectrum_component(payload.spect, albedo, payload.throughput, smp.next(), pdf);
-        float sample_t = extinction.component(channel);
-        ray.max_t = (sample_t > 0.0f) ? -logf(1.0f - smp.next()) / sample_t : kMaxFloat;
-        ETX_VALIDATE(ray.max_t);
-      }
 
       if (running() == false) {
         return StepResult::Break;
       }
 
       Ray exit_ray = ray;
+      exit_ray.min_t = 0.0f;
       exit_ray.max_t = kMaxFloat;
       Intersection exit_intersection = {};
       if (rt.trace_material(scene, exit_ray, subsurface_material, exit_intersection, smp) == false) {
         payload.throughput = {payload.spect, 0.0f};
         return StepResult::Break;
       }
+      SpectralResponse channel_weight = albedo;
+      if ((mat.subsurface_packing > 0.0f) && (spectral_query_is_spectral(payload.spect) == false)) {
+        channel_weight.integrated = {
+          subsurface_free_path_channel_weight(extinction.integrated.x, mat.subsurface_packing, counter != 0u, exit_intersection.t, albedo.integrated.x),
+          subsurface_free_path_channel_weight(extinction.integrated.y, mat.subsurface_packing, counter != 0u, exit_intersection.t, albedo.integrated.y),
+          subsurface_free_path_channel_weight(extinction.integrated.z, mat.subsurface_packing, counter != 0u, exit_intersection.t, albedo.integrated.z),
+        };
+      }
+      SpectralResponse pdf = {};
+      const uint32_t channel = sample_spectrum_component(payload.spect, channel_weight, payload.throughput, smp.next(), pdf);
+      const float sample_t = extinction.component(channel);
+      ray.max_t = subsurface_free_path_sample(sample_t, mat.subsurface_packing, counter != 0u, smp.next());
+      ETX_VALIDATE(ray.max_t);
       const bool found_intersection = exit_intersection.t <= ray.max_t;
 
       if (found_intersection) {
@@ -731,27 +756,47 @@ struct CPUBidirectionalImpl : public Task {
 
       ETX_VALIDATE(ray.max_t);
 
-      SpectralResponse tr = spectrum_exp(-ray.max_t * extinction);
+      SpectralResponse tr{payload.spect};
+      SpectralResponse density{payload.spect};
+      if (spectral_query_is_spectral(payload.spect)) {
+        const SubsurfaceFreePath flight = subsurface_free_path_evaluate(extinction.value, mat.subsurface_packing, counter != 0u, ray.max_t);
+        tr.value = flight.survival;
+        density.value = flight.density;
+      } else {
+        const SubsurfaceFreePath x = subsurface_free_path_evaluate(extinction.integrated.x, mat.subsurface_packing, counter != 0u, ray.max_t);
+        const SubsurfaceFreePath y = subsurface_free_path_evaluate(extinction.integrated.y, mat.subsurface_packing, counter != 0u, ray.max_t);
+        const SubsurfaceFreePath z = subsurface_free_path_evaluate(extinction.integrated.z, mat.subsurface_packing, counter != 0u, ray.max_t);
+        tr.integrated = {x.survival, y.survival, z.survival};
+        density.integrated = {x.density, y.density, z.density};
+      }
 
-      pdf *= found_intersection ? tr : tr * extinction;
+      pdf *= found_intersection ? tr : density;
       if (pdf.is_zero())
         return StepResult::Break;
 
-      auto weight = (found_intersection ? tr : tr * scattering) / pdf.sum();
+      auto weight = (found_intersection ? tr : subsurface::safe_mul(density, albedo)) / pdf.sum();
       ETX_VALIDATE(weight);
 
       payload.throughput *= weight;
       ETX_VALIDATE(payload.throughput);
+
+      if (payload.throughput.is_zero()) {
+        return StepResult::Break;
+      }
 
       if (found_intersection) {
         return StepResult::IntersectionFound;
       }
 
       const float3 medium_sample_pos = ray.o + ray.d * ray.max_t;
-      handle_medium({}, false, false, medium_sample_pos, medium_instance, payload, ray, smp, path_data, curr, prev);
+      handle_medium({}, false, mode == Mode::BDPTFull, medium_sample_pos, medium_instance, payload, ray, smp, path_data, curr, prev);
+      if (random_continue(path_length, scene.options.random_path_termination, payload.eta, smp, payload.throughput) == false) {
+        return StepResult::Break;
+      }
+      path_length += 1u;
     }
 
-    return StepResult::Nothing;
+    return StepResult::Break;
   }
 
   SpectralResponse build_path(Sampler& smp, Ray ray, PathData& path_data, Payload& payload, const EmitterSample& emitter_sample, GBuffer& gbuffer, PathVertex& curr,
@@ -772,7 +817,7 @@ struct CPUBidirectionalImpl : public Task {
       if (subsurface_material == kInvalidIndex) {
         step = regular_step(ray, smp, intersection, medium_sample, payload, path_length + 1u);
       } else {
-        step = subsurface_step(subsurface_material, ray, smp, intersection, payload, path_data, curr, prev);
+        step = subsurface_step(subsurface_material, ray, smp, intersection, payload, path_data, curr, prev, path_length);
       }
 
       if (step == StepResult::Continue) {
@@ -791,13 +836,15 @@ struct CPUBidirectionalImpl : public Task {
         handle_medium(emitter_sample, first_interaction, medium.enable_explicit_connections, medium_sample.pos, medium_inst, payload, ray, smp, path_data, curr, prev);
         should_break = false;
       } else if (step == StepResult::IntersectionFound) {
-        bool from_subsurface = subsurface_material != kInvalidIndex;
-        if (from_subsurface) {
-          intersection.material_index = scene.defaults.subsurface_scatter_material;
+        const uint32_t subsurface_exit_material = subsurface_material;
+        if (subsurface_exit_material != kInvalidIndex) {
+          if (scene.materials[subsurface_exit_material].cls != MaterialClass::Plastic) {
+            intersection.material_index = scene.defaults.subsurface_scatter_material;
+          }
           subsurface_material = kInvalidIndex;
         }
 
-        auto result = handle_surface(intersection, emitter_sample, first_interaction, payload, ray, smp, path_data, curr, prev, gbuffer, from_subsurface);
+        auto result = handle_surface(intersection, emitter_sample, first_interaction, payload, ray, smp, path_data, curr, prev, gbuffer, subsurface_exit_material);
 
         if (result == InteractionResult::SampleSubsurface) {
           subsurface_material = intersection.material_index;
@@ -1229,7 +1276,7 @@ struct CPUBidirectionalImpl : public Task {
         shading_pos(scene, tri, z_curr.intersection.barycentric, normalize(sampled_vertex.intersection.pos - z_curr.intersection.pos), z_curr.intersection.instance_index);
     }
 
-    SpectralResponse tr = rt.trace_transmittance(spect, scene, shadow_origin, sampled_vertex.intersection.pos, z_curr.medium, smp);
+    SpectralResponse tr = rt.trace_transmittance(spect, scene, shadow_origin, sampled_vertex.intersection.pos, connection_medium(z_curr, dp), smp);
     float weight = mis_weight_camera_to_light(z_curr, z_prev, path_data, spect, emitter_sample, sampling_pdf, bsdf_eval.pdf, smp);
     return z_curr.throughput * bsdf_eval.bsdf * emitter_throughput * tr * weight;
   }
@@ -1289,6 +1336,26 @@ struct CPUBidirectionalImpl : public Task {
     return splat;
   }
 
+  MediumInstance connection_medium(const PathVertex& vertex, const float3& direction) const {
+    if (vertex.is_surface_interaction()) {
+      const auto& material = rt.scene().materials[vertex.intersection.material_index];
+      const bool coated_subsurface = (material.cls == MaterialClass::Plastic) && (material.subsurface_cls != SubsurfaceMaterial::Disabled);
+      if ((material.cls == MaterialClass::Dielectric) || coated_subsurface) {
+        const auto& scene = rt.scene();
+        const auto& triangle = scene.triangles[vertex.intersection.triangle_index];
+        const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, triangle, vertex.intersection.instance_index);
+        if (dot(geometric_normal, direction) >= 0.0f) {
+          return {.index = material.ext_medium};
+        }
+        if (coated_subsurface && (material.int_medium == kInvalidIndex)) {
+          return {.extinction = vertex.medium.extinction, .index = kInvalidIndex};
+        }
+        return {.index = material.int_medium};
+      }
+    }
+    return vertex.medium;
+  }
+
   SpectralResponse local_transmittance(SpectralQuery spect, Sampler& smp, const PathVertex& p0, const float3& p1) const {
     auto& scene = rt.scene();
     float3 origin = p0.intersection.pos;
@@ -1296,7 +1363,7 @@ struct CPUBidirectionalImpl : public Task {
       const auto& tri = scene.triangles[p0.intersection.triangle_index];
       origin = shading_pos(scene, tri, p0.intersection.barycentric, normalize(p1 - p0.intersection.pos), p0.intersection.instance_index);
     }
-    return rt.trace_transmittance(spect, scene, origin, p1, p0.medium, smp);
+    return rt.trace_transmittance(spect, scene, origin, p1, connection_medium(p0, p1 - origin), smp);
   }
 
   void build_options(Options& options) const {

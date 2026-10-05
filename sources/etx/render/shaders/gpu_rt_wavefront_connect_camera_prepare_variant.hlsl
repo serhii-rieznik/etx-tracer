@@ -22,8 +22,8 @@
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_PLASTIC)
 # include <interop/bsdf_plastic_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Plastic
-# define ETX_STAGE_BSDF_EVAL  bsdf_plastic_evaluate
-# define ETX_STAGE_BSDF_PDF   bsdf_plastic_pdf
+# define ETX_STAGE_BSDF_EVAL  bsdf_plastic_opaque_evaluate
+# define ETX_STAGE_BSDF_PDF   bsdf_plastic_opaque_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
 # if ETX_ENABLE_OPENPBR_STAGE
 #  include <interop/bsdf_openpbr_shared.hxx>
@@ -149,7 +149,7 @@ bool wavefront_connect_camera_stage_matches_material(uint material_class) {
   if (wavefront_load_connect_camera_prepare_input(dtid.x, input_value) == false) {
     return;
   }
-  if (wavefront_connect_camera_stage_matches_material(input_value.material.cls) == false) {
+  if (wavefront_connect_camera_stage_matches_material(material_boundary_class(input_value.material.cls, input_value.material.subsurface_cls)) == false) {
     return;
   }
 

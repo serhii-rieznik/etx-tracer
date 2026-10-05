@@ -86,8 +86,10 @@ uint wavefront_material_queue_index_from_material(uint material_index) {
     return kInvalidIndex;
   }
   ByteAddressBuffer materials = WAVEFRONT_RO_BUFFER(constants.scene.materials);
-  const uint material_class = materials.Load(material_index * kMaterialStride + kMaterialClassOffset);
-  return wavefront_material_queue_index(material_class);
+  const uint base_offset = material_index * kMaterialStride;
+  const uint material_class = materials.Load(base_offset + kMaterialClassOffset);
+  const uint subsurface_class = materials.Load(base_offset + kMaterialSubsurfaceClassOffset);
+  return wavefront_material_queue_index(material_boundary_class(material_class, subsurface_class));
 }
 
 uint wavefront_shadow_queue_base_offset(GPUWavefrontResources resources, uint shadow_queue_index) {

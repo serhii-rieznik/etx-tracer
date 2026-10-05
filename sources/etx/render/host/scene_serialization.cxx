@@ -15,6 +15,7 @@
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
 #include <etx/render/host/scene_procedural_geometry.hxx>
+#include <limits>
 
 namespace etx {
 
@@ -2228,6 +2229,21 @@ struct SceneSerializationImpl {
           i += 3;
         } else if ((strcmp(params[i], "scale") == 0) && (i + 1 < e)) {
           subsurface_scale = static_cast<float>(atof(params[i + 1]));
+          i += 1;
+        } else if ((strcmp(params[i], "packing") == 0) || (strcmp(params[i], "anisotropy") == 0)) {
+          float parsed = std::numeric_limits<float>::quiet_NaN();
+          if ((i + 1) < e) {
+            char* end = nullptr;
+            const float value = strtof(params[i + 1], &end);
+            if ((end != params[i + 1]) && (*end == '\0') && std::isfinite(value)) {
+              parsed = value;
+            }
+          }
+          if (strcmp(params[i], "packing") == 0) {
+            mtl.subsurface_packing = parsed;
+          } else {
+            mtl.subsurface_anisotropy = parsed;
+          }
           i += 1;
         } else if ((strcmp(params[i], "image") == 0) && (i + 1 < e)) {
           if (get_file(base_dir, params[i + 1])) {

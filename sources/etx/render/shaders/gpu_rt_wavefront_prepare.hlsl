@@ -6,11 +6,12 @@
     return;
   }
 
-  const SpectralQuery spect = wavefront_vcm_iteration_spectral_query();
+  const SpectralQuery spect = spectral_query_progressive_sample(constants.sample_index, load_scene_options_random_seed());
   RWByteAddressBuffer spectral_values = bindless_rw_buffers[NonUniformResourceIndex(constants.scene.spectral_values)];
   if (dtid.x == 0u) {
     const float3 rgb_estimate_scale = spectral_response_to_rgb_estimate(spectral_response_make(spect, 1.0f));
     spectral_values.Store3(kGPUSpectralValuesRGBEstimateScaleOffset, asuint(rgb_estimate_scale));
+    spectral_values.Store(kGPUSpectralValuesWavelengthOffset, asuint(spect.wavelength));
   }
 
   if (constants.scene.spectrums == kInvalidIndex) {

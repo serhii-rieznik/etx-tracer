@@ -27,7 +27,7 @@ inline UPBPScatteringEval upbp_evaluate_vertex_scattering(const Scene& scene, co
     return result;
   }
 
-  if (vertex.cls != UPBPVertexClass::Surface) {
+  if ((vertex.cls != UPBPVertexClass::Surface) || (scattering_direction_valid(scene, vertex.intersection, vertex.intersection.w_i, outgoing_direction) == false)) {
     return result;
   }
 
@@ -58,6 +58,9 @@ inline uint32_t upbp_connection_medium(const Scene& scene, const UPBPPathVertexR
   const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, triangle, vertex.intersection.instance_index);
   if ((dot(geometric_normal, vertex.intersection.w_i) * dot(geometric_normal, outgoing_direction)) < 0.0f) {
     return vertex.incident_medium_index;
+  }
+  if (vertex.intersection.material_index == scene.defaults.subsurface_scatter_material) {
+    return vertex.outgoing_medium_index;
   }
   return (dot(geometric_normal, outgoing_direction) < 0.0f) ? material.int_medium : material.ext_medium;
 }
@@ -103,6 +106,46 @@ inline bool upbp_sample_connection_transmittance(const Raytracing& rt, const Sce
 
   const float minimum_distance = source.cls == UPBPVertexClass::Medium ? 0.0f : kRayEpsilon;
   const Ray ray = {origin, direction, minimum_distance, maximum_distance};
+  const Material* material = source.cls == UPBPVertexClass::Surface ? &scene.materials[source.intersection.material_index] : nullptr;
+  const bool inline_coated_subsurface = (material != nullptr) && (material->cls == MaterialClass::Plastic) && (material->subsurface_cls != SubsurfaceMaterial::Disabled) &&
+                                        (material->int_medium == kInvalidIndex) && (dot(source.intersection.nrm, direction) < 0.0f);
+  const bool inline_subsurface =
+    (inline_coated_subsurface || ((source.cls == UPBPVertexClass::Surface) && (source.intersection.material_index == scene.defaults.subsurface_scatter_material) &&
+                                   (source.outgoing_medium_index == kInvalidIndex))) &&
+    (spectral_response_is_zero(source.medium.extinction) == false);
+  if (inline_subsurface) {
+    Intersection intersection = {};
+    if (rt.trace(scene, ray, intersection, intersection_sampler)) {
+      return true;
+    }
+    const MediumTrackingInput input = {
+      .spect = spect,
+      .scattering = SpectralResponse{spect, 0.0f},
+      .absorption = source.medium.extinction,
+      .density_majorant = 1.0f,
+    };
+    UPBPSegmentRecord interval = {};
+    result.segment.reset(spect);
+    if (upbp_track_medium_segment(
+          input, medium_sampler, ray.o, ray.d, ray.max_t, kInvalidIndex, maximum_null_events_per_interval,
+          [](const float3&) {
+            return 1.0f;
+          },
+          interval) == false) {
+      result.segment.failure = interval.failure;
+      result.medium_failure = interval.failure;
+      result.failure = UPBPSceneSegmentFailure::MediumTracking;
+      return false;
+    }
+    if (result.segment.append(interval) == false) {
+      result.medium_failure = result.segment.failure;
+      result.failure = UPBPSceneSegmentFailure::MediumTracking;
+      return false;
+    }
+    result.visible = interval.terminal_event == MediumTrackingEventType::Escape;
+    result.weight = result.visible ? result.segment.weight : SpectralResponse{spect, 0.0f};
+    return true;
+  }
   UPBPSceneSegmentResult scene_segment = {};
   if (upbp_walk_scene_segment(rt, scene, spect, intersection_sampler, medium_sampler, ray, upbp_connection_medium(scene, source, direction), maximum_boundary_count,
         maximum_null_events_per_interval, scene_segment) == false) {

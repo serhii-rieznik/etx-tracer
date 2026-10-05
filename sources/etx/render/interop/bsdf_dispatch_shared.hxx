@@ -186,7 +186,8 @@ ETX_SHARED_INLINE bool bsdf_is_delta_with_context(ETX_IN(BSDFResourceContext, co
     case MaterialClass::Dielectric:
       return bsdf_dielectric_energy_compensated_is_delta_with_context(context, effective_material, tex);
     case MaterialClass::Plastic:
-      return bsdf_plastic_is_delta(effective_material, tex, sampler);
+      return bsdf_plastic_has_subsurface(effective_material) ? bsdf_dielectric_energy_compensated_is_delta_with_context(context, effective_material, tex)
+                                                             : bsdf_plastic_is_delta(effective_material, tex, sampler);
     case MaterialClass::Thinfilm:
       return bsdf_thinfilm_is_delta(effective_material, tex, sampler);
     case MaterialClass::Mirror:

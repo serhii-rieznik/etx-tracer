@@ -59,7 +59,11 @@ bool wavefront_connect_light_try_load_vertex_medium(GPUWavefrontPathVertex verte
   }
 
   if (wavefront_path_vertex_is_subsurface(vertex)) {
-    medium_access.phase_function_g = 0.0f;
+    Material material = (Material)0;
+    if (try_load_material_full(vertex.material_index, material) == false) {
+      return false;
+    }
+    medium_access.phase_function_g = material.subsurface_anisotropy;
     return true;
   }
 
@@ -171,6 +175,10 @@ uint wavefront_connect_light_upbp_connection_medium(WavefrontConnectLightPrepare
   if (wavefront_path_vertex_is_surface(input_value.light_vertex)) {
     if ((dot(input_value.light_vertex.geo_normal, input_value.light_vertex.w_i) * dot(input_value.light_vertex.geo_normal, direction_to_camera)) < 0.0f) {
       return light_vertex.incident_medium_index;
+    }
+    ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
+    if (input_value.light_vertex.material_index == scene_gpu_load_u32(scene_globals, kSceneGlobalsDefaultSubsurfaceScatterMaterialOffset)) {
+      return light_vertex.outgoing_medium_index;
     }
     return dot(input_value.light_vertex.geo_normal, direction_to_camera) < 0.0f ? input_value.light_material.int_medium : input_value.light_material.ext_medium;
   }
@@ -412,7 +420,10 @@ void wavefront_initialize_connect_light_prepare_candidate(uint dispatch_index, u
 
 void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput input_value, ETX_IN(BSDFEval, camera_eval), WavefrontConnectLightStagePrepared prepared,
   uint camera_reverse_seed) {
-  if (bsdf_eval_valid(camera_eval) == false) {
+  if ((bsdf_eval_valid(camera_eval) == false) ||
+      (wavefront_path_vertex_is_surface(input_value.camera_vertex) &&
+        (scene_math_shared_scattering_direction_valid(input_value.camera_vertex.normal, input_value.camera_vertex.geo_normal, input_value.camera_vertex.w_i,
+           normalize(input_value.light_vertex.position - input_value.camera_vertex.position)) == false))) {
     return;
   }
 
@@ -456,7 +467,7 @@ void wavefront_store_connect_light_camera_task(WavefrontConnectLightPrepareInput
   candidate.previous_light_vertex_index = input_value.previous_light_vertex_index;
   candidate.flags = GPUWavefrontConnectLightTaskFlags::CameraPrepared;
   candidate.sampler_seed = input_value.camera_sampler_seed;
-  candidate.light_material_class = input_value.light_material.cls;
+  candidate.light_material_class = material_boundary_class(input_value.light_material.cls, input_value.light_material.subsurface_cls);
   wavefront_store_connect_light_candidate(input_value.resources.connect_light_task_buffer, input_value.storage_index, candidate);
 }
 #endif
@@ -484,7 +495,8 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   if (wavefront_load_connect_light_prepare_input(dispatch_index, batch_index, false, kInvalidIndex, kInvalidIndex, input_value) == false) {
     return;
   }
-  if (wavefront_connect_light_stage_matches_vertex(input_value.light_vertex, input_value.light_material.cls) == false) {
+  if (wavefront_connect_light_stage_matches_vertex(input_value.light_vertex, material_boundary_class(input_value.light_material.cls, input_value.light_material.subsurface_cls)) ==
+      false) {
     return;
   }
 
@@ -520,7 +532,9 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
     light_eval = wavefront_connect_light_stage_light_bsdf_eval_prepared(resource_context, light_data, direction_to_camera, input_value.light_material, prepared, light_sampler);
     light_reverse_seed = light_sampler.seed;
   }
-  if (bsdf_eval_valid(light_eval) == false) {
+  if ((bsdf_eval_valid(light_eval) == false) ||
+      (wavefront_path_vertex_is_surface(input_value.light_vertex) && (scene_math_shared_scattering_direction_valid(input_value.light_vertex.normal,
+                                                                        input_value.light_vertex.geo_normal, input_value.light_vertex.w_i, direction_to_camera) == false))) {
     return;
   }
   if (wavefront_path_vertex_is_surface(input_value.light_vertex)) {
@@ -594,13 +608,22 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   task.sampler_seed = sampler_random_seed(candidate.sampler_seed, candidate.light_vertex_index);
   task.inline_medium_extinction = input_value.light_vertex.inline_medium_extinction;
   task.inline_medium_flags = input_value.light_vertex.inline_medium_flags;
+  if (wavefront_path_vertex_is_surface(input_value.light_vertex) &&
+      ((input_value.light_material.cls == MaterialClass::Dielectric) ||
+        ((input_value.light_material.cls == MaterialClass::Plastic) && (input_value.light_material.subsurface_cls != SubsurfaceMaterial::Disabled)))) {
+    const bool into_body = dot(input_value.light_vertex.geo_normal, direction_to_camera) < 0.0f;
+    task.medium_index = into_body ? input_value.light_material.int_medium : input_value.light_material.ext_medium;
+    task.inline_medium_flags = into_body ? task.inline_medium_flags : 0u;
+  }
 # if ETX_UPBP
   if (scene_path_mode_is_upbp()) {
     const GPUUPBPResources upbp_resources = upbp_load_resources(input_value.resources);
     const GPUUPBPVertex camera_vertex = upbp_load_vertex(upbp_resources.vertex_buffer, input_value.camera_vertex_index);
     const GPUUPBPVertex light_vertex = upbp_load_bpt_light_vertex(upbp_resources, input_value.light_vertex_index);
     const bool light_vertex_inline_medium = (input_value.light_vertex.inline_medium_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u;
-    task.medium_index = light_vertex_inline_medium ? kInvalidIndex : wavefront_connect_light_upbp_connection_medium(input_value, light_vertex, direction_to_camera);
+    task.medium_index = ((input_value.light_material.cls == MaterialClass::Plastic) && (input_value.light_material.subsurface_cls != SubsurfaceMaterial::Disabled))
+                          ? (dot(input_value.light_vertex.geo_normal, direction_to_camera) < 0.0f ? input_value.light_material.int_medium : input_value.light_material.ext_medium)
+                          : (light_vertex_inline_medium ? kInvalidIndex : wavefront_connect_light_upbp_connection_medium(input_value, light_vertex, direction_to_camera));
     task.upbp_camera_vertex_index = input_value.camera_vertex_index;
     task.upbp_light_vertex_index = input_value.light_vertex_index;
     task.upbp_camera_pdf_forward_bits = asuint(candidate.camera_pdf);

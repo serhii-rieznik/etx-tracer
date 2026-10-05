@@ -14,6 +14,10 @@ bool upbp_vertex_is_delta(GPUUPBPVertex vertex) {
   return (vertex.flags & GPUUPBPVertexFlags::Delta) != 0u;
 }
 
+bool upbp_previous_bpt_connectible(GPUUPBPRecursiveWeights weights) {
+  return (weights.flags & (GPUUPBPRecursiveWeightFlags::PreviousDelta | GPUUPBPRecursiveWeightFlags::PreviousNonConnectible)) == 0u;
+}
+
 bool upbp_vertex_is_density_connectible(GPUUPBPVertex vertex) {
   return (vertex.flags & GPUUPBPVertexFlags::DensityConnectible) != 0u;
 }
@@ -176,8 +180,7 @@ float2 upbp_bpt_vertex_mis_terms(GPUUPBPIteration iteration, GPUUPBPVertex verte
   const GPUUPBPRecursiveWeights weights = vertex.arrival_weights;
   const float log_local_volume = upbp_log_recursive_local_volume_factor(iteration, vertex, weights, -log_reverse_ray_pdf,
     upbp_vertex_is_medium(vertex) ? -vertex.log_medium_event_density : kUPBPLogZero, sin_theta);
-  const bool previous_delta = (weights.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
-  const float log_base = upbp_log_add(upbp_log_add(log_local_volume, previous_delta ? kUPBPLogZero : weights.log_d_shared),
+  const float log_base = upbp_log_add(upbp_log_add(log_local_volume, upbp_previous_bpt_connectible(weights) ? weights.log_d_shared : kUPBPLogZero),
     upbp_log_mis_reverse_term(weights.log_d_bpt_base, scattering_pdf_reverse, weights.log_ray_sample_reverse_pdf_inverse));
   const float log_surface = upbp_log_product(upbp_log_positive(iteration.technique_factors[1u]),
     upbp_log_add(upbp_log_surface_coefficient(iteration, vertex),
@@ -200,11 +203,9 @@ UPBPGPUSurfaceMISWeights upbp_point_merge_mis_weights(GPUUPBPIteration iteration
   if (upbp_log_is_zero(log_selected_factor) || (scattering_pdf_forward <= 0.0f) || (scattering_pdf_reverse <= 0.0f)) {
     return (UPBPGPUSurfaceMISWeights)0;
   }
-  const bool light_previous_delta = (light.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
-  const bool camera_previous_delta = (camera.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
   const float log_bpt_count = upbp_log_positive(iteration.bpt_sample_count);
-  const float log_light_shared = light_previous_delta ? kUPBPLogZero : upbp_log_product(light.log_d_shared, log_bpt_count);
-  const float log_camera_shared = camera_previous_delta ? kUPBPLogZero : upbp_log_product(camera.log_d_shared, log_bpt_count);
+  const float log_light_shared = upbp_previous_bpt_connectible(light) ? upbp_log_product(light.log_d_shared, log_bpt_count) : kUPBPLogZero;
+  const float log_camera_shared = upbp_previous_bpt_connectible(camera) ? upbp_log_product(camera.log_d_shared, log_bpt_count) : kUPBPLogZero;
   const float log_light_base = upbp_log_product(
     upbp_log_add(log_light_shared, upbp_log_mis_reverse_term(light.log_d_pde_base, scattering_pdf_forward, light.log_ray_sample_reverse_pdf_inverse)), -log_selected_factor);
   const float log_camera_base = upbp_log_product(
@@ -336,8 +337,7 @@ bool upbp_prepare_recursive_departure(GPUUPBPVertex vertex, GPUUPBPIteration ite
     state.failure_vertex_index = vertex_index;
     return false;
   }
-  const bool previous_delta = (state.weights.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
-  const bool bpt_previous = (previous_delta == false) && (upbp_vertex_is_delta(vertex) == false);
+  const bool bpt_previous = upbp_previous_bpt_connectible(state.weights) && (upbp_vertex_is_delta(vertex) == false) && ((vertex.flags & GPUUPBPVertexFlags::Connectible) != 0u);
   const float log_forward_pdf = log(forward_pdf);
   const float log_reverse_pdf = upbp_log_positive(reverse_pdf);
   const float log_cosine = log(cosine);
@@ -368,6 +368,7 @@ bool upbp_prepare_recursive_departure(GPUUPBPVertex vertex, GPUUPBPIteration ite
   state.weights.log_d_shared = -log_forward_pdf;
   state.weights.flags = upbp_vertex_is_medium(vertex) ? GPUUPBPRecursiveWeightFlags::PreviousInMedium : 0u;
   state.weights.flags |= upbp_vertex_is_delta(vertex) ? GPUUPBPRecursiveWeightFlags::PreviousDelta : 0u;
+  state.weights.flags |= (vertex.flags & GPUUPBPVertexFlags::Connectible) == 0u ? GPUUPBPRecursiveWeightFlags::PreviousNonConnectible : 0u;
   const float direction_cosine = dot(vertex.w_i, vertex.sampled_direction);
   state.last_sin_theta = sqrt(max(0.0f, 1.0f - direction_cosine * direction_cosine));
   const bool valid = isfinite(state.log_d_bpt_a) && isfinite(state.log_d_bpt_b) && isfinite(state.log_d_surface_b) && isfinite(state.log_d_pde_b);

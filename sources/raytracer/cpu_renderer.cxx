@@ -97,6 +97,11 @@ RendererStatus CPURaytracingRenderer::status() const {
     return result;
   }
   const Integrator* integrator = current_integrator();
+  if ((integrator != nullptr) && (integrator->subsurface_failure_reason() != nullptr)) {
+    result.state = RendererStatusState::Failed;
+    result.message = integrator->subsurface_failure_reason();
+    return result;
+  }
   if ((integrator == nullptr) || ((integrator->can_run() == false) && (integrator->failed() == false))) {
     if (_runtime_failure_reason.empty() == false) {
       result.state = RendererStatusState::Failed;

@@ -23,7 +23,7 @@ namespace etx {
 
 namespace {
 
-constexpr uint32_t kEnergyCompensationGeneratorVersion = 28u;
+constexpr uint32_t kEnergyCompensationGeneratorVersion = 29u;
 constexpr uint32_t kEnergyCompensationConductorLutSize = kBSDFEnergyCompensationConductorLutSize;
 constexpr uint32_t kEnergyCompensationDielectricLutSize = kBSDFEnergyCompensationDielectricLutSize;
 constexpr uint32_t kEnergyCompensationConductorSampleCount = 2048u;

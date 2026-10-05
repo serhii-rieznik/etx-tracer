@@ -15,6 +15,7 @@
 #include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/bsdf_energy_compensation_lut.hxx>
 #include <etx/render/host/thermal_preparation.hxx>
+#include <etx/render/host/subsurface_preparation.hxx>
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/host/scene_serialization.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
@@ -4297,7 +4298,7 @@ void SceneRepresentationImpl::set_scattering_rhi(RHIContext& rhi_context) {
 bool SceneRepresentationImpl::ensure_energy_compensation_interfaces() {
   const bool scattering_ready =
     ((rhi != nullptr) && rhi->valid()) ? etx::ensure_energy_compensation_interfaces(data, scheduler, *rhi) : etx::ensure_energy_compensation_interfaces(data, scheduler);
-  if ((scattering_ready == false) || (prepare_thermal_materials(data, active_camera.medium_index) == false)) {
+  if ((scattering_ready == false) || (subsurface_materials_valid(data) == false) || (prepare_thermal_materials(data, active_camera.medium_index) == false)) {
     return false;
   }
   create_area_emitters_from_materials();
@@ -4338,7 +4339,7 @@ EnergyCompensationPreparationState SceneRepresentationImpl::poll_energy_compensa
     return energy_compensation_preparation_state;
   }
 
-  if ((result == EnergyCompensationGenerationResult::Complete) && prepare_thermal_materials(data, active_camera.medium_index)) {
+  if ((result == EnergyCompensationGenerationResult::Complete) && subsurface_materials_valid(data) && prepare_thermal_materials(data, active_camera.medium_index)) {
     create_area_emitters_from_materials();
     energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
     return energy_compensation_preparation_state;
@@ -6180,6 +6181,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       }
       float3 subsurface_color = spectrum_rgb(material.subsurface.spectrum_index);
       materials_stream << " distances " << subsurface_color.x << " " << subsurface_color.y << " " << subsurface_color.z;
+      materials_stream << " packing " << material.subsurface_packing << " anisotropy " << material.subsurface_anisotropy;
       materials_stream << "\n";
     }
 

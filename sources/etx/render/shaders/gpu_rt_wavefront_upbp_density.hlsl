@@ -22,6 +22,7 @@ struct UPBPGPUPreparedBeam {
   uint event_index_offset;
   bool scale_d_shared_by_distance;
   bool previous_delta;
+  bool previous_connectible;
   bool valid;
 };
 
@@ -107,7 +108,8 @@ bool upbp_make_beam_from_interval(GPUUPBPResources resources, uint interval_inde
     return false;
   }
   const GPUUPBPInterval interval = upbp_load_interval(resources.interval_buffer, interval_index);
-  if (((interval.flags & GPUUPBPIntervalFlags::Valid) == 0u) || (interval.medium_index == kInvalidIndex) || (interval.segment_index >= resources.camera_segment_capacity)) {
+  if (((interval.flags & GPUUPBPIntervalFlags::Valid) == 0u) || ((interval.flags & GPUUPBPIntervalFlags::Subsurface) != 0u) || (interval.medium_index == kInvalidIndex) ||
+      (interval.segment_index >= resources.camera_segment_capacity)) {
     return false;
   }
   const GPUUPBPSegment segment = upbp_load_segment(resources.segment_buffer, interval.segment_index);
@@ -304,6 +306,7 @@ bool upbp_prepare_beam(GPUUPBPResources resources, GPUUPBPBeam beam, out UPBPGPU
   result.interval_distance = beam_interval.distance;
   result.log_d_shared = departure.weights.log_d_shared;
   result.previous_delta = (departure.weights.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
+  result.previous_connectible = (departure.weights.flags & GPUUPBPRecursiveWeightFlags::PreviousNonConnectible) == 0u;
   result.source_event_log_density = upbp_vertex_is_medium(source) ? source.log_medium_event_density : 0.0f;
   const float log_source_ray_ratio = upbp_vertex_is_medium(source) ? -result.source_event_log_density : kUPBPLogZero;
   result.scale_d_shared_by_distance = (source.path_length > 0u) || ((source.flags & GPUUPBPVertexFlags::DistantEndpoint) == 0u);
@@ -389,6 +392,7 @@ GPUUPBPDensityBeam upbp_pack_density_beam(GPUUPBPResources resources, GPUUPBPBea
   result.event_index_offset = 0u;
   result.flags |= prepared.scale_d_shared_by_distance ? GPUUPBPDensityBeamFlags::ScaleDSharedByDistance : 0u;
   result.flags |= prepared.previous_delta ? GPUUPBPDensityBeamFlags::PreviousDelta : 0u;
+  result.flags |= prepared.previous_connectible ? 0u : GPUUPBPDensityBeamFlags::PreviousNonConnectible;
   return result;
 }
 
@@ -411,6 +415,7 @@ UPBPGPUPreparedBeam upbp_unpack_density_beam(GPUUPBPDensityBeam record) {
   result.event_index_offset = record.event_index_offset;
   result.scale_d_shared_by_distance = (record.flags & GPUUPBPDensityBeamFlags::ScaleDSharedByDistance) != 0u;
   result.previous_delta = (record.flags & GPUUPBPDensityBeamFlags::PreviousDelta) != 0u;
+  result.previous_connectible = (record.flags & GPUUPBPDensityBeamFlags::PreviousNonConnectible) == 0u;
   result.valid = (record.flags & GPUUPBPDensityBeamFlags::Valid) != 0u;
   return result;
 }
@@ -515,6 +520,7 @@ bool upbp_partial_prepared_beam_vertex_with_interval(GPUUPBPResources resources,
   result.weights.log_ray_sample_forward_ratio = -log_real_event_density;
   result.weights.log_ray_sample_reverse_ratio = kUPBPLogZero;
   result.weights.flags = prepared.previous_delta ? GPUUPBPRecursiveWeightFlags::PreviousDelta : 0u;
+  result.weights.flags |= prepared.previous_connectible ? 0u : GPUUPBPRecursiveWeightFlags::PreviousNonConnectible;
   result.throughput = spectral_response_mul(prepared.source_throughput, spectral_response_mul(prepared.transport_at_origin.weight, partial_interval.weight));
   return upbp_recursive_weights_finite(result.weights) && (spectral_response_is_zero(result.throughput) == false);
 }
@@ -651,6 +657,9 @@ void upbp_evaluate_point_vertex_prepared(GPUUPBPResources resources, GPUUPBPVert
   float pdf_reverse = 0.0f;
   uint seed = upbp_pair_seed(resources.iteration, camera_vertex, light_vertex);
   if (surface) {
+    if (scene_math_shared_scattering_direction_valid(camera_vertex.normal, camera_vertex.geo_normal, camera_vertex.w_i, outgoing_direction) == false) {
+      return;
+    }
 #if defined(ETX_UPBP_SURFACE_VARIANT)
     if (prepared_query.valid == false) {
       return;
@@ -765,7 +774,7 @@ void upbp_evaluate_point_candidate(GPUUPBPResources resources, GPUUPBPVertex cam
 #if defined(ETX_UPBP_SURFACE_VARIANT)
   Material camera_material = (Material)0;
   if ((camera_vertex.material_index == kInvalidIndex) || (try_load_material_full(camera_vertex.material_index, camera_material) == false) ||
-      (upbp_surface_stage_matches_material(camera_material.cls) == false)) {
+      (upbp_surface_stage_matches_material(material_boundary_class(camera_material.cls, camera_material.subsurface_cls)) == false)) {
     return;
   }
   upbp_surface_camera_vertices[group_thread_index] = camera_vertex;
@@ -831,7 +840,7 @@ void upbp_evaluate_surface_point_merge_group(uint dispatch_index, uint group_thr
         Material camera_material = (Material)0;
         if (((camera_vertex.flags & GPUUPBPVertexFlags::Valid) != 0u) && (camera_vertex.path_length > 0u) && upbp_vertex_is_density_connectible(camera_vertex) &&
             (camera_vertex.material_index != kInvalidIndex) && try_load_material_full(camera_vertex.material_index, camera_material) &&
-            upbp_surface_stage_matches_material(camera_material.cls)) {
+            upbp_surface_stage_matches_material(material_boundary_class(camera_material.cls, camera_material.subsurface_cls))) {
           upbp_surface_camera_vertex = camera_vertex;
           upbp_surface_query_valid = 1u;
         }
@@ -1294,8 +1303,8 @@ void upbp_evaluate_environment_direct_hit(uint path_index, GPUWavefrontResources
         mis_weight = 1.0f;
       } else {
         const float log_reverse_ray_pdf = segment.log_transport_pdf_reverse + (upbp_vertex_is_medium(previous) ? previous.log_medium_event_density : 0.0f);
-        const bool previous_delta = (endpoint.arrival_weights.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
-        const float log_shared = previous_delta ? kUPBPLogZero : log(emitter_selection_pdf) + log(pdf_area) + endpoint.arrival_weights.log_d_shared;
+        const float log_shared =
+          upbp_previous_bpt_connectible(endpoint.arrival_weights) ? log(emitter_selection_pdf) + log(pdf_area) + endpoint.arrival_weights.log_d_shared : kUPBPLogZero;
         mis_weight = upbp_surface_mis_weight(upbp_bpt_direct_hit_cross_technique_weights(resources.iteration, endpoint.arrival_weights, log_shared,
                                                log(emitter_selection_pdf) + log(pdf_dir_out) + log_reverse_ray_pdf),
           0.0f);
@@ -1372,8 +1381,8 @@ void upbp_evaluate_direct_hit_dispatch(uint dispatch_index) {
     } else {
       const float log_reverse_ray_pdf = segment.log_transport_pdf_reverse + (upbp_vertex_is_medium(previous) ? previous.log_medium_event_density : 0.0f);
       const float emitter_selection_pdf = emitter_discrete_pdf(emitter_vertex.emitter_index);
-      const bool previous_delta = (emitter_vertex.arrival_weights.flags & GPUUPBPRecursiveWeightFlags::PreviousDelta) != 0u;
-      const float log_shared = previous_delta ? kUPBPLogZero : log(emitter_selection_pdf) + log(pdf_area) + emitter_vertex.arrival_weights.log_d_shared;
+      const float log_shared =
+        upbp_previous_bpt_connectible(emitter_vertex.arrival_weights) ? log(emitter_selection_pdf) + log(pdf_area) + emitter_vertex.arrival_weights.log_d_shared : kUPBPLogZero;
       mis_weight = upbp_surface_mis_weight(upbp_bpt_direct_hit_cross_technique_weights(resources.iteration, emitter_vertex.arrival_weights, log_shared,
                                              log(emitter_selection_pdf) + log(pdf_dir_out) + log_reverse_ray_pdf),
         0.0f);
@@ -1399,7 +1408,9 @@ uint upbp_surface_query_family_from_material(uint material_index) {
   if ((material_index == kInvalidIndex) || (constants.scene.materials == kInvalidIndex)) {
     return kInvalidIndex;
   }
-  const uint material_class = WAVEFRONT_RO_BUFFER(constants.scene.materials).Load(material_index * kMaterialStride + kMaterialClassOffset);
+  ByteAddressBuffer materials = WAVEFRONT_RO_BUFFER(constants.scene.materials);
+  const uint base_offset = material_index * kMaterialStride;
+  const uint material_class = material_boundary_class(materials.Load(base_offset + kMaterialClassOffset), materials.Load(base_offset + kMaterialSubsurfaceClassOffset));
   switch (material_class) {
     case MaterialClass::Plastic:
       return GPUUPBPSurfaceQueryFamily::Plastic;
@@ -1477,7 +1488,7 @@ uint upbp_surface_query_family_from_material(uint material_index) {
       }
     }
     if (((resources.iteration.technique_mask & GPUUPBPTechnique::BP2D) != 0u) && (resources.beam_buffer != kInvalidIndex) && upbp_vertex_is_medium(vertex) &&
-        (vertex.medium_index != kInvalidIndex)) {
+        upbp_vertex_is_density_connectible(vertex) && (vertex.medium_index != kInvalidIndex)) {
       uint query_index = 0u;
       counters.InterlockedAdd(GPUUPBPCounterIndex::CameraMediumVertexQuery * sizeof(uint), 1u, query_index);
       if (query_index < resources.beam_capacity) {
@@ -1492,7 +1503,7 @@ uint upbp_surface_query_family_from_material(uint material_index) {
       return;
     }
     const GPUUPBPInterval interval = upbp_load_interval(resources.interval_buffer, input_index);
-    if (((interval.flags & GPUUPBPIntervalFlags::Valid) == 0u) || (interval.medium_index == kInvalidIndex) ||
+    if (((interval.flags & GPUUPBPIntervalFlags::Valid) == 0u) || ((interval.flags & GPUUPBPIntervalFlags::Subsurface) != 0u) || (interval.medium_index == kInvalidIndex) ||
         ((resources.iteration.technique_mask & (GPUUPBPTechnique::PB2D | GPUUPBPTechnique::BB1D)) == 0u)) {
       return;
     }
@@ -2125,7 +2136,7 @@ groupshared GPUWavefrontCompactSpectralResponse upbp_bp2d_lane_contributions[kGP
     if (vertex_index < vertex_count) {
       upbp_bp2d_camera_vertex = upbp_load_vertex(resources.vertex_buffer, vertex_index);
       if (((upbp_bp2d_camera_vertex.flags & GPUUPBPVertexFlags::Valid) != 0u) && (upbp_bp2d_camera_vertex.path_length > 0u) && upbp_vertex_is_medium(upbp_bp2d_camera_vertex) &&
-          (upbp_bp2d_camera_vertex.medium_index != kInvalidIndex)) {
+          upbp_vertex_is_density_connectible(upbp_bp2d_camera_vertex) && (upbp_bp2d_camera_vertex.medium_index != kInvalidIndex)) {
         const SpectralResponse camera_throughput = upbp_unpack_spectral_response(upbp_bp2d_camera_vertex.throughput);
         SpectralResponse camera_scattering = spectral_response_zero(spectral_response_as_query(camera_throughput));
         SpectralResponse camera_pre_collision = spectral_response_zero(spectral_response_as_query(camera_throughput));

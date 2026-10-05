@@ -151,10 +151,11 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
 
   GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, meta.camera_path_length));
   const bool subsurface_medium_vertex = (wavefront_path_vertex_is_subsurface(current_vertex)) && (wavefront_path_vertex_is_medium(current_vertex));
-  const bool medium_direct_connection_disabled =
-    wavefront_path_vertex_is_medium(current_vertex) && (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index) == false);
-  if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_connectible(current_vertex) == false) || subsurface_medium_vertex ||
-      medium_direct_connection_disabled) {
+  const bool coated_subsurface_connections = wavefront_coated_subsurface_connections_enabled(current_vertex);
+  const bool medium_direct_connection_disabled = wavefront_path_vertex_is_medium(current_vertex) && (coated_subsurface_connections == false) &&
+                                                 (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index) == false);
+  if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_connectible(current_vertex) == false) ||
+      (subsurface_medium_vertex && (coated_subsurface_connections == false)) || medium_direct_connection_disabled) {
     return;
   }
   uint connection_length = meta.camera_path_length + 1u;
@@ -220,7 +221,10 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
 
   if (wavefront_path_vertex_is_medium(current_vertex)) {
     MediumAccess medium_access = (MediumAccess)0;
-    if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
+    if (coated_subsurface_connections) {
+      const GPUWavefrontSubsurfaceState body = wavefront_load_subsurface_state(wavefront_subsurface_state_buffer(resources, true), path_index);
+      medium_access.phase_function_g = body.phase_function_g;
+    } else if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
       return;
     }
 
@@ -273,6 +277,8 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
     }
     task.pixel_index = current_vertex.pixel_index;
     task.medium_index = current_vertex.medium_index;
+    task.inline_medium_extinction = current_vertex.inline_medium_extinction;
+    task.inline_medium_flags = current_vertex.inline_medium_flags;
     task.flags = GPUWavefrontPointConnectionTaskFlags::Ready | GPUWavefrontPointConnectionTaskFlags::SourceMedium;
     task.path_index = path_index;
 #if ETX_UPBP

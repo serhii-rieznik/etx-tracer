@@ -363,6 +363,12 @@ ETX_SHARED_INLINE float3 shading_pos(const Scene& scene, const Triangle& triangl
   return offset_ray(convex ? sh_pos : geo_pos, scene_triangle_world_geometric_normal(scene, triangle, instance_index) * direction);
 }
 
+ETX_SHARED_INLINE bool scattering_direction_valid(const Scene& scene, const Intersection& intersection, const float3& incoming_direction, const float3& outgoing_direction) {
+  const auto& triangle = scene.triangles[intersection.triangle_index];
+  return scene_math_shared_scattering_direction_valid(intersection.nrm, scene_triangle_world_geometric_normal(scene, triangle, intersection.instance_index), incoming_direction,
+    outgoing_direction);
+}
+
 ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float3& w_i, const IntersectionBase& base) {
   float3 bc = barycentrics(base.barycentric);
   const auto& tri = scene.triangles[base.triangle_index];

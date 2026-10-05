@@ -1,4 +1,5 @@
 #pragma once
+#include <interop/subsurface_free_path_shared.hxx>
 
 #include "gpu_rt_wavefront_common.hlsl"
 
@@ -828,7 +829,7 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
     uint terminal_type = kUPBPMediumFailure;
     bool tracking_valid = false;
     if (subsurface_state.medium_index != kInvalidIndex) {
-      tracking_valid = upbp_track_interval(upbp_resources, from_camera, path_index, subsurface_state.medium_index, ray.Origin, ray.Direction, surface_hit.hit_t,
+      tracking_valid = upbp_track_interval(upbp_resources, from_camera, path_index, subsurface_state.medium_index, true, ray.Origin, ray.Direction, surface_hit.hit_t,
         surface_hit.surface_point.vertex.pos, surface_hit.surface_point.geo_normal, spect, medium_seed, upbp_path_state, medium_sample, terminal_type);
     } else {
       const SpectralResponse absorption = spectral_response_sub(subsurface_state.extinction, subsurface_state.scattering);
@@ -854,7 +855,7 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
       return true;
     }
 
-    subsurface_state.flags = 0u;
+    subsurface_state.flags &= GPUWavefrontSubsurfaceFlags::InlineMedium;
     result = surface_hit;
     result.transmittance = medium_sample.weight;
     result.medium_index = subsurface_state.medium_index;
@@ -865,16 +866,10 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
   }
 #endif
 
-  SpectralResponse pdf = spectral_response_zero(spect);
-  float sampled_distance = 0.0f;
-  while (sampled_distance < kRayEpsilon) {
-    uint channel = medium_sample_shared_sample_spectrum_component(spect, subsurface_state.albedo, throughput, rnd01(seed), pdf);
-    float extinction_value = wavefront_subsurface_trace_response_component(subsurface_state.extinction, channel);
-    sampled_distance = (extinction_value > 0.0f) ? (-log(1.0f - rnd01(seed)) / extinction_value) : kMaxFloat;
-  }
+  const bool correlated_origin = (subsurface_state.flags & GPUWavefrontSubsurfaceFlags::CorrelatedOrigin) != 0u;
 
   RayDesc subsurface_ray = ray;
-  subsurface_ray.TMin = max(kRayEpsilon, ray.TMin);
+  subsurface_ray.TMin = 0.0f;
   subsurface_ray.TMax = kMaxFloat;
 
   TraceSurfaceResult surface_hit = (TraceSurfaceResult)0;
@@ -883,12 +878,37 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
     result.transmittance = spectral_response_make(spect, 0.0f);
     return false;
   }
+  SpectralResponse channel_weight = subsurface_state.albedo;
+  if ((subsurface_state.packing > 0.0f) && (spectral_query_is_spectral(spect) == false)) {
+    channel_weight = spectral_response_make(spect, float3(subsurface_free_path_channel_weight(subsurface_state.extinction.integrated.x, subsurface_state.packing, correlated_origin,
+                                                            surface_hit.hit_t, subsurface_state.albedo.integrated.x),
+                                                     subsurface_free_path_channel_weight(subsurface_state.extinction.integrated.y, subsurface_state.packing, correlated_origin,
+                                                       surface_hit.hit_t, subsurface_state.albedo.integrated.y),
+                                                     subsurface_free_path_channel_weight(subsurface_state.extinction.integrated.z, subsurface_state.packing, correlated_origin,
+                                                       surface_hit.hit_t, subsurface_state.albedo.integrated.z)));
+  }
+  SpectralResponse pdf = spectral_response_zero(spect);
+  const uint channel = medium_sample_shared_sample_spectrum_component(spect, channel_weight, throughput, rnd01(seed), pdf);
+  const float extinction_value = wavefront_subsurface_trace_response_component(subsurface_state.extinction, channel);
+  const float sampled_distance = subsurface_free_path_sample(extinction_value, subsurface_state.packing, correlated_origin, rnd01(seed));
   const bool intersection_found = surface_hit.hit_t <= sampled_distance;
   float segment_distance = intersection_found ? surface_hit.hit_t : sampled_distance;
-  SpectralResponse tr = spectral_response_exp(spectral_response_mul(subsurface_state.extinction, -segment_distance));
+  SpectralResponse tr = spectral_response_zero(spect);
+  SpectralResponse density = spectral_response_zero(spect);
+  if (spectral_query_is_spectral(spect)) {
+    const SubsurfaceFreePath flight = subsurface_free_path_evaluate(subsurface_state.extinction.value, subsurface_state.packing, correlated_origin, segment_distance);
+    tr = spectral_response_make(spect, flight.survival);
+    density = spectral_response_make(spect, flight.density);
+  } else {
+    const SubsurfaceFreePath x = subsurface_free_path_evaluate(subsurface_state.extinction.integrated.x, subsurface_state.packing, correlated_origin, segment_distance);
+    const SubsurfaceFreePath y = subsurface_free_path_evaluate(subsurface_state.extinction.integrated.y, subsurface_state.packing, correlated_origin, segment_distance);
+    const SubsurfaceFreePath z = subsurface_free_path_evaluate(subsurface_state.extinction.integrated.z, subsurface_state.packing, correlated_origin, segment_distance);
+    tr = spectral_response_make(spect, float3(x.survival, y.survival, z.survival));
+    density = spectral_response_make(spect, float3(x.density, y.density, z.density));
+  }
   SpectralResponse pdf_factor = tr;
   if (intersection_found == false) {
-    pdf_factor = wavefront_subsurface_trace_safe_mul(spect, tr, subsurface_state.extinction);
+    pdf_factor = density;
   }
   pdf = spectral_response_mul(pdf, pdf_factor);
   if (spectral_response_is_zero(pdf)) {
@@ -897,11 +917,11 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
 
   SpectralResponse weight = tr;
   if (intersection_found == false) {
-    weight = wavefront_subsurface_trace_safe_mul(spect, tr, subsurface_state.scattering);
+    weight = wavefront_subsurface_trace_safe_mul(spect, density, subsurface_state.albedo);
   }
-  SpectralResponse weighted_transmittance = spectral_response_div(weight, max(kEpsilon, wavefront_subsurface_trace_response_sum(pdf)));
+  SpectralResponse weighted_transmittance = spectral_response_div(weight, wavefront_subsurface_trace_response_sum(pdf));
   if (intersection_found) {
-    subsurface_state.flags = 0u;
+    subsurface_state.flags &= GPUWavefrontSubsurfaceFlags::InlineMedium;
     result = surface_hit;
     result.transmittance = weighted_transmittance;
     result.medium_index = subsurface_state.medium_index;
@@ -912,6 +932,7 @@ bool wavefront_trace_subsurface_path_state(bool from_camera, uint path_index, Ra
   }
 
   result.hit_t = segment_distance;
+  subsurface_state.flags |= GPUWavefrontSubsurfaceFlags::CorrelatedOrigin;
   result.transmittance = weighted_transmittance;
   result.surface_point.vertex.pos = ray.Origin + ray.Direction * segment_distance;
   result.hit = 1u;
@@ -1032,8 +1053,8 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, RayDesc ray, 
     uint upbp_terminal_type = kUPBPMediumEscape;
     if (record_upbp) {
       const float3 terminal_normal = found_hit ? segment_hit.surface_point.geo_normal : float3(0.0f, 0.0f, 0.0f);
-      if (upbp_track_interval(upbp_resources, from_camera, path_index, ray_medium_index, current_origin, ray.Direction, segment_distance, segment_hit.surface_point.vertex.pos,
-            terminal_normal, spect, upbp_medium_seed, upbp_path_state, medium_sample, upbp_terminal_type) == false) {
+      if (upbp_track_interval(upbp_resources, from_camera, path_index, ray_medium_index, false, current_origin, ray.Direction, segment_distance,
+            segment_hit.surface_point.vertex.pos, terminal_normal, spect, upbp_medium_seed, upbp_path_state, medium_sample, upbp_terminal_type) == false) {
         upbp_mark_failed_path(upbp_resources, from_camera, path_index, GPUUPBPPathFailure::TrackInterval);
         result.transmittance = spectral_response_make(spect, 0.0f);
         return false;
@@ -1139,7 +1160,7 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
   GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;
   uint subsurface_state_buffer = wavefront_subsurface_state_buffer(resources, from_camera);
   bool subsurface_active = wavefront_subsurface_state_active(resources, from_camera, path_index, subsurface_state);
-  ray.TMin = scene_path_mode_is_upbp() ? max(0.0f, state.ray.min_t) : max(kRayEpsilon, state.ray.min_t);
+  ray.TMin = max(0.0f, state.ray.min_t);
   ray.TMax = max(ray.TMin + kRayEpsilon, state.ray.max_t);
 
   uint medium_index = state.medium_index;

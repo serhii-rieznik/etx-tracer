@@ -6,6 +6,21 @@
 ETX_SHARED_INLINE bool bsdf_dielectric_is_delta(ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler));
 ETX_SHARED_INLINE bool bsdf_dielectric_is_delta_with_context(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, tex));
 
+ETX_SHARED_INLINE bool bsdf_plastic_has_subsurface(ETX_IN(Material, material)) {
+  return (material.cls == MaterialClass::Plastic) && (material.subsurface_cls != SubsurfaceMaterial::Disabled);
+}
+
+ETX_SHARED_INLINE SpectralResponse bsdf_dielectric_boundary_texture(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), bool reflection) {
+  if ((reflection == false) && bsdf_plastic_has_subsurface(material)) {
+    return spectral_response_make(data.spectrum_sample, 1.0f);
+  }
+  SpectralImage texture = material.reflectance;
+  if (reflection == false) {
+    texture = material.scattering;
+  }
+  return bsdf_resource_apply_image(context, data.spectrum_sample, texture, data.tex);
+}
+
 ETX_SHARED_INLINE bool bsdf_dielectric_has_thinfilm(ETX_IN(Material, material)) {
   return bsdf_resource_thinfilm_enabled(material.thinfilm);
 }
@@ -95,8 +110,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_delta_sample(ETX_IN(BSDFResourceCon
   const float eta_factor = data.path_source == PathSource::Light ? 1.0f / (eta * eta) : 1.0f;
   result.w_o = normalize(local_frame_from_local(frame, local_w_o));
   result.pdf = pdf;
-  result.weight = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex),
-    spectral_response_div(spectral_response_mul(one_minus_fresnel, eta_factor), pdf));
+  result.weight =
+    spectral_response_mul(bsdf_dielectric_boundary_texture(context, data, material, false), spectral_response_div(spectral_response_mul(one_minus_fresnel, eta_factor), pdf));
   result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged | BSDFSample::WavelengthDependentDirection;
   result.medium_index = outside ? material.int_medium : material.ext_medium;
   result.eta = eta;
@@ -130,7 +145,7 @@ ETX_SHARED_INLINE BSDFThinfilmInterface bsdf_thinfilm_interface(ETX_IN(BSDFResou
   const SpectralResponse fresnel = bsdf_fresnel_calculate(data.spectrum_sample, local_w_i.z, phase_ext_ior, phase_int_ior, thinfilm);
   const SpectralResponse one_minus_fresnel = spectral_response_sub(spectral_response_make(data.spectrum_sample, 1.0f), fresnel);
   result.reflection = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex), fresnel);
-  result.transmission = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex), one_minus_fresnel);
+  result.transmission = spectral_response_mul(bsdf_dielectric_boundary_texture(context, data, material, false), one_minus_fresnel);
   result.reflection_probability = min(1.0f, max(0.0f, spectral_response_monochromatic(fresnel)));
   result.transmission_probability = max(0.0f, 1.0f - result.reflection_probability);
   result.transmission_medium = entering ? material.int_medium : material.ext_medium;
@@ -219,7 +234,7 @@ ETX_SHARED_INLINE bool bsdf_thinfilm_is_delta(ETX_IN(Material, material), ETX_IN
 
 ETX_SHARED_INLINE SpectralResponse bsdf_thinfilm_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
-  return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
+  return bsdf_dielectric_boundary_texture(context, data, material, false);
 }
 
 ETX_SHARED_INLINE bool bsdf_dielectric_is_delta(ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler)) {
@@ -236,5 +251,5 @@ ETX_SHARED_INLINE bool bsdf_dielectric_is_delta_with_context(ETX_IN(BSDFResource
 
 ETX_SHARED_INLINE SpectralResponse bsdf_dielectric_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
-  return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
+  return bsdf_dielectric_boundary_texture(context, data, material, false);
 }

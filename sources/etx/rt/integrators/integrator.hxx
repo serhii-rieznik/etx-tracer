@@ -78,11 +78,15 @@ struct Integrator {
   }
 
   virtual bool failed() const {
-    return rt.medium_emission_failed();
+    return rt.medium_emission_failed() || (subsurface_failure_reason() != nullptr);
   }
 
   virtual const char* failure_reason() const {
-    return rt.medium_emission_failed() ? Raytracing::kMediumEmissionFailure : "";
+    if (rt.medium_emission_failed()) {
+      return Raytracing::kMediumEmissionFailure;
+    }
+    const char* reason = subsurface_failure_reason();
+    return reason != nullptr ? reason : "";
   }
 
   virtual PathProgress path_progress() const {
@@ -120,7 +124,18 @@ struct Integrator {
   }
 
   bool can_run() const {
-    return rt.scene().committed() && (rt.medium_emission_failed() == false);
+    return rt.scene().committed() && (rt.medium_emission_failed() == false) && (subsurface_failure_reason() == nullptr);
+  }
+
+  const char* subsurface_failure_reason() const {
+    if ((type() == Type::Bidirectional) || (type() == Type::VCM) || (type() == Type::UPBP)) {
+      for (const Material& material : rt.scene().materials) {
+        if ((material.subsurface_cls != SubsurfaceMaterial::Disabled) && (material.subsurface_packing > 0.0f)) {
+          return "Exclusion SSS requires the Path Tracing integrator; bidirectional and merging densities are not supported";
+        }
+      }
+    }
+    return nullptr;
   }
 
   State state() const {

@@ -19,8 +19,8 @@
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_PLASTIC)
 # define ETX_UPBP_SURFACE_QUERY_FAMILY GPUUPBPSurfaceQueryFamily::Plastic
 # include <interop/bsdf_plastic_shared.hxx>
-# define ETX_UPBP_SURFACE_EVAL bsdf_plastic_evaluate
-# define ETX_UPBP_SURFACE_PDF  bsdf_plastic_pdf
+# define ETX_UPBP_SURFACE_EVAL bsdf_plastic_opaque_evaluate
+# define ETX_UPBP_SURFACE_PDF  bsdf_plastic_opaque_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
 # define ETX_UPBP_SURFACE_QUERY_FAMILY GPUUPBPSurfaceQueryFamily::Conductor
 # if ETX_ENABLE_OPENPBR_STAGE
@@ -180,9 +180,9 @@ UPBPSurfacePreparedQuery upbp_surface_prepare_query(BSDFResourceContext context,
   result.material = material;
   result.data = data;
   result.context = context;
-  result.valid = upbp_surface_stage_matches_material(material.cls);
+  result.valid = upbp_surface_stage_matches_material(material_boundary_class(material.cls, material.subsurface_cls));
 #if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)) && (ETX_SPECTRAL_MODE != ETX_SPECTRAL_MODE_RUNTIME)
-  result.use_prepared_material = (material.cls == MaterialClass::Conductor) || (material.cls == MaterialClass::Dielectric);
+  result.use_prepared_material = (material.cls == MaterialClass::Conductor) || (material_boundary_class(material.cls, material.subsurface_cls) == MaterialClass::Dielectric);
   if (result.use_prepared_material) {
     Sampler sampler = (Sampler)0;
     result.prepared_material = bsdf_energy_compensated_prepare_material(result.context, data.spectrum_sample, material, data.tex, sampler);

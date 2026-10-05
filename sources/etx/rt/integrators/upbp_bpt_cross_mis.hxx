@@ -35,7 +35,7 @@ inline void upbp_bpt_add_vertex_mis_terms(UPBPSurfaceMISWeights& result, const U
   const double surface_factor = configuration.factor(UPBPTechnique::Surface);
   const double local_surface_coefficient = upbp_recursive_surface_coefficient(configuration, vertex.cls, vertex.delta, vertex.density_connectible);
   result.add_term(false, {sampling_density, local_volume_factor}, {});
-  result.add_term(false, {sampling_density, static_cast<double>(weights.previous_delta == false), weights.d_shared}, {});
+  result.add_term(false, {sampling_density, static_cast<double>((weights.previous_delta == false) && weights.previous_connectible), weights.d_shared}, {});
   result.add_term(false, {sampling_density, scattering_pdf_reverse, weights.d_bpt_base}, {weights.ray_sample_reverse_pdf_inverse});
   result.add_term(true, {sampling_density, surface_factor, local_surface_coefficient}, {});
   result.add_term(true, {sampling_density, scattering_pdf_reverse, surface_factor, weights.d_surface}, {weights.ray_sample_reverse_pdf_inverse});
@@ -93,7 +93,8 @@ inline UPBPSurfaceMISWeights upbp_bpt_direct_hit_cross_technique_weights(const U
   const UPBPTransportSegmentRecord& segment = camera_path.segments[emitter_vertex_index - 1u];
   const double reverse_ray_pdf = std::exp(upbp_segment_sampling_log_density(segment, previous, emitter, true));
   UPBPSurfaceMISWeights result = {1.0};
-  result.add_term(false, {emitter_selection_pdf, direct_area_pdf, static_cast<double>(camera_weights.previous_delta == false), camera_weights.d_shared}, {});
+  result.add_term(false,
+    {emitter_selection_pdf, direct_area_pdf, static_cast<double>((camera_weights.previous_delta == false) && camera_weights.previous_connectible), camera_weights.d_shared}, {});
   result.add_term(false, {emitter_selection_pdf, emission_direction_pdf, reverse_ray_pdf, camera_weights.d_bpt_base}, {});
   result.add_term(true, {emitter_selection_pdf, emission_direction_pdf, reverse_ray_pdf, configuration.factor(UPBPTechnique::Surface), camera_weights.d_surface}, {});
   return result;

@@ -129,6 +129,8 @@ ETX_SHARED_INLINE Material gpu_abi_load_material_full(ByteAddressBuffer buffer, 
   result.thermal_emission_weight = gpu_abi_load_f32(buffer, base_offset + kMaterialThermalEmissionWeightOffset);
   result.thermal_int_medium_index = gpu_abi_load_u32(buffer, base_offset + kMaterialThermalIntMediumIndexOffset);
   result.thermal_conductor_image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialThermalConductorImageIndexOffset);
+  result.subsurface_packing = gpu_abi_load_f32(buffer, base_offset + kMaterialSubsurfacePackingOffset);
+  result.subsurface_anisotropy = gpu_abi_load_f32(buffer, base_offset + kMaterialSubsurfaceAnisotropyOffset);
   result.energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialEnergyCompensationInterfaceIndexOffset);
   result.conductor_energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialConductorEnergyCompensationInterfaceIndexOffset);
   return result;

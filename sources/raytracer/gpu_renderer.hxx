@@ -448,6 +448,7 @@ struct GPURaytracingRenderer : public Renderer {
   void set_preparation_state(RendererPreparationState state, const char* phase, const std::string& message = {}, uint32_t completed_steps = 0u, uint32_t total_steps = 0u);
   void reset_runtime_failure();
   void set_runtime_failure(std::string message);
+  void set_configuration_failure(std::string message);
 
  private:
   RHIPipeline _pipelines[static_cast<uint32_t>(PipelineStage::Count)] = {};
@@ -682,6 +683,7 @@ struct GPURaytracingRenderer : public Renderer {
 
   std::string _compile_stage_filter = {};
   std::string _runtime_failure_reason = {};
+  bool _configuration_failed = false;
   std::string _preparation_phase = "Ready";
   std::string _preparation_message = {};
   RHIMemoryStats _last_memory_stats = {};

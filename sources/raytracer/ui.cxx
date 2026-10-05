@@ -1217,6 +1217,12 @@ void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vecto
   apply_field(before.subsurface_path, after.subsurface_path, [](Material& material, const uint32_t value) {
     material.subsurface_path = value;
   });
+  apply_field(before.subsurface_packing, after.subsurface_packing, [](Material& material, const float value) {
+    material.subsurface_packing = value;
+  });
+  apply_field(before.subsurface_anisotropy, after.subsurface_anisotropy, [](Material& material, const float value) {
+    material.subsurface_anisotropy = value;
+  });
   apply_field(before.cls, after.cls, [](Material& material, const uint32_t value) {
     material.cls = value;
   });
@@ -2808,14 +2814,24 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
             [&]() {
               return ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface_cls), "Disabled\0Random Walk\0");
             });
-          ImGui::TextUnformatted("Path");
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          changed |= mixed_control(material_values_mixed([](const Material& value) {
-            return value.subsurface_path;
-          }),
-            [&]() {
-              return ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface_path), "Diffuse Transmittance\0Refraction\0");
-            });
+          if ((material.cls != MaterialClass::Diffuse) && (material.cls != MaterialClass::Plastic) && (material.subsurface_cls != SubsurfaceMaterial::Disabled)) {
+            ImGui::TextWrapped("Random-walk SSS supports diffuse and plastic materials.");
+          }
+          if (material.cls == MaterialClass::Plastic) {
+            ImGui::TextWrapped("SSS replaces the diffuse substrate. The dielectric coating retains reflection, refraction and internal reflection.");
+          } else {
+            ImGui::TextUnformatted("Path");
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            changed |= mixed_control(material_values_mixed([](const Material& value) {
+              return value.subsurface_path;
+            }),
+              [&]() {
+                return ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface_path), "Diffuse Transmittance\0Incident Direction\0");
+              });
+            if ((material.subsurface_cls != SubsurfaceMaterial::Disabled) && (material.subsurface_path != SubsurfaceMaterial::DiffusePath)) {
+              ImGui::TextWrapped("Incident Direction omits refraction and is unsupported. Use Diffuse Transmittance or a dielectric with an internal medium.");
+            }
+          }
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.subsurface.spectrum_index;
           }),
@@ -2832,6 +2848,39 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
               ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
               return image_picker(scene_rep, "Subsurface Texture##subsurface_texture", material.subsurface.image_index, Image::RepeatU | Image::RepeatV);
             });
+
+          changed |= mixed_control(material_values_mixed([](const Material& value) {
+            return value.subsurface_packing;
+          }),
+            [&]() {
+              int model = material.subsurface_packing > 0.0f ? 1 : 0;
+              if (ImGui::Combo("Free paths##sss", &model, "Exponential\0Exclusion (PT)\0")) {
+                material.subsurface_packing = model == 0 ? 0.0f : 0.5f;
+                return true;
+              }
+              return false;
+            });
+          if (material.subsurface_packing > 0.0f) {
+            changed |= mixed_control(material_values_mixed([](const Material& value) {
+              return value.subsurface_packing;
+            }),
+              [&]() {
+                return ImGui::SliderFloat("Packing##sss", &material.subsurface_packing, 0.001f, 0.99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+              });
+            ImGui::TextWrapped(
+              "Requires Path Tracing. Diffuse uses Diffuse Transmittance; plastic retains its dielectric coating. Packing is exclusion distance / mean collision flight.");
+            ImGui::TextWrapped("Use uniform bulk coefficients or a homogeneous internal medium. Color and distance textures cannot define exclusion transport.");
+          }
+          if (material.int_medium == kInvalidIndex) {
+            changed |= mixed_control(material_values_mixed([](const Material& value) {
+              return value.subsurface_anisotropy;
+            }),
+              [&]() {
+                return ImGui::SliderFloat("Anisotropy##sss", &material.subsurface_anisotropy, -0.99f, 0.99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+              });
+          } else {
+            ImGui::TextDisabled("Anisotropy comes from the internal medium");
+          }
 
           ImGui::Spacing();
         }

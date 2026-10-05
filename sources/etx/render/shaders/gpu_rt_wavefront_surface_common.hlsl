@@ -406,7 +406,8 @@ void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_i
     return;
   }
 
-  if (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index) == false) {
+  const bool coated_subsurface_connections = wavefront_coated_subsurface_connections_enabled(current_vertex);
+  if ((coated_subsurface_connections == false) && (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index) == false)) {
     return;
   }
 
@@ -416,7 +417,10 @@ void wavefront_store_medium_connect_camera_task(uint dispatch_index, uint path_i
   }
 
   MediumAccess medium_access = (MediumAccess)0;
-  if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
+  if (coated_subsurface_connections) {
+    const GPUWavefrontSubsurfaceState body = wavefront_load_subsurface_state(wavefront_subsurface_state_buffer(resources, false), path_index);
+    medium_access.phase_function_g = body.phase_function_g;
+  } else if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
     return;
   }
 
@@ -607,6 +611,11 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     if (subsurface_medium_vertex) {
       GPUWavefrontSubsurfaceState subsurface_state = wavefront_load_subsurface_state(wavefront_subsurface_state_buffer(resources, from_camera), path_index);
       medium_access.phase_function_g = subsurface_state.phase_function_g;
+      current_vertex.material_index = subsurface_state.material_index;
+      if ((subsurface_state.flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) {
+        current_vertex.inline_medium_extinction = subsurface_state.extinction;
+        current_vertex.inline_medium_flags = GPUWavefrontSubsurfaceFlags::InlineMedium;
+      }
     } else {
       if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
         state.flags = 0u;
@@ -700,7 +709,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     state.sampled_bsdf_pdf = phase_pdf;
     state.ray.o = current_vertex.position;
     state.ray.d = normalize(sampled_direction);
-    state.ray.min_t = scene_path_mode_is_upbp() ? 0.0f : kRayEpsilon;
+    state.ray.min_t = 0.0f;
     state.ray.max_t = kMaxFloat;
 
     wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u), previous_vertex);
@@ -710,7 +719,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     }
     wavefront_store_path_meta(resources.path_meta_buffer, path_index, path_meta);
 
-    if ((from_camera == false) && (subsurface_medium_vertex == false)) {
+    if ((from_camera == false) && ((subsurface_medium_vertex == false) || wavefront_coated_subsurface_connections_enabled(current_vertex))) {
       wavefront_store_medium_connect_camera_task(dispatch_index, path_index, resources, state, path_meta, current_vertex, previous_vertex);
     }
 

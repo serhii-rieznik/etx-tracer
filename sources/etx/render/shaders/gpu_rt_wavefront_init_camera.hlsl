@@ -16,7 +16,7 @@
   uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
   uint seed = scene_random_domain_seed(seed_pixel_index, constants.sample_index, kSamplerRandomDomainCameraPathRoot);
   SpectralQuery spect = spectral_query_sample();
-  if (scene_path_mode_is_vcm() || scene_path_mode_is_upbp()) {
+  if (scene_path_mode_is_path_tracing() == false) {
     spect = wavefront_vcm_iteration_spectral_query();
     if (scene_uses_spectral_mode()) {
       rnd01(seed);

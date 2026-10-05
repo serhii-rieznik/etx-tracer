@@ -91,7 +91,7 @@ bool wavefront_vcm_merge_prepare(uint dispatch_index, out WavefrontVCMMergeQuery
   GPUWavefrontPathState state = (GPUWavefrontPathState)0;
   GPUWavefrontHit hit = (GPUWavefrontHit)0;
   if ((wavefront_vcm_merge_load_input(dispatch_index, query.resources, path_index, state, hit, query.camera_vertex, query.material) == false) ||
-      (wavefront_vcm_merge_stage_matches_material(query.material.cls) == false)) {
+      (wavefront_vcm_merge_stage_matches_material(material_boundary_class(query.material.cls, query.material.subsurface_cls)) == false)) {
     return false;
   }
   query.path_length = state.path_length;
@@ -181,6 +181,9 @@ float3 wavefront_vcm_merge_evaluate(WavefrontVCMMergeQuery query, uint light_ind
     return float3(0.0f, 0.0f, 0.0f);
   }
   float3 outgoing_direction = -light_vertex.w_i;
+  if (scene_math_shared_scattering_direction_valid(query.camera_vertex.normal, query.camera_vertex.geo_normal, query.camera_vertex.w_i, outgoing_direction) == false) {
+    return float3(0.0f, 0.0f, 0.0f);
+  }
   BSDFEval camera_eval = (BSDFEval)0;
 #if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)) && (ETX_SPECTRAL_MODE != ETX_SPECTRAL_MODE_RUNTIME)
   if (query.use_prepared_material) {

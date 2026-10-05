@@ -24,7 +24,7 @@ bool upbp_append_light_beam(GPUUPBPResources resources, GPUUPBPPathState path_st
   if ((resources.iteration.flags & GPUUPBPIterationFlags::CollectLightDensityRecords) == 0u) {
     return true;
   }
-  if (((path_state.flags & GPUUPBPPathStateFlags::Light) == 0u) || (interval.medium_index == kInvalidIndex)) {
+  if (((path_state.flags & GPUUPBPPathStateFlags::Light) == 0u) || (interval.medium_index == kInvalidIndex) || ((interval.flags & GPUUPBPIntervalFlags::Subsurface) != 0u)) {
     return true;
   }
   const float3 delta = interval.end_position - interval.start_position;
@@ -352,7 +352,7 @@ bool upbp_finish_interval(GPUUPBPResources resources, bool from_camera, uint pat
   return true;
 }
 
-bool upbp_track_interval(GPUUPBPResources resources, bool from_camera, uint path_index, uint medium_index, float3 origin, float3 direction, float maximum_distance,
+bool upbp_track_interval(GPUUPBPResources resources, bool from_camera, uint path_index, uint medium_index, bool subsurface, float3 origin, float3 direction, float maximum_distance,
   float3 surface_position, float3 surface_normal, SpectralQuery spect, inout uint seed, inout GPUUPBPPathState path_state, out MediumSample medium_sample, out uint terminal_type) {
   medium_sample = (MediumSample)0;
   medium_sample.weight = spectral_response_make(spect, 1.0f);
@@ -369,7 +369,7 @@ bool upbp_track_interval(GPUUPBPResources resources, bool from_camera, uint path
   interval.start_position = origin;
   interval.end_position = origin;
   interval.medium_index = medium_index;
-  interval.flags = GPUUPBPIntervalFlags::Valid;
+  interval.flags = GPUUPBPIntervalFlags::Valid | (subsurface ? GPUUPBPIntervalFlags::Subsurface : 0u);
   interval.first_event_index = kInvalidIndex;
   interval.segment_index = path_state.current_segment_index;
   interval.next_interval_index = kInvalidIndex;
@@ -529,7 +529,7 @@ bool upbp_track_homogeneous_interval(GPUUPBPResources resources, bool from_camer
   interval.start_position = origin;
   interval.end_position = origin;
   interval.medium_index = upbp_inline_medium_key(material_index);
-  interval.flags = GPUUPBPIntervalFlags::Valid | GPUUPBPIntervalFlags::InlineMedium;
+  interval.flags = GPUUPBPIntervalFlags::Valid | GPUUPBPIntervalFlags::InlineMedium | GPUUPBPIntervalFlags::Subsurface;
   interval.inline_scattering = upbp_pack_spectral_response(scattering);
   interval.inline_absorption = upbp_pack_spectral_response(absorption);
   interval.first_event_index = kInvalidIndex;

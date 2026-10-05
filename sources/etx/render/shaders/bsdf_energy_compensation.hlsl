@@ -378,7 +378,8 @@ EnergyCompensationDirectionalResult ec_integrate_conductor_directional(EnergyCom
       float raw_specular_pdf = vndf_pdf / max(kEpsilon, 4.0f * dot(w_o, m));
       EnergyCompensationLobe lobe = ec_conductor_base_lobe(spect, w_i, w_o, alpha, ext_ior, int_ior, thinfilm);
       if ((raw_specular_pdf > kEpsilon) && (lobe.pdf > kEpsilon)) {
-        result.albedo += float4(lobe.bsdf.integrated / raw_specular_pdf, 0.0f);
+        float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
+        result.albedo += float4(albedo / raw_specular_pdf, 0.0f);
         float lambda_o = bsdf_external_ray_info_make(w_o, alpha2).Lambda;
         float d = bsdf_external_d_ggx(m, alpha2);
         float g2 = 1.0f / (1.0f + lambda_i + lambda_o);
@@ -442,7 +443,8 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
       if (w_o_r.z > 0.0f) {
         EnergyCompensationLobe lobe = ec_dielectric_base_lobe(spect, w_i, w_o_r, alpha, source_ior, target_ior, thinfilm);
         if ((fresnel_probability > kEpsilon) && (lobe.pdf > kEpsilon)) {
-          result.branch_albedo[incident_side] += float4(lobe.bsdf.integrated * (fresnel_probability / lobe.pdf), 0.0f);
+          float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
+          result.branch_albedo[incident_side] += float4(albedo * (fresnel_probability / lobe.pdf), 0.0f);
           result.branch_visible_probability[incident_side] += fresnel_probability;
         }
       }
@@ -453,7 +455,8 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
           EnergyCompensationLobe lobe = ec_dielectric_base_lobe(spect, w_i, w_o_t, alpha, source_ior, target_ior, thinfilm);
           float transmission_probability = 1.0f - fresnel_probability;
           if ((transmission_probability > kEpsilon) && (lobe.pdf > kEpsilon)) {
-            result.branch_albedo[opposite_side] += float4(lobe.bsdf.integrated * (transmission_probability / lobe.pdf), 0.0f);
+            float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
+            result.branch_albedo[opposite_side] += float4(albedo * (transmission_probability / lobe.pdf), 0.0f);
             result.branch_visible_probability[opposite_side] += transmission_probability;
           }
         }

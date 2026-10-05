@@ -301,6 +301,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_translucent_evaluate(ETX_IN(BSDFResourceContext,
   result.bsdf = spectral_response_mul(result.func, abs_n_dot_o);
   result.pdf = kInvPi * abs_n_dot_o * branch_probability;
   result.eta = 1.0f;
+  result.properties = BSDFSample::Diffuse | (reflection ? BSDFSample::Reflection : (BSDFSample::Transmission | BSDFSample::MediumChanged));
+  result.medium_index = reflection ? data.current_medium : (local_frame_entering_material(frame) ? material.int_medium : material.ext_medium);
   return result;
 }
 

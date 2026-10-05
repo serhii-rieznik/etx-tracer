@@ -61,6 +61,7 @@ struct UPBPPointMergeMISInput {
     double ray_sample_reverse_pdf_inverse = 0.0;
     double ray_sample_forward_ratio = 0.0;
     bool previous_delta = false;
+    bool previous_connectible = true;
 
     Weights() = default;
 
@@ -71,7 +72,8 @@ struct UPBPPointMergeMISInput {
       , ray_sample_forward_pdf_inverse(weights.ray_sample_forward_pdf_inverse)
       , ray_sample_reverse_pdf_inverse(weights.ray_sample_reverse_pdf_inverse)
       , ray_sample_forward_ratio(weights.ray_sample_forward_ratio)
-      , previous_delta(weights.previous_delta) {
+      , previous_delta(weights.previous_delta)
+      , previous_connectible(weights.previous_connectible) {
     }
   };
 
@@ -186,8 +188,8 @@ inline UPBPSurfaceMISWeights upbp_point_merge_mis_weights(const UPBPPointMergeMI
   }
 
   const double inverse_selected_factor = 1.0 / selected_factor;
-  const double light_bpt_applicable = input.light.previous_delta ? 0.0 : 1.0;
-  const double camera_bpt_applicable = input.camera.previous_delta ? 0.0 : 1.0;
+  const double light_bpt_applicable = ((input.light.previous_delta == false) && input.light.previous_connectible) ? 1.0 : 0.0;
+  const double camera_bpt_applicable = ((input.camera.previous_delta == false) && input.camera.previous_connectible) ? 1.0 : 0.0;
   const double w_light_constant = inverse_selected_factor * (input.light.d_shared * light_bpt_applicable * static_cast<double>(input.bpt_sample_count) +
                                                               input.scattering_pdf_forward * input.light.d_pde_base / input.light.ray_sample_reverse_pdf_inverse);
   const double w_camera_constant = inverse_selected_factor * (input.camera.d_shared * camera_bpt_applicable * static_cast<double>(input.bpt_sample_count) +
@@ -304,6 +306,9 @@ inline bool upbp_evaluate_point_merge(const Scene& scene, const SpectralQuery sp
 
   const float3 outgoing_direction = -light_vertex.intersection.w_i;
   if (surface) {
+    if (scattering_direction_valid(scene, camera_vertex.intersection, camera_vertex.intersection.w_i, outgoing_direction) == false) {
+      return true;
+    }
     const Material& material = scene.materials[camera_vertex.intersection.material_index];
     const BSDFData data = {spect, camera_vertex.incident_medium_index, PathSource::Camera, camera_vertex.intersection, camera_vertex.intersection.w_i};
     const BSDFEval evaluation = bsdf::evaluate(data, outgoing_direction, material, sampler);
