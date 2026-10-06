@@ -78,7 +78,8 @@ bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery s
 }
 
 float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWavefrontPathVertex current_vertex, WavefrontEmitterSample emitter_sample, MediumAccess medium_access,
-  float phase_value) {
+  float phase_value, out float2 mis_terms) {
+  mis_terms = float2(0.0f, 0.0f);
   if (scene_multiple_importance_sampling_enabled() == false) {
     return 1.0f;
   }
@@ -101,8 +102,9 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
   if (scene_path_mode_uses_bdpt_fast() && (path_meta.camera_path_length != 1u)) {
     adjacent_connection = 0.0f;
   }
-  float w_camera = wavefront_safe_div(adjacent_connection + wavefront_connection_mis(current_vertex) * reverse_phase_pdf, density_ratio);
-  return 1.0f / (1.0f + w_light + w_camera);
+  float w_camera = wavefront_safe_div((adjacent_connection + wavefront_connection_mis(current_vertex) * reverse_phase_pdf), density_ratio);
+  mis_terms = float2(w_light, w_camera);
+  return 1.0f;
 }
 
 [numthreads(64, 1, 1)] void wavefront_camera_direct_light_sample_main(uint3 dtid : SV_DispatchThreadID) {
@@ -151,11 +153,11 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
 
   GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, meta.camera_path_length));
   const bool subsurface_medium_vertex = (wavefront_path_vertex_is_subsurface(current_vertex)) && (wavefront_path_vertex_is_medium(current_vertex));
-  const bool coated_subsurface_connections = wavefront_coated_subsurface_connections_enabled(current_vertex);
-  const bool medium_direct_connection_disabled = wavefront_path_vertex_is_medium(current_vertex) && (coated_subsurface_connections == false) &&
-                                                 (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index) == false);
+  const bool subsurface_connections = wavefront_subsurface_connections_enabled(current_vertex);
+  const bool medium_direct_connection_disabled =
+    wavefront_path_vertex_is_medium(current_vertex) && (subsurface_connections == false) && (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index) == false);
   if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_connectible(current_vertex) == false) ||
-      (subsurface_medium_vertex && (coated_subsurface_connections == false)) || medium_direct_connection_disabled) {
+      (subsurface_medium_vertex && (subsurface_connections == false)) || medium_direct_connection_disabled) {
     return;
   }
   uint connection_length = meta.camera_path_length + 1u;
@@ -221,7 +223,7 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
 
   if (wavefront_path_vertex_is_medium(current_vertex)) {
     MediumAccess medium_access = (MediumAccess)0;
-    if (coated_subsurface_connections) {
+    if (subsurface_connections) {
       const GPUWavefrontSubsurfaceState body = wavefront_load_subsurface_state(wavefront_subsurface_state_buffer(resources, true), path_index);
       medium_access.phase_function_g = body.phase_function_g;
     } else if (wavefront_try_load_medium(current_vertex.medium_index, medium_access) == false) {
@@ -234,7 +236,8 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
       return;
     }
 
-    float mis_weight = wavefront_medium_direct_light_weight(meta, current_vertex, emitter_sample, medium_access, phase_value);
+    float2 mis_terms = float2(0.0f, 0.0f);
+    float mis_weight = wavefront_medium_direct_light_weight(meta, current_vertex, emitter_sample, medium_access, phase_value, mis_terms);
     float upbp_w_light = 0.0f;
     float upbp_emission_to_direct_ratio = 0.0f;
     float upbp_reverse_phase_pdf = 0.0f;
@@ -278,7 +281,10 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
     task.pixel_index = current_vertex.pixel_index;
     task.medium_index = current_vertex.medium_index;
     task.inline_medium_extinction = current_vertex.inline_medium_extinction;
+    task.inline_medium_scattering = current_vertex.inline_medium_scattering;
     task.inline_medium_flags = current_vertex.inline_medium_flags;
+    task.subsurface_packing = current_vertex.subsurface_packing;
+    task.subsurface_endpoint_flags = GPUWavefrontSubsurfaceEndpointFlags::SourceCollision;
     task.flags = GPUWavefrontPointConnectionTaskFlags::Ready | GPUWavefrontPointConnectionTaskFlags::SourceMedium;
     task.path_index = path_index;
 #if ETX_UPBP
@@ -289,6 +295,8 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
 #endif
     {
       task.sampler_seed = state.sampler_seed;
+      task.upbp_auxiliary0_bits = asuint(mis_terms.x);
+      task.upbp_auxiliary1_bits = asuint(mis_terms.y);
     }
     wavefront_store_direct_light_task(resources.direct_light_task_buffer, dispatch_index, task);
     wavefront_shadow_queue_append(resources, kGPUWavefrontShadowQueueDirectLight, dispatch_index);

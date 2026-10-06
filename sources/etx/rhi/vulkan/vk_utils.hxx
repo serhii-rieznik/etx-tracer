@@ -6,6 +6,24 @@
 
 namespace etx {
 
+static RHIResult convert_vk_result_to_rhi(VkResult result) {
+  switch (result) {
+    case VK_SUCCESS:
+      return RHIResult::Success;
+    case VK_NOT_READY:
+    case VK_TIMEOUT:
+    case VK_PIPELINE_COMPILE_REQUIRED:
+      return RHIResult::NotReady;
+    case VK_ERROR_OUT_OF_HOST_MEMORY:
+    case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+      return RHIResult::OutOfMemory;
+    case VK_ERROR_DEVICE_LOST:
+      return RHIResult::DeviceLost;
+    default:
+      return RHIResult::ValidationError;
+  }
+}
+
 static VkFormat convert_rhi_format_to_vk(RHITextureFormat format) {
   switch (format) {
     case RHITextureFormat::R8_UNORM:

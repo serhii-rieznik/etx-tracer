@@ -28,6 +28,8 @@ GPUWavefrontPathVertex upbp_make_wavefront_path_vertex(GPUUPBPVertex vertex, boo
   result.flags |= ((vertex.flags & GPUUPBPVertexFlags::InlineMedium) != 0u) ? GPUWavefrontVertexFlags::Subsurface : 0u;
   if ((vertex.flags & GPUUPBPVertexFlags::InlineMedium) != 0u) {
     result.inline_medium_extinction = upbp_unpack_spectral_response(vertex.inline_extinction);
+    result.inline_medium_scattering = upbp_unpack_spectral_response(vertex.inline_scattering);
+    result.subsurface_packing = vertex.subsurface_packing;
     result.inline_medium_flags = GPUWavefrontSubsurfaceFlags::InlineMedium;
   }
   result.flags |= from_camera ? GPUWavefrontVertexFlags::From_camera : GPUWavefrontVertexFlags::From_light;

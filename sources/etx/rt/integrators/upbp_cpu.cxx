@@ -228,6 +228,23 @@ struct CPUUPBPImpl {
   std::vector<uint8_t> prepared_bb1d_validity = {};
   std::vector<UPBPMediumTrackingEventRecord> prepared_bb1d_tracking_events = {};
   std::vector<UPBPPreparedMedium> prepared_mediums = {};
+  std::vector<uint32_t> inline_prepared_medium_indices = {};
+  const Medium inline_density_medium = {.cls = Medium::Homogeneous};
+
+  uint32_t density_prepared_medium_index(const uint32_t medium_key) const {
+    if (medium_key == kInvalidIndex) {
+      return kInvalidIndex;
+    }
+    if ((medium_key & kUPBPInlineMediumBit) == 0u) {
+      return medium_key < rt.scene().mediums.count ? medium_key : kInvalidIndex;
+    }
+    const uint32_t material_index = medium_key & ~kUPBPInlineMediumBit;
+    return material_index < inline_prepared_medium_indices.size() ? inline_prepared_medium_indices[material_index] : kInvalidIndex;
+  }
+
+  const Medium& density_medium(const uint32_t medium_key) const {
+    return (medium_key & kUPBPInlineMediumBit) != 0u ? inline_density_medium : rt.scene().mediums[medium_key];
+  }
   UPBPPointIndex surface_index = {};
   UPBPPointIndex pp3d_index = {};
   UPBPPointBeamIndex pb2d_index = {};
@@ -535,6 +552,7 @@ struct CPUUPBPImpl {
     prepared_bb1d_validity = {};
     prepared_bb1d_tracking_events = {};
     prepared_mediums = {};
+    inline_prepared_medium_indices = {};
     surface_index = {};
     pp3d_index = {};
     pb2d_index = {};
@@ -575,6 +593,7 @@ struct CPUUPBPImpl {
     result += static_cast<uint64_t>(prepared_bb1d_validity.capacity()) * sizeof(uint8_t);
     result += static_cast<uint64_t>(prepared_bb1d_tracking_events.capacity()) * sizeof(UPBPMediumTrackingEventRecord);
     result += static_cast<uint64_t>(prepared_mediums.capacity()) * sizeof(UPBPPreparedMedium);
+    result += static_cast<uint64_t>(inline_prepared_medium_indices.capacity()) * sizeof(uint32_t);
     for (const UPBPPreparedMedium& prepared_medium : prepared_mediums) {
       result += prepared_medium.storage_bytes();
     }
@@ -646,6 +665,24 @@ struct CPUUPBPImpl {
       prepared_mediums.resize(rt.scene().mediums.count);
       for (uint32_t medium_index = 0u; medium_index < rt.scene().mediums.count; ++medium_index) {
         prepared_mediums[medium_index] = upbp_prepare_medium(rt.scene().mediums[medium_index], iteration.spect);
+      }
+      inline_prepared_medium_indices.assign(rt.scene().materials.count, kInvalidIndex);
+      for (uint32_t material_index = 0u; material_index < rt.scene().materials.count; ++material_index) {
+        const Material& material = rt.scene().materials[material_index];
+        if (material_has_uniform_exponential_inline_subsurface(material) == false) {
+          continue;
+        }
+        Intersection boundary = {};
+        boundary.material_index = material_index;
+        UPBPSubsurfaceState subsurface_state = {};
+        if (upbp_make_subsurface_state(rt.scene(), iteration.spect, material, boundary, subsurface_state) == false) {
+          fail("UPBP failed to prepare inline subsurface coefficients");
+          *state = Integrator::State::Stopped;
+          return;
+        }
+        inline_prepared_medium_indices[material_index] = static_cast<uint32_t>(prepared_mediums.size());
+        prepared_mediums.emplace_back(upbp_prepare_homogeneous_medium(subsurface_state.tracking.scattering,
+          subsurface_state.tracking.scattering + subsurface_state.tracking.absorption, subsurface_state.medium.anisotropy));
       }
       const size_t sampled_light_path_count = emitter_distribution_has_values() ? static_cast<size_t>(iteration.light_subpath_count) : 0u;
       light_paths.resize(sampled_light_path_count);
@@ -807,7 +844,7 @@ struct CPUUPBPImpl {
             return false;
           }
         } else if (collect_medium_points && (vertex.cls == UPBPVertexClass::Medium) && (vertex.delta == false) && vertex.density_connectible &&
-                   (vertex.medium.index != kInvalidIndex)) {
+                   (upbp_density_medium_key(vertex) != kInvalidIndex)) {
           if (increment(medium_point_count, "medium-point") == false) {
             return false;
           }
@@ -918,7 +955,7 @@ struct CPUUPBPImpl {
           if (collect_surface_points && (vertex.cls == UPBPVertexClass::Surface) && (vertex.delta == false) && vertex.density_connectible) {
             surface_points.emplace_back(UPBPPointReference{vertex.position, path_index, vertex_index});
           } else if (collect_medium_points && (vertex.cls == UPBPVertexClass::Medium) && (vertex.delta == false) && vertex.density_connectible &&
-                     (vertex.medium.index != kInvalidIndex)) {
+                     (upbp_density_medium_key(vertex) != kInvalidIndex)) {
             medium_points.emplace_back(UPBPPointReference{vertex.position, path_index, vertex_index});
           }
         }
@@ -1090,13 +1127,15 @@ struct CPUUPBPImpl {
     for (uint32_t camera_beam_index = 0u; camera_beam_index < camera_beams.size(); ++camera_beam_index) {
       const UPBPBeamReference& camera_beam = camera_beams[camera_beam_index];
       const UPBPPreparedBeam& prepared_camera_beam = prepared_camera_beams[camera_beam_index];
-      if (camera_beam.medium_index >= prepared_mediums.size()) {
+      const uint32_t prepared_medium_index = density_prepared_medium_index(camera_beam.medium_index);
+      if (prepared_medium_index >= prepared_mediums.size()) {
         return false;
       }
+      const UPBPPreparedMedium& prepared_medium = prepared_mediums[prepared_medium_index];
+      const Medium& medium = density_medium(camera_beam.medium_index);
       if (prepared_camera_beam.valid == false) {
         continue;
       }
-      const Medium& medium = rt.scene().mediums[camera_beam.medium_index];
       SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticPB2D];
       ++spatial.queries;
       bool evaluation_valid = true;
@@ -1113,7 +1152,9 @@ struct CPUUPBPImpl {
           }
           const UPBPPathVertexRecord& light_vertex = light_paths[point.path_index].subpath.path.vertices[point.vertex_index];
           const uint32_t path_length = point.vertex_index + camera_beam.source_vertex_index + 1u;
-          if ((light_vertex.cls != UPBPVertexClass::Medium) || (light_vertex.medium.index != camera_beam.medium_index) ||
+          if ((light_vertex.cls != UPBPVertexClass::Medium) ||
+              (subsurface_density_domain_matches(upbp_density_medium_key(light_vertex), light_vertex.density_owner_instance_index, camera_beam.medium_index,
+                 camera_beam.density_owner_instance_index) == false) ||
               (spectral_query_compatible(light_vertex.throughput.as_query(), camera_beam.throughput_at_origin.as_query()) == false) ||
               (path_length < rt.scene().options.min_path_length) || (path_length > rt.scene().options.max_path_length)) {
             return false;
@@ -1129,7 +1170,7 @@ struct CPUUPBPImpl {
           ++statistics.spatial[SpatialStatisticPB2D].eligible_candidates;
           return true;
         },
-        [this, &measurement, &medium, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPPointReference& point,
+        [this, &measurement, &medium, &prepared_medium, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPPointReference& point,
           const UPBPPointBeamIntersection& intersection) {
           SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticPB2D];
           ++spatial.intersections;
@@ -1147,8 +1188,8 @@ struct CPUUPBPImpl {
           }
           UPBPBeamContribution contribution;
           if (upbp_evaluate_prepared_pb2d(light_vertex, light_weights[point.path_index].arrivals[point.vertex_index],
-                prepared_light_vertex_throughputs[static_cast<size_t>(prepared_index)], medium, prepared_mediums[camera_beam.medium_index], prepared_camera_beam, camera_beam,
-                intersection, measurement.mis, options.kernel, measurement.pb2d_radius, measurement.light_subpath_count, measurement.bpt_sample_count, contribution) == false) {
+                prepared_light_vertex_throughputs[static_cast<size_t>(prepared_index)], medium, prepared_medium, prepared_camera_beam, camera_beam, intersection, measurement.mis,
+                options.kernel, measurement.pb2d_radius, measurement.light_subpath_count, measurement.bpt_sample_count, contribution) == false) {
             evaluation_valid = false;
             return;
           }
@@ -1175,11 +1216,17 @@ struct CPUUPBPImpl {
       return false;
     }
     const UPBPPathVertexRecord& camera_vertex = camera_path.vertices[camera_vertex_index];
-    if ((camera_vertex.cls != UPBPVertexClass::Medium) || (camera_vertex.medium.index >= prepared_mediums.size())) {
+    if ((camera_vertex.cls != UPBPVertexClass::Medium) || (camera_vertex.density_connectible == false)) {
+      return true;
+    }
+    const uint32_t medium_key = upbp_density_medium_key(camera_vertex);
+    const uint32_t prepared_medium_index = density_prepared_medium_index(medium_key);
+    if (prepared_medium_index >= prepared_mediums.size()) {
       return false;
     }
-    const Medium& medium = rt.scene().mediums[camera_vertex.medium.index];
-    const SpectralResponse scattering = upbp_medium_scattering_coefficient(medium, measurement.spect, camera_vertex.position);
+    const Medium& medium = density_medium(medium_key);
+    const UPBPPreparedMedium& prepared_medium = prepared_mediums[prepared_medium_index];
+    const SpectralResponse scattering = upbp_medium_scattering_coefficient(rt.scene(), measurement.spect, camera_vertex);
     if (scattering.is_zero()) {
       return true;
     }
@@ -1194,25 +1241,26 @@ struct CPUUPBPImpl {
     uint64_t query_candidate_count = 0u;
     const bool query_valid = bp2d_index.query_point_intersections(
       camera_vertex.position, static_cast<float>(measurement.bp2d_radius), query_candidate_count,
-      [this, &measurement, &camera_vertex, camera_vertex_index, &evaluation_valid, &statistics](const UPBPBeamReference& beam, const uint32_t beam_index) {
+      [this, &measurement, &camera_vertex, medium_key, camera_vertex_index, &evaluation_valid, &statistics](const UPBPBeamReference& beam, const uint32_t beam_index) {
         if (evaluation_valid == false) {
           return false;
         }
         const uint32_t path_length = beam.source_vertex_index + 1u + camera_vertex_index;
-        const bool eligible = (prepared_bp2d_validity[beam_index] != 0u) && (beam.medium_index == camera_vertex.medium.index) &&
+        const bool eligible = (prepared_bp2d_validity[beam_index] != 0u) &&
+                              subsurface_density_domain_matches(beam.medium_index, beam.density_owner_instance_index, medium_key, camera_vertex.density_owner_instance_index) &&
                               spectral_query_compatible(camera_vertex.throughput.as_query(), beam.throughput_at_origin.as_query()) &&
                               (path_length >= rt.scene().options.min_path_length) && (path_length <= rt.scene().options.max_path_length);
         statistics.spatial[SpatialStatisticBP2D].eligible_candidates += static_cast<uint64_t>(eligible);
         return eligible;
       },
-      [this, &measurement, &medium, &camera_vertex, &prepared_camera_weights, &camera_throughput, &scattering, &value, &evaluation_valid, &statistics](
+      [this, &measurement, &medium, &prepared_medium, &camera_vertex, &prepared_camera_weights, &camera_throughput, &scattering, &value, &evaluation_valid, &statistics](
         const UPBPBeamReference& beam, const uint32_t beam_index, const UPBPPointBeamIntersection& intersection) {
         SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticBP2D];
         ++spatial.intersections;
         UPBPBeamContribution contribution;
-        if (upbp_evaluate_prepared_bp2d(medium, prepared_mediums[camera_vertex.medium.index], prepared_bp2d_beams[beam_index], beam, intersection, camera_vertex.intersection.w_i,
-              prepared_camera_weights, camera_throughput, scattering, measurement.mis, options.kernel, measurement.bp2d_radius, measurement.light_subpath_count,
-              measurement.bpt_sample_count, contribution) == false) {
+        if (upbp_evaluate_prepared_bp2d(medium, prepared_medium, prepared_bp2d_beams[beam_index], beam, intersection, camera_vertex.intersection.w_i, prepared_camera_weights,
+              camera_throughput, scattering, measurement.mis, options.kernel, measurement.bp2d_radius, measurement.light_subpath_count, measurement.bpt_sample_count,
+              contribution) == false) {
           evaluation_valid = false;
           return;
         }
@@ -1236,9 +1284,12 @@ struct CPUUPBPImpl {
     for (uint32_t camera_beam_index = 0u; camera_beam_index < camera_beams.size(); ++camera_beam_index) {
       const UPBPBeamReference& camera_beam = camera_beams[camera_beam_index];
       const UPBPPreparedBeam& prepared_camera_beam = prepared_camera_beams[camera_beam_index];
-      if (camera_beam.medium_index >= prepared_mediums.size()) {
+      const uint32_t prepared_medium_index = density_prepared_medium_index(camera_beam.medium_index);
+      if (prepared_medium_index >= prepared_mediums.size()) {
         return false;
       }
+      const UPBPPreparedMedium& prepared_medium = prepared_mediums[prepared_medium_index];
+      const Medium& medium = density_medium(camera_beam.medium_index);
       const bool prepared_camera_beam_valid = prepared_camera_beam.valid;
       SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticBB1D];
       ++spatial.queries;
@@ -1251,18 +1302,20 @@ struct CPUUPBPImpl {
             return false;
           }
           const uint32_t path_length = light_beam.source_vertex_index + camera_beam.source_vertex_index + 2u;
-          const bool eligible = (prepared_bb1d_validity[light_beam_index] != 0u) && prepared_camera_beam_valid && (light_beam.medium_index == camera_beam.medium_index) &&
+          const bool eligible = (prepared_bb1d_validity[light_beam_index] != 0u) && prepared_camera_beam_valid &&
+                                subsurface_density_domain_matches(light_beam.medium_index, light_beam.density_owner_instance_index, camera_beam.medium_index,
+                                  camera_beam.density_owner_instance_index) &&
                                 (path_length >= rt.scene().options.min_path_length) && (path_length <= rt.scene().options.max_path_length);
           statistics.spatial[SpatialStatisticBB1D].eligible_candidates += static_cast<uint64_t>(eligible);
           return eligible;
         },
-        [this, &measurement, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam, const uint32_t light_beam_index,
-          const UPBPBeamBeamIntersection& intersection) {
+        [this, &measurement, &medium, &prepared_medium, &prepared_camera_beam, &camera_beam, &value, &evaluation_valid, &statistics](const UPBPBeamReference& light_beam,
+          const uint32_t light_beam_index, const UPBPBeamBeamIntersection& intersection) {
           SpatialTechniqueStatistics& spatial = statistics.spatial[SpatialStatisticBB1D];
           ++spatial.intersections;
           UPBPBeamContribution contribution;
-          if (upbp_evaluate_bb1d(rt.scene().mediums[camera_beam.medium_index], prepared_mediums[camera_beam.medium_index], prepared_bb1d_beams[light_beam_index], light_beam,
-                prepared_camera_beam, camera_beam, intersection, measurement.mis, prepared_bb1d, measurement.bpt_sample_count, contribution) == false) {
+          if (upbp_evaluate_bb1d(medium, prepared_medium, prepared_bb1d_beams[light_beam_index], light_beam, prepared_camera_beam, camera_beam, intersection, measurement.mis,
+                prepared_bb1d, measurement.bpt_sample_count, contribution) == false) {
             evaluation_valid = false;
             return;
           }

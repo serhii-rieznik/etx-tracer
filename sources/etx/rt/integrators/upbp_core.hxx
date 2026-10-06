@@ -1,6 +1,7 @@
 #pragma once
 
 #include <etx/rt/medium_tracking.hxx>
+#include <etx/render/interop/subsurface_transport_shared.hxx>
 
 #include <algorithm>
 #include <cmath>
@@ -136,11 +137,19 @@ struct UPBPSegmentRecord {
   float3 start_position = {};
   float3 end_position = {};
   uint32_t medium_index = kInvalidIndex;
+  uint32_t density_owner_instance_index = kInvalidIndex;
   uint32_t event_count = 0u;
   uint32_t null_event_count = 0u;
   MediumTrackingEventType terminal_event = MediumTrackingEventType::Escape;
   MediumTrackingFailure failure = MediumTrackingFailure::None;
   bool complete = false;
+  bool density_connectible = true;
+  SpectralResponse subsurface_extinction = {};
+  SpectralResponse subsurface_scattering = {};
+  double log_beam_survival_forward = 0.0;
+  double log_beam_survival_reverse = 0.0;
+  float subsurface_packing = 0.0f;
+  bool subsurface_source_collision = false;
 
   void reset(const SpectralQuery spect, const uint32_t active_medium_index, const float3& origin) {
     events.clear();
@@ -154,11 +163,31 @@ struct UPBPSegmentRecord {
     start_position = origin;
     end_position = origin;
     medium_index = active_medium_index;
+    density_owner_instance_index = kInvalidIndex;
     event_count = 0u;
     null_event_count = 0u;
     terminal_event = MediumTrackingEventType::Escape;
     failure = MediumTrackingFailure::None;
     complete = false;
+    density_connectible = true;
+    subsurface_extinction = {};
+    subsurface_scattering = {};
+    log_beam_survival_forward = 0.0;
+    log_beam_survival_reverse = 0.0;
+    subsurface_packing = 0.0f;
+    subsurface_source_collision = false;
+  }
+
+  void set_subsurface_law(const SpectralResponse& extinction, const SpectralResponse& scattering, const float packing, const bool source_collision, const bool target_collision) {
+    subsurface_extinction = extinction;
+    subsurface_scattering = scattering;
+    subsurface_packing = packing;
+    subsurface_source_collision = source_collision;
+    const float forward_survival = subsurface_transport_sampling_free_path(extinction, scattering, packing, source_collision, distance).survival;
+    const float reverse_survival =
+      source_collision == target_collision ? forward_survival : subsurface_transport_sampling_free_path(extinction, scattering, packing, target_collision, distance).survival;
+    log_beam_survival_forward = std::log(static_cast<double>(forward_survival));
+    log_beam_survival_reverse = std::log(static_cast<double>(reverse_survival));
   }
 
   bool append(const MediumTrackingEvent& event) {
@@ -244,6 +273,9 @@ struct UPBPTransportSegmentRecord {
   uint32_t boundary_count = 0u;
   MediumTrackingFailure failure = MediumTrackingFailure::None;
   bool has_terminal_event_density = false;
+  bool has_exclusion_interval = false;
+  double log_beam_survival_forward = 0.0;
+  double log_beam_survival_reverse = 0.0;
 
   void reset(const SpectralQuery spect) {
     intervals.clear();
@@ -257,6 +289,9 @@ struct UPBPTransportSegmentRecord {
     boundary_count = 0u;
     failure = MediumTrackingFailure::None;
     has_terminal_event_density = false;
+    has_exclusion_interval = false;
+    log_beam_survival_forward = 0.0;
+    log_beam_survival_reverse = 0.0;
   }
 
   bool append(const UPBPSegmentRecord& interval) {
@@ -277,6 +312,10 @@ struct UPBPTransportSegmentRecord {
     log_pdf_reverse += interval.log_pdf_reverse;
     log_transport_pdf_forward += interval.log_transport_pdf_forward;
     log_transport_pdf_reverse += interval.log_transport_pdf_reverse;
+    const bool exclusion_interval = interval.subsurface_packing > 0.0f;
+    has_exclusion_interval = has_exclusion_interval || exclusion_interval;
+    log_beam_survival_forward += exclusion_interval ? interval.log_beam_survival_forward : interval.log_transport_pdf_forward;
+    log_beam_survival_reverse += exclusion_interval ? interval.log_beam_survival_reverse : interval.log_transport_pdf_reverse;
     if (terminal_medium_event) {
       log_terminal_event_density = interval.log_terminal_event_density;
       has_terminal_event_density = true;
@@ -347,6 +386,7 @@ struct UPBPPathVertexRecord {
   float3 sampled_direction = {};
   Intersection intersection = {};
   MediumInstance medium = {};
+  uint32_t density_owner_instance_index = kInvalidIndex;
   SpectralResponse throughput = {};
   SpectralResponse outgoing_throughput = {};
   float scatter_pdf_forward = 0.0f;

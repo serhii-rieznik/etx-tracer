@@ -71,6 +71,18 @@ inline double upbp_short_beam_ray_factor(const UPBPPathVertexRecord& terminal) {
   return density > 0.0 ? 1.0 / density : 0.0;
 }
 
+inline double upbp_segment_short_beam_ray_factor(const UPBPTransportSegmentRecord& segment, const UPBPPathVertexRecord& terminal, const bool reverse) {
+  if (terminal.cls != UPBPVertexClass::Medium) {
+    return 0.0;
+  }
+  if (segment.has_exclusion_interval == false) {
+    return upbp_short_beam_ray_factor(terminal);
+  }
+  const double log_survival = reverse ? segment.log_beam_survival_reverse : segment.log_beam_survival_forward;
+  const double log_transport_density = reverse ? segment.log_transport_pdf_reverse : segment.log_transport_pdf_forward;
+  return std::exp(log_survival - log_transport_density - terminal.log_medium_event_density);
+}
+
 inline double upbp_vertex_cosine(const Scene& scene, const UPBPPathVertexRecord& vertex, const float3& direction) {
   if (vertex.cls == UPBPVertexClass::Medium) {
     return 1.0;
@@ -138,13 +150,14 @@ inline double upbp_recursive_local_pde_factor(const UPBPDensityMISConfiguration&
 struct UPBPRecursiveLocalPDEAffine {
   double surface_coefficient = 0.0;
   double reverse_pdf_inverse_coefficient = 0.0;
+  double reverse_ratio_coefficient = 0.0;
   double constant = 0.0;
 };
 
 inline UPBPRecursiveLocalPDEAffine upbp_recursive_local_pde_affine(const UPBPDensityMISConfiguration& configuration, const UPBPVertexClass vertex_class, const bool vertex_delta,
   const bool vertex_density_connectible, const UPBPRecursiveVertexWeights& weights, const double next_reverse_ratio, const double sin_theta, const PathSource source) {
   UPBPRecursiveLocalPDEAffine result = {};
-  result.constant = upbp_recursive_local_volume_factor(configuration, vertex_class, vertex_delta, vertex_density_connectible, weights, 0.0, next_reverse_ratio, sin_theta, source);
+  result.constant = upbp_recursive_local_volume_factor(configuration, vertex_class, vertex_delta, vertex_density_connectible, weights, 0.0, 0.0, sin_theta, source);
   result.surface_coefficient = upbp_recursive_surface_coefficient(configuration, vertex_class, vertex_delta, vertex_density_connectible);
 
   UPBPDensityMISContext variable_context = {
@@ -156,17 +169,28 @@ inline UPBPRecursiveLocalPDEAffine upbp_recursive_local_pde_affine(const UPBPDen
     vertex_delta,
     vertex_density_connectible,
   };
-  if ((source == PathSource::Light) && configuration.camera_beams_long) {
+  if (source == PathSource::Light) {
     variable_context.forward_ray_factor = configuration.photon_beams_long ? weights.ray_sample_forward_pdf_inverse : weights.ray_sample_forward_ratio;
     variable_context.reverse_ray_factor = 1.0;
-    result.reverse_pdf_inverse_coefficient =
+    const double coefficient =
       upbp_density_strategy_factor(configuration, variable_context, UPBPTechnique::PB2D) + upbp_density_strategy_factor(configuration, variable_context, UPBPTechnique::BB1D);
-  } else if ((source == PathSource::Camera) && configuration.photon_beams_long) {
+    if (configuration.camera_beams_long) {
+      result.reverse_pdf_inverse_coefficient = coefficient;
+    } else {
+      result.reverse_ratio_coefficient = coefficient;
+    }
+  } else if (source == PathSource::Camera) {
     variable_context.forward_ray_factor = 1.0;
     variable_context.reverse_ray_factor = configuration.camera_beams_long ? weights.ray_sample_forward_pdf_inverse : weights.ray_sample_forward_ratio;
-    result.reverse_pdf_inverse_coefficient =
+    const double coefficient =
       upbp_density_strategy_factor(configuration, variable_context, UPBPTechnique::BP2D) + upbp_density_strategy_factor(configuration, variable_context, UPBPTechnique::BB1D);
+    if (configuration.photon_beams_long) {
+      result.reverse_pdf_inverse_coefficient = coefficient;
+    } else {
+      result.reverse_ratio_coefficient = coefficient;
+    }
   }
+  result.constant += result.reverse_ratio_coefficient * next_reverse_ratio;
   return result;
 }
 
@@ -226,7 +250,7 @@ inline bool upbp_complete_recursive_arrival(const Scene& scene, const UPBPPathRe
 
   if (vertex_index > 1u) {
     const double next_reverse_inverse = 1.0 / reverse_pdf;
-    const double next_reverse_ratio = upbp_short_beam_ray_factor(source);
+    const double next_reverse_ratio = upbp_segment_short_beam_ray_factor(segment, source, true);
     const double local_factor = upbp_recursive_local_volume_factor(configuration, source.cls, source.delta, source.density_connectible, state.weights, next_reverse_inverse,
       next_reverse_ratio, state.last_sin_theta, source.source);
     state.weights.d_bpt_base = state.d_bpt_a * local_factor + state.d_bpt_b;
@@ -256,8 +280,8 @@ inline bool upbp_complete_recursive_arrival(const Scene& scene, const UPBPPathRe
   state.weights.d_surface /= cosine;
   state.weights.ray_sample_forward_pdf_inverse = 1.0 / forward_pdf;
   state.weights.ray_sample_reverse_pdf_inverse = 1.0 / reverse_pdf;
-  state.weights.ray_sample_forward_ratio = upbp_short_beam_ray_factor(target);
-  state.weights.ray_sample_reverse_ratio = upbp_short_beam_ray_factor(source);
+  state.weights.ray_sample_forward_ratio = upbp_segment_short_beam_ray_factor(segment, target, false);
+  state.weights.ray_sample_reverse_ratio = upbp_segment_short_beam_ray_factor(segment, source, true);
   const bool valid =
     std::isfinite(state.weights.d_shared) && std::isfinite(state.weights.d_bpt_base) && (std::isfinite(state.weights.d_pde_base) && std::isfinite(state.weights.d_surface));
   state.failure = valid ? UPBPRecursiveWeightFailure::None : UPBPRecursiveWeightFailure::NonFiniteArrival;
@@ -332,7 +356,7 @@ inline bool upbp_compute_recursive_path_weights(const Scene& scene, const UPBPPa
   result.has_departure.resize(path.vertices.size(), false);
   result.arrivals[0u] = state.weights;
   result.departures[0u] = state;
-  result.has_departure[0u] = path.segments.empty() == false;
+  result.has_departure[0u] = (path.segments.empty() == false) || path.has_terminal_segment;
   for (uint32_t vertex_index = 1u; vertex_index < path.vertices.size(); ++vertex_index) {
     if (upbp_complete_recursive_arrival(scene, path, vertex_index, configuration, state) == false) {
       result.arrivals.clear();

@@ -86,7 +86,7 @@ bool upbp_trace_with_medium_origin_retry(const Ray& ray, TraceFunction&& trace, 
 
 inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, const SpectralQuery spect, Sampler& intersection_sampler, Sampler& medium_sampler,
   const Ray& input_ray, const uint32_t initial_medium_index, const uint32_t maximum_boundary_count, const uint32_t maximum_null_events_per_interval, PathSource source,
-  UPBPSceneSegmentResult& result) {
+  UPBPSceneSegmentResult& result, BoundaryRayTraversal& traversal) {
   result = {};
   result.segment.reset(spect);
   result.thermal_radiance = {spect, 0.0f};
@@ -99,9 +99,9 @@ inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, co
     return false;
   }
 
-  Ray ray = input_ray;
+  Ray ray = traversal.ray;
   const bool bounded_segment = input_ray.max_t < 0.5f * kMaxFloat;
-  float traveled_distance = 0.0f;
+  float traveled_distance = traversal.distance;
   float3 interval_origin = input_ray.o;
   for (;;) {
     Intersection intersection = {};
@@ -187,6 +187,7 @@ inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, co
     const Material& material = scene.materials[intersection.material_index];
     if (material.cls != MaterialClass::Boundary) {
       result.intersection = intersection;
+      traversal.record_hit(result.intersection);
       result.terminal = UPBPSceneSegmentTerminal::Surface;
       return true;
     }
@@ -203,7 +204,7 @@ inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, co
     result.active_medium_index = (dot(geometric_normal, ray.d) < 0.0f) ? material.int_medium : material.ext_medium;
     // Boundaries preserve the ray; a normal offset can cross an adjacent face near an edge.
     traveled_distance = intersection.t;
-    interval_origin = input_ray.o + input_ray.d * traveled_distance;
+    interval_origin = ray.o + ray.d * traveled_distance;
     ray.min_t = std::nextafter(traveled_distance, kMaxFloat);
     if (ray.min_t >= ray.max_t) {
       if (bounded_segment) {
@@ -214,6 +215,15 @@ inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, co
       return false;
     }
   }
+}
+
+inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, const SpectralQuery spect, Sampler& intersection_sampler, Sampler& medium_sampler,
+  const Ray& input_ray, const uint32_t initial_medium_index, const uint32_t maximum_boundary_count, const uint32_t maximum_null_events_per_interval, PathSource source,
+  UPBPSceneSegmentResult& result) {
+  BoundaryRayTraversal traversal = {};
+  traversal.reset(input_ray);
+  return upbp_walk_scene_segment(rt, scene, spect, intersection_sampler, medium_sampler, input_ray, initial_medium_index, maximum_boundary_count, maximum_null_events_per_interval,
+    source, result, traversal);
 }
 
 inline bool upbp_walk_scene_segment(const Raytracing& rt, const Scene& scene, const SpectralQuery spect, Sampler& intersection_sampler, Sampler& medium_sampler,

@@ -51,7 +51,8 @@
     }
     GPUUPBPVertex light_vertex = upbp_load_vertex(upbp_resources.vertex_buffer, path_state.last_vertex_index);
     mis_weight = upbp_bpt_light_tracing_cross_technique_weight(upbp_resources.iteration, light_vertex, task.shadow_ray.d, asfloat(task.upbp_camera_area_density_bits),
-      asfloat(task.upbp_scattering_pdf_reverse_bits), asfloat(result_value.upbp_log_transport_pdf_reverse_bits));
+      asfloat(task.upbp_scattering_pdf_reverse_bits), asfloat(result_value.upbp_log_transport_pdf_reverse_bits), asfloat(result_value.upbp_log_beam_survival_reverse_bits),
+      result_value.upbp_has_exclusion_transport != 0u);
     if (mis_weight <= 0.0f) {
       return;
     }

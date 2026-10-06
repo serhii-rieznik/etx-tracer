@@ -239,6 +239,7 @@ GPUUPBPVertex upbp_load_vertex(uint descriptor_index, uint index) {
   result.inline_scattering.payload = wavefront_load_float4(buffer, base_offset + kGPUUPBPVertexInlineScatteringOffset);
   result.inline_extinction.payload = wavefront_load_float4(buffer, base_offset + kGPUUPBPVertexInlineExtinctionOffset);
   result.inline_phase_function_g = asfloat(buffer.Load(base_offset + kGPUUPBPVertexInlinePhaseFunctionGOffset));
+  result.subsurface_packing = asfloat(buffer.Load(base_offset + kGPUUPBPVertexSubsurfacePackingOffset));
   return result;
 }
 
@@ -269,6 +270,7 @@ GPUUPBPVertex upbp_load_bpt_light_vertex(GPUUPBPResources resources, uint index)
   result.inline_extinction.payload = wavefront_load_float4(buffer, base_offset + kGPUUPBPBPTVertexInlineExtinctionOffset);
   result.incident_medium_index = buffer.Load(base_offset + kGPUUPBPBPTVertexIncidentMediumIndexOffset);
   result.outgoing_medium_index = buffer.Load(base_offset + kGPUUPBPBPTVertexOutgoingMediumIndexOffset);
+  result.subsurface_packing = asfloat(buffer.Load(base_offset + kGPUUPBPBPTVertexSubsurfacePackingOffset));
   return result;
 }
 
@@ -297,6 +299,7 @@ void upbp_store_bpt_light_vertex(uint descriptor_index, uint index, GPUUPBPVerte
   wavefront_store_float4(buffer, base_offset + kGPUUPBPBPTVertexInlineExtinctionOffset, value.inline_extinction.payload);
   buffer.Store(base_offset + kGPUUPBPBPTVertexIncidentMediumIndexOffset, value.incident_medium_index);
   buffer.Store(base_offset + kGPUUPBPBPTVertexOutgoingMediumIndexOffset, value.outgoing_medium_index);
+  buffer.Store(base_offset + kGPUUPBPBPTVertexSubsurfacePackingOffset, asuint(value.subsurface_packing));
 }
 
 GPUUPBPPathState upbp_load_bpt_light_path_state(uint descriptor_index, uint index) {
@@ -356,6 +359,7 @@ void upbp_store_vertex(uint descriptor_index, uint index, GPUUPBPVertex value) {
   wavefront_store_float4(buffer, base_offset + kGPUUPBPVertexInlineScatteringOffset, value.inline_scattering.payload);
   wavefront_store_float4(buffer, base_offset + kGPUUPBPVertexInlineExtinctionOffset, value.inline_extinction.payload);
   buffer.Store(base_offset + kGPUUPBPVertexInlinePhaseFunctionGOffset, asuint(value.inline_phase_function_g));
+  buffer.Store(base_offset + kGPUUPBPVertexSubsurfacePackingOffset, asuint(value.subsurface_packing));
 }
 
 GPUUPBPPathState upbp_load_path_state(uint descriptor_index, uint index) {
@@ -405,6 +409,8 @@ GPUUPBPSegment upbp_load_segment(uint descriptor_index, uint index) {
   result.target_vertex_index = buffer.Load(base_offset + kGPUUPBPSegmentTargetVertexIndexOffset);
   result.boundary_count = buffer.Load(base_offset + kGPUUPBPSegmentBoundaryCountOffset);
   result.flags = buffer.Load(base_offset + kGPUUPBPSegmentFlagsOffset);
+  result.log_beam_survival_forward = asfloat(buffer.Load(base_offset + kGPUUPBPSegmentLogBeamSurvivalForwardOffset));
+  result.log_beam_survival_reverse = asfloat(buffer.Load(base_offset + kGPUUPBPSegmentLogBeamSurvivalReverseOffset));
   return result;
 }
 
@@ -424,6 +430,8 @@ void upbp_store_segment(uint descriptor_index, uint index, GPUUPBPSegment value)
   buffer.Store(base_offset + kGPUUPBPSegmentTargetVertexIndexOffset, value.target_vertex_index);
   buffer.Store(base_offset + kGPUUPBPSegmentBoundaryCountOffset, value.boundary_count);
   buffer.Store(base_offset + kGPUUPBPSegmentFlagsOffset, value.flags);
+  buffer.Store(base_offset + kGPUUPBPSegmentLogBeamSurvivalForwardOffset, asuint(value.log_beam_survival_forward));
+  buffer.Store(base_offset + kGPUUPBPSegmentLogBeamSurvivalReverseOffset, asuint(value.log_beam_survival_reverse));
 }
 
 GPUUPBPInterval upbp_load_interval_at_offset(ByteAddressBuffer buffer, uint base_offset) {
@@ -433,6 +441,9 @@ GPUUPBPInterval upbp_load_interval_at_offset(ByteAddressBuffer buffer, uint base
   result.medium_index = buffer.Load(base_offset + kGPUUPBPIntervalMediumIndexOffset);
   result.end_position = wavefront_load_float3(buffer, base_offset + kGPUUPBPIntervalEndPositionOffset);
   result.flags = buffer.Load(base_offset + kGPUUPBPIntervalFlagsOffset);
+  result.subsurface_packing = asfloat(buffer.Load(base_offset + kGPUUPBPIntervalSubsurfacePackingOffset));
+  result.log_beam_survival_forward = asfloat(buffer.Load(base_offset + kGPUUPBPIntervalLogBeamSurvivalForwardOffset));
+  result.log_beam_survival_reverse = asfloat(buffer.Load(base_offset + kGPUUPBPIntervalLogBeamSurvivalReverseOffset));
   result.log_pdf_forward = asfloat(buffer.Load(base_offset + kGPUUPBPIntervalLogPdfForwardOffset));
   result.log_pdf_reverse = asfloat(buffer.Load(base_offset + kGPUUPBPIntervalLogPdfReverseOffset));
   result.log_transport_pdf_forward = asfloat(buffer.Load(base_offset + kGPUUPBPIntervalLogTransportPdfForwardOffset));
@@ -444,8 +455,11 @@ GPUUPBPInterval upbp_load_interval_at_offset(ByteAddressBuffer buffer, uint base
   result.segment_index = buffer.Load(base_offset + kGPUUPBPIntervalSegmentIndexOffset);
   result.next_interval_index = buffer.Load(base_offset + kGPUUPBPIntervalNextIntervalIndexOffset);
   result.tracking_seed = buffer.Load(base_offset + kGPUUPBPIntervalTrackingSeedOffset);
+  result.inline_phase_function_g = asfloat(buffer.Load(base_offset + kGPUUPBPIntervalInlinePhaseFunctionGOffset));
   result.inline_scattering.payload = wavefront_load_float4(buffer, base_offset + kGPUUPBPIntervalInlineScatteringOffset);
   result.inline_absorption.payload = wavefront_load_float4(buffer, base_offset + kGPUUPBPIntervalInlineAbsorptionOffset);
+  result.inline_extinction.payload = wavefront_load_float4(buffer, base_offset + kGPUUPBPIntervalInlineExtinctionOffset);
+  result.density_owner_instance_index = buffer.Load(base_offset + kGPUUPBPIntervalDensityOwnerInstanceIndexOffset);
   return result;
 }
 
@@ -455,6 +469,9 @@ void upbp_store_interval_at_offset(RWByteAddressBuffer buffer, uint base_offset,
   buffer.Store(base_offset + kGPUUPBPIntervalMediumIndexOffset, value.medium_index);
   wavefront_store_float3(buffer, base_offset + kGPUUPBPIntervalEndPositionOffset, value.end_position);
   buffer.Store(base_offset + kGPUUPBPIntervalFlagsOffset, value.flags);
+  buffer.Store(base_offset + kGPUUPBPIntervalSubsurfacePackingOffset, asuint(value.subsurface_packing));
+  buffer.Store(base_offset + kGPUUPBPIntervalLogBeamSurvivalForwardOffset, asuint(value.log_beam_survival_forward));
+  buffer.Store(base_offset + kGPUUPBPIntervalLogBeamSurvivalReverseOffset, asuint(value.log_beam_survival_reverse));
   buffer.Store(base_offset + kGPUUPBPIntervalLogPdfForwardOffset, asuint(value.log_pdf_forward));
   buffer.Store(base_offset + kGPUUPBPIntervalLogPdfReverseOffset, asuint(value.log_pdf_reverse));
   buffer.Store(base_offset + kGPUUPBPIntervalLogTransportPdfForwardOffset, asuint(value.log_transport_pdf_forward));
@@ -466,8 +483,11 @@ void upbp_store_interval_at_offset(RWByteAddressBuffer buffer, uint base_offset,
   buffer.Store(base_offset + kGPUUPBPIntervalSegmentIndexOffset, value.segment_index);
   buffer.Store(base_offset + kGPUUPBPIntervalNextIntervalIndexOffset, value.next_interval_index);
   buffer.Store(base_offset + kGPUUPBPIntervalTrackingSeedOffset, value.tracking_seed);
+  buffer.Store(base_offset + kGPUUPBPIntervalInlinePhaseFunctionGOffset, asuint(value.inline_phase_function_g));
   wavefront_store_float4(buffer, base_offset + kGPUUPBPIntervalInlineScatteringOffset, value.inline_scattering.payload);
   wavefront_store_float4(buffer, base_offset + kGPUUPBPIntervalInlineAbsorptionOffset, value.inline_absorption.payload);
+  wavefront_store_float4(buffer, base_offset + kGPUUPBPIntervalInlineExtinctionOffset, value.inline_extinction.payload);
+  buffer.Store(base_offset + kGPUUPBPIntervalDensityOwnerInstanceIndexOffset, value.density_owner_instance_index);
 }
 
 GPUUPBPInterval upbp_load_interval(uint descriptor_index, uint index) {
@@ -575,6 +595,7 @@ GPUUPBPDensityPoint upbp_load_density_point(uint descriptor_index, uint index) {
   result.inline_phase_function_g = asfloat(buffer.Load(base_offset + kGPUUPBPDensityPointInlinePhaseFunctionGOffset));
   result.inline_scattering.payload = wavefront_load_float4(buffer, base_offset + kGPUUPBPDensityPointInlineScatteringOffset);
   result.inline_extinction.payload = wavefront_load_float4(buffer, base_offset + kGPUUPBPDensityPointInlineExtinctionOffset);
+  result.density_owner_instance_index = buffer.Load(base_offset + kGPUUPBPDensityPointDensityOwnerInstanceIndexOffset);
   return result;
 }
 
@@ -594,6 +615,7 @@ void upbp_store_density_point(uint descriptor_index, uint index, GPUUPBPDensityP
   buffer.Store(base_offset + kGPUUPBPDensityPointInlinePhaseFunctionGOffset, asuint(value.inline_phase_function_g));
   wavefront_store_float4(buffer, base_offset + kGPUUPBPDensityPointInlineScatteringOffset, value.inline_scattering.payload);
   wavefront_store_float4(buffer, base_offset + kGPUUPBPDensityPointInlineExtinctionOffset, value.inline_extinction.payload);
+  buffer.Store(base_offset + kGPUUPBPDensityPointDensityOwnerInstanceIndexOffset, value.density_owner_instance_index);
 }
 
 GPUUPBPDensityBeam upbp_load_density_beam(uint descriptor_index, uint index) {
@@ -611,6 +633,9 @@ GPUUPBPDensityBeam upbp_load_density_beam(uint descriptor_index, uint index) {
   result.log_d_pde_reverse_coefficient = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamDPDEReverseCoefficientOffset));
   result.log_d_pde_constant = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamDPDEConstantOffset));
   result.log_d_surface_constant = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamDSurfaceConstantOffset));
+  result.transport_log_beam_survival_forward = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamTransportLogBeamSurvivalForwardOffset));
+  result.transport_log_beam_survival_reverse = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamTransportLogBeamSurvivalReverseOffset));
+  result.log_d_pde_reverse_ratio_coefficient = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamDPDEReverseRatioCoefficientOffset));
   result.source_event_log_density = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamSourceEventLogDensityOffset));
   result.interval_distance = asfloat(buffer.Load(base_offset + kGPUUPBPDensityBeamIntervalDistanceOffset));
   result.flags = buffer.Load(base_offset + kGPUUPBPDensityBeamFlagsOffset);
@@ -633,6 +658,9 @@ void upbp_store_density_beam(uint descriptor_index, uint index, GPUUPBPDensityBe
   buffer.Store(base_offset + kGPUUPBPDensityBeamDPDEReverseCoefficientOffset, asuint(value.log_d_pde_reverse_coefficient));
   buffer.Store(base_offset + kGPUUPBPDensityBeamDPDEConstantOffset, asuint(value.log_d_pde_constant));
   buffer.Store(base_offset + kGPUUPBPDensityBeamDSurfaceConstantOffset, asuint(value.log_d_surface_constant));
+  buffer.Store(base_offset + kGPUUPBPDensityBeamTransportLogBeamSurvivalForwardOffset, asuint(value.transport_log_beam_survival_forward));
+  buffer.Store(base_offset + kGPUUPBPDensityBeamTransportLogBeamSurvivalReverseOffset, asuint(value.transport_log_beam_survival_reverse));
+  buffer.Store(base_offset + kGPUUPBPDensityBeamDPDEReverseRatioCoefficientOffset, asuint(value.log_d_pde_reverse_ratio_coefficient));
   buffer.Store(base_offset + kGPUUPBPDensityBeamSourceEventLogDensityOffset, asuint(value.source_event_log_density));
   buffer.Store(base_offset + kGPUUPBPDensityBeamIntervalDistanceOffset, asuint(value.interval_distance));
   buffer.Store(base_offset + kGPUUPBPDensityBeamFlagsOffset, value.flags);
@@ -665,6 +693,7 @@ GPUUPBPBeamReference upbp_load_beam_reference(uint descriptor_index, uint index)
   result.direction = wavefront_load_float3(buffer, base_offset + kGPUUPBPBeamReferenceDirectionOffset);
   result.path_length = buffer.Load(base_offset + kGPUUPBPBeamReferencePathLengthOffset);
   result.medium_index = buffer.Load(base_offset + kGPUUPBPBeamReferenceMediumIndexOffset);
+  result.density_owner_instance_index = buffer.Load(base_offset + kGPUUPBPBeamReferenceDensityOwnerInstanceIndexOffset);
   return result;
 }
 

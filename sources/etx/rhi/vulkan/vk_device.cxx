@@ -1357,8 +1357,9 @@ RHICreateResult<VkPipelineLayout> VKDevice::Impl::get_bindless_pipeline_layout()
   layout_info.pushConstantRangeCount = 1;
   layout_info.pPushConstantRanges = &push_constants;
 
-  if (etx_vk_call(vkCreatePipelineLayout(device, &layout_info, nullptr, &bindless_layout)) != VK_SUCCESS) {
-    return {RHIResult::ValidationError, {}};
+  const VkResult layout_result = etx_vk_call(vkCreatePipelineLayout(device, &layout_info, nullptr, &bindless_layout));
+  if (layout_result != VK_SUCCESS) {
+    return {convert_vk_result_to_rhi(layout_result), {}};
   }
 
   return {RHIResult::Success, bindless_layout};
@@ -1376,8 +1377,9 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   vert_info.codeSize = desc.vertex_shader.spirv_size;
   vert_info.pCode = reinterpret_cast<const uint32_t*>(desc.vertex_shader.spirv_data);
   VkShaderModule vert_module = {};
-  if (etx_vk_call(vkCreateShaderModule(device, &vert_info, nullptr, &vert_module)) != VK_SUCCESS) {
-    return RHIResult::ValidationError;
+  const VkResult vertex_result = etx_vk_call(vkCreateShaderModule(device, &vert_info, nullptr, &vert_module));
+  if (vertex_result != VK_SUCCESS) {
+    return convert_vk_result_to_rhi(vertex_result);
   }
 
   // Create fragment shader module from SPIR-V
@@ -1385,9 +1387,10 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   frag_info.codeSize = desc.fragment_shader.spirv_size;
   frag_info.pCode = reinterpret_cast<const uint32_t*>(desc.fragment_shader.spirv_data);
   VkShaderModule frag_module = {};
-  if (etx_vk_call(vkCreateShaderModule(device, &frag_info, nullptr, &frag_module)) != VK_SUCCESS) {
+  const VkResult fragment_result = etx_vk_call(vkCreateShaderModule(device, &frag_info, nullptr, &frag_module));
+  if (fragment_result != VK_SUCCESS) {
     vkDestroyShaderModule(device, vert_module, nullptr);
-    return RHIResult::ValidationError;
+    return convert_vk_result_to_rhi(fragment_result);
   }
 
   VkPipelineShaderStageCreateInfo shader_stages[] = {
@@ -1540,10 +1543,11 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   pipeline_info.pDynamicState = &dynamic_state_info;
   pipeline_info.layout = layout;
 
-  if (etx_vk_call(vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &out_pipeline)) != VK_SUCCESS) {
+  const VkResult pipeline_result = etx_vk_call(vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &out_pipeline));
+  if (pipeline_result != VK_SUCCESS) {
     vkDestroyShaderModule(device, frag_module, nullptr);
     vkDestroyShaderModule(device, vert_module, nullptr);
-    return RHIResult::ValidationError;
+    return convert_vk_result_to_rhi(pipeline_result);
   }
   vkDestroyShaderModule(device, frag_module, nullptr);
   vkDestroyShaderModule(device, vert_module, nullptr);
@@ -1559,8 +1563,9 @@ RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelin
     .pCode = reinterpret_cast<const uint32_t*>(desc.compute_shader.spirv_data),
   };
   VkShaderModule comp_module = {};
-  if (etx_vk_call(vkCreateShaderModule(device, &comp_info, nullptr, &comp_module)) != VK_SUCCESS) {
-    return RHIResult::ValidationError;
+  const VkResult module_result = etx_vk_call(vkCreateShaderModule(device, &comp_info, nullptr, &comp_module));
+  if (module_result != VK_SUCCESS) {
+    return convert_vk_result_to_rhi(module_result);
   }
 
   VkPipelineShaderStageCreateInfo shader_stage = {
@@ -1586,7 +1591,7 @@ RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelin
   }
   if (create_result != VK_SUCCESS) {
     log::error("Vulkan: compute pipeline creation failed (%s)", vk_error_to_string(create_result));
-    return RHIResult::ValidationError;
+    return convert_vk_result_to_rhi(create_result);
   }
   return RHIResult::Success;
 }

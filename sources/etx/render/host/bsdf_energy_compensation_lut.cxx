@@ -23,7 +23,7 @@ namespace etx {
 
 namespace {
 
-constexpr uint32_t kEnergyCompensationGeneratorVersion = 29u;
+constexpr uint32_t kEnergyCompensationGeneratorVersion = 33u;
 constexpr uint32_t kEnergyCompensationConductorLutSize = kBSDFEnergyCompensationConductorLutSize;
 constexpr uint32_t kEnergyCompensationDielectricLutSize = kBSDFEnergyCompensationDielectricLutSize;
 constexpr uint32_t kEnergyCompensationConductorSampleCount = 2048u;
@@ -183,15 +183,6 @@ float radical_inverse_vdc(uint32_t bits) {
 
 float2 hammersley(uint32_t index, uint32_t count) {
   return float2{(static_cast<float>(index) + 0.5f) / static_cast<float>(count), radical_inverse_vdc(index)};
-}
-
-float quasi_random(uint32_t index, uint32_t dimension) {
-  const uint32_t seed = index + 1u + dimension * 0x9e3779b9u;
-  return min(1.0f - kEpsilon, max(kEpsilon, radical_inverse_vdc(seed)));
-}
-
-float2 quasi_random_2d(uint32_t index, uint32_t dimension) {
-  return float2{quasi_random(index, dimension), quasi_random(index, dimension + 1u)};
 }
 
 SpectralQuery spectral_cache_query(uint32_t wavelength_index) {
@@ -855,25 +846,28 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
     const float cos_theta_t2 = 1.0f - (1.0f - i_dot_m * i_dot_m) / (eta * eta);
 
     const float3 w_o_r = -w_i + 2.0f * m * i_dot_m;
+    if ((w_i.z * w_o_r.z) > kEpsilon) {
+      result.branch_visible_probability[incident_side] += fresnel_probability;
+    }
     if (w_o_r.z > 0.0f) {
       const auto lobe = bsdf_energy_compensated_dielectric_base_lobe(spect, w_i, w_o_r, alpha, ext_ior, int_ior, thinfilm, texture);
       if ((fresnel_probability > kEpsilon) && (lobe.pdf > kEpsilon)) {
         const float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
         result.branch_albedo[incident_side] += albedo * (fresnel_probability / lobe.pdf);
-        result.branch_visible_probability[incident_side] += fresnel_probability;
       }
     }
 
     if ((fresnel_probability < 1.0f) && (cos_theta_t2 > 0.0f)) {
-      float3 w_o_t = normalize(bsdf_external_refract(w_i, m, eta));
-      w_o_t.z = -abs(w_o_t.z);
+      const float3 w_o_t = normalize(bsdf_external_refract(w_i, m, eta));
+      if ((w_i.z * w_o_t.z) < -kEpsilon) {
+        result.branch_visible_probability[opposite_side] += 1.0f - fresnel_probability;
+      }
       if (w_o_t.z < 0.0f) {
         const auto lobe = bsdf_energy_compensated_dielectric_base_lobe(spect, w_i, w_o_t, alpha, ext_ior, int_ior, thinfilm, texture);
         const float transmission_probability = 1.0f - fresnel_probability;
         if ((transmission_probability > kEpsilon) && (lobe.pdf > kEpsilon)) {
           const float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
           result.branch_albedo[opposite_side] += albedo * (transmission_probability / lobe.pdf);
-          result.branch_visible_probability[opposite_side] += transmission_probability;
         }
       }
     }
@@ -888,8 +882,8 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
   return result;
 }
 
-DielectricDirectionalAlbedoResult integrate_dielectric_total_directional(const SpectralQuery& spect, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
-  const ThinfilmEval& thinfilm, bool incident_outside, float mu_i, float alpha) {
+DielectricDirectionalAlbedoResult integrate_dielectric_multiscatter_directional(const SpectralQuery& spect, const RefractiveIndexSample& ext_ior,
+  const RefractiveIndexSample& int_ior, const ThinfilmEval& thinfilm, bool incident_outside, float mu_i, float alpha) {
   DielectricDirectionalAlbedoResult result = {};
   if (mu_i <= kEpsilon) {
     return result;
@@ -903,8 +897,6 @@ DielectricDirectionalAlbedoResult integrate_dielectric_total_directional(const S
 
   const bool no_thinfilm = (thinfilm.weight <= 0.0f) || (thinfilm.thickness <= 0.0f) || spectral_response_is_zero(thinfilm.ior.eta);
   if ((no_thinfilm) && (abs(eta - 1.0f) <= (16.0f * kEpsilon))) {
-    result.branch_albedo[opposite_side] = float3(1.0f, 1.0f, 1.0f);
-    result.visible_probability = 1.0f;
     return result;
   }
 
@@ -914,21 +906,20 @@ DielectricDirectionalAlbedoResult integrate_dielectric_total_directional(const S
     bool ray_outside = true;
     bool valid = true;
     uint32_t scattering_order = 0u;
-    uint32_t dimension = 0u;
+    uint32_t random_state = sampler_random_seed(sample_index, 0u);
 
     while (valid) {
-      const float sampled_height = bsdf_external_sample_height(ray, quasi_random(sample_index, dimension));
-      dimension += 1u;
+      const float sampled_height = bsdf_external_sample_height(ray, min(1.0f - kEpsilon, max(kEpsilon, sampler_next_random(random_state))));
       if (sampled_height == kMaxFloat) {
         break;
       }
 
       ray = bsdf_external_ray_info_update_height(ray, sampled_height);
 
-      const float2 rnd_slope = quasi_random_2d(sample_index, dimension);
-      dimension += 2u;
-      const float rnd_reflection = quasi_random(sample_index, dimension);
-      dimension += 1u;
+      const float rnd_slope_x = min(1.0f - kEpsilon, max(kEpsilon, sampler_next_random(random_state)));
+      const float rnd_slope_y = min(1.0f - kEpsilon, max(kEpsilon, sampler_next_random(random_state)));
+      const float2 rnd_slope = float2{rnd_slope_x, rnd_slope_y};
+      const float rnd_reflection = min(1.0f - kEpsilon, max(kEpsilon, sampler_next_random(random_state)));
       const RefractiveIndexSample& phase_ext_ior = ray_outside ? ext_ior : int_ior;
       const RefractiveIndexSample& phase_int_ior = ray_outside ? int_ior : ext_ior;
       const BSDFExternalDielectricSample sample =
@@ -949,7 +940,7 @@ DielectricDirectionalAlbedoResult integrate_dielectric_total_directional(const S
       }
     }
 
-    if (valid == false) {
+    if ((valid == false) || (scattering_order <= 1u)) {
       continue;
     }
 
@@ -1143,7 +1134,7 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
   const SpectralQuery spect = {};
   const uint32_t side_entry_count = kEnergyCompensationDielectricLutSize * kEnergyCompensationDielectricLutSize;
   std::vector<DielectricDirectionalAlbedoResult> directional(side_entry_count * 2u);
-  std::vector<DielectricDirectionalAlbedoResult> total_directional(side_entry_count * 2u);
+  std::vector<DielectricDirectionalAlbedoResult> multiscatter_directional(side_entry_count * 2u);
   scheduler.execute(side_entry_count * 2u, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
     (void)thread_id;
     for (uint32_t index = begin; index < end; ++index) {
@@ -1166,7 +1157,7 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
       const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
       const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
       const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
-      total_directional[index] = integrate_dielectric_total_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
+      multiscatter_directional[index] = integrate_dielectric_multiscatter_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
         mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
     }
   });
@@ -1176,7 +1167,7 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
   std::vector<float4> average(kEnergyCompensationDielectricAverageWidth * kEnergyCompensationDielectricLutSize, float4{0.0f, 0.0f, 0.0f, 1.0f});
   for (uint32_t alpha_index = 0u; alpha_index < kEnergyCompensationDielectricLutSize; ++alpha_index) {
     float3 single_average[kEnergyCompensationDielectricBranchCount] = {};
-    float3 total_average[kEnergyCompensationDielectricBranchCount] = {};
+    float3 multiscatter_average[kEnergyCompensationDielectricBranchCount] = {};
     float3 residual_average[kEnergyCompensationDielectricBranchCount] = {};
     float3 residual_coefficient[kEnergyCompensationDielectricBranchCount] = {};
 
@@ -1184,7 +1175,7 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
       for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
         const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
         single_average[branch] = integrate_dielectric_branch_average(directional, alpha_index, incident_side, outgoing_side);
-        total_average[branch] = integrate_dielectric_branch_average(total_directional, alpha_index, incident_side, outgoing_side);
+        multiscatter_average[branch] = integrate_dielectric_branch_average(multiscatter_directional, alpha_index, incident_side, outgoing_side);
       }
     }
 
@@ -1199,7 +1190,7 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
     for (uint32_t incident_side = 0u; incident_side < 2u; ++incident_side) {
       for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
         const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
-        residual_average[branch] = max(float3(0.0f, 0.0f, 0.0f), total_average[branch] - single_average[branch]);
+        residual_average[branch] = multiscatter_average[branch];
       }
     }
 
@@ -1219,7 +1210,7 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
       const uint32_t branch_0 = dielectric_branch_index(side, 0u);
       const uint32_t branch_1 = dielectric_branch_index(side, 1u);
       const float3 single_row = single_average[branch_0] + single_average[branch_1];
-      const float3 model_total_row = total_average[branch_0] + total_average[branch_1];
+      const float3 model_total_row = multiscatter_average[branch_0] + multiscatter_average[branch_1];
       const float3 total_row = single_row + residual_average[branch_0] + residual_average[branch_1];
       if ((isfinite(single_row.x) == false) || (isfinite(single_row.y) == false) || (isfinite(single_row.z) == false) || (isfinite(model_total_row.x) == false) ||
           (isfinite(model_total_row.y) == false) || (isfinite(model_total_row.z) == false) || (isfinite(total_row.x) == false) || (isfinite(total_row.y) == false) ||
@@ -1284,7 +1275,7 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
     const RefractiveIndexSample int_ior = sample_refractive_index(data, material.int_ior, spect);
     const ThinfilmEval thinfilm = sample_thinfilm_slice(data, material.thinfilm, spect, thinfilm_slice_index, thinfilm_slice_count);
     std::vector<DielectricDirectionalAlbedoResult> directional(side_entry_count * 2u);
-    std::vector<DielectricDirectionalAlbedoResult> total_directional(side_entry_count * 2u);
+    std::vector<DielectricDirectionalAlbedoResult> multiscatter_directional(side_entry_count * 2u);
     scheduler.execute(side_entry_count * 2u, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
       (void)thread_id;
       for (uint32_t index = begin; index < end; ++index) {
@@ -1307,14 +1298,14 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
         const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
         const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
         const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
-        total_directional[index] = integrate_dielectric_total_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
+        multiscatter_directional[index] = integrate_dielectric_multiscatter_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
           mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
       }
     });
 
     for (uint32_t alpha_index = 0u; alpha_index < kEnergyCompensationDielectricLutSize; ++alpha_index) {
       float3 single_average[kEnergyCompensationDielectricBranchCount] = {};
-      float3 total_average[kEnergyCompensationDielectricBranchCount] = {};
+      float3 multiscatter_average[kEnergyCompensationDielectricBranchCount] = {};
       float3 residual_average[kEnergyCompensationDielectricBranchCount] = {};
       float3 residual_coefficient[kEnergyCompensationDielectricBranchCount] = {};
 
@@ -1322,7 +1313,7 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
         for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
           const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
           single_average[branch] = integrate_dielectric_branch_average(directional, alpha_index, incident_side, outgoing_side);
-          total_average[branch] = integrate_dielectric_branch_average(total_directional, alpha_index, incident_side, outgoing_side);
+          multiscatter_average[branch] = integrate_dielectric_branch_average(multiscatter_directional, alpha_index, incident_side, outgoing_side);
         }
       }
 
@@ -1337,7 +1328,7 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
       for (uint32_t incident_side = 0u; incident_side < 2u; ++incident_side) {
         for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
           const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
-          residual_average[branch] = max(float3(0.0f, 0.0f, 0.0f), total_average[branch] - single_average[branch]);
+          residual_average[branch] = multiscatter_average[branch];
         }
       }
 

@@ -194,6 +194,9 @@ struct CameraController {
   }
 
   void add_mouse_delta(float dx, float dy) {
+    if (_mouse_buttons == 0u) {
+      return;
+    }
     _mouse_delta.x += dx;
     _mouse_delta.y += dy;
   }
@@ -266,8 +269,7 @@ struct CameraController {
       }
 
       case SAPP_EVENTTYPE_MOUSE_MOVE: {
-        _mouse_delta.x += e->mouse_dx;
-        _mouse_delta.y += e->mouse_dy;
+        add_mouse_delta(e->mouse_dx, e->mouse_dy);
         break;
       }
 

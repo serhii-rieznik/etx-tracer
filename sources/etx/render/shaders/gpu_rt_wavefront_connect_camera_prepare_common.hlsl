@@ -61,7 +61,8 @@ bool wavefront_connect_camera_valid_spectral_response(SpectralResponse value) {
   return isfinite(value.value) && all(isfinite(value.integrated));
 }
 
-float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_value, inout Sampler sampler) {
+float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_value, inout Sampler sampler, out float mis_term) {
+  mis_term = 0.0f;
   if ((wavefront_connect_camera_scene_mis_enabled() == false) || scene_path_mode_is_light_tracing()) {
     return 1.0f;
   }
@@ -83,7 +84,8 @@ float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_v
     adjacent_connection = 0.0f;
   }
   float w_light = current_from_camera * (vm_camera + adjacent_connection + wavefront_connection_mis(input_value.current_vertex, surface_factor) * previous_from_current_dir);
-  return 1.0f / (1.0f + w_light);
+  mis_term = w_light;
+  return 1.0f;
 }
 
 bool wavefront_load_connect_camera_prepare_input(uint dispatch_index, out WavefrontConnectCameraPrepareInput input_value) {
@@ -214,6 +216,7 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
     return;
   }
 
+  float mis_term = 0.0f;
   float mis_weight = 1.0f;
   float scattering_pdf_reverse = 0.0f;
   float camera_area_density = 0.0f;
@@ -228,10 +231,10 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
     camera_area_density = wavefront_convert_solid_angle_pdf_to_area(input_value.camera_sample.pdf_dir_out, input_value.camera_sample.position, input_value.current_vertex.position,
       wavefront_path_vertex_is_surface(input_value.current_vertex), input_value.current_vertex.geo_normal);
   } else {
-    mis_weight = wavefront_connect_camera_weight(input_value, sampler);
+    mis_weight = wavefront_connect_camera_weight(input_value, sampler, mis_term);
   }
 #else
-  mis_weight = wavefront_connect_camera_weight(input_value, sampler);
+  mis_weight = wavefront_connect_camera_weight(input_value, sampler, mis_term);
 #endif
   if (upbp == false) {
     input_value.state.sampler_seed = sampler.seed;
@@ -262,19 +265,12 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
   task.pixel_index = pixel_index;
   task.medium_index = ((bsdf_eval.properties & BSDFSample::MediumChanged) != 0u) ? bsdf_eval.medium_index : input_value.hit.medium_index;
   task.inline_medium_extinction = input_value.current_vertex.inline_medium_extinction;
+  task.inline_medium_scattering = input_value.current_vertex.inline_medium_scattering;
   task.inline_medium_flags = input_value.current_vertex.inline_medium_flags;
-  if (wavefront_path_vertex_is_surface(input_value.current_vertex) && (input_value.material.cls == MaterialClass::Plastic) &&
-      (input_value.material.subsurface_cls != SubsurfaceMaterial::Disabled)) {
+  if (wavefront_path_vertex_is_surface(input_value.current_vertex) && (input_value.material.subsurface_cls != SubsurfaceMaterial::Disabled)) {
     const bool into_body = dot(input_value.current_vertex.geo_normal, input_value.camera_sample.direction) < 0.0f;
     task.medium_index = into_body ? input_value.material.int_medium : input_value.material.ext_medium;
     task.inline_medium_flags = into_body ? task.inline_medium_flags : 0u;
-  }
-  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
-  if (input_value.current_vertex.material_index == scene_gpu_load_u32(scene_globals, kSceneGlobalsDefaultSubsurfaceScatterMaterialOffset)) {
-    const bool reflection =
-      (dot(input_value.current_vertex.geo_normal, input_value.current_vertex.w_i) * dot(input_value.current_vertex.geo_normal, input_value.camera_sample.direction)) < 0.0f;
-    task.medium_index = reflection ? input_value.hit.medium_index : input_value.current_vertex.medium_index;
-    task.inline_medium_flags = reflection ? 0u : task.inline_medium_flags;
   }
   task.flags = GPUWavefrontPointConnectionTaskFlags::Ready;
   task.flags |= (input_value.current_vertex.flags & GPUWavefrontVertexFlags::Medium) != 0u ? GPUWavefrontPointConnectionTaskFlags::SourceMedium : 0u;
@@ -287,7 +283,11 @@ void wavefront_store_connect_camera_prepare_task(uint dispatch_index, WavefrontC
 #endif
   {
     task.sampler_seed = sampler.seed;
+    // The reverse connection coefficient shares the UPBP-only auxiliary seed slot.
+    task.upbp_auxiliary1_bits = asuint(mis_term);
   }
+  task.subsurface_packing = ((task.inline_medium_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) ? input_value.current_vertex.subsurface_packing : 0.0f;
+  task.subsurface_endpoint_flags = wavefront_path_vertex_is_medium(input_value.current_vertex) ? GPUWavefrontSubsurfaceEndpointFlags::SourceCollision : 0u;
   wavefront_store_connect_camera_task(input_value.resources.connect_camera_task_buffer, dispatch_index, task);
   wavefront_shadow_queue_append(input_value.resources, kGPUWavefrontShadowQueueConnectCamera, dispatch_index);
 }

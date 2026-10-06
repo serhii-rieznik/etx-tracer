@@ -20,7 +20,7 @@ struct UPBPDensityMISConfiguration {
   std::array<double, 6u> technique_factors = {};
   uint32_t enabled_techniques = 0u;
   bool photon_beams_long = false;
-  bool camera_beams_long = true;
+  bool camera_beams_long = false;
 
   bool enabled(const UPBPTechnique technique) const {
     return (enabled_techniques & static_cast<uint32_t>(technique)) != 0u;

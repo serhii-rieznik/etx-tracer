@@ -80,6 +80,7 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPVertex, barycentric, kGPUUPBPVertexBarycentric
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPVertex, emitter_index, kGPUUPBPVertexEmitterIndexOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPVertex, inline_scattering, kGPUUPBPVertexInlineScatteringOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPVertex, inline_extinction, kGPUUPBPVertexInlineExtinctionOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPVertex, subsurface_packing, kGPUUPBPVertexSubsurfacePackingOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPVertex, inline_phase_function_g, kGPUUPBPVertexInlinePhaseFunctionGOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPPathState, recursive_state, kGPUUPBPPathStateRecursiveStateOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPPathState, first_vertex_index, kGPUUPBPPathStateFirstVertexIndexOffset);
@@ -110,6 +111,7 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBPTVertex, emitter_index, kGPUUPBPBPTVertexEmi
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBPTVertex, barycentric, kGPUUPBPBPTVertexBarycentricOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBPTVertex, scatter_pdf_forward, kGPUUPBPBPTVertexScatterPdfForwardOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBPTVertex, inline_extinction, kGPUUPBPBPTVertexInlineExtinctionOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBPTVertex, subsurface_packing, kGPUUPBPBPTVertexSubsurfacePackingOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBPTVertex, incident_medium_index, kGPUUPBPBPTVertexIncidentMediumIndexOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBPTVertex, outgoing_medium_index, kGPUUPBPBPTVertexOutgoingMediumIndexOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBPTPathState, last_vertex_index, kGPUUPBPBPTPathStateLastVertexIndexOffset);
@@ -129,11 +131,16 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPSegment, source_vertex_index, kGPUUPBPSegmentS
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPSegment, target_vertex_index, kGPUUPBPSegmentTargetVertexIndexOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPSegment, boundary_count, kGPUUPBPSegmentBoundaryCountOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPSegment, flags, kGPUUPBPSegmentFlagsOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPSegment, log_beam_survival_forward, kGPUUPBPSegmentLogBeamSurvivalForwardOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPSegment, log_beam_survival_reverse, kGPUUPBPSegmentLogBeamSurvivalReverseOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, weight, kGPUUPBPIntervalWeightOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, start_position, kGPUUPBPIntervalStartPositionOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, medium_index, kGPUUPBPIntervalMediumIndexOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, end_position, kGPUUPBPIntervalEndPositionOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, flags, kGPUUPBPIntervalFlagsOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, subsurface_packing, kGPUUPBPIntervalSubsurfacePackingOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, log_beam_survival_forward, kGPUUPBPIntervalLogBeamSurvivalForwardOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, log_beam_survival_reverse, kGPUUPBPIntervalLogBeamSurvivalReverseOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, log_pdf_forward, kGPUUPBPIntervalLogPdfForwardOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, log_pdf_reverse, kGPUUPBPIntervalLogPdfReverseOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, log_transport_pdf_forward, kGPUUPBPIntervalLogTransportPdfForwardOffset);
@@ -145,8 +152,11 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, event_count, kGPUUPBPIntervalEventCo
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, segment_index, kGPUUPBPIntervalSegmentIndexOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, next_interval_index, kGPUUPBPIntervalNextIntervalIndexOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, tracking_seed, kGPUUPBPIntervalTrackingSeedOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, inline_phase_function_g, kGPUUPBPIntervalInlinePhaseFunctionGOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, inline_scattering, kGPUUPBPIntervalInlineScatteringOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, inline_absorption, kGPUUPBPIntervalInlineAbsorptionOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, inline_extinction, kGPUUPBPIntervalInlineExtinctionOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPInterval, density_owner_instance_index, kGPUUPBPIntervalDensityOwnerInstanceIndexOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPTrackingEvent, weight_before, kGPUUPBPTrackingEventWeightBeforeOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPTrackingEvent, log_transport_pdf_forward_before, kGPUUPBPTrackingEventLogTransportPdfForwardBeforeOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPTrackingEvent, log_transport_pdf_reverse_before, kGPUUPBPTrackingEventLogTransportPdfReverseBeforeOffset);
@@ -270,6 +280,7 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityPoint, log_medium_event_density, kGPUUP
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityPoint, inline_phase_function_g, kGPUUPBPDensityPointInlinePhaseFunctionGOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityPoint, inline_scattering, kGPUUPBPDensityPointInlineScatteringOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityPoint, inline_extinction, kGPUUPBPDensityPointInlineExtinctionOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityPoint, density_owner_instance_index, kGPUUPBPDensityPointDensityOwnerInstanceIndexOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, beam, kGPUUPBPDensityBeamBeamOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, interval, kGPUUPBPDensityBeamIntervalOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, source_throughput, kGPUUPBPDensityBeamSourceThroughputOffset);
@@ -281,6 +292,9 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, log_d_shared, kGPUUPBPDensityBeam
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, log_d_pde_reverse_coefficient, kGPUUPBPDensityBeamDPDEReverseCoefficientOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, log_d_pde_constant, kGPUUPBPDensityBeamDPDEConstantOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, log_d_surface_constant, kGPUUPBPDensityBeamDSurfaceConstantOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, transport_log_beam_survival_forward, kGPUUPBPDensityBeamTransportLogBeamSurvivalForwardOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, transport_log_beam_survival_reverse, kGPUUPBPDensityBeamTransportLogBeamSurvivalReverseOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, log_d_pde_reverse_ratio_coefficient, kGPUUPBPDensityBeamDPDEReverseRatioCoefficientOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, source_event_log_density, kGPUUPBPDensityBeamSourceEventLogDensityOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, interval_distance, kGPUUPBPDensityBeamIntervalDistanceOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPDensityBeam, flags, kGPUUPBPDensityBeamFlagsOffset);
@@ -300,6 +314,7 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamReference, length, kGPUUPBPBeamReferenceLe
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamReference, direction, kGPUUPBPBeamReferenceDirectionOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamReference, path_length, kGPUUPBPBeamReferencePathLengthOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamReference, medium_index, kGPUUPBPBeamReferenceMediumIndexOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamReference, density_owner_instance_index, kGPUUPBPBeamReferenceDensityOwnerInstanceIndexOffset);
 #undef ETX_ASSERT_GPU_UPBP_OFFSET
 
 static_assert(std::is_standard_layout_v<GPUWavefrontQueueHeader>, "GPUWavefrontQueueHeader must stay standard layout for GPU wavefront ABI");
@@ -407,6 +422,7 @@ static_assert(offsetof(GPUWavefrontPathVertex, instance_index) == kGPUWavefrontP
 static_assert(offsetof(GPUWavefrontPathVertex, reserved0) == kGPUWavefrontPathVertexReserved0Offset, "GPUWavefrontPathVertex::reserved0 offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, d_vm) == kGPUWavefrontPathVertexDVmOffset, "GPUWavefrontPathVertex::d_vm offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathVertex, d_surface) == kGPUWavefrontPathVertexDSurfaceOffset, "GPUWavefrontPathVertex::d_surface offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathVertex, subsurface_packing) == kGPUWavefrontPathVertexSubsurfacePackingOffset, "GPUWavefrontPathVertex::subsurface_packing offset changed");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontCompactSpectralResponse>, "GPUWavefrontCompactSpectralResponse must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontCompactSpectralResponse>, "GPUWavefrontCompactSpectralResponse must stay trivially copyable for GPU wavefront ABI");
@@ -464,6 +480,23 @@ static_assert(offsetof(GPUWavefrontLightPathVertex, instance_index) == kGPUWavef
 static_assert(offsetof(GPUWavefrontLightPathVertex, d_vm) == kGPUWavefrontLightPathVertexDVmOffset, "GPUWavefrontLightPathVertex::d_vm offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontLightPathVertex, d_surface) == kGPUWavefrontLightPathVertexDSurfaceOffset,
   "GPUWavefrontLightPathVertex::d_surface offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathState, flight_pdf) == kGPUWavefrontPathStateFlightPdfOffset, "GPUWavefrontPathState flight PDF offset changed");
+static_assert(offsetof(GPUWavefrontPathVertex, flight_pdf) == kGPUWavefrontPathVertexFlightPdfOffset, "GPUWavefrontPathVertex flight PDF offset changed");
+static_assert(offsetof(GPUWavefrontLightPathVertex, flight_pdf) == kGPUWavefrontLightPathVertexFlightPdfOffset, "GPUWavefrontLightPathVertex flight PDF offset changed");
+static_assert(offsetof(GPUWavefrontLightPathVertex, subsurface_packing) == kGPUWavefrontLightPathVertexSubsurfacePackingOffset,
+  "GPUWavefrontLightPathVertex::subsurface_packing offset changed");
+static_assert(offsetof(GPUWavefrontDirectLightTask, subsurface_packing) == kGPUWavefrontDirectLightTaskSubsurfacePackingOffset,
+  "GPUWavefrontDirectLightTask SSS packing offset changed");
+static_assert(offsetof(GPUWavefrontDirectLightTask, subsurface_endpoint_flags) == kGPUWavefrontDirectLightTaskSubsurfaceEndpointFlagsOffset,
+  "GPUWavefrontDirectLightTask SSS endpoint flags offset changed");
+static_assert(offsetof(GPUWavefrontConnectLightTask, subsurface_packing) == kGPUWavefrontConnectLightTaskSubsurfacePackingOffset,
+  "GPUWavefrontConnectLightTask SSS packing offset changed");
+static_assert(offsetof(GPUWavefrontConnectLightTask, subsurface_endpoint_flags) == kGPUWavefrontConnectLightTaskSubsurfaceEndpointFlagsOffset,
+  "GPUWavefrontConnectLightTask SSS endpoint flags offset changed");
+static_assert(offsetof(GPUWavefrontConnectCameraTask, subsurface_packing) == kGPUWavefrontConnectCameraTaskSubsurfacePackingOffset,
+  "GPUWavefrontConnectCameraTask SSS packing offset changed");
+static_assert(offsetof(GPUWavefrontConnectCameraTask, subsurface_endpoint_flags) == kGPUWavefrontConnectCameraTaskSubsurfaceEndpointFlagsOffset,
+  "GPUWavefrontConnectCameraTask SSS endpoint flags offset changed");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontFastLightEndpoint>, "GPUWavefrontFastLightEndpoint must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontFastLightEndpoint>, "GPUWavefrontFastLightEndpoint must stay trivially copyable for GPU wavefront ABI");
@@ -493,6 +526,9 @@ static_assert(offsetof(GPUWavefrontPathMeta, light_mis_history) == kGPUWavefront
 static_assert(offsetof(GPUWavefrontPathMeta, from_delta) == kGPUWavefrontPathMetaFromDeltaOffset, "GPUWavefrontPathMeta::from_delta offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathMeta, reserved1) == kGPUWavefrontPathMetaReserved1Offset, "GPUWavefrontPathMeta::reserved1 offset changed; update GPU wavefront ABI");
 
+static_assert(offsetof(GPUWavefrontSubsurfaceState, flight_pdf_forward) == kGPUWavefrontSubsurfaceStateFlightPdfForwardOffset);
+static_assert(offsetof(GPUWavefrontSubsurfaceState, flight_pdf_reverse) == kGPUWavefrontSubsurfaceStateFlightPdfReverseOffset);
+static_assert(offsetof(GPUWavefrontSubsurfaceState, owner_instance_index) == kGPUWavefrontSubsurfaceStateOwnerInstanceIndexOffset);
 static_assert(std::is_standard_layout_v<GPUWavefrontSubsurfaceState>, "GPUWavefrontSubsurfaceState must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontSubsurfaceState>, "GPUWavefrontSubsurfaceState must stay trivially copyable for GPU wavefront ABI");
 static_assert(sizeof(GPUWavefrontSubsurfaceState) == kGPUWavefrontSubsurfaceStateStride, "GPUWavefrontSubsurfaceState size changed; update GPU wavefront ABI");
@@ -576,6 +612,12 @@ static_assert(offsetof(GPUWavefrontDirectLightResult, transmittance) == kGPUWave
   "GPUWavefrontDirectLightResult::transmittance offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontDirectLightResult, visible) == kGPUWavefrontDirectLightResultVisibleOffset,
   "GPUWavefrontDirectLightResult::visible offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontDirectLightResult, upbp_log_beam_survival_forward_bits) == kGPUWavefrontDirectLightResultUPBPLogBeamSurvivalForwardBitsOffset,
+  "GPUWavefrontDirectLightResult::upbp_log_beam_survival_forward_bits offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontDirectLightResult, upbp_log_beam_survival_reverse_bits) == kGPUWavefrontDirectLightResultUPBPLogBeamSurvivalReverseBitsOffset,
+  "GPUWavefrontDirectLightResult::upbp_log_beam_survival_reverse_bits offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontDirectLightResult, upbp_has_exclusion_transport) == kGPUWavefrontDirectLightResultUPBPHasExclusionTransportOffset,
+  "GPUWavefrontDirectLightResult::upbp_has_exclusion_transport offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontConnectLightCandidate>, "GPUWavefrontConnectLightCandidate must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontConnectLightCandidate>, "GPUWavefrontConnectLightCandidate must stay trivially copyable for GPU wavefront ABI");
@@ -599,7 +641,9 @@ static_assert(offsetof(GPUWavefrontConnectLightCandidate, sampler_seed) == kGPUW
 
 static_assert(std::is_standard_layout_v<GPUWavefrontConnectLightTask>, "GPUWavefrontConnectLightTask must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontConnectLightTask>, "GPUWavefrontConnectLightTask must stay trivially copyable for GPU wavefront ABI");
-static_assert(sizeof(GPUWavefrontConnectLightTask) == kGPUWavefrontConnectLightTaskStride, "GPUWavefrontConnectLightTask size changed; update GPU wavefront ABI");
+static_assert(sizeof(GPUWavefrontConnectLightTask) == kGPUWavefrontConnectLightTaskPayloadStride, "GPUWavefrontConnectLightTask size changed; update GPU wavefront ABI");
+static_assert(kGPUWavefrontConnectLightResolverFlagsOffset >= kGPUWavefrontConnectLightTaskPayloadStride);
+static_assert((kGPUWavefrontConnectLightResolverMaterialClassOffset + sizeof(uint32_t)) <= kGPUWavefrontConnectLightTaskStride);
 static_assert(offsetof(GPUWavefrontConnectLightTask, shadow_origin) == kGPUWavefrontConnectLightTaskShadowOriginOffset,
   "GPUWavefrontConnectLightTask::shadow_origin offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectLightTask, shadow_target) == kGPUWavefrontConnectLightTaskShadowTargetOffset,
@@ -666,6 +710,12 @@ static_assert(offsetof(GPUWavefrontConnectCameraResult, transmittance) == kGPUWa
   "GPUWavefrontConnectCameraResult::transmittance offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontConnectCameraResult, visible) == kGPUWavefrontConnectCameraResultVisibleOffset,
   "GPUWavefrontConnectCameraResult::visible offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectCameraResult, upbp_log_beam_survival_forward_bits) == kGPUWavefrontConnectCameraResultUPBPLogBeamSurvivalForwardBitsOffset,
+  "GPUWavefrontConnectCameraResult::upbp_log_beam_survival_forward_bits offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectCameraResult, upbp_log_beam_survival_reverse_bits) == kGPUWavefrontConnectCameraResultUPBPLogBeamSurvivalReverseBitsOffset,
+  "GPUWavefrontConnectCameraResult::upbp_log_beam_survival_reverse_bits offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontConnectCameraResult, upbp_has_exclusion_transport) == kGPUWavefrontConnectCameraResultUPBPHasExclusionTransportOffset,
+  "GPUWavefrontConnectCameraResult::upbp_has_exclusion_transport offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<GPUWavefrontResources>, "GPUWavefrontResources must stay standard layout for GPU wavefront ABI");
 static_assert(std::is_trivially_copyable_v<GPUWavefrontResources>, "GPUWavefrontResources must stay trivially copyable for GPU wavefront ABI");
@@ -980,3 +1030,18 @@ static_assert(static_cast<uint32_t>(NoiseFunction::Lattice) == MediumNoiseType::
 static_assert(static_cast<uint32_t>(NoiseFunction::Uniform) == MediumNoiseType::Uniform, "NoiseFunction::Uniform changed; update GPU shader decode");
 }  // namespace
 }  // namespace etx
+
+static_assert(offsetof(GPUWavefrontPathVertex, inline_medium_scattering) == kGPUWavefrontPathVertexInlineMediumScatteringOffset,
+  "GPUWavefrontPathVertex scattering offset changed");
+
+static_assert(offsetof(GPUWavefrontLightPathVertex, inline_medium_scattering) == kGPUWavefrontLightPathVertexInlineMediumScatteringOffset,
+  "GPUWavefrontLightPathVertex scattering offset changed");
+
+static_assert(offsetof(GPUWavefrontDirectLightTask, inline_medium_scattering) == kGPUWavefrontDirectLightTaskInlineMediumScatteringOffset,
+  "GPUWavefrontDirectLightTask scattering offset changed");
+
+static_assert(offsetof(GPUWavefrontConnectLightTask, inline_medium_scattering) == kGPUWavefrontConnectLightTaskInlineMediumScatteringOffset,
+  "GPUWavefrontConnectLightTask scattering offset changed");
+
+static_assert(offsetof(GPUWavefrontConnectCameraTask, inline_medium_scattering) == kGPUWavefrontConnectCameraTaskInlineMediumScatteringOffset,
+  "GPUWavefrontConnectCameraTask scattering offset changed");

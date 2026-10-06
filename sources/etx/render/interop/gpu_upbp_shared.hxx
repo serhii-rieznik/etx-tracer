@@ -46,6 +46,8 @@ struct GPUUPBPIntervalFlags {
     InlineMedium = 1u << 5u,
     RecomputeTracking = 1u << 6u,
     Subsurface = 1u << 7u,
+    DensityConnectible = 1u << 8u,
+    SubsurfaceSourceCollision = 1u << 9u,
   };
 };
 
@@ -54,6 +56,7 @@ struct GPUUPBPSegmentFlags {
     Valid = 1u << 0u,
     Terminal = 1u << 1u,
     HasTerminalEventDensity = 1u << 2u,
+    HasExclusionInterval = 1u << 3u,
   };
 };
 
@@ -278,6 +281,7 @@ struct GPUUPBPDensityBeamFlags {
     ScaleDSharedByDistance = 1u << 1u,
     PreviousDelta = 1u << 2u,
     PreviousNonConnectible = 1u << 3u,
+    ExclusionTransport = 1u << 4u,
   };
 };
 
@@ -337,7 +341,7 @@ struct ETX_ALIGNED GPUUPBPVertex {
   float3 barycentric ETX_INIT({});
   uint32_t emitter_index ETX_INIT(kInvalidIndex);
   float inline_phase_function_g ETX_INIT(0.0f);
-  uint32_t reserved0 ETX_INIT(0u);
+  float subsurface_packing ETX_INIT(0.0f);
   uint32_t reserved1 ETX_INIT(0u);
   GPUWavefrontCompactSpectralResponse inline_scattering ETX_INIT({});
   GPUWavefrontCompactSpectralResponse inline_extinction ETX_INIT({});
@@ -378,6 +382,7 @@ struct ETX_ALIGNED GPUUPBPBPTVertex {
   GPUWavefrontCompactSpectralResponse inline_extinction ETX_INIT({});
   uint32_t incident_medium_index ETX_INIT(kInvalidIndex);
   uint32_t outgoing_medium_index ETX_INIT(kInvalidIndex);
+  float subsurface_packing ETX_INIT(0.0f);
 };
 
 struct ETX_ALIGNED GPUUPBPBPTPathState {
@@ -401,6 +406,10 @@ struct ETX_ALIGNED GPUUPBPSegment {
   uint32_t target_vertex_index ETX_INIT(kInvalidIndex);
   uint32_t boundary_count ETX_INIT(0u);
   uint32_t flags ETX_INIT(0u);
+  float log_beam_survival_forward ETX_INIT(0.0f);
+  float log_beam_survival_reverse ETX_INIT(0.0f);
+  uint32_t reserved0 ETX_INIT(0u);
+  uint32_t reserved1 ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUUPBPInterval {
@@ -420,8 +429,14 @@ struct ETX_ALIGNED GPUUPBPInterval {
   uint32_t segment_index ETX_INIT(kInvalidIndex);
   uint32_t next_interval_index ETX_INIT(kInvalidIndex);
   uint32_t tracking_seed ETX_INIT(0u);
+  float inline_phase_function_g ETX_INIT(0.0f);
   GPUWavefrontCompactSpectralResponse inline_scattering ETX_INIT({});
   GPUWavefrontCompactSpectralResponse inline_absorption ETX_INIT({});
+  float subsurface_packing ETX_INIT(0.0f);
+  float log_beam_survival_forward ETX_INIT(0.0f);
+  float log_beam_survival_reverse ETX_INIT(0.0f);
+  uint32_t density_owner_instance_index ETX_INIT(kInvalidIndex);
+  GPUWavefrontCompactSpectralResponse inline_extinction ETX_INIT({});
 };
 
 struct ETX_ALIGNED GPUUPBPTrackingEvent {
@@ -473,6 +488,7 @@ struct ETX_ALIGNED GPUUPBPDensityPoint {
   float inline_phase_function_g ETX_INIT(0.0f);
   GPUWavefrontCompactSpectralResponse inline_scattering ETX_INIT({});
   GPUWavefrontCompactSpectralResponse inline_extinction ETX_INIT({});
+  uint32_t density_owner_instance_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED GPUUPBPDensityBeam {
@@ -492,6 +508,10 @@ struct ETX_ALIGNED GPUUPBPDensityBeam {
   uint32_t event_buffer ETX_INIT(kInvalidIndex);
   uint32_t event_index_offset ETX_INIT(0u);
   float log_d_surface_constant ETX_INIT(0.0f);
+  float transport_log_beam_survival_forward ETX_INIT(0.0f);
+  float transport_log_beam_survival_reverse ETX_INIT(0.0f);
+  float log_d_pde_reverse_ratio_coefficient ETX_INIT(0.0f);
+  uint32_t reserved0 ETX_INIT(0u);
 };
 
 struct GPUUPBPDensityBatch {
@@ -513,6 +533,7 @@ struct GPUUPBPBeamReference {
   float3 direction ETX_INIT({});
   uint32_t path_length ETX_INIT(0u);
   uint32_t medium_index ETX_INIT(kInvalidIndex);
+  uint32_t density_owner_instance_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED GPUUPBPBeamGridMetadata {

@@ -98,6 +98,8 @@ struct ETX_ALIGNED MediumInstance {
   SpectralResponse extinction;
   float anisotropy ETX_INIT(0.0f);
   uint32_t index ETX_INIT(kInvalidIndex);
+  float subsurface_packing ETX_INIT(0.0f);
+  uint32_t subsurface_material ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED MediumSample {

@@ -2227,9 +2227,19 @@ bool validate_energy_compensated_dielectric_transport_contract(const char* label
   for (uint32_t i = 0u; i < kBsdfSamples; ++i) {
     etx::Sampler sampler(seed + i + 3000u, seed ^ (i * 37u + 23u));
     const etx::BSDFSample sample = etx::bsdf::sample(data, material_with_media, sampler);
-    if ((validate_sample(sample) == false) || (sample.valid() == false)) {
+    if (validate_sample(sample) == false) {
       std::printf("%s roughness %.3f invalid media sample\n", label, roughness);
       return false;
+    }
+    if (sample.valid() == false) {
+      const bool zero_weight = sample.weight.spectral() ? (sample.weight.value == 0.0f)
+                                                        : ((sample.weight.integrated.x == 0.0f) && (sample.weight.integrated.y == 0.0f) && (sample.weight.integrated.z == 0.0f));
+      if ((sample.pdf != 0.0f) || (zero_weight == false) || (sample.w_o.x != 0.0f) || (sample.w_o.y != 0.0f) || (sample.w_o.z != 0.0f) || (sample.properties != 0u) ||
+          (sample.medium_index != kInvalidIndex) || (sample.eta != 1.0f)) {
+        std::printf("%s roughness %.3f invalid null sample metadata\n", label, roughness);
+        return false;
+      }
+      continue;
     }
 
     const bool reflection = (sample.properties & etx::BSDFSample::Reflection) != 0u;

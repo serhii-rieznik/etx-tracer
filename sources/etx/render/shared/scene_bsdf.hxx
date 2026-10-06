@@ -6,6 +6,12 @@
 
 namespace etx {
 
+ETX_SHARED_INLINE SpectralResponse subsurface_boundary_color(const Scene& scene, const SpectralQuery spect, const Material& material, const float2& uv) {
+  SpectralResponse result;
+  static_cast<::SpectralResponse&>(result) = ::bsdf_resource_subsurface_boundary_color(make_bsdf_resource_cpu_context(scene), spect, material, uv);
+  return result;
+}
+
 #define ETX_DECLARE_BSDF(Class)                                                                         \
   namespace Class##BSDF {                                                                               \
     ETX_SHARED_INLINE BSDFSample sample(const BSDFData&, const Material&, Sampler&);                    \

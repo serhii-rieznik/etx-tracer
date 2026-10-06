@@ -56,11 +56,11 @@ inline UPBPSurfaceMISWeights upbp_bpt_connection_cross_technique_weights(const U
   const float3 light_to_camera_direction = normalize(camera_vertex.position - light_vertex.position);
   const double light_sin_theta = upbp_medium_phase_sine(light_vertex.intersection.w_i, light_to_camera_direction);
   const double camera_sin_theta = upbp_medium_phase_sine(camera_vertex.intersection.w_i, -light_to_camera_direction);
-  const double light_local_factor =
-    upbp_recursive_local_volume_factor(input.configuration, light_vertex.cls, light_vertex.delta, light_vertex.density_connectible, input.light_weights,
-      1.0 / (camera_to_light_transport * light_event_density), light_vertex.cls == UPBPVertexClass::Medium ? 1.0 / light_event_density : 0.0, light_sin_theta, PathSource::Light);
+  const double light_local_factor = upbp_recursive_local_volume_factor(input.configuration, light_vertex.cls, light_vertex.delta, light_vertex.density_connectible,
+    input.light_weights, 1.0 / (camera_to_light_transport * light_event_density), upbp_segment_short_beam_ray_factor(*input.connection_segment, light_vertex, true),
+    light_sin_theta, PathSource::Light);
   const double camera_local_factor = upbp_recursive_local_volume_factor(input.configuration, camera_vertex.cls, camera_vertex.delta, camera_vertex.density_connectible,
-    input.camera_weights, 1.0 / (light_to_camera_transport * camera_event_density), camera_vertex.cls == UPBPVertexClass::Medium ? 1.0 / camera_event_density : 0.0,
+    input.camera_weights, 1.0 / (light_to_camera_transport * camera_event_density), upbp_segment_short_beam_ray_factor(*input.connection_segment, camera_vertex, false),
     camera_sin_theta, PathSource::Camera);
 
   const double camera_to_light_density =
@@ -137,7 +137,7 @@ inline UPBPSurfaceMISWeights upbp_bpt_nee_cross_technique_weights(const UPBPBPTN
   const double reverse_ray_pdf = std::exp(input.connection_segment->log_transport_pdf_reverse) * camera_event_density;
   const double sin_theta = upbp_medium_phase_sine(camera_vertex.intersection.w_i, direction_to_light);
   const double local_factor = upbp_recursive_local_volume_factor(input.configuration, camera_vertex.cls, camera_vertex.delta, camera_vertex.density_connectible,
-    input.camera_weights, 1.0 / reverse_ray_pdf, camera_vertex.cls == UPBPVertexClass::Medium ? 1.0 / camera_event_density : 0.0, sin_theta, PathSource::Camera);
+    input.camera_weights, 1.0 / reverse_ray_pdf, upbp_segment_short_beam_ray_factor(*input.connection_segment, camera_vertex, true), sin_theta, PathSource::Camera);
   const double emission_to_direct_ratio =
     static_cast<double>(input.emitter_sample.pdf_dir_out) * camera_cosine / (static_cast<double>(input.emitter_sample.pdf_dir) * light_cosine);
   UPBPSurfaceMISWeights result = {1.0 + w_light};
@@ -178,7 +178,7 @@ inline UPBPSurfaceMISWeights upbp_bpt_light_tracing_cross_technique_weights(cons
   const double reverse_ray_pdf = std::exp(input.connection_segment->log_transport_pdf_reverse) * light_event_density;
   const double sin_theta = upbp_medium_phase_sine(light_vertex.intersection.w_i, direction_to_camera);
   const double local_factor = upbp_recursive_local_volume_factor(input.configuration, light_vertex.cls, light_vertex.delta, light_vertex.density_connectible, input.light_weights,
-    1.0 / reverse_ray_pdf, light_vertex.cls == UPBPVertexClass::Medium ? 1.0 / light_event_density : 0.0, sin_theta, PathSource::Light);
+    1.0 / reverse_ray_pdf, upbp_segment_short_beam_ray_factor(*input.connection_segment, light_vertex, true), sin_theta, PathSource::Light);
   UPBPSurfaceMISWeights result = {1.0};
   upbp_bpt_add_vertex_mis_terms(result, input.configuration, light_vertex, input.light_weights, camera_area_density * reverse_ray_pdf, local_factor,
     input.light_scattering.pdf_reverse);

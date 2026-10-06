@@ -710,13 +710,6 @@ GPUIntegratorSelection gpu_integrator_selection_from_scene(const SceneRepresenta
   GPUIntegratorSelection result = {};
   const auto& integrator_data = scene.integrator_data();
   result.integrator_type = integrator_data.selected;
-  if ((result.integrator_type != Integrator::Type::PathTracing) && std::any_of(scene.data().materials.begin(), scene.data().materials.end(), [](const Material& material) {
-        return (material.subsurface_cls != SubsurfaceMaterial::Disabled) && (material.subsurface_packing > 0.0f);
-      })) {
-    result.supported = false;
-    result.unsupported_reason = "exclusion SSS requires Path Tracing; bidirectional and merging densities are not supported";
-    return result;
-  }
   const bool camera_source_path = ((scene.data().options.strategy_flags & Scene::Strategy::DirectHit) != 0u) || scene_has_authored_medium_emission(scene.data()) ||
                                   std::any_of(scene.data().materials.begin(), scene.data().materials.end(), [](const Material& material) {
                                     return (material.temperature_kelvin > 0.0f) && (material.int_medium != kInvalidIndex) &&
@@ -2282,8 +2275,9 @@ struct GPURaytracingRenderer::SceneUpload {
     RHIResult result = transfers->submit();
     if (result == RHIResult::Success)
       result = transfers->finish();
-    if (result == RHIResult::DeviceLost)
-      renderer.set_runtime_failure("GPU device lost during scene metadata upload");
+    if (result == RHIResult::DeviceLost) {
+      renderer.set_runtime_failure("GPU scene metadata upload failed", result);
+    }
     if (result != RHIResult::Success) {
       log::error("GPU RT: scene metadata upload failed (%u)", static_cast<uint32_t>(result));
       return false;
@@ -2394,9 +2388,20 @@ void GPURaytracingRenderer::reset_render_window() {
 }
 
 void GPURaytracingRenderer::reset_runtime_failure() {
+  if (_recovery_blocked) {
+    return;
+  }
   _runtime_failed = false;
   _configuration_failed = false;
   _runtime_failure_reason.clear();
+}
+
+void GPURaytracingRenderer::set_runtime_failure(std::string message, RHIResult result) {
+  if (result == RHIResult::DeviceLost) {
+    _recovery_blocked = true;
+    message = "The graphics device was lost. " + message;
+  }
+  set_runtime_failure(std::move(message));
 }
 
 void GPURaytracingRenderer::set_runtime_failure(std::string message) {
@@ -2415,8 +2420,21 @@ void GPURaytracingRenderer::set_runtime_failure(std::string message) {
 }
 
 void GPURaytracingRenderer::set_configuration_failure(std::string message) {
-  set_runtime_failure(std::move(message));
+  if (_recovery_blocked) {
+    return;
+  }
+  const bool report = (_configuration_failed == false) || (_runtime_failure_reason != message);
+  if (_runtime_failed == false) {
+    preserve_render_statistics();
+  }
+  _run_state = RunState::Stopped;
+  _runtime_failure_reason = std::move(message);
+  _runtime_failed = true;
   _configuration_failed = true;
+  if (report) {
+    log::warning("%s", _runtime_failure_reason.c_str());
+  }
+  set_preparation_state(RendererPreparationState::Blocked, "Unsupported settings", _runtime_failure_reason);
 }
 
 void GPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
@@ -2559,8 +2577,18 @@ RendererStatus GPURaytracingRenderer::status() const {
 
   const bool failed = (_preparation_state == RendererPreparationState::Failed) || _runtime_failed;
   if (failed) {
-    result.state = RendererStatusState::Failed;
+    result.state = _configuration_failed ? RendererStatusState::Blocked : RendererStatusState::Failed;
     result.message = _runtime_failed ? _runtime_failure_reason : _preparation_message;
+    result.diagnostic = {
+      .severity = _configuration_failed ? RendererDiagnosticSeverity::Warning : RendererDiagnosticSeverity::Error,
+      .recovery = _configuration_failed ? RendererRecovery::ChangeSettings : (_recovery_blocked ? RendererRecovery::RestartApplication : RendererRecovery::Restart),
+    };
+  } else if (_preparation_state == RendererPreparationState::Canceled) {
+    result.message = _preparation_message;
+    result.diagnostic = {RendererDiagnosticSeverity::Info, RendererRecovery::Restart};
+  } else if (_runtime_warning.empty() == false) {
+    result.message = _runtime_warning;
+    result.diagnostic.severity = RendererDiagnosticSeverity::Warning;
   }
 
   if ((failed == false) && (_preparation_state == RendererPreparationState::Preparing)) {
@@ -2681,7 +2709,7 @@ RendererStatus GPURaytracingRenderer::status() const {
   const double tile_count = static_cast<double>(std::max(1u, _wavefront_tile_count));
   const double tiled_sample_progress = (_wavefront_tile_plan_valid || (_wavefront_tile_count > 1u)) ? (static_cast<double>(_wavefront_tile_index) / tile_count) : 0.0;
   const double completed_sample_count = static_cast<double>(_sample_index) + tiled_sample_progress;
-  if (result.state != RendererStatusState::Failed) {
+  if (failed == false) {
     if ((result.elapsed_seconds > 0.0) && (_last_target_samples > 0u) && (completed_sample_count > 0.0)) {
       const double sample_rate = completed_sample_count / result.elapsed_seconds;
       if (sample_rate > 0.0) {
@@ -2809,7 +2837,8 @@ RendererControlState GPURaytracingRenderer::control_state() const {
   result.can_run = render_ready && ((_run_state == RunState::Stopped) || (_run_state == RunState::Completed));
   result.can_finish = render_ready && (_run_state == RunState::Running);
   result.can_stop = render_active || (_preparation_state == RendererPreparationState::Preparing);
-  result.can_restart = render_ready && (_run_state != RunState::Stopped);
+  result.can_restart = render_ready || (_initialized && _scene_valid && (_configuration_failed == false) && (_recovery_blocked == false) && (_pipeline_publish_task == nullptr) &&
+                                         ((_preparation_state == RendererPreparationState::Failed) || (_preparation_state == RendererPreparationState::Canceled)));
   return result;
 }
 
@@ -3270,6 +3299,9 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
     if ((group.compilation.result != RHIResult::Success) || (group.compilation.binaries.size() != group.stages.size())) {
       const char* failing_stage = group.stages.empty() ? "<unknown>" : group.stages.front()->entry_point;
       result->error_message = "GPU shader pipeline compilation failed at '" + std::string(failing_stage) + "'";
+      if (group.compilation.error_message.empty() == false) {
+        result->error_message += ":\n" + group.compilation.error_message;
+      }
       log::error("Failed to compile GPU RT shader group rooted at '%s' after %.2fms: %s", failing_stage, group.compile_time_ms, group.compilation.error_message.c_str());
       compiler.log_statistics("GPU RT wavefront");
       result->compile_finished_at = std::chrono::steady_clock::now();
@@ -3298,7 +3330,7 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
 }
 
 void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentation& scene, const char* reason, bool force_reload) {
-  if (_initialized == false) {
+  if ((_initialized == false) || _recovery_blocked) {
     return;
   }
 
@@ -3499,10 +3531,11 @@ bool GPURaytracingRenderer::finish_pipeline_publish_batch(RHIDevice& device, boo
     }
     if (_preparation_canceled && current_generation) {
       _publish_preparation.reset();
-      set_preparation_failed("Preparation canceled", "Canceled");
+      set_preparation_state(RendererPreparationState::Canceled, "Canceled", "GPU pipeline preparation was canceled.");
+      stop_rendering();
     } else if (task->preparation == _publish_preparation) {
       _publish_preparation.reset();
-      set_preparation_failed("Starting the queued pipeline reload", "Retrying");
+      set_preparation_state(RendererPreparationState::Preparing, "Retrying", "Starting the queued pipeline reload");
     }
     return true;
   }
@@ -3518,7 +3551,8 @@ bool GPURaytracingRenderer::finish_pipeline_publish_batch(RHIDevice& device, boo
     return true;
   }
 
-  bool batch_success = true;
+  std::string batch_failure = {};
+  RHIResult batch_failure_result = RHIResult::Success;
   for (uint32_t batch_index = 0u; batch_index < task->pipeline_count; ++batch_index) {
     const uint32_t pipeline_index = task->pipeline_indices[batch_index];
     const auto& stage = _publish_preparation->compiled_stages[pipeline_index];
@@ -3539,18 +3573,21 @@ bool GPURaytracingRenderer::finish_pipeline_publish_batch(RHIDevice& device, boo
       stage.uses_stage_entry_define ? "yes" : "no", static_cast<unsigned long long>(stage.binary.spirv_size), pipeline_result.cache_hit ? "hit" : "compiled",
       pipeline_result.elapsed_ms);
     if ((pipeline_result.result != RHIResult::Success) || (pipeline_result.handle.valid() == false)) {
-      batch_success = false;
+      if (batch_failure.empty() || ((pipeline_result.result == RHIResult::DeviceLost) && (batch_failure_result != RHIResult::DeviceLost))) {
+        batch_failure = "GPU pipeline creation failed at '" + stage.entry_point + "' (" + std::to_string(static_cast<uint32_t>(pipeline_result.result)) + ")";
+        batch_failure_result = pipeline_result.result;
+      }
     }
   }
 
-  if (batch_success == false) {
+  if (batch_failure.empty() == false) {
     for (const auto& pipeline_result : task->results) {
       if (pipeline_result.handle.valid()) {
         device.destroy_pipeline(pipeline_result.handle);
       }
     }
-    const std::string message = "GPU pipeline batch creation failed";
-    set_runtime_failure(message);
+    const std::string& message = batch_failure;
+    set_runtime_failure(message, batch_failure_result);
     set_preparation_failed(message, "Pipeline creation failed");
     const uint32_t first_pipeline = task->pipeline_indices.empty() ? 0u : task->pipeline_indices.front();
     log::error("GPU RT preparation failed: generation=%u phase=pipeline batch_start=%u", _publish_preparation->generation, first_pipeline);
@@ -3729,8 +3766,9 @@ bool GPURaytracingRenderer::create_pipelines_sync(RHIContext& ctx, SceneRepresen
 
 bool GPURaytracingRenderer::finish_preparation(RHIContext& ctx, SceneRepresentation& scene) {
   (void)scene;
-  if (finish_density_dispatch(ctx, true) != RHIResult::Success) {
-    set_runtime_failure("GPU UPBP density dispatch failed before pipeline preparation");
+  const RHIResult density_result = finish_density_dispatch(ctx, true);
+  if (density_result != RHIResult::Success) {
+    set_runtime_failure("GPU UPBP density dispatch failed before pipeline preparation", density_result);
     return false;
   }
   while (_preparation_state == RendererPreparationState::Preparing) {
@@ -3755,7 +3793,7 @@ void GPURaytracingRenderer::poll_preparation(RHIContext& ctx) {
     return;
   }
   if (density_result != RHIResult::Success) {
-    set_runtime_failure("GPU UPBP density dispatch failed before pipeline publication");
+    set_runtime_failure("GPU UPBP density dispatch failed before pipeline publication", density_result);
     return;
   }
   poll_preparation_tasks(ctx, false);
@@ -3821,7 +3859,8 @@ void GPURaytracingRenderer::cancel_preparation() {
     canceled_preparation->progress_condition.notify_all();
   }
   log::info("GPU RT preparation canceled: generation=%u", _preparation_generation - 1u);
-  set_preparation_failed("Preparation canceled", "Canceled");
+  set_preparation_state(RendererPreparationState::Canceled, "Canceled", "GPU pipeline preparation was canceled.");
+  stop_rendering();
 }
 
 void GPURaytracingRenderer::stop() {
@@ -3857,6 +3896,33 @@ void GPURaytracingRenderer::restart() {
   start_render(false, false);
 }
 
+bool GPURaytracingRenderer::recover(RHIContext& ctx, SceneRepresentation& scene) {
+  if ((control_state().can_restart == false) || (scene.valid() == false)) {
+    return false;
+  }
+  cancel_preparation();
+  finish_pipeline_publish_batch(ctx.device(), true);
+  release_inflight_preparation_tasks(false);
+  finish_density_dispatch(ctx, true);
+  const RHIResult wait_result = ctx.wait_idle();
+  if (wait_result != RHIResult::Success) {
+    set_runtime_failure("GPU restart could not synchronize the device (" + std::to_string(static_cast<uint32_t>(wait_result)) + "). Restart the application.", wait_result);
+    _recovery_blocked = true;
+    return false;
+  }
+  destroy_wavefront_buffers(ctx);
+  _current_scene_hashes = {};
+  _current_camera_hash = 0u;
+  reset_runtime_failure();
+  _runtime_warning.clear();
+  request_pipeline_preparation(scene, "restart after interruption", true);
+  if (_runtime_failed) {
+    return false;
+  }
+  start_render(false, true);
+  return true;
+}
+
 void GPURaytracingRenderer::destroy_scene_buffers(RHIContext& ctx) {
   ETX_PROFILER_SCOPE();
 
@@ -3889,7 +3955,7 @@ void GPURaytracingRenderer::wait_for_pending_work(RHIContext& ctx) {
   while (_density_dispatch_count > 0u) {
     const RHIResult result = finish_density_dispatch(ctx, true);
     if (result != RHIResult::Success) {
-      set_runtime_failure("GPU UPBP density dispatch failed (" + std::to_string(static_cast<uint32_t>(result)) + ")");
+      set_runtime_failure("GPU UPBP density dispatch failed (" + std::to_string(static_cast<uint32_t>(result)) + ")", result);
       return;
     }
     if ((_wavefront_render_step == WavefrontRenderStep::UPBPEvaluateDensity) && (_upbp.density_query_work_index < _upbp.density_query_work.size())) {
@@ -3958,7 +4024,7 @@ void GPURaytracingRenderer::submit_density_dispatch(RHIContext& ctx) {
 void GPURaytracingRenderer::advance_density_dispatches(RHIContext& ctx) {
   const RHIResult result = finish_density_dispatch(ctx, false);
   if ((result != RHIResult::Success) && (result != RHIResult::NotReady)) {
-    set_runtime_failure("GPU UPBP density dispatch failed (" + std::to_string(static_cast<uint32_t>(result)) + ")");
+    set_runtime_failure("GPU UPBP density dispatch failed (" + std::to_string(static_cast<uint32_t>(result)) + ")", result);
     return;
   }
   while ((_density_dispatch_count < _density_dispatches.size()) && (_upbp.density_query_work_index < _upbp.density_query_work.size())) {
@@ -4017,7 +4083,9 @@ RHIResult GPURaytracingRenderer::finish_density_dispatch(RHIContext& ctx, bool w
       if (wait == false) {
         return result;
       }
-      completion_result = result;
+      if ((completion_result == RHIResult::Success) || (result == RHIResult::DeviceLost)) {
+        completion_result = result;
+      }
     }
   }
   return completion_result;
@@ -5310,6 +5378,9 @@ void GPURaytracingRenderer::destroy_acceleration_structures(RHIContext& ctx) {
 }
 
 void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) {
+  if (_recovery_blocked) {
+    return;
+  }
   ETX_PROFILER_SCOPE();
   const bool check_medium_emission_failures = scene_has_authored_medium_emission(scene.data());
   if (_initialized && scene.valid() && is_running() && pipelines_valid() && (_scene_update_scope == SceneUpdateScope::None) &&
@@ -5333,7 +5404,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     return;
   }
   if (density_result != RHIResult::Success) {
-    set_runtime_failure("GPU UPBP density dispatch failed (" + std::to_string(static_cast<uint32_t>(density_result)) + ")");
+    set_runtime_failure("GPU UPBP density dispatch failed (" + std::to_string(static_cast<uint32_t>(density_result)) + ")", density_result);
     return;
   }
   double pipeline_refresh_ms = 0.0;
@@ -5388,8 +5459,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   const bool spectral_mode_changed = (_spectral_mode != new_spectral_mode);
   const bool pipeline_configuration_changed = integrator_mode_changed || integrator_features_changed || material_compile_mask_changed || spectral_mode_changed;
   const bool missing_pipelines = (_preparation_state == RendererPreparationState::Ready) && (pipelines_valid() == false);
-  const bool failed_preparation_can_retry =
-    (_preparation_state == RendererPreparationState::Failed) && (_preparation_canceled == false) && ((_runtime_failed == false) || _configuration_failed);
+  const bool failed_preparation_can_retry = ((_preparation_state == RendererPreparationState::Failed) || (_preparation_state == RendererPreparationState::Blocked)) &&
+                                            (_preparation_canceled == false) && ((_runtime_failed == false) || _configuration_failed);
   const bool material_configuration_supported = gpu_material_compile_mask_supported(new_material_compile_mask);
   const bool should_request_prepare =
     integrator_selection.supported && material_configuration_supported && (pipeline_configuration_changed || missing_pipelines || failed_preparation_can_retry);
@@ -5666,7 +5737,12 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (wavefront_sample_in_progress == false) {
     const auto blue_noise_update_begin = std::chrono::steady_clock::now();
     if (update_blue_noise_buffer(ctx, scene) == false) {
-      log::warning("GPU RT: blue noise buffer is unavailable, falling back to white noise");
+      if (_runtime_warning.empty()) {
+        log::warning("GPU RT: blue noise buffer is unavailable, falling back to white noise");
+      }
+      _runtime_warning = "Blue noise is unavailable. Rendering continues with white noise sampling.";
+    } else {
+      _runtime_warning.clear();
     }
     const auto blue_noise_update_end = std::chrono::steady_clock::now();
     blue_noise_update_ms = elapsed_ms(blue_noise_update_begin, blue_noise_update_end);
@@ -5817,13 +5893,14 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       if (output_texture_result.handle.valid()) {
         device.destroy_texture(output_texture_result.handle);
       }
-      set_runtime_failure("GPU RT failed to create its output texture (" + std::to_string(static_cast<uint32_t>(output_texture_result.result)) + ")");
+      set_runtime_failure("GPU RT failed to create its output texture (" + std::to_string(static_cast<uint32_t>(output_texture_result.result)) + ")", output_texture_result.result);
       return;
     }
     const RHIResult replacement_wait_result = ctx.wait_idle();
     if (replacement_wait_result != RHIResult::Success) {
       device.destroy_texture(output_texture_result.handle);
-      set_runtime_failure("GPU RT failed to synchronize before replacing its output texture (" + std::to_string(static_cast<uint32_t>(replacement_wait_result)) + ")");
+      set_runtime_failure("GPU RT failed to synchronize before replacing its output texture (" + std::to_string(static_cast<uint32_t>(replacement_wait_result)) + ")",
+        replacement_wait_result);
       return;
     }
     const RHITexture previous_output_texture = _output_texture;
@@ -5934,7 +6011,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (reclaim_upbp_phase_storage) {
     const RHIResult reclaim_result = ctx.wait_idle();
     if (reclaim_result != RHIResult::Success) {
-      set_runtime_failure("GPU UPBP failed to reclaim completed phase storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")");
+      set_runtime_failure("GPU UPBP failed to reclaim completed phase storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
       return;
     }
     if (prepare_upbp_light_phase) {
@@ -6218,7 +6295,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       deferred_command_wait_result = RHIResult::Success;
       for (auto& submitted_command : submitted_commands) {
         const RHIResult command_wait_result = ctx.wait_for_command_buffer(submitted_command.command_buffer);
-        if ((wait_result == RHIResult::Success) && (command_wait_result != RHIResult::Success)) {
+        if (((wait_result == RHIResult::Success) || (command_wait_result == RHIResult::DeviceLost)) && (command_wait_result != RHIResult::Success)) {
           wait_result = command_wait_result;
         }
         if ((command_wait_result == RHIResult::Success) && (submitted_command.timestamp_query_count > 0u)) {
@@ -6460,7 +6537,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       });
       const RHIResult copy_result = wait_and_destroy_submitted_commands("UPBP compact matching light history");
       if (copy_result != RHIResult::Success) {
-        set_runtime_failure("GPU UPBP compact matching light history failed (" + std::to_string(static_cast<uint32_t>(copy_result)) + ")");
+        set_runtime_failure("GPU UPBP compact matching light history failed (" + std::to_string(static_cast<uint32_t>(copy_result)) + ")", copy_result);
         return false;
       }
       _upbp.bpt_light_max_path_length = upbp_counters[GPUUPBPCounterIndex::MaximumLightPathLength];
@@ -6525,7 +6602,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
 
       const RHIResult init_result = wait_and_destroy_submitted_commands("deferred camera init submit");
       if (init_result != RHIResult::Success) {
-        set_runtime_failure("GPU RT deferred camera init submit failed (" + std::to_string(static_cast<uint32_t>(init_result)) + ")");
+        set_runtime_failure("GPU RT deferred camera init submit failed (" + std::to_string(static_cast<uint32_t>(init_result)) + ")", init_result);
         _wavefront_camera_queue_count = 0u;
         return false;
       }
@@ -6589,7 +6666,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         });
         const RHIResult init_result = wait_and_destroy_submitted_commands("init sample submit");
         if (init_result != RHIResult::Success) {
-          set_runtime_failure("GPU RT init sample submit failed (" + std::to_string(static_cast<uint32_t>(init_result)) + ")");
+          set_runtime_failure("GPU RT init sample submit failed (" + std::to_string(static_cast<uint32_t>(init_result)) + ")", init_result);
           _wavefront_camera_queue_count = 0u;
           _wavefront_light_queue_count = 0u;
           return;
@@ -6666,7 +6743,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               if (submitted_commands.empty() == false) {
                 const RHIResult pending_result = wait_and_destroy_submitted_commands("light history growth");
                 if (pending_result != RHIResult::Success) {
-                  set_runtime_failure("GPU RT light history synchronization failed (" + std::to_string(static_cast<uint32_t>(pending_result)) + ")");
+                  set_runtime_failure("GPU RT light history synchronization failed (" + std::to_string(static_cast<uint32_t>(pending_result)) + ")", pending_result);
                   _wavefront_camera_queue_count = 0u;
                   _wavefront_light_queue_count = 0u;
                   return;
@@ -6978,7 +7055,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           }
 
           if (trace_step_result != RHIResult::Success) {
-            set_runtime_failure("GPU RT trace bounce submit failed (" + std::to_string(static_cast<uint32_t>(trace_step_result)) + ")");
+            set_runtime_failure("GPU RT trace bounce submit failed (" + std::to_string(static_cast<uint32_t>(trace_step_result)) + ")", trace_step_result);
             _wavefront_camera_queue_count = 0u;
             _wavefront_light_queue_count = 0u;
             return;
@@ -6996,13 +7073,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               GPUWavefrontQueueHeader queue_header = {};
               const RHIResult read_result = device.read_buffer(_camera_queue_count_readback_buffer, &queue_header, static_cast<uint64_t>(sizeof(queue_header)));
               if (read_result != RHIResult::Success) {
-                set_runtime_failure("GPU RT failed to read the camera queue count (" + std::to_string(static_cast<uint32_t>(read_result)) + ")");
+                set_runtime_failure("GPU RT failed to read the camera queue count (" + std::to_string(static_cast<uint32_t>(read_result)) + ")", read_result);
                 _wavefront_camera_queue_count = 0u;
                 _wavefront_light_queue_count = 0u;
                 return;
               }
               if (queue_header.pad1 != 0u) {
-                set_runtime_failure(Raytracing::kMediumEmissionFailure);
+                set_configuration_failure(Raytracing::kMediumEmissionFailure);
                 _wavefront_camera_queue_count = 0u;
                 _wavefront_light_queue_count = 0u;
                 return;
@@ -7016,7 +7093,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               GPUWavefrontQueueHeader queue_header = {};
               const RHIResult read_result = device.read_buffer(_light_queue_count_readback_buffer, &queue_header, static_cast<uint64_t>(sizeof(queue_header)));
               if (read_result != RHIResult::Success) {
-                set_runtime_failure("GPU RT failed to read the light queue count (" + std::to_string(static_cast<uint32_t>(read_result)) + ")");
+                set_runtime_failure("GPU RT failed to read the light queue count (" + std::to_string(static_cast<uint32_t>(read_result)) + ")", read_result);
                 _wavefront_camera_queue_count = 0u;
                 _wavefront_light_queue_count = 0u;
                 return;
@@ -7039,7 +7116,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             uint32_t light_vertex_count = 0u;
             const RHIResult counter_read_result = device.read_buffer(_light_vertex_counter_readback_buffer, &light_vertex_count, kWavefrontLightVertexCounterSize);
             if (counter_read_result != RHIResult::Success) {
-              set_runtime_failure("GPU RT failed to read compact light history size (" + std::to_string(static_cast<uint32_t>(counter_read_result)) + ")");
+              set_runtime_failure("GPU RT failed to read compact light history size (" + std::to_string(static_cast<uint32_t>(counter_read_result)) + ")", counter_read_result);
               _wavefront_camera_queue_count = 0u;
               _wavefront_light_queue_count = 0u;
               return;
@@ -7077,13 +7154,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         });
         const RHIResult validation_result = wait_and_destroy_submitted_commands("UPBP batch validation");
         if (validation_result != RHIResult::Success) {
-          set_runtime_failure("GPU UPBP batch validation failed (" + std::to_string(static_cast<uint32_t>(validation_result)) + ")");
+          set_runtime_failure("GPU UPBP batch validation failed (" + std::to_string(static_cast<uint32_t>(validation_result)) + ")", validation_result);
           return;
         }
         uint32_t upbp_counters[GPUUPBPCounterIndex::Count] = {};
         const RHIResult counter_result = device.read_buffer(_upbp.counter_readback_buffer.handle, upbp_counters, sizeof(upbp_counters));
         if (counter_result != RHIResult::Success) {
-          set_runtime_failure("GPU UPBP failed to read batch counters (" + std::to_string(static_cast<uint32_t>(counter_result)) + ")");
+          set_runtime_failure("GPU UPBP failed to read batch counters (" + std::to_string(static_cast<uint32_t>(counter_result)) + ")", counter_result);
           return;
         }
         const uint32_t overflow_flags = upbp_counters[GPUUPBPCounterIndex::OverflowFlags];
@@ -7210,12 +7287,12 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           });
           const RHIResult compact_result = wait_and_destroy_submitted_commands("UPBP compact density batch");
           if (compact_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP compact density batch failed (" + std::to_string(static_cast<uint32_t>(compact_result)) + ")");
+            set_runtime_failure("GPU UPBP compact density batch failed (" + std::to_string(static_cast<uint32_t>(compact_result)) + ")", compact_result);
             return;
           }
           const RHIResult compact_counter_result = device.read_buffer(_upbp.counter_readback_buffer.handle, upbp_counters, sizeof(upbp_counters));
           if (compact_counter_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP failed to read compact density counts (" + std::to_string(static_cast<uint32_t>(compact_counter_result)) + ")");
+            set_runtime_failure("GPU UPBP failed to read compact density counts (" + std::to_string(static_cast<uint32_t>(compact_counter_result)) + ")", compact_counter_result);
             return;
           }
           density_batch.surface_point_count = upbp_counters[GPUUPBPCounterIndex::DensitySurfacePoint];
@@ -7237,7 +7314,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           if (released_resident_bytes > 0u) {
             const RHIResult reclaim_result = ctx.wait_idle();
             if (reclaim_result != RHIResult::Success) {
-              set_runtime_failure("GPU UPBP failed to reclaim resident light-path storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")");
+              set_runtime_failure("GPU UPBP failed to reclaim resident light-path storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
               return;
             }
             log::info("GPU UPBP released %.2f MiB of resident light-path storage before density-cache consolidation",
@@ -7373,7 +7450,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           });
           const RHIResult point_copy_result = wait_and_destroy_submitted_commands("UPBP consolidated density storage");
           if (point_copy_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP failed to consolidate point storage (" + std::to_string(static_cast<uint32_t>(point_copy_result)) + ")");
+            set_runtime_failure("GPU UPBP failed to consolidate point storage (" + std::to_string(static_cast<uint32_t>(point_copy_result)) + ")", point_copy_result);
             return;
           }
           {
@@ -7388,7 +7465,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             if (released_bytes > 0u) {
               const RHIResult reclaim_result = ctx.wait_idle();
               if (reclaim_result != RHIResult::Success) {
-                set_runtime_failure("GPU UPBP failed to reclaim copied density point storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")");
+                set_runtime_failure("GPU UPBP failed to reclaim copied density point storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
                 return;
               }
             }
@@ -7428,7 +7505,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           });
           const RHIResult point_bounds_result = wait_and_destroy_submitted_commands("UPBP consolidated point bounds");
           if (point_bounds_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP failed to generate consolidated point bounds (" + std::to_string(static_cast<uint32_t>(point_bounds_result)) + ")");
+            set_runtime_failure("GPU UPBP failed to generate consolidated point bounds (" + std::to_string(static_cast<uint32_t>(point_bounds_result)) + ")", point_bounds_result);
             return;
           }
           const auto ensure_compact_point_blas_capacity = [&device](const UPBPBuffer& aabb_buffer, uint32_t offset, uint32_t count, RHIBindlessHandle& result, uint32_t& capacity) {
@@ -7612,12 +7689,14 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             });
             const RHIResult instance_generation_result = wait_and_destroy_submitted_commands("UPBP compact beam instance generation");
             if (instance_generation_result != RHIResult::Success) {
-              set_runtime_failure("GPU UPBP compact beam instance generation failed (" + std::to_string(static_cast<uint32_t>(instance_generation_result)) + ")");
+              set_runtime_failure("GPU UPBP compact beam instance generation failed (" + std::to_string(static_cast<uint32_t>(instance_generation_result)) + ")",
+                instance_generation_result);
               return;
             }
             const RHIResult instance_counter_result = device.read_buffer(_upbp.counter_readback_buffer.handle, upbp_counters, sizeof(upbp_counters));
             if (instance_counter_result != RHIResult::Success) {
-              set_runtime_failure("GPU UPBP failed to validate GPU-authored compact beam instances (" + std::to_string(static_cast<uint32_t>(instance_counter_result)) + ")");
+              set_runtime_failure("GPU UPBP failed to validate GPU-authored compact beam instances (" + std::to_string(static_cast<uint32_t>(instance_counter_result)) + ")",
+                instance_counter_result);
               return;
             }
             if ((upbp_counters[GPUUPBPCounterIndex::OverflowFlags] & GPUUPBPOverflowFlags::BeamInstance) != 0u) {
@@ -7638,7 +7717,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           if (released_beam_bytes > 0u) {
             const RHIResult reclaim_result = ctx.wait_idle();
             if (reclaim_result != RHIResult::Success) {
-              set_runtime_failure("GPU UPBP failed to reclaim compacted density beam storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")");
+              set_runtime_failure("GPU UPBP failed to reclaim compacted density beam storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
               return;
             }
             log::info("GPU UPBP released %.2f MiB of compacted density beam storage before beam indexing", static_cast<double>(released_beam_bytes) / (1024.0 * 1024.0));
@@ -7904,7 +7983,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           });
           const RHIResult tlas_build_result = wait_and_destroy_submitted_commands("UPBP compact density TLAS build");
           if (tlas_build_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP compact density TLAS build failed (" + std::to_string(static_cast<uint32_t>(tlas_build_result)) + ")");
+            set_runtime_failure("GPU UPBP compact density TLAS build failed (" + std::to_string(static_cast<uint32_t>(tlas_build_result)) + ")", tlas_build_result);
             return;
           }
           {
@@ -7924,7 +8003,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             if (released_build_bytes > 0u) {
               const RHIResult reclaim_result = ctx.wait_idle();
               if (reclaim_result != RHIResult::Success) {
-                set_runtime_failure("GPU UPBP failed to reclaim density-index build storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")");
+                set_runtime_failure("GPU UPBP failed to reclaim density-index build storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
                 return;
               }
               log::info("GPU UPBP released %.2f MiB of density acceleration-structure build inputs", static_cast<double>(released_build_bytes) / (1024.0 * 1024.0));
@@ -8185,12 +8264,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           });
           const RHIResult compact_result = wait_and_destroy_submitted_commands("UPBP camera density query compaction");
           if (compact_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP camera density query compaction failed (" + std::to_string(static_cast<uint32_t>(compact_result)) + ")");
+            set_runtime_failure("GPU UPBP camera density query compaction failed (" + std::to_string(static_cast<uint32_t>(compact_result)) + ")", compact_result);
             return;
           }
           const RHIResult compact_counter_result = device.read_buffer(_upbp.counter_readback_buffer.handle, upbp_counters, sizeof(upbp_counters));
           if (compact_counter_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP failed to read compact camera density query counts (" + std::to_string(static_cast<uint32_t>(compact_counter_result)) + ")");
+            set_runtime_failure("GPU UPBP failed to read compact camera density query counts (" + std::to_string(static_cast<uint32_t>(compact_counter_result)) + ")",
+              compact_counter_result);
             return;
           }
           camera_surface_queries_compacted = true;
@@ -8291,12 +8371,12 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         });
         const RHIResult grid_result = wait_and_destroy_submitted_commands("UPBP density evaluation");
         if (grid_result != RHIResult::Success) {
-          set_runtime_failure("GPU UPBP density evaluation failed (" + std::to_string(static_cast<uint32_t>(grid_result)) + ")");
+          set_runtime_failure("GPU UPBP density evaluation failed (" + std::to_string(static_cast<uint32_t>(grid_result)) + ")", grid_result);
           return;
         }
         const RHIResult grid_counter_result = device.read_buffer(_upbp.counter_readback_buffer.handle, upbp_counters, sizeof(upbp_counters));
         if (grid_counter_result != RHIResult::Success) {
-          set_runtime_failure("GPU UPBP failed to validate its streamed beam grid (" + std::to_string(static_cast<uint32_t>(grid_counter_result)) + ")");
+          set_runtime_failure("GPU UPBP failed to validate its streamed beam grid (" + std::to_string(static_cast<uint32_t>(grid_counter_result)) + ")", grid_counter_result);
           return;
         }
         if ((upbp_counters[GPUUPBPCounterIndex::OverflowFlags] & GPUUPBPOverflowFlags::BeamInstance) != 0u) {
@@ -8336,7 +8416,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           });
           const RHIResult init_result = wait_and_destroy_submitted_commands("UPBP light batch init");
           if (init_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP light batch initialization failed (" + std::to_string(static_cast<uint32_t>(init_result)) + ")");
+            set_runtime_failure("GPU UPBP light batch initialization failed (" + std::to_string(static_cast<uint32_t>(init_result)) + ")", init_result);
             return;
           }
           _wavefront_render_step = WavefrontRenderStep::TraceBounce;
@@ -8350,7 +8430,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           if (released_wavefront_bytes > 0u) {
             const RHIResult reclaim_result = ctx.wait_idle();
             if (reclaim_result != RHIResult::Success) {
-              set_runtime_failure("GPU UPBP failed to reclaim completed light-phase storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")");
+              set_runtime_failure("GPU UPBP failed to reclaim completed light-phase storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
               return;
             }
           }
@@ -8454,7 +8534,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         });
         const RHIResult result = wait_and_destroy_submitted_commands("UPBP density evaluation");
         if (result != RHIResult::Success) {
-          set_runtime_failure("GPU UPBP density evaluation failed (" + std::to_string(static_cast<uint32_t>(result)) + ")");
+          set_runtime_failure("GPU UPBP density evaluation failed (" + std::to_string(static_cast<uint32_t>(result)) + ")", result);
           return;
         }
         uint32_t counters[GPUUPBPCounterIndex::Count] = {};
@@ -8642,7 +8722,9 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _pipeline_publish_logged = false;
   invalidate_output();
   _preparation_canceled = false;
+  _recovery_blocked = false;
   reset_runtime_failure();
+  _runtime_warning.clear();
   set_preparation_ready();
   request_scene_update();
 }
@@ -8657,7 +8739,7 @@ void GPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
 
 void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
   if (thermal_medium_binding_valid(scene.data(), scene.camera().medium_index) == false) {
-    set_runtime_failure(kThermalCameraBindingFailure);
+    set_configuration_failure(kThermalCameraBindingFailure);
   } else if ((_runtime_failure_reason == kThermalCameraBindingFailure) || (_runtime_failure_reason == Raytracing::kMediumEmissionFailure)) {
     reset_runtime_failure();
     set_preparation_ready();

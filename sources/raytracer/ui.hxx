@@ -144,6 +144,7 @@ struct UI {
   }
 
   bool handle_event(const sapp_event*);
+  bool commit_pending_edits(SceneRepresentation& scene_rep);
   void invalidate_scene_resources() {
     _mesh_materials_dirty = true;
   }
@@ -315,7 +316,7 @@ struct UI {
   bool build_medium(SceneRepresentation& scene_rep, uint32_t medium_index, Medium& medium);
   bool material_spectrum_control(SceneRepresentation& scene_rep, const char* label, SpectrumTarget::Channel channel, SpectrumSource::Kind kind);
   bool spectrum_control(SceneRepresentation& scene_rep, const char* label, const std::vector<SpectrumTarget>& targets, SpectrumSource::Kind kind, bool expanded);
-  void flush_spectrum_changes(SceneRepresentation& scene_rep);
+  bool flush_spectrum_changes(SceneRepresentation& scene_rep, bool defer_pending);
   bool image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options);
   bool sampled_image_picker(SceneRepresentation& scene_rep, const char* label, SampledImage& image, uint32_t image_options);
   bool angle_editor(const char* label, float2& angles, float min_azimuth, float max_azimuth, float min_elevation, float max_elevation, float pole_threshold);
@@ -361,6 +362,7 @@ struct UI {
   void build_render_configuration_selector(const char* id);
   void select_render_configuration(RendererMode renderer, Integrator* integrator);
   void build_status_bar(const BuildContext& ctx);
+  void build_renderer_diagnostic(const BuildContext& ctx);
   void build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_scene_explorer(SceneRepresentation& scene_rep, const BuildContext& ctx);
   void build_inspector(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
@@ -574,7 +576,7 @@ struct UI {
   float _explorer_width = 300.0f;
   float _inspector_width = 400.0f;
   float _diagnostics_height = 260.0f;
-  bool _viewport_pointer_active = false;
+  uint32_t _viewport_mouse_buttons = 0u;
   bool _reset_layout_requested = false;
   bool _scene_dirty = false;
   bool _unsaved_changes_modal_requested = false;

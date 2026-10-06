@@ -168,6 +168,7 @@ struct GPURaytracingRenderer : public Renderer {
   void stop_rendering() override;
   void finish() override;
   void restart() override;
+  bool recover(RHIContext& ctx, SceneRepresentation& scene) override;
   void discard_render_output() override {
     _sample_index = 0u;
   }
@@ -448,6 +449,7 @@ struct GPURaytracingRenderer : public Renderer {
   void set_preparation_state(RendererPreparationState state, const char* phase, const std::string& message = {}, uint32_t completed_steps = 0u, uint32_t total_steps = 0u);
   void reset_runtime_failure();
   void set_runtime_failure(std::string message);
+  void set_runtime_failure(std::string message, RHIResult result);
   void set_configuration_failure(std::string message);
 
  private:
@@ -684,6 +686,8 @@ struct GPURaytracingRenderer : public Renderer {
   std::string _compile_stage_filter = {};
   std::string _runtime_failure_reason = {};
   bool _configuration_failed = false;
+  bool _recovery_blocked = false;
+  std::string _runtime_warning = {};
   std::string _preparation_phase = "Ready";
   std::string _preparation_message = {};
   RHIMemoryStats _last_memory_stats = {};

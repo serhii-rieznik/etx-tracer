@@ -69,6 +69,7 @@
   if (resources.light_subsurface_state_buffer != kInvalidIndex) {
     GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;
     subsurface_state.material_index = kInvalidIndex;
+    subsurface_state.owner_instance_index = kInvalidIndex;
     subsurface_state.medium_index = kInvalidIndex;
     subsurface_state.scatter_material_index = kInvalidIndex;
     wavefront_store_subsurface_state(resources.light_subsurface_state_buffer, path_index, subsurface_state);

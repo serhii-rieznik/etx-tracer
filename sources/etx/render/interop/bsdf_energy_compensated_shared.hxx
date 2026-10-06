@@ -1302,7 +1302,7 @@ ETX_SHARED_INLINE float bsdf_energy_compensated_dielectric_base_pdf_local(ETX_IN
   ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm)) {
   const SpectralResponse texture = spectral_response_make(spect, 1.0f);
   const BSDFEnergyCompensatedLobe lobe = bsdf_energy_compensated_dielectric_base_lobe(spect, w_i_local, w_o_local, alpha, ext_ior, int_ior, thinfilm, texture);
-  return lobe.pdf;
+  return (abs(w_i_local.z * w_o_local.z) > kEpsilon) ? lobe.pdf : 0.0f;
 }
 
 ETX_SHARED_INLINE float bsdf_energy_compensated_dielectric_base_pdf_local(ETX_IN(SpectralQuery, spect), ETX_IN(float3, w_i_local), ETX_IN(float3, w_o_local), float alpha,
@@ -1323,7 +1323,7 @@ ETX_SHARED_NOINLINE BSDFEnergyCompensatedDielectricComponents bsdf_energy_compen
 
   const BSDFEnergyCompensatedLobe base_lobe = bsdf_energy_compensated_dielectric_base_lobe(spect, w_i, w_o, base_alpha, ext_ior, int_ior, thinfilm, texture);
   result.base = base_lobe.bsdf;
-  result.base_pdf = base_lobe.pdf;
+  result.base_pdf = (abs(w_i.z * w_o.z) > kEpsilon) ? base_lobe.pdf : 0.0f;
   result.thinfilm_lut_value = thinfilm_lut_value;
   const bool incident_outside = w_i.z > 0.0f;
   const bool outgoing_outside = w_o.z > 0.0f;

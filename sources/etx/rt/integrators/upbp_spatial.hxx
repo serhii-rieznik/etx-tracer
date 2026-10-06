@@ -307,6 +307,7 @@ struct UPBPBeamReference {
   uint32_t transport_segment_index = 0u;
   uint32_t transport_interval_index = 0u;
   SpectralResponse throughput_at_origin = {};
+  uint32_t density_owner_instance_index = kInvalidIndex;
 };
 
 inline float upbp_float3_component(const float3& value, const uint32_t axis) {
@@ -619,7 +620,7 @@ inline bool upbp_collect_medium_beams(const UPBPPathRecord& path, const uint32_t
     SpectralResponse throughput = path.vertices[source_vertex_index].outgoing_throughput;
     for (uint32_t transport_interval_index = 0u; transport_interval_index < segment.intervals.size(); ++transport_interval_index) {
       const UPBPSegmentRecord& interval = segment.intervals[transport_interval_index];
-      if (interval.medium_index != kInvalidIndex) {
+      if ((interval.medium_index != kInvalidIndex) && interval.density_connectible) {
         const float3 delta = interval.end_position - interval.start_position;
         const float distance_squared = dot(delta, delta);
         if ((interval.distance <= 0.0f) || (std::isfinite(interval.distance) == false) || (distance_squared < 0.0f) || (std::isfinite(distance_squared) == false)) {
@@ -638,6 +639,7 @@ inline bool upbp_collect_medium_beams(const UPBPPathRecord& path, const uint32_t
             transport_segment_index,
             transport_interval_index,
             throughput,
+            interval.density_owner_instance_index,
           });
         }
       }
@@ -678,8 +680,29 @@ struct UPBPBeamTransportPrefix {
   SpectralResponse weight = {};
   double log_transport_pdf_forward = 0.0;
   double log_transport_pdf_reverse = 0.0;
+  double log_beam_survival_forward = 0.0;
+  double log_beam_survival_reverse = 0.0;
   float distance = 0.0f;
 };
+
+inline bool upbp_subsurface_interval_prefix(const UPBPSegmentRecord& interval, const float prefix_distance, UPBPBeamTransportPrefix& result) {
+  if ((interval.subsurface_packing <= 0.0f) || (prefix_distance <= 0.0f) || (prefix_distance >= interval.distance)) {
+    return false;
+  }
+  const SubsurfaceBeamTransport transport =
+    subsurface_transport_beam(interval.subsurface_extinction, interval.subsurface_scattering, interval.subsurface_packing, interval.subsurface_source_collision, prefix_distance);
+  if (transport.supported == false) {
+    return false;
+  }
+  result = {};
+  result.weight = transport.weight;
+  result.log_transport_pdf_forward = std::log(static_cast<double>(transport.transport_pdf_forward));
+  result.log_transport_pdf_reverse = std::log(static_cast<double>(transport.transport_pdf_reverse));
+  result.log_beam_survival_forward = std::log(static_cast<double>(transport.survival_forward));
+  result.log_beam_survival_reverse = std::log(static_cast<double>(transport.survival_reverse));
+  result.distance = prefix_distance;
+  return result.weight.is_zero() == false;
+}
 
 inline bool upbp_medium_interval_prefix(const UPBPSegmentRecord& interval, const float prefix_distance, UPBPBeamTransportPrefix& result) {
   if ((interval.valid() == false) || (interval.complete == false) || (interval.medium_index == kInvalidIndex) || (prefix_distance <= 0.0f) ||
@@ -687,6 +710,9 @@ inline bool upbp_medium_interval_prefix(const UPBPSegmentRecord& interval, const
     return false;
   }
 
+  if (interval.subsurface_packing > 0.0f) {
+    return upbp_subsurface_interval_prefix(interval, prefix_distance, result);
+  }
   result = {};
   auto prefix = interval.events.begin();
   constexpr size_t linear_search_limit = 8u;
@@ -716,6 +742,8 @@ inline bool upbp_medium_interval_prefix(const UPBPSegmentRecord& interval, const
   }
   result.log_transport_pdf_forward += log_transmittance;
   result.log_transport_pdf_reverse += log_transmittance;
+  result.log_beam_survival_forward = result.log_transport_pdf_forward;
+  result.log_beam_survival_reverse = result.log_transport_pdf_reverse;
   result.distance = prefix_distance;
   return true;
 }
@@ -742,6 +770,8 @@ inline bool upbp_beam_transport_prefix(const UPBPPathRecord& path, const UPBPBea
     result.weight *= interval.weight;
     result.log_transport_pdf_forward += interval.log_transport_pdf_forward;
     result.log_transport_pdf_reverse += interval.log_transport_pdf_reverse;
+    result.log_beam_survival_forward += interval.subsurface_packing > 0.0f ? interval.log_beam_survival_forward : interval.log_transport_pdf_forward;
+    result.log_beam_survival_reverse += interval.subsurface_packing > 0.0f ? interval.log_beam_survival_reverse : interval.log_transport_pdf_reverse;
     result.distance += interval.distance;
   }
 
@@ -752,6 +782,8 @@ inline bool upbp_beam_transport_prefix(const UPBPPathRecord& path, const UPBPBea
   result.weight *= partial_interval.weight;
   result.log_transport_pdf_forward += partial_interval.log_transport_pdf_forward;
   result.log_transport_pdf_reverse += partial_interval.log_transport_pdf_reverse;
+  result.log_beam_survival_forward += partial_interval.log_beam_survival_forward;
+  result.log_beam_survival_reverse += partial_interval.log_beam_survival_reverse;
   result.distance += partial_interval.distance;
   return true;
 }

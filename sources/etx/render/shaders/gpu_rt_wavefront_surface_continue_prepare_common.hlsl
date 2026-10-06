@@ -10,8 +10,7 @@
 bool wavefront_subsurface_random_walk_applicable(Material material, BSDFSample bsdf_sample) {
   const bool coated = material.cls == MaterialClass::Plastic;
   return (material.subsurface_cls != SubsurfaceMaterial::Disabled) &&
-         (coated ? ((bsdf_sample.properties & (BSDFSample::Reflection | BSDFSample::Transmission)) != 0u)
-                 : (((bsdf_sample.properties & BSDFSample::Reflection) != 0u) && ((bsdf_sample.properties & BSDFSample::Diffuse) != 0u)));
+         (coated ? ((bsdf_sample.properties & (BSDFSample::Reflection | BSDFSample::Transmission)) != 0u) : ((bsdf_sample.properties & BSDFSample::Transmission) != 0u));
 }
 #endif
 
@@ -151,44 +150,31 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   bool subsurface_medium_walk = false;
   GPUWavefrontSubsurfaceState subsurface_state = (GPUWavefrontSubsurfaceState)0;
 #if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC))
-  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
-  const uint scatter_material_index = scene_gpu_load_u32(scene_globals, kSceneGlobalsDefaultSubsurfaceScatterMaterialOffset);
-  if (sample_valid && (hit.material_index == scatter_material_index) && ((bsdf_sample.properties & BSDFSample::Transmission) != 0u)) {
-    const GPUWavefrontSubsurfaceState exit_state = wavefront_load_subsurface_state(wavefront_subsurface_state_buffer(resources, from_camera), path_index);
-    ByteAddressBuffer material_buffer = bindless_buffers[NonUniformResourceIndex(constants.scene.materials)];
-    bsdf_sample.medium_index = gpu_abi_load_u32(material_buffer, exit_state.material_index * kMaterialStride + kMaterialExtMediumOffset);
-  }
   const bool coated_subsurface = material.cls == MaterialClass::Plastic;
-  const bool into_subsurface = coated_subsurface ? (dot(hit.vertex.nrm, bsdf_sample.w_o) < 0.0f) : true;
-  const bool mapped_coated_medium = coated_subsurface && (material.int_medium != kInvalidIndex) && (material.subsurface_packing == 0.0f);
-  if (sample_valid && into_subsurface && (mapped_coated_medium == false) && wavefront_subsurface_random_walk_applicable(material, bsdf_sample)) {
-    Material scatter_material = (Material)0;
-    if (try_load_material_full(scatter_material_index, scatter_material) == false) {
-      state.reserved0 = 0u;
-      state.flags = 0u;
-      wavefront_store_path_state(state_descriptor, path_index, state);
-      return;
-    }
-
+  const bool into_subsurface = dot(hit.vertex.nrm, bsdf_sample.w_o) < 0.0f;
+  const bool mapped_classical_medium = (material.int_medium != kInvalidIndex) && (material.subsurface_packing == 0.0f);
+  if (sample_valid && into_subsurface && (mapped_classical_medium == false) && wavefront_subsurface_random_walk_applicable(material, bsdf_sample)) {
     const bool inside_coating = coated_subsurface && (dot(hit.vertex.nrm, state.ray.d) > 0.0f);
     if (inside_coating) {
       subsurface_state = wavefront_load_subsurface_state(wavefront_subsurface_state_buffer(resources, from_camera), path_index);
     }
     const bool cached_inline_bulk =
-      inside_coating && (subsurface_state.material_index == hit.material_index) && ((subsurface_state.flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u);
+      inside_coating && (subsurface_state.material_index == hit.material_index) && (subsurface_state.owner_instance_index == hit.instance_index) &&
+      ((subsurface_state.flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u);
     if (cached_inline_bulk) {
       subsurface_state.flags = GPUWavefrontSubsurfaceFlags::Active | GPUWavefrontSubsurfaceFlags::InlineMedium;
     } else {
       subsurface_state.material_index = hit.material_index;
+      subsurface_state.owner_instance_index = hit.instance_index;
       subsurface_state.medium_index = material.int_medium;
-      subsurface_state.scatter_material_index = coated_subsurface ? hit.material_index : scatter_material_index;
+      subsurface_state.scatter_material_index = hit.material_index;
       subsurface_state.flags = GPUWavefrontSubsurfaceFlags::Active;
       subsurface_state.phase_function_g = material.subsurface_anisotropy;
       subsurface_state.packing = material.subsurface_packing;
 
       if (material.int_medium == kInvalidIndex) {
-        SpectralResponse color = apply_image(state.spect, material.scattering, hit.vertex.tex);
-        SpectralResponse distances = apply_image(state.spect, material.subsurface, hit.vertex.tex);
+        SpectralResponse color = load_scene_spectrum_or_zero(material.scattering.spectrum_index, state.spect);
+        SpectralResponse distances = load_scene_spectrum_or_zero(material.subsurface.spectrum_index, state.spect);
         wavefront_subsurface_remap(state.spect, color, distances, subsurface_state.albedo, subsurface_state.extinction, subsurface_state.scattering);
         subsurface_state.flags |= GPUWavefrontSubsurfaceFlags::InlineMedium;
       } else {
@@ -215,27 +201,6 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
       return;
     }
 
-    if (coated_subsurface == false) {
-      float3 subsurface_direction = (material.subsurface_path == SubsurfaceMaterial::DiffusePath)
-                                      ? sample_cosine_distribution(float2(rnd01(bsdf_sampler.seed), rnd01(bsdf_sampler.seed)), -hit.vertex.nrm, 1.0f)
-                                      : normalize(state.ray.d);
-      float subsurface_pdf = abs(dot(subsurface_direction, hit.vertex.nrm)) * kInvPi;
-      if ((gpu_valid_direction(subsurface_direction) == false) || (subsurface_pdf <= 0.0f)) {
-        state.reserved0 = 0u;
-        state.flags = 0u;
-        wavefront_store_path_state(state_descriptor, path_index, state);
-        return;
-      }
-
-      bsdf_sample.w_o = subsurface_direction;
-      bsdf_sample.weight = spectral_response_make(state.spect, 1.0f);
-      bsdf_sample.pdf = subsurface_pdf;
-      bsdf_sample.eta = 1.0f;
-      bsdf_sample.medium_index = material.int_medium;
-      bsdf_sample.properties = BSDFSample::Transmission | BSDFSample::Diffuse | BSDFSample::MediumChanged;
-      hit.material_index = scatter_material_index;
-      material = scatter_material;
-    }
     wavefront_store_subsurface_state(subsurface_state_buffer, path_index, subsurface_state);
     subsurface_medium_walk = true;
   }
@@ -277,8 +242,10 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     current_vertex.material_index = hit.material_index;
     current_vertex.medium_index = bsdf_sample.medium_index;
     current_vertex.flags |= GPUWavefrontVertexFlags::Subsurface;
-    if ((subsurface_state.flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) {
+    current_vertex.subsurface_packing = subsurface_state.packing;
+    if (((subsurface_state.flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) || (subsurface_state.packing > 0.0f)) {
       current_vertex.inline_medium_extinction = subsurface_state.extinction;
+      current_vertex.inline_medium_scattering = subsurface_state.scattering;
       current_vertex.inline_medium_flags = GPUWavefrontSubsurfaceFlags::InlineMedium;
     }
   }
@@ -319,11 +286,15 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     upbp_vertex.outgoing_medium_index = current_medium_index;
     upbp_vertex.geo_normal = hit.geo_normal;
     upbp_vertex.material_index = current_vertex.material_index;
+    upbp_vertex.subsurface_packing = current_vertex.subsurface_packing;
     upbp_vertex.texcoord = current_vertex.texcoord;
     upbp_vertex.triangle_index = current_vertex.triangle_index;
     upbp_vertex.instance_index = current_vertex.instance_index;
     upbp_vertex.scatter_pdf_forward = selected_sample_pdf;
     upbp_vertex.scatter_pdf_reverse = reverse_bsdf_pdf;
+    if (material_has_incident_subsurface_boundary(material)) {
+      upbp_vertex.scatter_pdf_reverse = selected_sample_pdf;
+    }
     upbp_vertex.eta = state.eta;
     upbp_vertex.sample_properties = bsdf_sample.properties;
     upbp_vertex.barycentric = float3(1.0f - hit.barycentric.x - hit.barycentric.y, hit.barycentric.x, hit.barycentric.y);
@@ -333,6 +304,7 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     upbp_vertex.flags |= hit.emitter_index != kInvalidIndex ? GPUUPBPVertexFlags::Emitter : 0u;
     if ((current_vertex.inline_medium_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) {
       upbp_vertex.inline_extinction = upbp_pack_spectral_response(current_vertex.inline_medium_extinction);
+      upbp_vertex.inline_scattering = upbp_pack_spectral_response(current_vertex.inline_medium_scattering);
       upbp_vertex.flags |= GPUUPBPVertexFlags::InlineMedium;
     }
     if (upbp_append_physical_vertex(upbp_resources, from_camera, path_index, upbp_path_state, upbp_vertex) == false) {
@@ -359,11 +331,11 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     }
   }
 # endif
-  previous_vertex.pdf_from_next = wavefront_vertex_to_vertex_area_pdf(reverse_bsdf_pdf, current_vertex, previous_vertex);
+  previous_vertex.pdf_from_next = wavefront_vertex_to_vertex_area_pdf(reverse_bsdf_pdf, current_vertex, previous_vertex) * current_vertex.flight_pdf.y;
   if ((from_camera == false) && (state.path_length == 1u) && (previous_vertex.emitter_index != kInvalidIndex)) {
     GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
     if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_access_is_local_class(emitter_instance.emitter_class) == false)) {
-      previous_vertex.pdf_from_next = reverse_bsdf_pdf;
+      previous_vertex.pdf_from_next = reverse_bsdf_pdf * current_vertex.flight_pdf.y;
     }
   }
 

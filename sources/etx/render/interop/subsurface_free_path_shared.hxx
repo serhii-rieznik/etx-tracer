@@ -18,7 +18,14 @@ ETX_SHARED_INLINE float subsurface_free_path_sample(float extinction, float pack
   }
   const float tail = 1.0f - packing;
   const float survival = correlated ? (1.0f - random) : ((1.0f - random) / tail);
-  return (packing - tail * ETX_STD log(survival)) / extinction;
+#if ETX_CPP
+  const float exclusion_distance = packing / extinction;
+  const float distance = exclusion_distance - (tail / extinction) * ETX_STD log(survival);
+#else
+  precise float exclusion_distance = packing / extinction;
+  precise float distance = exclusion_distance - (tail / extinction) * log(survival);
+#endif
+  return distance;
 }
 
 ETX_SHARED_INLINE SubsurfaceFreePath subsurface_free_path_evaluate(float extinction, float packing, bool correlated, float distance) {
@@ -28,16 +35,27 @@ ETX_SHARED_INLINE SubsurfaceFreePath subsurface_free_path_evaluate(float extinct
   if (extinction <= 0.0f) {
     return result;
   }
-  const float optical_distance = extinction * distance;
-  if (optical_distance < packing) {
+#if ETX_CPP
+  const float exclusion_distance = packing / extinction;
+#else
+  precise float exclusion_distance = packing / extinction;
+#endif
+  if (distance < exclusion_distance) {
     if (correlated == false) {
-      result.survival = 1.0f - optical_distance;
+      result.survival = 1.0f - extinction * distance;
       result.density = extinction;
     }
     return result;
   }
   const float tail = 1.0f - packing;
-  const float correlated_survival = ETX_STD exp(-(optical_distance - packing) / tail);
+#if ETX_CPP
+  const float excess_distance = distance - exclusion_distance;
+  const float exponent = -excess_distance * extinction / tail;
+#else
+  precise float excess_distance = distance - exclusion_distance;
+  precise float exponent = -excess_distance * extinction / tail;
+#endif
+  const float correlated_survival = ETX_STD exp(exponent);
   result.survival = correlated ? correlated_survival : (tail * correlated_survival);
   result.density = correlated ? (extinction * correlated_survival / tail) : (extinction * correlated_survival);
   return result;

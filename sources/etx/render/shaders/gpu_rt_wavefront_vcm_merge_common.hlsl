@@ -121,7 +121,7 @@ bool wavefront_vcm_merge_prepare(uint dispatch_index, out WavefrontVCMMergeQuery
 # endif
 #endif
 #if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE
-  query.use_prepared_diffuse = query.material.cls == MaterialClass::Diffuse;
+  query.use_prepared_diffuse = (query.material.cls == MaterialClass::Diffuse) && (query.material.subsurface_cls == SubsurfaceMaterial::Disabled);
   query.diffuse_frame = (LocalFrame)0;
   query.diffuse_local_w_i = float3(0.0f, 0.0f, 0.0f);
   query.diffuse_albedo = spectral_response_zero(state.spect);

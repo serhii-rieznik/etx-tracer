@@ -110,6 +110,41 @@ ETX_SHARED_INLINE MediumInstance make_medium_instance(const Medium& medium, cons
   return result;
 }
 
+ETX_SHARED_INLINE MediumInstance make_subsurface_medium_instance(const Scene& scene, const SpectralQuery spect, uint32_t material_index) {
+  const Material& material = scene.materials[material_index];
+  MediumInstance result = {};
+  if (material.int_medium != kInvalidIndex) {
+    result = make_medium_instance(scene.mediums[material.int_medium], spect, material.int_medium);
+  } else {
+    const SpectralResponse color = medium_load_spectrum_or_zero(material.scattering.spectrum_index, spect);
+    const SpectralResponse distances = medium_load_spectrum_or_zero(material.subsurface.spectrum_index, spect);
+    SpectralResponse albedo{spect};
+    SpectralResponse scattering{spect};
+    result.extinction = SpectralResponse{spect};
+    subsurface::remap(color.integrated, distances.integrated, albedo.integrated, result.extinction.integrated, scattering.integrated);
+    subsurface::remap_channel(color.value, distances.value, albedo.value, result.extinction.value, scattering.value);
+    result.anisotropy = material.subsurface_anisotropy;
+  }
+  result.subsurface_packing = material.subsurface_packing;
+  result.subsurface_material = material_index;
+  return result;
+}
+
+ETX_SHARED_INLINE SpectralResponse subsurface_medium_scattering(const Scene& scene, const SpectralQuery spect, const MediumInstance& instance) {
+  if (instance.index != kInvalidIndex) {
+    return medium_scattering(scene.mediums[instance.index], spect);
+  }
+  const Material& material = scene.materials[instance.subsurface_material];
+  const SpectralResponse color = medium_load_spectrum_or_zero(material.scattering.spectrum_index, spect);
+  const SpectralResponse distances = medium_load_spectrum_or_zero(material.subsurface.spectrum_index, spect);
+  SpectralResponse albedo{spect};
+  SpectralResponse extinction{spect};
+  SpectralResponse scattering{spect};
+  subsurface::remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
+  subsurface::remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
+  return scattering;
+}
+
 ETX_SHARED_INLINE SpectralResponse medium_transmittance(const Medium& medium, const SpectralQuery spect, Sampler& smp, const float3& pos, const float3& direction, float distance) {
   SpectralResponse one = {spect, 1.0f};
   if (distance <= 0.0f) {

@@ -12,7 +12,7 @@ ETX_SHARED_INLINE bool bsdf_plastic_has_subsurface(ETX_IN(Material, material)) {
 
 ETX_SHARED_INLINE SpectralResponse bsdf_dielectric_boundary_texture(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), bool reflection) {
   if ((reflection == false) && bsdf_plastic_has_subsurface(material)) {
-    return spectral_response_make(data.spectrum_sample, 1.0f);
+    return bsdf_resource_subsurface_boundary_color(context, data.spectrum_sample, material, data.tex);
   }
   SpectralImage texture = material.reflectance;
   if (reflection == false) {
@@ -45,12 +45,12 @@ ETX_SHARED_INLINE bool bsdf_dielectric_equal_eta_with_context(ETX_IN(BSDFResourc
   return abs(eta_ext - eta_int) <= tolerance;
 }
 
-ETX_SHARED_INLINE BSDFSample bsdf_dielectric_equal_eta_sample(ETX_IN(BSDFData, data), ETX_IN(Material, material)) {
+ETX_SHARED_INLINE BSDFSample bsdf_dielectric_equal_eta_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material)) {
   const LocalFrame frame = bsdf_data_get_normal_frame(data);
   BSDFSample result = ETX_ZERO(BSDFSample);
   result.w_o = data.w_i;
   result.pdf = 1.0f;
-  result.weight = spectral_response_make(data.spectrum_sample, 1.0f);
+  result.weight = bsdf_dielectric_boundary_texture(context, data, material, false);
   result.properties = BSDFSample::Delta | BSDFSample::Transmission | BSDFSample::MediumChanged;
   result.medium_index = local_frame_entering_material(frame) ? material.int_medium : material.ext_medium;
   result.eta = 1.0f;
@@ -71,7 +71,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_delta_sample(ETX_IN(BSDFResourceCon
   RefractiveIndexSample int_ior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, data.spectrum_sample);
   const ThinfilmEval thinfilm = bsdf_resource_evaluate_thinfilm(context, data.spectrum_sample, material.thinfilm, data.tex, sampler);
   if (((thinfilm.weight <= 0.0f) || (thinfilm.thickness <= 0.0f)) && bsdf_dielectric_equal_eta(ext_ior, int_ior)) {
-    return bsdf_dielectric_equal_eta_sample(data, material);
+    return bsdf_dielectric_equal_eta_sample(context, data, material);
   }
 
   const bool outside = w_i_local.z > 0.0f;

@@ -83,8 +83,8 @@ ETX_SHARED_INLINE float bsdf_diffuse_eon_average_albedo(float roughness) {
   return a * (1.0f + roughness * (2.0f / 3.0f - 28.0f * kInvPi / 15.0f));
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_diffuse_eon_brdf(ETX_IN(SpectralQuery, spect), ETX_IN(SpectralResponse, albedo), ETX_IN(float3, local_w_i),
-  ETX_IN(float3, local_w_o), float roughness) {
+ETX_SHARED_INLINE SpectralResponse bsdf_diffuse_eon_brdf(ETX_IN(SpectralQuery, spect), ETX_IN(SpectralResponse, albedo), ETX_IN(float3, local_w_i), ETX_IN(float3, local_w_o),
+  float roughness) {
   if (roughness <= kEpsilon) {
     return spectral_response_mul(albedo, kInvPi);
   }
@@ -129,6 +129,32 @@ ETX_SHARED_INLINE BSDFEval bsdf_diffuse_layer(ETX_IN(BSDFResourceContext, contex
 }
 
 ETX_SHARED_INLINE BSDFSample bsdf_diffuse_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  if (material_has_incident_subsurface_boundary(material)) {
+    BSDFSample result = ETX_ZERO(BSDFSample);
+    result.w_o = data.w_i;
+    result.weight = bsdf_resource_subsurface_boundary_color(context, data.spectrum_sample, material, data.tex);
+    result.pdf = 1.0f;
+    result.eta = 1.0f;
+    result.properties = BSDFSample::Transmission | BSDFSample::Delta | BSDFSample::MediumChanged;
+    result.medium_index = (dot(data.nrm, data.w_i) < 0.0f) ? material.int_medium : material.ext_medium;
+    return result;
+  }
+  if (material_has_diffuse_subsurface_boundary(material)) {
+    if (abs(dot(data.nrm, data.w_i)) <= kEpsilon) {
+      return bsdf_sample_zero(data.spectrum_sample);
+    }
+    const LocalFrame frame = bsdf_data_get_normal_frame(data);
+    const float2 rnd = bsdf_sampler_has_fixed(sampler) ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
+    const float3 local_w_o = sample_cosine_distribution(rnd, 1.0f);
+    BSDFSample result = ETX_ZERO(BSDFSample);
+    result.w_o = local_frame_from_local(frame, -local_w_o);
+    result.weight = bsdf_resource_subsurface_boundary_color(context, data.spectrum_sample, material, data.tex);
+    result.pdf = local_w_o.z * kInvPi;
+    result.eta = 1.0f;
+    result.properties = BSDFSample::Transmission | BSDFSample::Diffuse | BSDFSample::MediumChanged;
+    result.medium_index = local_frame_entering_material(frame) ? material.int_medium : material.ext_medium;
+    return result;
+  }
   const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
   const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
 
@@ -156,6 +182,24 @@ ETX_SHARED_INLINE BSDFSample bsdf_diffuse_sample(ETX_IN(BSDFResourceContext, con
 
 ETX_SHARED_INLINE BSDFEval bsdf_diffuse_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
+  if (material_has_incident_subsurface_boundary(material)) {
+    return bsdf_eval_zero(data.spectrum_sample);
+  }
+  if (material_has_diffuse_subsurface_boundary(material)) {
+    if ((abs(dot(data.nrm, data.w_i)) <= kEpsilon) || (abs(dot(data.nrm, outgoing_direction)) <= kEpsilon) ||
+        ((dot(data.nrm, data.w_i) * dot(data.nrm, outgoing_direction)) <= 0.0f)) {
+      return bsdf_eval_zero(data.spectrum_sample);
+    }
+    BSDFEval result = ETX_ZERO(BSDFEval);
+    result.func = spectral_response_mul(bsdf_resource_subsurface_boundary_color(context, data.spectrum_sample, material, data.tex), kInvPi);
+    const float cosine = abs(dot(data.nrm, outgoing_direction));
+    result.bsdf = spectral_response_mul(result.func, cosine);
+    result.pdf = cosine * kInvPi;
+    result.eta = 1.0f;
+    result.properties = BSDFSample::Transmission | BSDFSample::Diffuse | BSDFSample::MediumChanged;
+    result.medium_index = (dot(data.nrm, outgoing_direction) < 0.0f) ? material.int_medium : material.ext_medium;
+    return result;
+  }
   const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
   const float3 local_w_o = local_frame_to_local(frame, outgoing_direction);
   if (local_w_o.z <= kEpsilon) {
@@ -171,6 +215,16 @@ ETX_SHARED_INLINE float bsdf_diffuse_pdf(ETX_IN(BSDFResourceContext, context), E
   (void)context;
   (void)sampler;
 
+  if (material_has_incident_subsurface_boundary(material)) {
+    return 0.0f;
+  }
+  if (material_has_diffuse_subsurface_boundary(material)) {
+    if ((abs(dot(data.nrm, data.w_i)) <= kEpsilon) || (abs(dot(data.nrm, outgoing_direction)) <= kEpsilon)) {
+      return 0.0f;
+    }
+    return ((dot(data.nrm, data.w_i) * dot(data.nrm, outgoing_direction)) > 0.0f) ? abs(dot(data.nrm, outgoing_direction)) * kInvPi : 0.0f;
+  }
+
   const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
   const float3 local_w_o = local_frame_to_local(frame, outgoing_direction);
   if (local_w_o.z <= kEpsilon) {
@@ -181,14 +235,16 @@ ETX_SHARED_INLINE float bsdf_diffuse_pdf(ETX_IN(BSDFResourceContext, context), E
 }
 
 ETX_SHARED_INLINE bool bsdf_diffuse_is_delta(ETX_IN(Material, material), ETX_IN(float2, tex), ETX_INOUT(Sampler, sampler)) {
-  (void)material;
   (void)tex;
   (void)sampler;
-  return false;
+  return material_has_incident_subsurface_boundary(material);
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_diffuse_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
+  if (material_has_incident_subsurface_boundary(material) || material_has_diffuse_subsurface_boundary(material)) {
+    return bsdf_resource_subsurface_boundary_color(context, data.spectrum_sample, material, data.tex);
+  }
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
 }
 

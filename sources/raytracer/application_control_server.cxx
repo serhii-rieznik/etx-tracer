@@ -858,8 +858,38 @@ const char* run_state_name(RendererStatusState state) {
       return "completed";
     case RendererStatusState::Failed:
       return "failed";
+    case RendererStatusState::Blocked:
+      return "blocked";
+    case RendererStatusState::Preparing:
+      return "preparing";
     default:
       return "stopped";
+  }
+}
+
+const char* diagnostic_severity_name(RendererDiagnosticSeverity severity) {
+  switch (severity) {
+    case RendererDiagnosticSeverity::Info:
+      return "info";
+    case RendererDiagnosticSeverity::Warning:
+      return "warning";
+    case RendererDiagnosticSeverity::Error:
+      return "error";
+    default:
+      return "none";
+  }
+}
+
+const char* recovery_name(RendererRecovery recovery) {
+  switch (recovery) {
+    case RendererRecovery::Restart:
+      return "restart";
+    case RendererRecovery::ChangeSettings:
+      return "change_settings";
+    case RendererRecovery::RestartApplication:
+      return "restart_application";
+    default:
+      return "none";
   }
 }
 
@@ -888,12 +918,15 @@ Json state_json(const ApplicationStateSnapshot& state) {
     {"integrators", std::move(integrators)},
     {"run_state", run_state_name(state.status.state)},
     {"preview_active", state.status.preview_active},
+    {"diagnostic",
+      {{"severity", diagnostic_severity_name(state.status.diagnostic.severity)}, {"recovery", recovery_name(state.status.diagnostic.recovery)}, {"message", state.status.message}}},
     {"controls",
       {{"can_run", state.controls.can_run}, {"can_finish", state.controls.can_finish}, {"can_stop", state.controls.can_stop}, {"can_restart", state.controls.can_restart}}},
     {"preparation", {{"state", static_cast<uint32_t>(state.preparation.state)}, {"phase", state.preparation.phase}, {"message", state.preparation.message},
                       {"completed_steps", state.preparation.completed_steps}, {"total_steps", state.preparation.total_steps}}},
     {"runtime", {{"valid", runtime_valid}, {"image_stale", state.status.output_stale}, {"completed_samples", completed_samples}, {"target_samples", target_samples},
-                  {"elapsed_seconds", elapsed_seconds}, {"estimated_remaining_seconds", estimated_remaining_seconds}, {"failure_reason", state.status.message}}},
+                  {"elapsed_seconds", elapsed_seconds}, {"estimated_remaining_seconds", estimated_remaining_seconds},
+                  {"failure_reason", ((state.status.state == RendererStatusState::Failed) || (state.status.state == RendererStatusState::Blocked)) ? state.status.message : ""}}},
     {"view", {{"exposure", state.view.exposure}, {"view_layer", state.view.view_layer}, {"output_view", state.view.view_image}, {"display_transform", state.view.view_option}}},
   };
 }

@@ -15,6 +15,20 @@ inline SpectralResponse upbp_medium_scattering_coefficient(const Medium& medium,
   return medium_scattering(medium, spect) * density;
 }
 
+inline SpectralResponse upbp_medium_scattering_coefficient(const Scene& scene, const SpectralQuery spect, const UPBPPathVertexRecord& vertex) {
+  if (vertex.medium.index < scene.mediums.count) {
+    return upbp_medium_scattering_coefficient(scene.mediums[vertex.medium.index], spect, vertex.position);
+  }
+  UPBPSubsurfaceState state = {};
+  Intersection boundary = {};
+  boundary.material_index = vertex.medium.subsurface_material;
+  if ((boundary.material_index >= scene.materials.count) || (material_has_uniform_exponential_inline_subsurface(scene.materials[boundary.material_index]) == false) ||
+      (upbp_make_subsurface_state(scene, spect, scene.materials[boundary.material_index], boundary, state) == false)) {
+    return SpectralResponse{spect, 0.0f};
+  }
+  return state.tracking.scattering;
+}
+
 inline bool upbp_remove_medium_collision_weight(const SpectralResponse& throughput, const SpectralResponse& scattering, SpectralResponse& result) {
   result = SpectralResponse{throughput.as_query(), 0.0f};
   if ((spectral_query_compatible(throughput.as_query(), scattering.as_query()) == false) || (throughput.valid() == false) || (scattering.valid() == false) ||
@@ -45,10 +59,10 @@ inline bool upbp_remove_medium_collision_weight(const SpectralResponse& throughp
 }
 
 inline bool upbp_medium_pre_collision_throughput(const Scene& scene, const SpectralQuery spect, const UPBPPathVertexRecord& vertex, SpectralResponse& result) {
-  if ((vertex.cls != UPBPVertexClass::Medium) || (vertex.medium.index >= scene.mediums.count)) {
+  if ((vertex.cls != UPBPVertexClass::Medium) || (vertex.density_connectible == false)) {
     return false;
   }
-  const SpectralResponse scattering = upbp_medium_scattering_coefficient(scene.mediums[vertex.medium.index], spect, vertex.position);
+  const SpectralResponse scattering = upbp_medium_scattering_coefficient(scene, spect, vertex);
   return (scattering.is_zero() == false) && upbp_remove_medium_collision_weight(vertex.throughput, scattering, result);
 }
 
@@ -260,7 +274,9 @@ inline bool upbp_surface_merge_compatible(const Scene& scene, const UPBPPathVert
 
 inline bool upbp_medium_merge_compatible(const UPBPPathVertexRecord& light, const UPBPPathVertexRecord& camera) {
   return (light.cls == UPBPVertexClass::Medium) && (camera.cls == UPBPVertexClass::Medium) && light.density_connectible && camera.density_connectible &&
-         (light.medium.index != kInvalidIndex) && (light.medium.index == camera.medium.index) && (light.delta == false) && (camera.delta == false);
+         subsurface_density_domain_matches(upbp_density_medium_key(light), light.density_owner_instance_index, upbp_density_medium_key(camera),
+           camera.density_owner_instance_index) &&
+         (light.delta == false) && (camera.delta == false);
 }
 
 struct UPBPPointMergeContribution {
@@ -346,7 +362,7 @@ inline bool upbp_evaluate_point_merge(const Scene& scene, const SpectralQuery sp
         (upbp_medium_pre_collision_throughput(scene, spect, camera_vertex, camera_throughput) == false)) {
       return false;
     }
-    const SpectralResponse scattering = upbp_medium_scattering_coefficient(scene.mediums[camera_vertex.medium.index], spect, camera_vertex.position);
+    const SpectralResponse scattering = upbp_medium_scattering_coefficient(scene, spect, camera_vertex);
     result.scattering.value *= scattering;
   }
 

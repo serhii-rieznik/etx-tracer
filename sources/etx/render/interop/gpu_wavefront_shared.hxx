@@ -62,6 +62,13 @@ struct GPUWavefrontSubsurfaceFlags {
   };
 };
 
+struct GPUWavefrontSubsurfaceEndpointFlags {
+  enum : uint32_t {
+    SourceCollision = 1u << 0u,
+    TargetCollision = 1u << 1u,
+  };
+};
+
 struct GPUWavefrontPathMetaFlags {
   enum : uint32_t {
     Camera_active = 1u << 0u,
@@ -106,7 +113,7 @@ struct ETX_ALIGNED GPUWavefrontPathState {
   float d_vm ETX_INIT(0.0f);
   uint32_t reserved0 ETX_INIT(0u);
   float d_surface ETX_INIT(0.0f);
-  uint32_t reserved2 ETX_INIT(0u);
+  float2 flight_pdf ETX_INIT({1.0f, 1.0f});
 };
 
 struct ETX_ALIGNED GPUWavefrontHit {
@@ -152,7 +159,10 @@ struct ETX_ALIGNED GPUWavefrontPathVertex {
   uint32_t instance_index ETX_INIT(kInvalidIndex);
   uint32_t reserved0 ETX_INIT(0u);
   float d_vm ETX_INIT(0.0f);
+  float subsurface_packing ETX_INIT(0.0f);
   float d_surface ETX_INIT(0.0f);
+  float2 flight_pdf ETX_INIT({1.0f, 1.0f});
+  SpectralResponse inline_medium_scattering ETX_INIT({});
 };
 
 struct ETX_ALIGNED GPUWavefrontCompactSpectralResponse {
@@ -184,7 +194,10 @@ struct ETX_ALIGNED GPUWavefrontLightPathVertex {
   uint32_t previous_vertex_index ETX_INIT(kInvalidIndex);
   uint32_t instance_index ETX_INIT(kInvalidIndex);
   float d_vm ETX_INIT(0.0f);
+  float subsurface_packing ETX_INIT(0.0f);
   float d_surface ETX_INIT(0.0f);
+  float2 flight_pdf ETX_INIT({1.0f, 1.0f});
+  GPUWavefrontCompactSpectralResponse inline_medium_scattering ETX_INIT({});
 };
 
 struct ETX_ALIGNED GPUWavefrontFastLightEndpoint {
@@ -215,8 +228,9 @@ struct ETX_ALIGNED GPUWavefrontSubsurfaceState {
   uint32_t flags ETX_INIT(0u);
   float phase_function_g ETX_INIT(0.0f);
   float packing ETX_INIT(0.0f);
-  uint32_t reserved1 ETX_INIT(0u);
-  uint32_t reserved2 ETX_INIT(0u);
+  float flight_pdf_forward ETX_INIT(1.0f);
+  float flight_pdf_reverse ETX_INIT(1.0f);
+  uint32_t owner_instance_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED GPUWavefrontDirectLightSample {
@@ -246,6 +260,7 @@ struct ETX_ALIGNED GPUWavefrontDirectLightSample {
   uint32_t reserved12 ETX_INIT(0u);
   uint32_t reserved13 ETX_INIT(0u);
   uint32_t reserved14 ETX_INIT(0u);
+  uint32_t task_padding[8] ETX_INIT({});
 };
 
 struct ETX_ALIGNED GPUWavefrontDirectLightTask {
@@ -263,6 +278,9 @@ struct ETX_ALIGNED GPUWavefrontDirectLightTask {
   uint32_t upbp_auxiliary1_bits ETX_INIT(0u);
   SpectralResponse inline_medium_extinction ETX_INIT({});
   uint32_t inline_medium_flags ETX_INIT(0u);
+  float subsurface_packing ETX_INIT(0.0f);
+  uint32_t subsurface_endpoint_flags ETX_INIT(0u);
+  SpectralResponse inline_medium_scattering ETX_INIT({});
 };
 
 struct ETX_ALIGNED GPUWavefrontDirectLightResult {
@@ -271,6 +289,9 @@ struct ETX_ALIGNED GPUWavefrontDirectLightResult {
   uint32_t upbp_log_transport_pdf_forward_bits ETX_INIT(0u);
   uint32_t upbp_log_transport_pdf_reverse_bits ETX_INIT(0u);
   uint32_t upbp_tracking_valid ETX_INIT(0u);
+  uint32_t upbp_log_beam_survival_forward_bits ETX_INIT(0u);
+  uint32_t upbp_log_beam_survival_reverse_bits ETX_INIT(0u);
+  uint32_t upbp_has_exclusion_transport ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontConnectLightCandidate {
@@ -302,6 +323,9 @@ struct ETX_ALIGNED GPUWavefrontConnectLightTask {
   uint32_t upbp_light_pdf_reverse_bits ETX_INIT(0u);
   uint32_t upbp_intersection_seed ETX_INIT(0u);
   uint32_t upbp_medium_seed ETX_INIT(0u);
+  float subsurface_packing ETX_INIT(0.0f);
+  uint32_t subsurface_endpoint_flags ETX_INIT(0u);
+  SpectralResponse inline_medium_scattering ETX_INIT({});
 };
 
 struct ETX_ALIGNED GPUWavefrontConnectCameraTask {
@@ -319,6 +343,9 @@ struct ETX_ALIGNED GPUWavefrontConnectCameraTask {
   uint32_t upbp_auxiliary1_bits ETX_INIT(0u);
   SpectralResponse inline_medium_extinction ETX_INIT({});
   uint32_t inline_medium_flags ETX_INIT(0u);
+  float subsurface_packing ETX_INIT(0.0f);
+  uint32_t subsurface_endpoint_flags ETX_INIT(0u);
+  SpectralResponse inline_medium_scattering ETX_INIT({});
 };
 
 struct ETX_ALIGNED GPUWavefrontConnectCameraResult {
@@ -327,6 +354,9 @@ struct ETX_ALIGNED GPUWavefrontConnectCameraResult {
   uint32_t upbp_log_transport_pdf_forward_bits ETX_INIT(0u);
   uint32_t upbp_log_transport_pdf_reverse_bits ETX_INIT(0u);
   uint32_t upbp_tracking_valid ETX_INIT(0u);
+  uint32_t upbp_log_beam_survival_forward_bits ETX_INIT(0u);
+  uint32_t upbp_log_beam_survival_reverse_bits ETX_INIT(0u);
+  uint32_t upbp_has_exclusion_transport ETX_INIT(0u);
 };
 
 struct ETX_ALIGNED GPUWavefrontResources {

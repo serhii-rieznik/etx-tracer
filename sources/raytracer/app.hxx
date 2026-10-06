@@ -74,7 +74,7 @@ struct RTApplication {
   void on_integrator_selected(Integrator::Type);
   void on_run_selected();
   void on_stop_selected(bool wait_for_completion);
-  void on_restart_selected();
+  bool on_restart_selected();
   void on_options_changed();
   void on_use_image_as_reference();
   SceneResourceEditResult on_material_added();
@@ -138,6 +138,9 @@ struct RTApplication {
   void finish_preview();
   void cancel_preview();
   RendererStatus current_renderer_status() const;
+  RendererPreparationStatus current_renderer_preparation() const;
+  RendererControlState current_renderer_controls() const;
+  bool execute_application_command_impl(const ApplicationCommand& command, std::string& message);
   void sync_ui_renderer_state();
   void process_application_commands();
   bool execute_application_command(const ApplicationCommand& command, std::string& message);
@@ -180,6 +183,8 @@ struct RTApplication {
   bool _camera_preview_claim_active = false;
   bool _camera_preview_delayed_release = false;
   bool _material_render_resource_preparation_active = false;
+  bool _material_render_resource_preparation_failed = false;
+  std::string _command_failure_reason = {};
   bool _restart_cpu_after_material_resource_preparation = false;
   bool _restart_gpu_after_material_resource_preparation = false;
   bool _scene_dirty = false;

@@ -27,10 +27,12 @@ struct UPBPBeamContribution {
 
 struct UPBPPreparedBeam {
   const UPBPMediumTrackingEventRecord* tracking_events = nullptr;
+  const UPBPSegmentRecord* subsurface_interval = nullptr;
   SpectralResponse source_throughput = {};
   UPBPBeamTransportPrefix transport_at_origin = {};
   double d_shared = 0.0;
   double d_pde_reverse_coefficient = 0.0;
+  double d_pde_reverse_ratio_coefficient = 0.0;
   double d_pde_constant = 0.0;
   double d_surface_constant = 0.0;
   double source_event_density = 1.0;
@@ -39,6 +41,7 @@ struct UPBPPreparedBeam {
   bool scale_d_shared_by_distance = false;
   bool previous_delta = false;
   bool previous_connectible = true;
+  bool has_exclusion_transport = false;
   bool valid = false;
 };
 
@@ -170,16 +173,21 @@ inline bool upbp_prepare_noise_octave(const Medium& medium, const uint32_t octav
   return true;
 }
 
-inline UPBPPreparedMedium upbp_prepare_medium(const Medium& medium, const SpectralQuery spect) {
+inline UPBPPreparedMedium upbp_prepare_homogeneous_medium(const SpectralResponse& scattering, const SpectralResponse& extinction, const float phase_function_g) {
   UPBPPreparedMedium result = {};
-  result.scattering = medium_scattering(medium, spect);
-  const SpectralResponse extinction = result.scattering + medium_absorption(medium, spect);
+  result.scattering = scattering;
   result.real_event_density_scale = static_cast<double>(extinction.average());
-  result.phase_constant = (1.0f / (4.0f * kPi)) * (1.0f - medium.phase_function_g * medium.phase_function_g);
-  result.phase_one_plus_g_squared = 1.0f + medium.phase_function_g * medium.phase_function_g;
-  result.phase_two_g = 2.0f * medium.phase_function_g;
+  result.phase_constant = (1.0f / (4.0f * kPi)) * (1.0f - phase_function_g * phase_function_g);
+  result.phase_one_plus_g_squared = 1.0f + phase_function_g * phase_function_g;
+  result.phase_two_g = 2.0f * phase_function_g;
   result.valid = result.scattering.valid() && extinction.valid() && (result.scattering.minimum() >= 0.0f) && (extinction.minimum() >= 0.0f) &&
                  (result.real_event_density_scale > 0.0) && std::isfinite(result.real_event_density_scale);
+  return result;
+}
+
+inline UPBPPreparedMedium upbp_prepare_medium(const Medium& medium, const SpectralQuery spect) {
+  const SpectralResponse scattering = medium_scattering(medium, spect);
+  UPBPPreparedMedium result = upbp_prepare_homogeneous_medium(scattering, scattering + medium_absorption(medium, spect), medium.phase_function_g);
   const bool supported_noise = (medium.grid.noise_type == MediumNoiseType::Perlin) || (medium.grid.noise_type == MediumNoiseType::Billow);
   if ((medium.cls != Medium::Heterogeneous) || (medium.grid.type != MediumGridType::NoiseFunction) || (supported_noise == false) ||
       (medium.grid.noise_octaves > result.noise_octaves.size())) {
@@ -360,12 +368,14 @@ inline bool upbp_prepare_beam(const UPBPPathRecord& path, const UPBPRecursivePat
 
   const UPBPPathVertexRecord& source = path.vertices[beam.source_vertex_index];
   const UPBPSegmentRecord& interval = segment->intervals[beam.transport_interval_index];
-  if ((interval.valid() == false) || (interval.complete == false) || (interval.medium_index == kInvalidIndex) || interval.events.empty() ||
-      (interval.events.size() > std::numeric_limits<uint32_t>::max())) {
+  if ((interval.valid() == false) || (interval.complete == false) || (interval.density_connectible == false) || (interval.medium_index == kInvalidIndex) ||
+      ((interval.subsurface_packing <= 0.0f) && interval.events.empty()) || (interval.events.size() > std::numeric_limits<uint32_t>::max())) {
     return false;
   }
   result.tracking_events = interval.events.data();
   result.tracking_event_count = static_cast<uint32_t>(interval.events.size());
+  result.subsurface_interval = interval.subsurface_packing > 0.0f ? &interval : nullptr;
+  result.has_exclusion_transport = interval.subsurface_packing > 0.0f;
   result.interval_distance = interval.distance;
   const UPBPRecursiveState& departure = path_weights.departures[beam.source_vertex_index];
   result.d_shared = departure.weights.d_shared;
@@ -382,6 +392,10 @@ inline bool upbp_prepare_beam(const UPBPPathRecord& path, const UPBPRecursivePat
     result.transport_at_origin.weight *= interval.weight;
     result.transport_at_origin.log_transport_pdf_forward += interval.log_transport_pdf_forward;
     result.transport_at_origin.log_transport_pdf_reverse += interval.log_transport_pdf_reverse;
+    const bool exclusion_interval = interval.subsurface_packing > 0.0f;
+    result.has_exclusion_transport = result.has_exclusion_transport || exclusion_interval;
+    result.transport_at_origin.log_beam_survival_forward += exclusion_interval ? interval.log_beam_survival_forward : interval.log_transport_pdf_forward;
+    result.transport_at_origin.log_beam_survival_reverse += exclusion_interval ? interval.log_beam_survival_reverse : interval.log_transport_pdf_reverse;
     result.transport_at_origin.distance += interval.distance;
   }
   result.source_event_density = source.cls == UPBPVertexClass::Medium ? std::exp(source.log_medium_event_density) : 1.0;
@@ -389,16 +403,18 @@ inline bool upbp_prepare_beam(const UPBPPathRecord& path, const UPBPRecursivePat
   result.scale_d_shared_by_distance = (beam.source_vertex_index > 0u) || (path.vertices.front().distant_endpoint == false);
   if (beam.source_vertex_index > 0u) {
     const UPBPRecursiveLocalPDEAffine local = upbp_recursive_local_pde_affine(configuration, source.cls, source.delta, source.density_connectible, departure.weights,
-      source_ray_ratio, departure.last_sin_theta, source.source);
+      result.has_exclusion_transport ? 0.0 : source_ray_ratio, departure.last_sin_theta, source.source);
     result.d_pde_reverse_coefficient = departure.d_bpt_a * local.reverse_pdf_inverse_coefficient;
+    result.d_pde_reverse_ratio_coefficient = result.has_exclusion_transport ? departure.d_bpt_a * local.reverse_ratio_coefficient : 0.0;
     result.d_pde_constant = departure.d_bpt_a * local.constant + departure.d_pde_b;
     result.d_surface_constant = departure.d_bpt_a * local.surface_coefficient + departure.d_surface_b;
   } else {
     result.d_pde_constant = departure.weights.d_pde_base;
     result.d_surface_constant = departure.weights.d_surface;
   }
-  result.valid = (interval.medium_index == beam.medium_index) && (result.source_event_density > 0.0) && std::isfinite(result.source_event_density) &&
-                 std::isfinite(source_ray_ratio) && std::isfinite(result.d_shared) && std::isfinite(result.d_pde_reverse_coefficient) &&
+  result.valid = subsurface_density_domain_matches(interval.medium_index, interval.density_owner_instance_index, beam.medium_index, beam.density_owner_instance_index) &&
+                 (result.source_event_density > 0.0) && std::isfinite(result.source_event_density) && std::isfinite(source_ray_ratio) && std::isfinite(result.d_shared) &&
+                 std::isfinite(result.d_pde_reverse_coefficient) && std::isfinite(result.d_pde_reverse_ratio_coefficient) &&
                  (std::isfinite(result.d_pde_constant) && std::isfinite(result.d_surface_constant));
   if (result.valid == false) {
     result = {};
@@ -407,6 +423,9 @@ inline bool upbp_prepare_beam(const UPBPPathRecord& path, const UPBPRecursivePat
 }
 
 ETX_UPBP_FORCE_INLINE bool upbp_prepared_medium_interval_prefix(const UPBPPreparedBeam& prepared, const float prefix_distance, UPBPBeamTransportPrefix& result) {
+  if (prepared.subsurface_interval != nullptr) {
+    return upbp_subsurface_interval_prefix(*prepared.subsurface_interval, prefix_distance, result);
+  }
   if ((prepared.tracking_events == nullptr) || (prepared.tracking_event_count == 0u) || (prefix_distance <= 0.0f) || (prefix_distance >= prepared.interval_distance)) {
     return false;
   }
@@ -435,12 +454,15 @@ ETX_UPBP_FORCE_INLINE bool upbp_prepared_medium_interval_prefix(const UPBPPrepar
   }
   result.log_transport_pdf_forward += log_transmittance;
   result.log_transport_pdf_reverse += log_transmittance;
+  result.log_beam_survival_forward = result.log_transport_pdf_forward;
+  result.log_beam_survival_reverse = result.log_transport_pdf_reverse;
   result.distance = prefix_distance;
   return true;
 }
 
 ETX_UPBP_FORCE_INLINE bool upbp_complete_prepared_partial_medium_arrival(const UPBPPreparedBeam& prepared, const double log_transport_pdf_forward,
-  const double log_transport_pdf_reverse, const float transport_distance, const double query_real_event_density, UPBPPointMergeMISInput::Weights& weights) {
+  const double log_transport_pdf_reverse, const double log_beam_survival_forward, const double log_beam_survival_reverse, const float transport_distance,
+  const double query_real_event_density, UPBPPointMergeMISInput::Weights& weights) {
   if ((transport_distance <= 0.0f) || (query_real_event_density <= 0.0)) {
     return false;
   }
@@ -452,7 +474,9 @@ ETX_UPBP_FORCE_INLINE bool upbp_complete_prepared_partial_medium_arrival(const U
     return false;
   }
   const double reverse_pdf_inverse = 1.0 / reverse_pdf;
-  weights.d_pde_base = (prepared.d_pde_reverse_coefficient * reverse_pdf_inverse + prepared.d_pde_constant) / forward_pdf;
+  const double reverse_ratio = prepared.has_exclusion_transport ? std::exp(log_beam_survival_reverse - log_transport_pdf_reverse) / prepared.source_event_density : 0.0;
+  weights.d_pde_base =
+    (prepared.d_pde_reverse_coefficient * reverse_pdf_inverse + prepared.d_pde_reverse_ratio_coefficient * reverse_ratio + prepared.d_pde_constant) / forward_pdf;
   weights.d_surface = prepared.d_surface_constant / forward_pdf;
   weights.d_shared = prepared.d_shared / forward_pdf;
   if (prepared.scale_d_shared_by_distance) {
@@ -460,7 +484,8 @@ ETX_UPBP_FORCE_INLINE bool upbp_complete_prepared_partial_medium_arrival(const U
   }
   weights.ray_sample_forward_pdf_inverse = 1.0 / forward_pdf;
   weights.ray_sample_reverse_pdf_inverse = reverse_pdf_inverse;
-  weights.ray_sample_forward_ratio = 1.0 / query_real_event_density;
+  weights.ray_sample_forward_ratio =
+    prepared.has_exclusion_transport ? std::exp(log_beam_survival_forward - log_transport_pdf_forward) / query_real_event_density : 1.0 / query_real_event_density;
   weights.previous_delta = prepared.previous_delta;
   weights.previous_connectible = prepared.previous_connectible;
   return std::isfinite(weights.d_shared) && (std::isfinite(weights.d_pde_base) && std::isfinite(weights.d_surface));
@@ -484,12 +509,15 @@ ETX_UPBP_FORCE_INLINE bool upbp_partial_prepared_beam_vertex(const Medium& mediu
   if ((result.medium_density < 0.0f) || (result.medium_density > medium_tracking_density_majorant(medium)) || (std::isfinite(result.medium_density) == false)) {
     return false;
   }
-  const double real_event_density = prepared_medium.real_event_density_scale * result.medium_density;
+  const double real_event_density = prepared.subsurface_interval != nullptr ? subsurface_transport_sampling_extinction(prepared.subsurface_interval->subsurface_extinction)
+                                                                            : prepared_medium.real_event_density_scale * result.medium_density;
   if (real_event_density <= 0.0) {
     return false;
   }
   if (upbp_complete_prepared_partial_medium_arrival(prepared, prepared.transport_at_origin.log_transport_pdf_forward + partial_interval.log_transport_pdf_forward,
-        prepared.transport_at_origin.log_transport_pdf_reverse + partial_interval.log_transport_pdf_reverse, prepared.transport_at_origin.distance + partial_interval.distance,
+        prepared.transport_at_origin.log_transport_pdf_reverse + partial_interval.log_transport_pdf_reverse,
+        prepared.transport_at_origin.log_beam_survival_forward + partial_interval.log_beam_survival_forward,
+        prepared.transport_at_origin.log_beam_survival_reverse + partial_interval.log_beam_survival_reverse, prepared.transport_at_origin.distance + partial_interval.distance,
         real_event_density, result.weights) == false) {
     return false;
   }

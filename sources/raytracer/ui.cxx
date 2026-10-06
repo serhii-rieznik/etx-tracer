@@ -183,6 +183,8 @@ const char* renderer_status_state_name(RendererStatusState state) {
       return "Completed";
     case RendererStatusState::Failed:
       return "Failed";
+    case RendererStatusState::Blocked:
+      return "Unsupported settings";
     default:
       return "Unavailable";
   }
@@ -862,8 +864,16 @@ void UI::apply_resource_remapping(SelectionKind kind, const std::vector<uint32_t
     }
   };
   remap_targets(_spectrum_targets);
-  for (auto& [index, state] : _spectrum_controls)
+  for (auto& [index, state] : _spectrum_controls) {
     remap_targets(state.targets);
+    std::erase_if(state.targets, [](const SpectrumTarget& target) {
+      return target.spectrum_index == kInvalidIndex;
+    });
+    if (state.targets.empty()) {
+      state.pending = false;
+      state.error.clear();
+    }
+  }
   if (_selection.kind != kind) {
     return;
   }
@@ -1855,6 +1865,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
     build_toolbar(ctx);
   }
   build_status_bar(ctx);
+  build_renderer_diagnostic(ctx);
   build_workspace(scene_rep, ctx, data);
   build_transform_gizmo(scene_rep, data);
   if (_node_transform_editor_interaction_active && (_node_transform_editor_interaction_rendered_this_frame == false)) {
@@ -1875,7 +1886,7 @@ void UI::build(SceneRepresentation& scene_rep, const FrameData& data) {
     callbacks.emitter_changed(_pending_emitter_change);
   }
   _pending_emitter_change = kInvalidIndex;
-  flush_spectrum_changes(scene_rep);
+  flush_spectrum_changes(scene_rep, true);
   build_unsaved_changes_modal();
   build_renderer_preparation_modal();
 }
@@ -1954,22 +1965,29 @@ bool UI::handle_event(const sapp_event* e) {
 
   if (e->type == SAPP_EVENTTYPE_MOUSE_DOWN) {
     if (_gizmo_captures_mouse) {
-      _viewport_pointer_active = false;
       return true;
     }
-    _viewport_pointer_active = pointer_inside_viewport();
-    return _viewport_pointer_active == false;
+    if (pointer_inside_viewport() == false) {
+      return true;
+    }
+    _viewport_mouse_buttons |= 1u << static_cast<uint32_t>(e->mouse_button);
+    return false;
   }
   if (e->type == SAPP_EVENTTYPE_MOUSE_UP) {
-    const bool route_to_viewport = _viewport_pointer_active;
-    _viewport_pointer_active = false;
+    const uint32_t button = 1u << static_cast<uint32_t>(e->mouse_button);
+    const bool route_to_viewport = (_viewport_mouse_buttons & button) != 0u;
+    _viewport_mouse_buttons &= ~button;
     return route_to_viewport == false;
+  }
+  if (e->type == SAPP_EVENTTYPE_UNFOCUSED) {
+    _viewport_mouse_buttons = 0u;
+    return false;
   }
   if (e->type == SAPP_EVENTTYPE_MOUSE_MOVE) {
     if (_gizmo_captures_mouse) {
       return true;
     }
-    return (_viewport_pointer_active || pointer_inside_viewport()) == false;
+    return ((_viewport_mouse_buttons != 0u) || pointer_inside_viewport()) == false;
   }
   if (e->type == SAPP_EVENTTYPE_MOUSE_SCROLL) {
     return pointer_inside_viewport() == false;
@@ -2775,7 +2793,13 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           return value.thinfilm.min_thickness;
         }),
           [&]() {
-            return ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
+            const float previous_value = material.thinfilm.min_thickness;
+            const bool edited = ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
+            if (edited && (std::isfinite(material.thinfilm.min_thickness) == false)) {
+              material.thinfilm.min_thickness = previous_value;
+              return false;
+            }
+            return edited;
           });
         ImGui::SameLine();
         ImGui::Text(" - ");
@@ -2785,7 +2809,13 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
           return value.thinfilm.max_thickness;
         }),
           [&]() {
-            return ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
+            const float previous_value = material.thinfilm.max_thickness;
+            const bool edited = ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
+            if (edited && (std::isfinite(material.thinfilm.max_thickness) == false)) {
+              material.thinfilm.max_thickness = previous_value;
+              return false;
+            }
+            return edited;
           });
         ImGui::Spacing();
         changed |= mixed_control(material_values_mixed([](const Material& value) {
@@ -2828,8 +2858,8 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
               [&]() {
                 return ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface_path), "Diffuse Transmittance\0Incident Direction\0");
               });
-            if ((material.subsurface_cls != SubsurfaceMaterial::Disabled) && (material.subsurface_path != SubsurfaceMaterial::DiffusePath)) {
-              ImGui::TextWrapped("Incident Direction omits refraction and is unsupported. Use Diffuse Transmittance or a dielectric with an internal medium.");
+            if (material_has_incident_subsurface_boundary(material)) {
+              ImGui::TextWrapped("Incident Direction uses index-matched, straight-through boundaries.");
             }
           }
           changed |= mixed_control(material_values_mixed([](const Material& value) {
@@ -2840,21 +2870,21 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
               ImGui::SameLine();
               return material_spectrum_control(scene_rep, "Subsurface Distance", SpectrumTarget::Channel::Subsurface, SpectrumSource::Kind::Coefficient);
             });
-          changed |= mixed_control(material_values_mixed([](const Material& value) {
-            return value.subsurface.image_index;
-          }),
-            [&]() {
-              ImGui::TextUnformatted("Texture");
-              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-              return image_picker(scene_rep, "Subsurface Texture##subsurface_texture", material.subsurface.image_index, Image::RepeatU | Image::RepeatV);
-            });
+          ImGui::TextWrapped("Bulk color and distance are uniform. Scattering textures tint surface transmission.");
+          if (material.subsurface.image_index != kInvalidIndex) {
+            ImGui::TextWrapped("The assigned distance texture is unused.");
+            if (ImGui::Button("Remove distance texture")) {
+              material.subsurface.image_index = kInvalidIndex;
+              changed = true;
+            }
+          }
 
           changed |= mixed_control(material_values_mixed([](const Material& value) {
             return value.subsurface_packing;
           }),
             [&]() {
               int model = material.subsurface_packing > 0.0f ? 1 : 0;
-              if (ImGui::Combo("Free paths##sss", &model, "Exponential\0Exclusion (PT)\0")) {
+              if (ImGui::Combo("Free paths##sss", &model, "Exponential\0Exclusion\0")) {
                 material.subsurface_packing = model == 0 ? 0.0f : 0.5f;
                 return true;
               }
@@ -2867,9 +2897,8 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
               [&]() {
                 return ImGui::SliderFloat("Packing##sss", &material.subsurface_packing, 0.001f, 0.99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
               });
-            ImGui::TextWrapped(
-              "Requires Path Tracing. Diffuse uses Diffuse Transmittance; plastic retains its dielectric coating. Packing is exclusion distance / mean collision flight.");
-            ImGui::TextWrapped("Use uniform bulk coefficients or a homogeneous internal medium. Color and distance textures cannot define exclusion transport.");
+            ImGui::TextWrapped("Packing is exclusion distance / mean collision flight.");
+            ImGui::TextWrapped("Exclusion transport uses uniform bulk coefficients or a homogeneous internal medium.");
           }
           if (material.int_medium == kInvalidIndex) {
             changed |= mixed_control(material_values_mixed([](const Material& value) {
@@ -3069,7 +3098,7 @@ bool UI::build_medium(SceneRepresentation& scene_rep, uint32_t medium_index, Med
       }
       ImGui::Text("Offset");
       ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-      if (ImGui::DragFloat3("##medium_noise_offset", &m.grid.noise_offset.x, 0.1f, -100.0f, 100.0f, "%.2f")) {
+      if (ImGui::DragFloat3("##medium_noise_offset", &m.grid.noise_offset.x, 0.1f, -100.0f, 100.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
         changed = true;
       }
       bool border_fade_enabled = m.grid.noise_enable_border_fade != 0u;
@@ -3141,7 +3170,7 @@ void UI::reset_scene_state() {
   _auto_open_emission_section = false;
   _scene_tree_open_subtree_ends.clear();
   _viewport_geometry = {};
-  _viewport_pointer_active = false;
+  _viewport_mouse_buttons = 0u;
   _gizmo_captures_mouse = false;
   _gizmo_was_using = false;
   _resource_filter[0] = 0;
@@ -3718,8 +3747,8 @@ void UI::build_toolbar(const BuildContext& ctx) {
 void UI::build_status_bar(const BuildContext& ctx) {
   if (ImGui::BeginViewportSideBar("##status", ImGui::GetMainViewport(), ImGuiDir_Down, ctx.text_size + 2.0f * ctx.wpadding.y, ImGuiWindowFlags_NoDecoration)) {
     const RendererStatus& status = _current_renderer_status;
-    const std::string essential_status =
-      format_string("%s  |  %s", renderer_mode_status_name(status.mode), status.preview_active ? "Preview" : renderer_status_state_name(status.state));
+    const bool preview_status = status.preview_active && (status.state != RendererStatusState::Failed) && (status.state != RendererStatusState::Blocked);
+    const std::string essential_status = format_string("%s  |  %s", renderer_mode_status_name(status.mode), preview_status ? "Preview" : renderer_status_state_name(status.state));
     std::string progress_status = {};
     if (status.progress_kind != RendererProgressKind::None) {
       const char* unit = renderer_progress_unit_name(status.progress_kind);
@@ -3856,7 +3885,7 @@ void UI::build_status_bar(const BuildContext& ctx) {
       detailed_status += "Remaining: " + duration_string(status.remaining_seconds);
     }
     const std::string& renderer_message = status.message.empty() ? _current_renderer_preparation.message : status.message;
-    if (((status.state == RendererStatusState::Preparing) || (status.state == RendererStatusState::Failed)) && (renderer_message.empty() == false)) {
+    if (renderer_message.empty() == false) {
       if (detailed_status.empty() == false) {
         detailed_status += "\n";
       }
@@ -3887,6 +3916,58 @@ void UI::request_quit_confirmation() {
   execute_menu_command(MenuCommand::Quit);
 }
 
+void UI::build_renderer_diagnostic(const BuildContext& ctx) {
+  const RendererStatus& status = _current_renderer_status;
+  if ((status.diagnostic.severity == RendererDiagnosticSeverity::None) || status.message.empty()) {
+    return;
+  }
+  ImGuiViewport* const viewport = ImGui::GetMainViewport();
+  const bool error = status.diagnostic.severity == RendererDiagnosticSeverity::Error;
+  const bool warning = status.diagnostic.severity == RendererDiagnosticSeverity::Warning;
+  const char* title = (status.state == RendererStatusState::Blocked) ? "Unsupported settings" : (error ? "Render interrupted" : (warning ? "Warning" : "Canceled"));
+  const float text_width = std::max(1.0f, viewport->WorkSize.x - 2.0f * ctx.wpadding.x - ImGui::GetStyle().ScrollbarSize);
+  const float action_width = (status.diagnostic.recovery == RendererRecovery::ChangeSettings) ? 230.0f
+                             : (status.diagnostic.recovery == RendererRecovery::Restart)      ? ImGui::CalcTextSize("Retry and restart").x + 2.0f * ImGui::GetStyle().FramePadding.x
+                             : (status.diagnostic.recovery == RendererRecovery::RestartApplication) ? ImGui::CalcTextSize("Restart the application to recover.").x
+                                                                                                    : 0.0f;
+  const bool wrap_action = ((ImGui::CalcTextSize(title).x + ImGui::GetStyle().ItemSpacing.x + action_width) > text_width) && (action_width > 0.0f);
+  const std::string action_message = status.action_failure.empty() ? std::string{} : "Action was not completed: " + status.action_failure;
+  const float text_height = ImGui::CalcTextSize(status.message.c_str(), nullptr, false, text_width).y + ctx.wpadding.y +
+                            (action_message.empty() ? 0.0f : ImGui::CalcTextSize(action_message.c_str(), nullptr, false, text_width).y + ImGui::GetStyle().ItemSpacing.y);
+  const float height =
+    (wrap_action ? 2.0f : 1.0f) * ImGui::GetFrameHeightWithSpacing() + std::min(text_height, std::max(ctx.text_size, viewport->WorkSize.y * 0.25f)) + 2.0f * ctx.wpadding.y;
+  if (ImGui::BeginViewportSideBar("##renderer_diagnostic", viewport, ImGuiDir_Up, height, ImGuiWindowFlags_NoDecoration)) {
+    const ImVec4 color = error ? ImVec4(0.9f, 0.3f, 0.3f, 1.0f) : (warning ? ImVec4(0.9f, 0.65f, 0.15f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Text));
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(color, "%s", title);
+    if ((action_width > 0.0f) && (wrap_action == false)) {
+      ImGui::SameLine();
+    }
+    if (status.diagnostic.recovery == RendererRecovery::Restart) {
+      ImGui::BeginDisabled(_current_renderer_controls.can_restart == false);
+      if (ImGui::Button("Retry and restart") && callbacks.restart_selected) {
+        callbacks.restart_selected();
+      }
+      ImGui::EndDisabled();
+    } else if (status.diagnostic.recovery == RendererRecovery::ChangeSettings) {
+      ImGui::SetNextItemWidth(std::min(230.0f, std::max(1.0f, ImGui::GetContentRegionAvail().x)));
+      build_render_configuration_selector("##diagnostic_configuration");
+    } else if (status.diagnostic.recovery == RendererRecovery::RestartApplication) {
+      ImGui::TextWrapped("Restart the application to recover.");
+    }
+    if (ImGui::BeginChild("##diagnostic_message", ImVec2(0.0f, 0.0f))) {
+      ImGui::PushTextWrapPos(0.0f);
+      ImGui::TextUnformatted(status.message.c_str());
+      if (action_message.empty() == false) {
+        ImGui::TextColored(ImVec4(0.9f, 0.65f, 0.15f, 1.0f), "%s", action_message.c_str());
+      }
+      ImGui::PopTextWrapPos();
+    }
+    ImGui::EndChild();
+  }
+  ImGui::End();
+}
+
 void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data) {
   ImGuiViewport* const main_viewport = ImGui::GetMainViewport();
   if (main_viewport == nullptr) {
@@ -3906,9 +3987,9 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
   const ImVec4 explorer_background = light_theme ? ImVec4(0.91f, 0.94f, 0.96f, 1.0f) : ImVec4(0.105f, 0.125f, 0.145f, 1.0f);
   const ImVec4 inspector_background = light_theme ? ImVec4(0.95f, 0.935f, 0.91f, 1.0f) : ImVec4(0.145f, 0.13f, 0.11f, 1.0f);
   const ImVec4 diagnostics_background = light_theme ? ImVec4(0.93f, 0.92f, 0.96f, 1.0f) : ImVec4(0.125f, 0.115f, 0.15f, 1.0f);
-  const bool explorer_visible = (_ui_setup & UIObjects) != 0u;
-  const bool inspector_visible = (_ui_setup & UIProperties) != 0u;
-  const bool diagnostics_visible = (_ui_setup & UIMemoryDiagnostics) != 0u;
+  bool explorer_visible = (_ui_setup & UIObjects) != 0u;
+  bool inspector_visible = (_ui_setup & UIProperties) != 0u;
+  bool diagnostics_visible = (_ui_setup & UIMemoryDiagnostics) != 0u;
   constexpr float splitter_size = 8.0f;
   constexpr float minimum_viewport_width = 320.0f;
   constexpr float minimum_panel_width = 220.0f;
@@ -3931,6 +4012,14 @@ void UI::build_workspace(SceneRepresentation& scene_rep, const BuildContext& ctx
 
   const ImVec2 content_origin = ImGui::GetCursorScreenPos();
   const ImVec2 content_size = ImGui::GetContentRegionAvail();
+  if (content_size.x < (minimum_viewport_width + minimum_inspector_width + splitter_size)) {
+    inspector_visible = false;
+  }
+  const float inspector_minimum_space = inspector_visible ? (minimum_inspector_width + splitter_size) : 0.0f;
+  if (content_size.x < (minimum_viewport_width + minimum_panel_width + splitter_size + inspector_minimum_space)) {
+    explorer_visible = false;
+  }
+  diagnostics_visible = diagnostics_visible && (content_size.y >= (minimum_main_height + 150.0f + splitter_size));
   const float horizontal_splitter_count = static_cast<float>((explorer_visible ? 1u : 0u) + (inspector_visible ? 1u : 0u));
   const float available_panel_width = std::max(0.0f, content_size.x - minimum_viewport_width - horizontal_splitter_count * splitter_size);
   float explorer_width = explorer_visible ? std::min(std::max(_explorer_width, minimum_panel_width), available_panel_width) : 0.0f;
@@ -6377,7 +6466,7 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     ImGui::Text("Angular Size");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
     float angular_size_deg = emitter.directional.angular_size * 180.0f / kPi;
-    if (ImGui::DragFloat("##angularsize", &angular_size_deg, 0.1f, 0.0f, 90.0f, "%.2f°", ImGuiSliderFlags_NoRoundToFormat)) {
+    if (ImGui::DragFloat("##angularsize", &angular_size_deg, 0.1f, 0.0f, 90.0f, "%.2f°", ImGuiSliderFlags_NoRoundToFormat | ImGuiSliderFlags_AlwaysClamp)) {
       emitter.directional.angular_size = angular_size_deg * kPi / 180.0f;
       emitter.directional.angular_size_cosine = cosf(emitter.directional.angular_size / 2.0f);
       emitter.directional.equivalent_disk_size = 2.0f * std::tan(emitter.directional.angular_size / 2.0f);
@@ -6447,27 +6536,27 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
       if (ImGui::CollapsingHeader("Atmosphere Parameters", ImGuiTreeNodeFlags_DefaultOpen)) {
         ImGui::TextUnformatted("Altitude");
         full_width_item();
-        if (ImGui::DragFloat("##altitude", &sky_emitter.atmosphere.scattering.altitude, 10.0f, 100.0f, 100000.0f, "%.0f m")) {
+        if (ImGui::DragFloat("##altitude", &sky_emitter.atmosphere.scattering.altitude, 10.0f, 100.0f, 100000.0f, "%.0f m", ImGuiSliderFlags_AlwaysClamp)) {
           changed = true;
         }
         ImGui::TextUnformatted("Anisotropy");
         full_width_item();
-        if (ImGui::SliderFloat("##anisotropy", &sky_emitter.atmosphere.scattering.anisotropy, -0.999f, 0.999f, "%.3f", ImGuiSliderFlags_None)) {
+        if (ImGui::SliderFloat("##anisotropy", &sky_emitter.atmosphere.scattering.anisotropy, -0.999f, 0.999f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
           changed = true;
         }
         ImGui::TextUnformatted("Rayleigh");
         full_width_item();
-        if (ImGui::DragFloat("##rayleigh", &sky_emitter.atmosphere.scattering.rayleigh_scale, 0.0f, 0.0f, 10.0f, "%.3f")) {
+        if (ImGui::DragFloat("##rayleigh", &sky_emitter.atmosphere.scattering.rayleigh_scale, 0.0f, 0.0f, 10.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
           changed = true;
         }
         ImGui::TextUnformatted("Mie");
         full_width_item();
-        if (ImGui::DragFloat("##mie", &sky_emitter.atmosphere.scattering.mie_scale, 0.0f, 0.0f, 10.0f, "%.3f")) {
+        if (ImGui::DragFloat("##mie", &sky_emitter.atmosphere.scattering.mie_scale, 0.0f, 0.0f, 10.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
           changed = true;
         }
         ImGui::TextUnformatted("Ozone");
         full_width_item();
-        if (ImGui::DragFloat("##ozone", &sky_emitter.atmosphere.scattering.ozone_scale, 0.0f, 0.0f, 10.0f, "%.3f")) {
+        if (ImGui::DragFloat("##ozone", &sky_emitter.atmosphere.scattering.ozone_scale, 0.0f, 0.0f, 10.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp)) {
           changed = true;
         }
         bool primary_scattering = sky_emitter.atmosphere.scattering.primary_scattering != 0u;
@@ -6730,7 +6819,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     return;
   }
 
-  uint2 viewport = camera.film_size;
+  int32_t image_size[2] = {static_cast<int32_t>(camera.film_size.x), static_cast<int32_t>(camera.film_size.y)};
   float focal_len = get_camera_focal_length(camera);
   int32_t pixel_size = std::countr_zero(data.output_pixel_size);
 
@@ -6745,7 +6834,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
 
     if (control_mode == 0) {
       if (labeled_control("Focal Length", [&]() {
-            return ImGui::DragFloat("##focal_length", &focal_len, 0.1f, 1.0f, 5000.0f, "%.1fmm");
+            return ImGui::DragFloat("##focal_length", &focal_len, 0.1f, 1.0f, 5000.0f, "%.1fmm", ImGuiSliderFlags_AlwaysClamp);
           })) {
         camera_changed = true;
       }
@@ -6765,6 +6854,11 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
       if (labeled_control(fov_label, [&]() {
             return ImGui::InputFloat("##fov_input", &fov_input, 0.1f, 1.0f, "%.1f°");
           })) {
+        const float minimum_horizontal_fov = focal_length_to_fov(5000.0f);
+        const float maximum_horizontal_fov = focal_length_to_fov(1.0f);
+        const float minimum_fov = _camera_fov_vertical ? horizontal_fov_to_vertical_fov(minimum_horizontal_fov) : minimum_horizontal_fov;
+        const float maximum_fov = _camera_fov_vertical ? horizontal_fov_to_vertical_fov(maximum_horizontal_fov) : maximum_horizontal_fov;
+        fov_input = std::isfinite(fov_input) ? std::clamp(fov_input, minimum_fov * 180.0f / kPi, maximum_fov * 180.0f / kPi) : displayed_fov_rad * 180.0f / kPi;
         displayed_fov_rad = fov_input * kPi / 180.0f;
         horizontal_fov_rad = _camera_fov_vertical ? vertical_fov_to_horizontal_fov(displayed_fov_rad) : displayed_fov_rad;
         focal_len = fov_to_focal_length(horizontal_fov_rad);
@@ -6774,14 +6868,14 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
     }
 
     if (labeled_control("Focus Distance", [&]() {
-          return ImGui::DragFloat("##focus_distance", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f");
+          return ImGui::DragFloat("##focus_distance", &camera.focal_distance, 0.1f, 0.0f, 65536.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         })) {
       camera_changed = true;
     }
     collect_preview_interaction();
 
     if (labeled_control("Lens Radius", [&]() {
-          return ImGui::DragFloat("##lens_radius", &camera.lens_radius, 0.01f, 0.0f, 2.0f, "%.3f");
+          return ImGui::DragFloat("##lens_radius", &camera.lens_radius, 0.01f, 0.0f, 2.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         })) {
       camera_changed = true;
     }
@@ -6789,7 +6883,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
 
     float clip_values[2] = {camera.clip_near, camera.clip_far};
     if (labeled_control("Clip Planes", [&]() {
-          return ImGui::DragFloat2("##clipplanes", clip_values, 0.01f, 0.0f, 5000.0f, "%.3f");
+          return ImGui::DragFloat2("##clipplanes", clip_values, 0.01f, 0.0f, 5000.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
         })) {
       camera.clip_near = max(0.0f, clip_values[0]);
       camera.clip_far = max(camera.clip_near + 0.001f, clip_values[1]);
@@ -6802,13 +6896,13 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
   if (ImGui::CollapsingHeader("Output", ImGuiTreeNodeFlags_Framed)) {
     ImGui::TextUnformatted("Image Size");
     full_width_item();
-    if (ImGui::InputInt2("##outimgsize", reinterpret_cast<int32_t*>(&viewport.x))) {
+    if (ImGui::InputInt2("##outimgsize", image_size)) {
       camera_changed = true;
     }
     collect_preview_interaction();
 
     if (labeled_control("Pixel Filter Radius", [&]() {
-          return ImGui::DragFloat("##pixelfiler", &pixel_filter_radius, 0.05f, 0.0f, 32.0f, "%.3fpx");
+          return ImGui::DragFloat("##pixelfiler", &pixel_filter_radius, 0.05f, 0.0f, 32.0f, "%.3fpx", ImGuiSliderFlags_AlwaysClamp);
         })) {
       camera_changed = true;
     }
@@ -6833,9 +6927,8 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
   }
 
   if (camera_changed) {
-    viewport.x = clamp(viewport.x, 1u, 1024u * 16u);
-    viewport.y = clamp(viewport.y, 1u, 1024u * 16u);
-    camera.film_size = {uint32_t(viewport.x), uint32_t(viewport.y)};
+    const uint2 viewport = {static_cast<uint32_t>(std::clamp(image_size[0], 1, 1024 * 16)), static_cast<uint32_t>(std::clamp(image_size[1], 1, 1024 * 16))};
+    camera.film_size = viewport;
     camera.lens_radius = fmaxf(camera.lens_radius, 0.0f);
     camera.focal_distance = fmaxf(camera.focal_distance, 0.0f);
     camera.clip_near = max(camera.clip_near, 0.0f);
@@ -6884,11 +6977,16 @@ void UI::build_scene_selection_properties(SceneRepresentation& scene_rep, const 
     if (validated_int_control("Random Termination", reinterpret_cast<int32_t&>(scene_rep.data().options.random_path_termination), 0, 65536)) {
       scene_settings_changed = true;
     }
+    const float previous_radiance_clamp = scene_rep.data().options.radiance_clamp;
     if (labeled_control("Radiance Clamp", [&]() {
           return ImGui::InputFloat("##radiance_clamp", &scene_rep.data().options.radiance_clamp, 0.1f, 1.f, "%0.2f");
         })) {
-      scene_rep.data().options.radiance_clamp = max(scene_rep.data().options.radiance_clamp, 0.0f);
-      scene_settings_changed = true;
+      if (std::isfinite(scene_rep.data().options.radiance_clamp)) {
+        scene_rep.data().options.radiance_clamp = max(scene_rep.data().options.radiance_clamp, 0.0f);
+        scene_settings_changed = true;
+      } else {
+        scene_rep.data().options.radiance_clamp = previous_radiance_clamp;
+      }
     }
     const bool spectral_changed = ImGui::Checkbox("Spectral Rendering", scene_rep.data().options.properties + Scene::Properties::Spectral);
     scene_settings_changed = (scene_settings_changed || spectral_changed);

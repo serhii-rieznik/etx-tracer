@@ -28,6 +28,8 @@ enum class RendererPreparationState : uint32_t {
   Ready,
   Preparing,
   Failed,
+  Blocked,
+  Canceled,
 };
 
 enum class RendererPreparationStepState : uint32_t {
@@ -71,6 +73,26 @@ enum class RendererStatusState : uint32_t {
   Finishing,
   Completed,
   Failed,
+  Blocked,
+};
+
+enum class RendererDiagnosticSeverity : uint32_t {
+  None,
+  Info,
+  Warning,
+  Error,
+};
+
+enum class RendererRecovery : uint32_t {
+  None,
+  Restart,
+  ChangeSettings,
+  RestartApplication,
+};
+
+struct RendererDiagnostic {
+  RendererDiagnosticSeverity severity = RendererDiagnosticSeverity::None;
+  RendererRecovery recovery = RendererRecovery::None;
 };
 
 enum class RendererProgressKind : uint32_t {
@@ -139,6 +161,8 @@ struct RendererStatus {
   bool elapsed_available = false;
   bool remaining_available = false;
   RendererUPBPStatus upbp = {};
+  RendererDiagnostic diagnostic = {};
+  std::string action_failure = {};
 };
 
 enum class RendererMemoryLocation : uint32_t {
@@ -339,6 +363,12 @@ struct Renderer {
   }
 
   virtual void restart() {
+  }
+
+  virtual bool recover(RHIContext& ctx, SceneRepresentation& scene) {
+    (void)ctx;
+    (void)scene;
+    return false;
   }
 
   virtual void discard_render_output() {

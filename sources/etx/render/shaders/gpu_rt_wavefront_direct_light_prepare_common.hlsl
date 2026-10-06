@@ -95,7 +95,8 @@ float wavefront_direct_light_sampling_pdf(GPUWavefrontDirectLightSample sample_v
   return sample_value.pdf_dir * sample_value.pdf_sample;
 }
 
-float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval), inout Sampler sampler) {
+float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value, ETX_IN(BSDFEval, bsdf_eval), inout Sampler sampler, out float2 mis_terms) {
+  mis_terms = float2(0.0f, 0.0f);
   if (wavefront_scene_multiple_importance_sampling_enabled() == false) {
     return 1.0f;
   }
@@ -126,8 +127,9 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
   }
   float vm_light = wavefront_vcm_surface_factor();
   float w_camera =
-    (density_ratio > 0.0f) ? wavefront_safe_div(vm_light + adjacent_connection + wavefront_connection_mis(input_value.current_vertex) * reverse_pdf, density_ratio) : 0.0f;
-  return 1.0f / (1.0f + w_light + w_camera);
+    (density_ratio > 0.0f) ? wavefront_safe_div((vm_light + adjacent_connection + wavefront_connection_mis(input_value.current_vertex) * reverse_pdf), density_ratio) : 0.0f;
+  mis_terms = float2(w_light, w_camera);
+  return 1.0f;
 #endif
 }
 
@@ -219,6 +221,7 @@ void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(Wavef
     return;
   }
 
+  float2 mis_terms = float2(0.0f, 0.0f);
   float mis_weight = 1.0f;
   float scattering_pdf_reverse = 0.0f;
   float upbp_w_light = 0.0f;
@@ -241,10 +244,10 @@ void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(Wavef
       return;
     }
   } else {
-    mis_weight = wavefront_direct_light_weight(input_value, bsdf_eval, sampler);
+    mis_weight = wavefront_direct_light_weight(input_value, bsdf_eval, sampler, mis_terms);
   }
 #else
-  mis_weight = wavefront_direct_light_weight(input_value, bsdf_eval, sampler);
+  mis_weight = wavefront_direct_light_weight(input_value, bsdf_eval, sampler, mis_terms);
 #endif
   SpectralResponse contribution = spectral_response_mul(spectral_response_mul(input_value.current_vertex.throughput, bsdf_eval.bsdf),
     spectral_response_mul(input_value.sample_value.value, mis_weight / sampling_pdf));
@@ -271,20 +274,13 @@ void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(Wavef
   task.pixel_index = input_value.current_vertex.pixel_index;
   task.medium_index = ((bsdf_eval.properties & BSDFSample::MediumChanged) != 0u) ? bsdf_eval.medium_index : input_value.current_vertex.medium_index;
   task.inline_medium_extinction = input_value.current_vertex.inline_medium_extinction;
+  task.inline_medium_scattering = input_value.current_vertex.inline_medium_scattering;
   task.inline_medium_flags = input_value.current_vertex.inline_medium_flags;
   if (wavefront_path_vertex_is_surface(input_value.current_vertex) &&
-      ((input_value.material.cls == MaterialClass::Dielectric) ||
-        ((input_value.material.cls == MaterialClass::Plastic) && (input_value.material.subsurface_cls != SubsurfaceMaterial::Disabled)))) {
+      ((input_value.material.cls == MaterialClass::Dielectric) || (input_value.material.subsurface_cls != SubsurfaceMaterial::Disabled))) {
     const bool into_body = dot(input_value.current_vertex.geo_normal, input_value.sample_value.direction) < 0.0f;
     task.medium_index = into_body ? input_value.material.int_medium : input_value.material.ext_medium;
     task.inline_medium_flags = into_body ? task.inline_medium_flags : 0u;
-  }
-  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
-  if (input_value.current_vertex.material_index == scene_gpu_load_u32(scene_globals, kSceneGlobalsDefaultSubsurfaceScatterMaterialOffset)) {
-    const bool reflection =
-      (dot(input_value.current_vertex.geo_normal, input_value.current_vertex.w_i) * dot(input_value.current_vertex.geo_normal, input_value.sample_value.direction)) < 0.0f;
-    task.medium_index = reflection ? input_value.hit.medium_index : input_value.current_vertex.medium_index;
-    task.inline_medium_flags = reflection ? 0u : task.inline_medium_flags;
   }
   task.flags = GPUWavefrontPointConnectionTaskFlags::Ready;
   task.flags |= (input_value.current_vertex.flags & GPUWavefrontVertexFlags::Medium) != 0u ? GPUWavefrontPointConnectionTaskFlags::SourceMedium : 0u;
@@ -298,7 +294,12 @@ void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(Wavef
 #endif
   {
     task.sampler_seed = sampler.seed;
+    // Outside UPBP, these auxiliary slots hold the forward and reverse MIS coefficients.
+    task.upbp_auxiliary0_bits = asuint(mis_terms.x);
+    task.upbp_auxiliary1_bits = asuint(mis_terms.y);
   }
+  task.subsurface_packing = ((task.inline_medium_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) ? input_value.current_vertex.subsurface_packing : 0.0f;
+  task.subsurface_endpoint_flags = wavefront_path_vertex_is_medium(input_value.current_vertex) ? GPUWavefrontSubsurfaceEndpointFlags::SourceCollision : 0u;
   wavefront_store_direct_light_task(input_value.resources.direct_light_task_buffer, dispatch_index, task);
   wavefront_shadow_queue_append(input_value.resources, kGPUWavefrontShadowQueueDirectLight, dispatch_index);
 }

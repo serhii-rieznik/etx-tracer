@@ -46,6 +46,16 @@ ETX_SHARED_INLINE SpectralResponse bsdf_resource_apply_image(ETX_IN(BSDFResource
   return bsdf_resource_apply_rgb(spect, result, image_value);
 }
 
+ETX_SHARED_INLINE SpectralResponse bsdf_resource_subsurface_boundary_color(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
+  ETX_IN(float2, uv)) {
+  const SpectralResponse unit = spectral_response_make(spect, 1.0f);
+  float4 value;
+  if ((material.scattering.image_index == kInvalidIndex) || (bsdf_resource_image_try_evaluate_rgba_no_pdf(context, material.scattering.image_index, uv, value) == false)) {
+    return unit;
+  }
+  return spectral_response_saturate(bsdf_resource_apply_rgb(spect, unit, value));
+}
+
 ETX_SHARED_INLINE float bsdf_resource_evaluate_sampled_image(ETX_IN(BSDFResourceContext, context), ETX_IN(SampledImage, image), ETX_IN(float2, uv), float default_value) {
   if (image.image_index == kInvalidIndex) {
     return default_value;

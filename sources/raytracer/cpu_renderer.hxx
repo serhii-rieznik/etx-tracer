@@ -50,6 +50,7 @@ struct CPURaytracingRenderer : public Renderer {
   void stop() override;
   void finish() override;
   void restart() override;
+  bool recover(RHIContext& ctx, SceneRepresentation& scene) override;
   void discard_render_output() override {
     _last_uploaded_completed_iterations = 0u;
   }
@@ -103,6 +104,7 @@ struct CPURaytracingRenderer : public Renderer {
   std::chrono::steady_clock::time_point _render_started_at = {};
   double _last_render_elapsed_seconds = 0.0;
   std::string _runtime_failure_reason = {};
+  bool _recovery_blocked = false;
   bool _render_timing_active = false;
 
   RHIBindlessHandle _output_staging_buffers[kRHIMaxFrames] = {};

@@ -18,14 +18,13 @@ inline bool subsurface_materials_valid(const SceneData& data) {
       log::error("SSS requires finite packing in [0, 1) and anisotropy in (-1, 1)");
       return false;
     }
-    if ((material.cls == MaterialClass::Diffuse) && (material.subsurface_path != SubsurfaceMaterial::DiffusePath)) {
-      log::error("Random-walk SSS requires Diffuse Transmittance; use a dielectric with an internal medium for refraction");
+    if ((material.cls == MaterialClass::Diffuse) && (material.subsurface_path != SubsurfaceMaterial::DiffusePath) &&
+        (material.subsurface_path != SubsurfaceMaterial::RefractedPath)) {
+      log::error("Random-walk SSS requires Diffuse Transmittance or Incident Direction");
       return false;
     }
-    if ((material.subsurface_packing > 0.0f) && (material.int_medium == kInvalidIndex) &&
-        ((material.scattering.image_index != kInvalidIndex) || (material.subsurface.image_index != kInvalidIndex))) {
-      log::error("Exclusion SSS requires uniform bulk coefficients; use a homogeneous internal medium to override color and distance textures");
-      return false;
+    if ((material.int_medium == kInvalidIndex) && (material.subsurface.image_index != kInvalidIndex)) {
+      log::warning("SSS distance textures do not affect uniform bulk coefficients");
     }
     if (material.int_medium != kInvalidIndex) {
       if (material.int_medium >= data.mediums_vector.size()) {

@@ -6,6 +6,7 @@
 #include <etx/render/host/emitter_packing.hxx>
 #include <etx/render/host/scene_data.hxx>
 #include <etx/render/shared/sampler.hxx>
+#include <etx/render/interop/subsurface_transport_shared.hxx>
 
 #include <embree4/rtcore.h>
 
@@ -508,6 +509,12 @@ bool Raytracing::trace_material(const Scene& scene, const Ray& r, const uint32_t
     }
     const auto& tri = ctx->scene->triangles[triangle_index];
 
+    // SSS transport starts after its origin; a zero-distance hit is a self-intersection.
+    if (RTCRayN_tfar(args->ray, args->N, 0) <= 0.0f) {
+      *args->valid = 0;
+      return;
+    }
+
     if ((ctx->m_id != kInvalidIndex) && (tri.material_index != ctx->m_id)) {
       *args->valid = 0;
       return;
@@ -572,6 +579,17 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
       return;
     }
 
+    const float hit_t = RTCRayN_tfar(args->ray, args->N, 0);
+    if ((ctx->i.triangle_index != kInvalidIndex) && (hit_t == ctx->i.t)) {
+      const auto& previous_material = scene.materials[scene.triangles[ctx->i.triangle_index].material_index];
+      const bool null_boundary = (mat.cls == MaterialClass::Boundary) || material_has_incident_subsurface_boundary(mat);
+      const bool previous_null_boundary = (previous_material.cls == MaterialClass::Boundary) || material_has_incident_subsurface_boundary(previous_material);
+      if (null_boundary && (previous_null_boundary == false)) {
+        *args->valid = 0;
+        return;
+      }
+    }
+
     ctx->i = {{u, v}, triangle_index, RTCRayN_tfar(args->ray, args->N, 0), instance_index};
   };
 
@@ -587,7 +605,21 @@ bool Raytracing::trace(const Scene& scene, const Ray& r, Intersection& result_in
 
 SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const MediumInstance& medium,
   Sampler& smp) const {
+  return trace_transmittance(spect, scene, p0, p1, medium, false, false, smp);
+}
+
+SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const MediumInstance& medium,
+  const bool source_collision, const bool target_collision, Sampler& smp) const {
+  float flight_pdf_forward = 1.0f;
+  float flight_pdf_reverse = 1.0f;
+  return trace_transmittance(spect, scene, p0, p1, medium, source_collision, target_collision, smp, flight_pdf_forward, flight_pdf_reverse);
+}
+
+SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const MediumInstance& medium,
+  const bool source_collision, const bool target_collision, Sampler& smp, float& flight_pdf_forward, float& flight_pdf_reverse) const {
   ETX_ASSERT(_private != nullptr);
+  flight_pdf_forward = 1.0f;
+  flight_pdf_reverse = 1.0f;
 
   constexpr uint32_t kIntersectionBufferSize = 63;
   struct IntermediateIntersection {
@@ -627,7 +659,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
       *args->valid = 0;
       return;
     }
-    if ((mat.cls != MaterialClass::Boundary) || ((ctx->intersection_count + 1u) >= kIntersectionBufferSize)) {
+    if (((mat.cls != MaterialClass::Boundary) && (material_has_incident_subsurface_boundary(mat) == false)) || ((ctx->intersection_count + 1u) >= kIntersectionBufferSize)) {
       ctx->occlusion_found = 1u;
       *args->valid = -1;
       return;
@@ -652,6 +684,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
   }
 
   t_max = sqrtf(t_max);
+  const float transport_distance = t_max;
   direction /= t_max;
   t_max -= fmaxf(kRayEpsilon, t_max * kRayEpsilon);
   ETX_VALIDATE(t_max);
@@ -669,7 +702,7 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
       }
     }
   }
-  context.intersections[context.intersection_count++] = {kInvalidIndex, kInvalidIndex, 0.0f, 0.0f, t_max};
+  context.intersections[context.intersection_count++] = {kInvalidIndex, kInvalidIndex, 0.0f, 0.0f, transport_distance};
 
   float current_t = 0.0f;
   float3 origin = p0;
@@ -680,7 +713,19 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     if (medium_instance_valid(current_medium)) {
       float dt = fmaxf(0.0f, intersection.t - current_t);
 
-      if (current_medium.index != kInvalidIndex) {
+      if (current_medium.subsurface_packing > 0.0f) {
+        const bool interval_source_collision = source_collision && (i == 0u);
+        const bool interval_target_collision = target_collision && ((i + 1u) == context.intersection_count);
+        result *= subsurface_transport_kernel(current_medium.extinction, current_medium.subsurface_packing, interval_source_collision, interval_target_collision, dt);
+        const SpectralResponse scattering = subsurface_medium_scattering(scene, spect, current_medium);
+        const float kernel_forward =
+          subsurface_transport_sampling_kernel(current_medium.extinction, scattering, current_medium.subsurface_packing, interval_source_collision, interval_target_collision, dt);
+        const float kernel_reverse =
+          subsurface_transport_sampling_kernel(current_medium.extinction, scattering, current_medium.subsurface_packing, interval_target_collision, interval_source_collision, dt);
+        const float extinction = subsurface_transport_sampling_extinction(current_medium.extinction);
+        flight_pdf_forward *= kernel_forward * (interval_target_collision ? extinction : 1.0f);
+        flight_pdf_reverse *= kernel_reverse * (interval_source_collision ? extinction : 1.0f);
+      } else if (current_medium.index != kInvalidIndex) {
         const auto& m = scene.mediums[current_medium.index];
         result *= medium_transmittance(m, spect, smp, origin, direction, dt);
         ETX_VALIDATE(result);
@@ -696,10 +741,16 @@ SpectralResponse Raytracing::trace_transmittance(const SpectralQuery spect, cons
     const auto& tri = scene.triangles[intersection.primitive_id];
     const auto& mat = scene.materials[tri.material_index];
     const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, intersection.instance_index);
+    if (material_has_incident_subsurface_boundary(mat)) {
+      result *= subsurface_boundary_color(scene, spect, mat, lerp_uv(scene, tri, barycentrics({intersection.u, intersection.v})));
+    }
     const bool entering_surface = dot(geo_normal, direction) < 0.0f;
     current_medium = {
       .index = entering_surface ? mat.int_medium : mat.ext_medium,
     };
+    if (entering_surface && material_has_incident_subsurface_boundary(mat)) {
+      current_medium = make_subsurface_medium_instance(scene, spect, tri.material_index);
+    }
     current_t = intersection.t;
     const float3 bc = barycentrics({intersection.u, intersection.v});
     origin = scene_triangle_world_position(scene, tri, 0u, intersection.instance_index) * bc.x + scene_triangle_world_position(scene, tri, 1u, intersection.instance_index) * bc.y +

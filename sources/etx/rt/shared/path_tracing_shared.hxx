@@ -73,8 +73,8 @@ ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, c
   SpectralResponse albedo = {spect};
 
   if (mat.int_medium == kInvalidIndex) {
-    auto color = apply_image(spect, mat.scattering, in_intersection.tex);
-    auto distances = apply_image(spect, mat.subsurface, in_intersection.tex);
+    auto color = medium_load_spectrum_or_zero(mat.scattering.spectrum_index, spect);
+    auto distances = medium_load_spectrum_or_zero(mat.subsurface.spectrum_index, spect);
     remap(color.integrated, distances.integrated, albedo.integrated, extinction.integrated, scattering.integrated);
     remap_channel(color.value, distances.value, albedo.value, extinction.value, scattering.value);
   } else {
@@ -92,7 +92,7 @@ ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, c
   ray.o = shading_pos(scene, scene.triangles[in_intersection.triangle_index], in_intersection.barycentric, ray.d, in_intersection.instance_index);
   ray.max_t = kMaxFloat;
 
-  SpectralResponse throughput = {spect, 1.0f};
+  SpectralResponse throughput = subsurface_boundary_color(scene, spect, mat, in_intersection.tex);
   for (uint32_t i = 0u;; ++i) {
     Intersection local_i;
     Ray exit_ray = ray;
@@ -153,7 +153,7 @@ ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, c
 
       result.intersection = local_i;
       result.intersection.w_i *= w_i_in ? -1.0f : +1.0f;
-      result.weight = throughput;
+      result.weight = throughput * subsurface_boundary_color(scene, spect, mat, local_i.tex);
       return GatherResult::Succeeded;
     }
 
@@ -341,8 +341,8 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
   auto bsdf_sample = bsdf::sample(bsdf_data, mat, payload.smp);
   payload.smp.pop_fixed();
 
-  bool subsurface_path = (mat.subsurface_cls != SubsurfaceMaterial::Disabled) &&  //
-                         (bsdf_sample.properties & BSDFSample::Reflection) && (bsdf_sample.properties & BSDFSample::Diffuse);
+  bool subsurface_path = (mat.subsurface_cls != SubsurfaceMaterial::Disabled) && (dot(intersection.nrm, bsdf_sample.w_o) < 0.0f) &&  //
+                         (bsdf_sample.properties & BSDFSample::Transmission) && (bsdf_sample.properties & BSDFSample::Diffuse);
 
   subsurface::Gather ss_gather = {};
   subsurface::GatherResult ss_gather_result = subsurface::GatherResult::Failed;
@@ -359,7 +359,7 @@ ETX_SHARED_INLINE bool handle_hit_ray(const Scene& scene, const Intersection& in
     return false;
   }
 
-  payload.medium = (bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium;
+  payload.medium = subsurface_sampled ? mat.ext_medium : ((bsdf_sample.properties & BSDFSample::MediumChanged) ? bsdf_sample.medium_index : payload.medium);
 
   // * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
   // direct light sampling

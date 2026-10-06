@@ -321,10 +321,6 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
     source.title = source.mode == SpectrumSource::Mode::Temperature ? "Temperature" : numeric ? "Constant value" : "RGB color";
     changed = true;
   }
-  if (source.output().empty()) {
-    state.error = "These values exceed the supported numeric range.";
-    changed = false;
-  }
   if (expanded) {
     ImGui::SeparatorText("Source curve (before strength)");
     const auto& points = state.curve.document.points;
@@ -353,12 +349,22 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
     }
     state.interacting |= ImGui::IsMouseDown(ImGuiMouseButton_Left);
   }
+  const bool invalid_output = source.output().empty();
+  if (invalid_output) {
+    state.error = "These values exceed the supported numeric range.";
+  }
   if (changed) {
     if (source.mode == SpectrumSource::Mode::Spectrum)
       state.custom = source;
     state.targets = targets;
     state.pending = true;
-    state.error.clear();
+    if (invalid_output == false) {
+      state.error.clear();
+    }
+    _scene_dirty = true;
+    if (callbacks.scene_modified) {
+      callbacks.scene_modified();
+    }
   }
   ImGui::PopID();
   ImGui::PopID();
@@ -366,23 +372,34 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
   return false;
 }
 
-void UI::flush_spectrum_changes(SceneRepresentation& scene) {
-  if (preparation_active())
-    return;
+bool UI::commit_pending_edits(SceneRepresentation& scene) {
+  commit_name_edit(true);
+  return flush_spectrum_changes(scene, false);
+}
+
+bool UI::flush_spectrum_changes(SceneRepresentation& scene, bool defer_pending) {
   std::vector<SpectrumEdit> edits;
   std::vector<uint32_t> indices;
+  bool deferred = false;
   for (auto& [index, state] : _spectrum_controls) {
     if (state.pending == false)
       continue;
-    if ((state.source.kind == SpectrumSource::Kind::IOR) && (state.interacting || ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
+    if (defer_pending && (state.error.empty() == false)) {
+      deferred = true;
+      continue;
+    }
+    if (preparation_active())
+      return false;
+    if (defer_pending && (state.source.kind == SpectrumSource::Kind::IOR) && (state.interacting || ImGui::IsMouseDown(ImGuiMouseButton_Left))) {
       state.interacting = false;
+      deferred = true;
       continue;
     }
     edits.push_back({state.targets, state.source});
     indices.push_back(index);
   }
   if (edits.empty())
-    return;
+    return deferred == false;
   const bool applied = callbacks.spectrum_applied && callbacks.spectrum_applied(edits);
   for (uint32_t index : indices) {
     auto& state = _spectrum_controls.at(index);
@@ -390,11 +407,12 @@ void UI::flush_spectrum_changes(SceneRepresentation& scene) {
       if (index < scene.data().spectrum_values.size())
         state.observed = scene.data().spectrum_values[index];
       state.error.clear();
-    } else {
+    } else if (state.error.empty()) {
       state.error = "The spectrum could not be applied. Check its values or select the target again.";
     }
-    state.pending = false;
+    state.pending = applied == false;
   }
+  return applied && (deferred == false);
 }
 
 void UI::build_spectrum_editor(SceneRepresentation& scene) {

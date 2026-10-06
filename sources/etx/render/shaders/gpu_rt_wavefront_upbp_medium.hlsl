@@ -24,7 +24,8 @@ bool upbp_append_light_beam(GPUUPBPResources resources, GPUUPBPPathState path_st
   if ((resources.iteration.flags & GPUUPBPIterationFlags::CollectLightDensityRecords) == 0u) {
     return true;
   }
-  if (((path_state.flags & GPUUPBPPathStateFlags::Light) == 0u) || (interval.medium_index == kInvalidIndex) || ((interval.flags & GPUUPBPIntervalFlags::Subsurface) != 0u)) {
+  if (((path_state.flags & GPUUPBPPathStateFlags::Light) == 0u) || (interval.medium_index == kInvalidIndex) ||
+      (((interval.flags & GPUUPBPIntervalFlags::Subsurface) != 0u) && ((interval.flags & GPUUPBPIntervalFlags::DensityConnectible) == 0u))) {
     return true;
   }
   const float3 delta = interval.end_position - interval.start_position;
@@ -76,6 +77,9 @@ struct GPUUPBPConnectionInterval {
   SpectralResponse weight;
   float log_transport_pdf_forward;
   float log_transport_pdf_reverse;
+  float log_beam_survival_forward;
+  float log_beam_survival_reverse;
+  bool has_exclusion_transport;
 };
 
 bool upbp_track_connection_interval(uint medium_index, float3 origin, float3 direction, float maximum_distance, SpectralQuery spect, uint maximum_null_events, inout uint seed,
@@ -339,6 +343,12 @@ bool upbp_finish_interval(GPUUPBPResources resources, bool from_camera, uint pat
   segment.log_pdf_reverse += interval.log_pdf_reverse;
   segment.log_transport_pdf_forward += interval.log_transport_pdf_forward;
   segment.log_transport_pdf_reverse += interval.log_transport_pdf_reverse;
+  const bool exclusion_interval = interval.subsurface_packing > 0.0f;
+  if (exclusion_interval) {
+    segment.flags |= GPUUPBPSegmentFlags::HasExclusionInterval;
+  }
+  segment.log_beam_survival_forward += exclusion_interval ? interval.log_beam_survival_forward : interval.log_transport_pdf_forward;
+  segment.log_beam_survival_reverse += exclusion_interval ? interval.log_beam_survival_reverse : interval.log_transport_pdf_reverse;
   segment.distance += interval.distance;
   if ((interval.flags & (GPUUPBPIntervalFlags::Scatter | GPUUPBPIntervalFlags::Absorb)) != 0u) {
     segment.log_terminal_event_density = interval.log_terminal_event_density;
@@ -350,6 +360,76 @@ bool upbp_finish_interval(GPUUPBPResources resources, bool from_camera, uint pat
   }
   upbp_store_path_state(resources.path_state_buffer, upbp_path_state_index(resources, from_camera, path_index), path_state);
   return true;
+}
+
+float2 upbp_subsurface_beam_survival(SpectralResponse extinction, SpectralResponse scattering, float packing, bool source_collision, bool target_collision, float distance) {
+  const float forward = subsurface_transport_sampling_free_path(extinction, scattering, packing, source_collision, distance).survival;
+  const float reverse = source_collision == target_collision ? forward
+    : subsurface_transport_sampling_free_path(extinction, scattering, packing, target_collision, distance).survival;
+  return float2(upbp_log_positive(forward), upbp_log_positive(reverse));
+}
+
+bool upbp_track_subsurface_interval(GPUUPBPResources resources, bool from_camera, uint path_index, GPUWavefrontSubsurfaceState subsurface_state, float3 origin, float3 direction,
+  float maximum_distance, float3 surface_position, float3 surface_normal, inout uint seed, inout GPUUPBPPathState path_state, out MediumSample medium_sample,
+  out uint terminal_type) {
+  const bool source_collision = (subsurface_state.flags & GPUWavefrontSubsurfaceFlags::CorrelatedOrigin) != 0u;
+  const SubsurfaceTransportSample flight = subsurface_transport_sample(subsurface_state.extinction, subsurface_state.scattering, subsurface_state.packing, source_collision, origin,
+    direction, maximum_distance, rnd01(seed));
+  medium_sample = flight.sample;
+  terminal_type = kUPBPMediumFailure;
+  if ((flight.pdf_forward <= 0.0f) || (flight.pdf_reverse <= 0.0f)) {
+    return false;
+  }
+  uint interval_index = kInvalidIndex;
+  if (upbp_append_partitioned_index(resources, from_camera, GPUUPBPCounterIndex::LightInterval, GPUUPBPCounterIndex::CameraInterval, resources.light_interval_capacity,
+        resources.camera_interval_capacity, GPUUPBPOverflowFlags::Interval, interval_index) == false) {
+    return false;
+  }
+  GPUUPBPInterval interval = (GPUUPBPInterval)0;
+  interval.weight = upbp_pack_spectral_response(flight.sample.weight);
+  interval.start_position = origin;
+  interval.end_position = flight.sample.pos;
+  interval.distance = flight.scattered ? flight.sample.sampled_medium_t : maximum_distance;
+  interval.medium_index = upbp_inline_medium_key(subsurface_state.material_index);
+  interval.density_owner_instance_index = subsurface_state.owner_instance_index;
+  interval.flags = GPUUPBPIntervalFlags::Valid | GPUUPBPIntervalFlags::InlineMedium | GPUUPBPIntervalFlags::Subsurface;
+  interval.inline_scattering = upbp_pack_spectral_response(subsurface_state.scattering);
+  interval.inline_extinction = upbp_pack_spectral_response(subsurface_state.extinction);
+  interval.flags |= source_collision ? GPUUPBPIntervalFlags::SubsurfaceSourceCollision : 0u;
+  interval.subsurface_packing = subsurface_state.packing;
+  const float2 log_beam_survival = upbp_subsurface_beam_survival(subsurface_state.extinction, subsurface_state.scattering, subsurface_state.packing, source_collision,
+    flight.scattered, interval.distance);
+  interval.log_beam_survival_forward = log_beam_survival.x;
+  interval.log_beam_survival_reverse = log_beam_survival.y;
+  interval.inline_absorption = upbp_pack_spectral_response(spectral_response_sub(subsurface_state.extinction, subsurface_state.scattering));
+  interval.inline_phase_function_g = subsurface_state.phase_function_g;
+  interval.first_event_index = kInvalidIndex;
+  interval.segment_index = path_state.current_segment_index;
+  interval.next_interval_index = kInvalidIndex;
+  interval.log_pdf_forward = log(flight.pdf_forward);
+  interval.log_pdf_reverse = log(flight.pdf_reverse);
+  interval.log_transport_pdf_forward = log(flight.transport_pdf_forward);
+  interval.log_transport_pdf_reverse = log(flight.transport_pdf_reverse);
+  interval.log_terminal_event_density = log(flight.event_density);
+  if (path_state.current_interval_index != kInvalidIndex) {
+    GPUUPBPInterval previous_interval = upbp_load_interval(resources.interval_buffer, path_state.current_interval_index);
+    previous_interval.next_interval_index = interval_index;
+    upbp_store_interval(resources.interval_buffer, path_state.current_interval_index, previous_interval);
+  }
+  path_state.current_interval_index = interval_index;
+  if (flight.scattered) {
+    const bool absorbed = spectral_response_is_zero(flight.sample.weight);
+    terminal_type = absorbed ? kUPBPMediumAbsorb : kUPBPMediumScatter;
+    interval.flags |= absorbed ? GPUUPBPIntervalFlags::Absorb : GPUUPBPIntervalFlags::Scatter;
+    if (absorbed == false) {
+      medium_sample.pos = medium_position_before_surface(flight.sample.pos, surface_position, surface_normal, direction);
+      interval.end_position = medium_sample.pos;
+    }
+  } else {
+    terminal_type = kUPBPMediumEscape;
+    interval.flags |= GPUUPBPIntervalFlags::Escape;
+  }
+  return upbp_finish_interval(resources, from_camera, path_index, path_state, interval);
 }
 
 bool upbp_track_interval(GPUUPBPResources resources, bool from_camera, uint path_index, uint medium_index, bool subsurface, float3 origin, float3 direction, float maximum_distance,
@@ -369,7 +449,8 @@ bool upbp_track_interval(GPUUPBPResources resources, bool from_camera, uint path
   interval.start_position = origin;
   interval.end_position = origin;
   interval.medium_index = medium_index;
-  interval.flags = GPUUPBPIntervalFlags::Valid | (subsurface ? GPUUPBPIntervalFlags::Subsurface : 0u);
+  interval.density_owner_instance_index = kInvalidIndex;
+  interval.flags = GPUUPBPIntervalFlags::Valid | (subsurface ? (GPUUPBPIntervalFlags::Subsurface | GPUUPBPIntervalFlags::DensityConnectible) : 0u);
   interval.first_event_index = kInvalidIndex;
   interval.segment_index = path_state.current_segment_index;
   interval.next_interval_index = kInvalidIndex;
@@ -510,9 +591,9 @@ bool upbp_track_interval(GPUUPBPResources resources, bool from_camera, uint path
   }
 }
 
-bool upbp_track_homogeneous_interval(GPUUPBPResources resources, bool from_camera, uint path_index, uint material_index, SpectralResponse scattering, SpectralResponse absorption,
-  float3 origin, float3 direction, float maximum_distance, float3 surface_position, float3 surface_normal, SpectralQuery spect, inout uint seed, inout GPUUPBPPathState path_state,
-  out MediumSample medium_sample, out uint terminal_type) {
+bool upbp_track_homogeneous_interval(GPUUPBPResources resources, bool from_camera, uint path_index, uint material_index, uint owner_instance_index, SpectralResponse scattering, SpectralResponse absorption,
+  float phase_function_g, float3 origin, float3 direction, float maximum_distance, float3 surface_position, float3 surface_normal, SpectralQuery spect, inout uint seed,
+  inout GPUUPBPPathState path_state, out MediumSample medium_sample, out uint terminal_type) {
   medium_sample = (MediumSample)0;
   medium_sample.weight = spectral_response_make(spect, 1.0f);
   medium_sample.pos = origin + direction * maximum_distance;
@@ -529,9 +610,15 @@ bool upbp_track_homogeneous_interval(GPUUPBPResources resources, bool from_camer
   interval.start_position = origin;
   interval.end_position = origin;
   interval.medium_index = upbp_inline_medium_key(material_index);
+  interval.density_owner_instance_index = owner_instance_index;
   interval.flags = GPUUPBPIntervalFlags::Valid | GPUUPBPIntervalFlags::InlineMedium | GPUUPBPIntervalFlags::Subsurface;
   interval.inline_scattering = upbp_pack_spectral_response(scattering);
   interval.inline_absorption = upbp_pack_spectral_response(absorption);
+  interval.inline_phase_function_g = phase_function_g;
+  Material body_material = (Material)0;
+  if (try_load_material_full(material_index, body_material) && material_has_uniform_exponential_inline_subsurface(body_material)) {
+    interval.flags |= GPUUPBPIntervalFlags::DensityConnectible;
+  }
   interval.first_event_index = kInvalidIndex;
   interval.segment_index = path_state.current_segment_index;
   interval.next_interval_index = kInvalidIndex;

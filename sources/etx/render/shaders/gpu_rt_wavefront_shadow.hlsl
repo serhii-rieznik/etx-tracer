@@ -36,7 +36,7 @@
     uint tracking_failure = GPUUPBPConnectionTrackingFailure::None;
     const bool source_is_medium = (task.flags & GPUWavefrontPointConnectionTaskFlags::SourceMedium) != 0u;
     const bool tracking_valid = wavefront_upbp_trace_connection_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
-      task.inline_medium_flags, source_is_medium, seed, medium_seed, visible, connection, tracking_failure);
+      task.inline_medium_scattering, task.inline_medium_flags, task.subsurface_packing, source_is_medium, false, seed, medium_seed, visible, connection, tracking_failure);
     if (tracking_valid == false) {
       const GPUUPBPResources upbp_resources = upbp_load_resources(resources);
       const GPUUPBPPathState path_state = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, true, task.path_index));
@@ -46,11 +46,21 @@
     result_value.visible = tracking_valid && visible ? 1u : 0u;
     result_value.upbp_log_transport_pdf_forward_bits = asuint(connection.log_transport_pdf_forward);
     result_value.upbp_log_transport_pdf_reverse_bits = asuint(connection.log_transport_pdf_reverse);
+    result_value.upbp_log_beam_survival_forward_bits = asuint(connection.log_beam_survival_forward);
+    result_value.upbp_log_beam_survival_reverse_bits = asuint(connection.log_beam_survival_reverse);
+    result_value.upbp_has_exclusion_transport = connection.has_exclusion_transport ? 1u : 0u;
     result_value.upbp_tracking_valid = tracking_valid ? 1u : 0u;
   } else
 #endif
   {
-    result_value.visible = wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
+    float2 flight_pdf = float2(1.0f, 1.0f);
+    result_value.visible = wavefront_trace_transmittance_to_point_inline_medium(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
+                             task.inline_medium_scattering, task.inline_medium_flags, task.subsurface_packing,
+                             (task.subsurface_endpoint_flags & GPUWavefrontSubsurfaceEndpointFlags::SourceCollision) != 0u, false, seed, result_value.transmittance, flight_pdf)
+                             ? 1u
+                             : 0u;
+    const float mis_weight = 1.0f / (1.0f + dot(float2(asfloat(task.upbp_auxiliary0_bits), asfloat(task.upbp_auxiliary1_bits)), flight_pdf));
+    result_value.transmittance = spectral_response_mul(result_value.transmittance, mis_weight);
   }
   if (scene_path_mode_is_upbp() == false) {
     GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, task.path_index);
@@ -103,14 +113,15 @@
     uint tracking_failure = GPUUPBPConnectionTrackingFailure::None;
     const bool source_is_medium = upbp_vertex_is_medium(light_vertex);
     const bool tracking_valid = wavefront_upbp_trace_connection_to_point(task.shadow_origin, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
-      task.inline_medium_flags, source_is_medium, intersection_seed, medium_seed, visible, connection, tracking_failure);
+      task.inline_medium_scattering, task.inline_medium_flags, task.subsurface_packing, source_is_medium, upbp_vertex_is_medium(camera_vertex), intersection_seed, medium_seed,
+      visible, connection, tracking_failure);
     if (tracking_valid == false) {
       upbp_mark_failed_connection(upbp_resources, camera_vertex.global_path_index, 3u, camera_vertex.path_length + 1u, light_vertex.path_length + 1u, tracking_failure);
     }
     if (tracking_valid && visible) {
       const float mis_weight = upbp_bpt_connection_cross_technique_weight(upbp_resources.iteration, light_vertex, camera_vertex, asfloat(task.upbp_light_pdf_forward_bits),
         asfloat(task.upbp_light_pdf_reverse_bits), asfloat(task.upbp_camera_pdf_forward_bits), asfloat(task.upbp_camera_pdf_reverse_bits), connection.log_transport_pdf_forward,
-        connection.log_transport_pdf_reverse);
+        connection.log_transport_pdf_reverse, float2(connection.log_beam_survival_forward, connection.log_beam_survival_reverse), connection.has_exclusion_transport);
       if (mis_weight > 0.0f) {
         const SpectralResponse value = spectral_response_mul(spectral_response_mul(task.contribution, connection.weight), mis_weight);
         wavefront_film_add(task.pixel_index, wavefront_spectral_estimate(value, spect));
@@ -119,12 +130,12 @@
     return;
   }
 #endif
-  if ((task.inline_medium_flags & GPUWavefrontSubsurfaceFlags::InlineMedium) != 0u) {
-    visible = wavefront_trace_transmittance_to_point_inline_medium(task.shadow_origin, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
-      task.inline_medium_flags, seed, transmittance);
-  } else {
-    visible = wavefront_trace_transmittance_to_point(task.shadow_origin, task.shadow_target, spect, task.medium_index, seed, transmittance);
-  }
+  float2 flight_pdf = float2(1.0f, 1.0f);
+  visible = wavefront_trace_transmittance_to_point_inline_medium(task.shadow_origin, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
+    task.inline_medium_scattering, task.inline_medium_flags, task.subsurface_packing, (task.subsurface_endpoint_flags & GPUWavefrontSubsurfaceEndpointFlags::SourceCollision) != 0u,
+    (task.subsurface_endpoint_flags & GPUWavefrontSubsurfaceEndpointFlags::TargetCollision) != 0u, seed, transmittance, flight_pdf);
+  const float mis_weight = 1.0f / (1.0f + dot(float2(asfloat(task.upbp_camera_pdf_forward_bits), asfloat(task.upbp_light_pdf_forward_bits)), flight_pdf));
+  transmittance = spectral_response_mul(transmittance, mis_weight);
   if (visible) {
     SpectralResponse value = spectral_response_mul(task.contribution, transmittance);
     wavefront_film_add(task.pixel_index, wavefront_spectral_estimate(value, spect));
@@ -167,7 +178,7 @@
     uint tracking_failure = GPUUPBPConnectionTrackingFailure::None;
     const bool source_is_medium = (task.flags & GPUWavefrontPointConnectionTaskFlags::SourceMedium) != 0u;
     const bool tracking_valid = wavefront_upbp_trace_connection_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
-      task.inline_medium_flags, source_is_medium, seed, medium_seed, visible, connection, tracking_failure);
+      task.inline_medium_scattering, task.inline_medium_flags, task.subsurface_packing, source_is_medium, false, seed, medium_seed, visible, connection, tracking_failure);
     if (tracking_valid == false) {
       const GPUUPBPResources upbp_resources = upbp_load_resources(resources);
       const GPUUPBPPathState path_state = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, false, task.path_index));
@@ -177,11 +188,21 @@
     result_value.visible = tracking_valid && visible ? 1u : 0u;
     result_value.upbp_log_transport_pdf_forward_bits = asuint(connection.log_transport_pdf_forward);
     result_value.upbp_log_transport_pdf_reverse_bits = asuint(connection.log_transport_pdf_reverse);
+    result_value.upbp_log_beam_survival_forward_bits = asuint(connection.log_beam_survival_forward);
+    result_value.upbp_log_beam_survival_reverse_bits = asuint(connection.log_beam_survival_reverse);
+    result_value.upbp_has_exclusion_transport = connection.has_exclusion_transport ? 1u : 0u;
     result_value.upbp_tracking_valid = tracking_valid ? 1u : 0u;
   } else
 #endif
   {
-    result_value.visible = wavefront_trace_transmittance_to_point(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, seed, result_value.transmittance) ? 1u : 0u;
+    float2 flight_pdf = float2(1.0f, 1.0f);
+    result_value.visible = wavefront_trace_transmittance_to_point_inline_medium(task.shadow_ray.o, task.shadow_target, spect, task.medium_index, task.inline_medium_extinction,
+                             task.inline_medium_scattering, task.inline_medium_flags, task.subsurface_packing,
+                             (task.subsurface_endpoint_flags & GPUWavefrontSubsurfaceEndpointFlags::SourceCollision) != 0u, false, seed, result_value.transmittance, flight_pdf)
+                             ? 1u
+                             : 0u;
+    const float mis_weight = 1.0f / (1.0f + asfloat(task.upbp_auxiliary1_bits) * flight_pdf.y);
+    result_value.transmittance = spectral_response_mul(result_value.transmittance, mis_weight);
   }
   if (scene_path_mode_is_upbp() == false) {
     GPUWavefrontPathState state = wavefront_load_path_state(resources.light_state_buffer, task.path_index);

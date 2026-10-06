@@ -66,7 +66,7 @@ inline UPBPIterationParameters upbp_iteration_parameters(const UPBPOptions& opti
   result.mis.technique_factors[4u] = upbp_density_mis_factor(UPBPTechnique::BP2D, result.light_subpath_count, result.bp2d_radius);
   result.mis.technique_factors[5u] = upbp_density_mis_factor(UPBPTechnique::BB1D, result.bb1d_light_subpath_count, result.bb1d_radius);
   result.mis.photon_beams_long = false;
-  result.mis.camera_beams_long = true;
+  result.mis.camera_beams_long = false;
   return result;
 }
 

@@ -121,15 +121,14 @@ float upbp_log_density_competitor_factor(GPUUPBPIteration iteration, uint techni
   return kUPBPLogZero;
 }
 
-float upbp_log_recursive_local_volume_factor(GPUUPBPIteration iteration, GPUUPBPVertex vertex, GPUUPBPRecursiveWeights weights, float log_next_reverse_pdf_inverse,
-  float log_next_reverse_ratio, float sin_theta) {
+float upbp_log_recursive_local_volume_factor(GPUUPBPIteration iteration, GPUUPBPVertex vertex, GPUUPBPRecursiveWeights weights, float log_next_reverse_ratio, float sin_theta) {
   if ((upbp_vertex_is_medium(vertex) == false) || upbp_vertex_is_delta(vertex) || (upbp_vertex_is_density_connectible(vertex) == false)) {
     return kUPBPLogZero;
   }
   const bool from_light = upbp_vertex_from_light(vertex);
-  // UPBP uses short photon beams and long camera beams.
+  // Both beam families end at sampled medium events.
   const float log_forward_ray_factor = from_light ? weights.log_ray_sample_forward_ratio : log_next_reverse_ratio;
-  const float log_reverse_ray_factor = from_light ? log_next_reverse_pdf_inverse : weights.log_ray_sample_forward_pdf_inverse;
+  const float log_reverse_ray_factor = from_light ? log_next_reverse_ratio : weights.log_ray_sample_forward_ratio;
   float result = kUPBPLogZero;
   result = upbp_log_add(result, upbp_log_density_competitor_factor(iteration, GPUUPBPTechnique::PP3D, vertex, log_forward_ray_factor, log_reverse_ray_factor, sin_theta));
   result = upbp_log_add(result, upbp_log_density_competitor_factor(iteration, GPUUPBPTechnique::PB2D, vertex, log_forward_ray_factor, log_reverse_ray_factor, sin_theta));
@@ -175,11 +174,21 @@ float upbp_log_mis_reverse_term(float log_coefficient, float scattering_pdf_reve
                                                                                            : kUPBPLogZero;
 }
 
-float2 upbp_bpt_vertex_mis_terms(GPUUPBPIteration iteration, GPUUPBPVertex vertex, float log_reverse_ray_pdf, float sin_theta, float scattering_pdf_reverse,
-  float log_sampling_density) {
+float upbp_log_connection_short_beam_ray_factor(GPUUPBPVertex terminal, float log_transport_pdf, float log_beam_survival, bool has_exclusion_transport) {
+  if (upbp_vertex_is_medium(terminal) == false) {
+    return kUPBPLogZero;
+  }
+  if (has_exclusion_transport == false) {
+    return -terminal.log_medium_event_density;
+  }
+  return upbp_log_is_zero(log_beam_survival) ? kUPBPLogZero : log_beam_survival - log_transport_pdf - terminal.log_medium_event_density;
+}
+
+float2 upbp_bpt_vertex_mis_terms(GPUUPBPIteration iteration, GPUUPBPVertex vertex, float sin_theta, float scattering_pdf_reverse, float log_sampling_density,
+  float log_next_reverse_ratio) {
   const GPUUPBPRecursiveWeights weights = vertex.arrival_weights;
-  const float log_local_volume = upbp_log_recursive_local_volume_factor(iteration, vertex, weights, -log_reverse_ray_pdf,
-    upbp_vertex_is_medium(vertex) ? -vertex.log_medium_event_density : kUPBPLogZero, sin_theta);
+  const float log_local_volume =
+    upbp_log_recursive_local_volume_factor(iteration, vertex, weights, log_next_reverse_ratio, sin_theta);
   const float log_base = upbp_log_add(upbp_log_add(log_local_volume, upbp_previous_bpt_connectible(weights) ? weights.log_d_shared : kUPBPLogZero),
     upbp_log_mis_reverse_term(weights.log_d_bpt_base, scattering_pdf_reverse, weights.log_ray_sample_reverse_pdf_inverse));
   const float log_surface = upbp_log_product(upbp_log_positive(iteration.technique_factors[1u]),
@@ -198,7 +207,7 @@ UPBPGPUSurfaceMISWeights upbp_bpt_direct_hit_cross_technique_weights(GPUUPBPIter
 UPBPGPUSurfaceMISWeights upbp_point_merge_mis_weights(GPUUPBPIteration iteration, uint selected_technique, GPUUPBPRecursiveWeights light, GPUUPBPRecursiveWeights camera,
   GPUUPBPVertex context_vertex, float scattering_pdf_forward, float scattering_pdf_reverse, float sin_theta) {
   const float log_forward_ray_factor = light.log_ray_sample_forward_ratio;
-  const float log_reverse_ray_factor = camera.log_ray_sample_forward_pdf_inverse;
+  const float log_reverse_ray_factor = camera.log_ray_sample_forward_ratio;
   const float log_selected_factor = upbp_log_density_competitor_factor(iteration, selected_technique, context_vertex, log_forward_ray_factor, log_reverse_ray_factor, sin_theta);
   if (upbp_log_is_zero(log_selected_factor) || (scattering_pdf_forward <= 0.0f) || (scattering_pdf_reverse <= 0.0f)) {
     return (UPBPGPUSurfaceMISWeights)0;
@@ -271,6 +280,18 @@ float upbp_segment_sampling_log_density(GPUUPBPSegment segment, GPUUPBPVertex te
   return transport_density + (upbp_vertex_is_medium(terminal) ? terminal.log_medium_event_density : 0.0f);
 }
 
+float upbp_log_segment_short_beam_ray_factor(GPUUPBPSegment segment, GPUUPBPVertex terminal, bool reverse) {
+  if (upbp_vertex_is_medium(terminal) == false) {
+    return kUPBPLogZero;
+  }
+  if ((segment.flags & GPUUPBPSegmentFlags::HasExclusionInterval) == 0u) {
+    return upbp_log_short_beam_ray_factor(terminal);
+  }
+  const float log_survival = reverse ? segment.log_beam_survival_reverse : segment.log_beam_survival_forward;
+  const float log_transport_density = reverse ? segment.log_transport_pdf_reverse : segment.log_transport_pdf_forward;
+  return upbp_log_is_zero(log_survival) ? kUPBPLogZero : log_survival - log_transport_density - terminal.log_medium_event_density;
+}
+
 bool upbp_complete_recursive_arrival(GPUUPBPVertex source, GPUUPBPVertex target, GPUUPBPSegment segment, GPUUPBPIteration iteration, uint vertex_index,
   inout GPUUPBPRecursiveState state) {
   const float log_forward_pdf = upbp_segment_sampling_log_density(segment, target, false);
@@ -282,8 +303,7 @@ bool upbp_complete_recursive_arrival(GPUUPBPVertex source, GPUUPBPVertex target,
   }
 
   if (vertex_index > 1u) {
-    const float log_local_factor =
-      upbp_log_recursive_local_volume_factor(iteration, source, state.weights, -log_reverse_pdf, upbp_log_short_beam_ray_factor(source), state.last_sin_theta);
+    const float log_local_factor = upbp_log_recursive_local_volume_factor(iteration, source, state.weights, upbp_log_segment_short_beam_ray_factor(segment, source, true), state.last_sin_theta);
     state.weights.log_d_bpt_base = upbp_log_add(upbp_log_product(state.log_d_bpt_a, log_local_factor), state.log_d_bpt_b);
     state.weights.log_d_pde_base = upbp_log_add(upbp_log_product(state.log_d_bpt_a, log_local_factor), state.log_d_pde_b);
     state.weights.log_d_surface = upbp_log_add(upbp_log_product(state.log_d_bpt_a, upbp_log_surface_coefficient(iteration, source)), state.log_d_surface_b);
@@ -311,8 +331,8 @@ bool upbp_complete_recursive_arrival(GPUUPBPVertex source, GPUUPBPVertex target,
   state.weights.log_d_surface = upbp_log_is_zero(state.weights.log_d_surface) ? kUPBPLogZero : state.weights.log_d_surface - log_cosine;
   state.weights.log_ray_sample_forward_pdf_inverse = -log_forward_pdf;
   state.weights.log_ray_sample_reverse_pdf_inverse = -log_reverse_pdf;
-  state.weights.log_ray_sample_forward_ratio = upbp_log_short_beam_ray_factor(target);
-  state.weights.log_ray_sample_reverse_ratio = upbp_log_short_beam_ray_factor(source);
+  state.weights.log_ray_sample_forward_ratio = upbp_log_segment_short_beam_ray_factor(segment, target, false);
+  state.weights.log_ray_sample_reverse_ratio = upbp_log_segment_short_beam_ray_factor(segment, source, true);
   if (upbp_recursive_weights_finite(state.weights) == false) {
     state.failure = GPUUPBPRecursiveFailure::NonFiniteArrival;
     state.failure_vertex_index = vertex_index;
@@ -378,7 +398,8 @@ bool upbp_prepare_recursive_departure(GPUUPBPVertex vertex, GPUUPBPIteration ite
 }
 
 UPBPGPUSurfaceMISWeights upbp_bpt_nee_cross_technique_weights(GPUUPBPIteration iteration, GPUUPBPVertex camera_vertex, float3 direction_to_light, float w_light,
-  float emission_to_direct_ratio, float scattering_pdf_reverse, float connection_log_transport_pdf_forward, float connection_log_transport_pdf_reverse) {
+  float emission_to_direct_ratio, float scattering_pdf_reverse, float connection_log_transport_pdf_forward, float connection_log_transport_pdf_reverse,
+  float connection_log_beam_survival_reverse, bool connection_has_exclusion_transport) {
   if ((iteration.technique_mask & GPUUPBPTechnique::BPT) == 0u) {
     return (UPBPGPUSurfaceMISWeights)0;
   }
@@ -395,20 +416,25 @@ UPBPGPUSurfaceMISWeights upbp_bpt_nee_cross_technique_weights(GPUUPBPIteration i
     return (UPBPGPUSurfaceMISWeights)0;
   }
   const float sin_theta = upbp_medium_phase_sine(camera_vertex, direction_to_light);
+  const float log_reverse_ratio = upbp_log_connection_short_beam_ray_factor(camera_vertex, connection_log_transport_pdf_reverse, connection_log_beam_survival_reverse,
+    connection_has_exclusion_transport);
   const float2 camera_terms =
-    upbp_bpt_vertex_mis_terms(iteration, camera_vertex, log_reverse_ray_pdf, sin_theta, scattering_pdf_reverse, log(emission_to_direct_ratio) + log_reverse_ray_pdf);
+    upbp_bpt_vertex_mis_terms(iteration, camera_vertex, sin_theta, scattering_pdf_reverse, log(emission_to_direct_ratio) + log_reverse_ray_pdf, log_reverse_ratio);
   return upbp_surface_mis_weights(upbp_log_add(0.0f, upbp_log_add(log_w_light, camera_terms.x)), camera_terms.y, false);
 }
 
 float upbp_bpt_nee_cross_technique_weight(GPUUPBPIteration iteration, GPUUPBPVertex camera_vertex, float3 direction_to_light, float w_light, float emission_to_direct_ratio,
-  float scattering_pdf_reverse, float connection_log_transport_pdf_forward, float connection_log_transport_pdf_reverse) {
+  float scattering_pdf_reverse, float connection_log_transport_pdf_forward, float connection_log_transport_pdf_reverse, float connection_log_beam_survival_reverse,
+  bool connection_has_exclusion_transport) {
   return upbp_surface_mis_weight(upbp_bpt_nee_cross_technique_weights(iteration, camera_vertex, direction_to_light, w_light, emission_to_direct_ratio, scattering_pdf_reverse,
-                                   connection_log_transport_pdf_forward, connection_log_transport_pdf_reverse),
+                                   connection_log_transport_pdf_forward, connection_log_transport_pdf_reverse, connection_log_beam_survival_reverse,
+                                   connection_has_exclusion_transport),
     0.0f);
 }
 
 UPBPGPUSurfaceMISWeights upbp_bpt_light_tracing_cross_technique_weights(GPUUPBPIteration iteration, GPUUPBPVertex light_vertex, float3 direction_to_camera,
-  float camera_area_density, float scattering_pdf_reverse, float connection_log_transport_pdf_reverse) {
+  float camera_area_density, float scattering_pdf_reverse, float connection_log_transport_pdf_reverse, float connection_log_beam_survival_reverse,
+  bool connection_has_exclusion_transport) {
   if ((iteration.technique_mask & GPUUPBPTechnique::BPT) == 0u) {
     return (UPBPGPUSurfaceMISWeights)0;
   }
@@ -424,15 +450,18 @@ UPBPGPUSurfaceMISWeights upbp_bpt_light_tracing_cross_technique_weights(GPUUPBPI
     return (UPBPGPUSurfaceMISWeights)0;
   }
   const float sin_theta = upbp_medium_phase_sine(light_vertex, direction_to_camera);
+  const float log_reverse_ratio = upbp_log_connection_short_beam_ray_factor(light_vertex, connection_log_transport_pdf_reverse, connection_log_beam_survival_reverse,
+    connection_has_exclusion_transport);
   const float2 light_terms =
-    upbp_bpt_vertex_mis_terms(iteration, light_vertex, log_reverse_ray_pdf, sin_theta, scattering_pdf_reverse, log(camera_area_density) + log_reverse_ray_pdf);
+    upbp_bpt_vertex_mis_terms(iteration, light_vertex, sin_theta, scattering_pdf_reverse, log(camera_area_density) + log_reverse_ray_pdf, log_reverse_ratio);
   return upbp_surface_mis_weights(upbp_log_add(0.0f, light_terms.x), light_terms.y, false);
 }
 
 float upbp_bpt_light_tracing_cross_technique_weight(GPUUPBPIteration iteration, GPUUPBPVertex light_vertex, float3 direction_to_camera, float camera_area_density,
-  float scattering_pdf_reverse, float connection_log_transport_pdf_reverse) {
+  float scattering_pdf_reverse, float connection_log_transport_pdf_reverse, float connection_log_beam_survival_reverse, bool connection_has_exclusion_transport) {
   return upbp_surface_mis_weight(
-    upbp_bpt_light_tracing_cross_technique_weights(iteration, light_vertex, direction_to_camera, camera_area_density, scattering_pdf_reverse, connection_log_transport_pdf_reverse),
+    upbp_bpt_light_tracing_cross_technique_weights(iteration, light_vertex, direction_to_camera, camera_area_density, scattering_pdf_reverse, connection_log_transport_pdf_reverse,
+      connection_log_beam_survival_reverse, connection_has_exclusion_transport),
     0.0f);
 }
 
@@ -457,7 +486,7 @@ float upbp_log_connection_sampling_density(GPUUPBPVertex source, GPUUPBPVertex t
 
 UPBPGPUSurfaceMISWeights upbp_bpt_connection_cross_technique_weights(GPUUPBPIteration iteration, GPUUPBPVertex light_vertex, GPUUPBPVertex camera_vertex,
   float light_scattering_pdf_forward, float light_scattering_pdf_reverse, float camera_scattering_pdf_forward, float camera_scattering_pdf_reverse,
-  float connection_log_transport_pdf_forward, float connection_log_transport_pdf_reverse) {
+  float connection_log_transport_pdf_forward, float connection_log_transport_pdf_reverse, float2 connection_log_beam_survival, bool connection_has_exclusion_transport) {
   if ((iteration.technique_mask & GPUUPBPTechnique::BPT) == 0u) {
     return (UPBPGPUSurfaceMISWeights)0;
   }
@@ -479,17 +508,23 @@ UPBPGPUSurfaceMISWeights upbp_bpt_connection_cross_technique_weights(GPUUPBPIter
   const float3 light_to_camera_direction = normalize(camera_vertex.position - light_vertex.position);
   const float log_camera_to_light_density = upbp_log_connection_sampling_density(camera_vertex, light_vertex, camera_scattering_pdf_forward, connection_log_transport_pdf_reverse);
   const float log_light_to_camera_density = upbp_log_connection_sampling_density(light_vertex, camera_vertex, light_scattering_pdf_forward, connection_log_transport_pdf_forward);
-  const float2 light_terms = upbp_bpt_vertex_mis_terms(iteration, light_vertex, log_light_reverse_ray_pdf, upbp_medium_phase_sine(light_vertex, light_to_camera_direction),
-    light_scattering_pdf_reverse, log_camera_to_light_density);
-  const float2 camera_terms = upbp_bpt_vertex_mis_terms(iteration, camera_vertex, log_camera_reverse_ray_pdf, upbp_medium_phase_sine(camera_vertex, -light_to_camera_direction),
-    camera_scattering_pdf_reverse, log_light_to_camera_density);
+  const float log_light_reverse_ratio = upbp_log_connection_short_beam_ray_factor(light_vertex, connection_log_transport_pdf_reverse, connection_log_beam_survival.y,
+    connection_has_exclusion_transport);
+  const float log_camera_reverse_ratio = upbp_log_connection_short_beam_ray_factor(camera_vertex, connection_log_transport_pdf_forward, connection_log_beam_survival.x,
+    connection_has_exclusion_transport);
+  const float2 light_terms =
+    upbp_bpt_vertex_mis_terms(iteration, light_vertex, upbp_medium_phase_sine(light_vertex, light_to_camera_direction), light_scattering_pdf_reverse, log_camera_to_light_density,
+      log_light_reverse_ratio);
+  const float2 camera_terms = upbp_bpt_vertex_mis_terms(iteration, camera_vertex, upbp_medium_phase_sine(camera_vertex, -light_to_camera_direction), camera_scattering_pdf_reverse,
+    log_light_to_camera_density, log_camera_reverse_ratio);
   return upbp_surface_mis_weights(upbp_log_add(0.0f, upbp_log_add(light_terms.x, camera_terms.x)), upbp_log_add(light_terms.y, camera_terms.y), false);
 }
 
 float upbp_bpt_connection_cross_technique_weight(GPUUPBPIteration iteration, GPUUPBPVertex light_vertex, GPUUPBPVertex camera_vertex, float light_scattering_pdf_forward,
   float light_scattering_pdf_reverse, float camera_scattering_pdf_forward, float camera_scattering_pdf_reverse, float connection_log_transport_pdf_forward,
-  float connection_log_transport_pdf_reverse) {
+  float connection_log_transport_pdf_reverse, float2 connection_log_beam_survival, bool connection_has_exclusion_transport) {
   return upbp_surface_mis_weight(upbp_bpt_connection_cross_technique_weights(iteration, light_vertex, camera_vertex, light_scattering_pdf_forward, light_scattering_pdf_reverse,
-                                   camera_scattering_pdf_forward, camera_scattering_pdf_reverse, connection_log_transport_pdf_forward, connection_log_transport_pdf_reverse),
+                                   camera_scattering_pdf_forward, camera_scattering_pdf_reverse, connection_log_transport_pdf_forward, connection_log_transport_pdf_reverse,
+                                   connection_log_beam_survival, connection_has_exclusion_transport),
     0.0f);
 }

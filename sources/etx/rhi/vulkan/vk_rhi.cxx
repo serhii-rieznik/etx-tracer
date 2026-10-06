@@ -570,8 +570,9 @@ RHIResult VKContext::wait_idle() {
     return RHIResult::InvalidHandle;
   }
 
-  if (etx_vk_call(vkDeviceWaitIdle(_impl->device.get_vk_device())) != VK_SUCCESS) {
-    return RHIResult::ValidationError;
+  const VkResult wait_result = etx_vk_call(vkDeviceWaitIdle(_impl->device.get_vk_device()));
+  if (wait_result != VK_SUCCESS) {
+    return convert_vk_result_to_rhi(wait_result);
   }
 
   std::vector<RHICommandBuffer> command_buffer_handles = _impl->command_buffer_pool.get_all_keys();

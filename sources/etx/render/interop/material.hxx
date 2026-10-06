@@ -118,3 +118,16 @@ struct ETX_ALIGNED Material {
 ETX_SHARED_INLINE uint32_t material_boundary_class(uint32_t material_class, uint32_t subsurface_class) {
   return ((material_class == MaterialClass::Plastic) && (subsurface_class != SubsurfaceMaterial::Disabled)) ? MaterialClass::Dielectric : material_class;
 }
+
+ETX_SHARED_INLINE bool material_has_uniform_exponential_inline_subsurface(ETX_IN(Material, material)) {
+  return (material.subsurface_cls != SubsurfaceMaterial::Disabled) && (material.subsurface_packing == 0.0f) && (material.int_medium == kInvalidIndex) &&
+         ((material.cls == MaterialClass::Diffuse) || (material.cls == MaterialClass::Plastic));
+}
+
+ETX_SHARED_INLINE bool material_has_diffuse_subsurface_boundary(ETX_IN(Material, material)) {
+  return (material.cls == MaterialClass::Diffuse) && (material.subsurface_cls != SubsurfaceMaterial::Disabled) && (material.subsurface_path == SubsurfaceMaterial::DiffusePath);
+}
+
+ETX_SHARED_INLINE bool material_has_incident_subsurface_boundary(ETX_IN(Material, material)) {
+  return (material.cls == MaterialClass::Diffuse) && (material.subsurface_cls != SubsurfaceMaterial::Disabled) && (material.subsurface_path == SubsurfaceMaterial::RefractedPath);
+}

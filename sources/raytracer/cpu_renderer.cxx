@@ -22,6 +22,9 @@ void CPURaytracingRenderer::init(RHIContext& ctx, SceneRepresentation& scene) {
 }
 
 void CPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, const FrameData& frame_data) {
+  if (_recovery_blocked) {
+    return;
+  }
   const uint64_t previous_scene_revision = _integrator_thread.scene_revision();
   const SceneUpdateScope scene_update_scope = consume_scene_update_request();
   if (scene_update_scope != SceneUpdateScope::None) {
@@ -79,6 +82,7 @@ void CPURaytracingRenderer::cleanup(RHIContext& ctx) {
   _last_uploaded_view_layer = kInvalidIndex;
   _display_output_valid = false;
   _runtime_failure_reason.clear();
+  _recovery_blocked = false;
 }
 
 bool CPURaytracingRenderer::is_running() const {
@@ -90,22 +94,25 @@ RendererStatus CPURaytracingRenderer::status() const {
     .mode = RendererMode::CPURaytracing,
   };
   result.output_stale = display_texture().valid() && (_last_uploaded_completed_iterations == 0u);
+  if (_recovery_blocked) {
+    result.state = RendererStatusState::Failed;
+    result.message = _runtime_failure_reason;
+    result.diagnostic = {RendererDiagnosticSeverity::Error, RendererRecovery::RestartApplication};
+    return result;
+  }
   const char* scene_failure_reason = _integrator_thread.scene_failure_reason();
   if (scene_failure_reason != nullptr) {
     result.state = RendererStatusState::Failed;
     result.message = scene_failure_reason;
+    result.diagnostic = {RendererDiagnosticSeverity::Error, RendererRecovery::Restart};
     return result;
   }
   const Integrator* integrator = current_integrator();
-  if ((integrator != nullptr) && (integrator->subsurface_failure_reason() != nullptr)) {
-    result.state = RendererStatusState::Failed;
-    result.message = integrator->subsurface_failure_reason();
-    return result;
-  }
   if ((integrator == nullptr) || ((integrator->can_run() == false) && (integrator->failed() == false))) {
     if (_runtime_failure_reason.empty() == false) {
       result.state = RendererStatusState::Failed;
       result.message = _runtime_failure_reason;
+      result.diagnostic = {RendererDiagnosticSeverity::Error, _recovery_blocked ? RendererRecovery::RestartApplication : RendererRecovery::Restart};
     }
     return result;
   }
@@ -129,12 +136,18 @@ RendererStatus CPURaytracingRenderer::status() const {
   result.total_path_count = path_progress.total_path_count;
 
   if (_runtime_failure_reason.empty() == false) {
-    result.state = RendererStatusState::Failed;
+    const bool configuration_blocked = _runtime_failure_reason == kThermalCameraBindingFailure;
+    result.state = configuration_blocked ? RendererStatusState::Blocked : RendererStatusState::Failed;
     result.message = _runtime_failure_reason;
+    result.diagnostic = {configuration_blocked ? RendererDiagnosticSeverity::Warning : RendererDiagnosticSeverity::Error,
+      configuration_blocked ? RendererRecovery::ChangeSettings : (_recovery_blocked ? RendererRecovery::RestartApplication : RendererRecovery::Restart)};
     result.completed_units = _last_uploaded_completed_iterations;
   } else if (integrator->failed()) {
-    result.state = RendererStatusState::Failed;
+    const bool configuration_blocked = integrator->can_run() == false;
+    result.state = configuration_blocked ? RendererStatusState::Blocked : RendererStatusState::Failed;
     result.message = integrator->failure_reason();
+    result.diagnostic = {configuration_blocked ? RendererDiagnosticSeverity::Warning : RendererDiagnosticSeverity::Error,
+      configuration_blocked ? RendererRecovery::ChangeSettings : RendererRecovery::Restart};
   } else {
     switch (integrator->state()) {
       case Integrator::State::Running:
@@ -154,7 +167,7 @@ RendererStatus CPURaytracingRenderer::status() const {
     result.elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - _render_started_at).count();
   }
   result.elapsed_available = _render_timing_active || (result.elapsed_seconds > 0.0);
-  if (result.state != RendererStatusState::Failed) {
+  if ((result.state != RendererStatusState::Failed) && (result.state != RendererStatusState::Blocked)) {
     if ((result.elapsed_seconds > 0.0) && (result.completed_units > 0u) && (result.completed_units < result.total_units)) {
       const double seconds_per_sample = result.elapsed_seconds / static_cast<double>(result.completed_units);
       result.remaining_seconds = seconds_per_sample * static_cast<double>(result.total_units - result.completed_units);
@@ -169,6 +182,9 @@ RendererStatus CPURaytracingRenderer::status() const {
 
 RendererControlState CPURaytracingRenderer::control_state() const {
   const Integrator* integrator = current_integrator();
+  if ((integrator != nullptr) && (status().diagnostic.recovery == RendererRecovery::Restart)) {
+    return {.can_restart = true};
+  }
   if ((integrator == nullptr) || (integrator->can_run() == false) || (_runtime_failure_reason.empty() == false) || (_integrator_thread.scene_failure_reason() != nullptr)) {
     return {};
   }
@@ -185,6 +201,7 @@ RendererControlState CPURaytracingRenderer::control_state() const {
       break;
     default:
       result.can_run = true;
+      result.can_restart = true;
       break;
   }
   return result;
@@ -229,6 +246,31 @@ void CPURaytracingRenderer::restart() {
   if ((_integrator_thread.scene_changes_pending() == false) && (_integrator_thread.running() == false)) {
     _integrator_thread.run();
   }
+}
+
+bool CPURaytracingRenderer::recover(RHIContext& ctx, SceneRepresentation& scene) {
+  if ((control_state().can_restart == false) || (scene.valid() == false)) {
+    return false;
+  }
+  stop();
+  const RHIResult wait_result = ctx.wait_idle();
+  if (wait_result != RHIResult::Success) {
+    _runtime_failure_reason =
+      "CPU renderer restart could not synchronize its display resources (" + std::to_string(static_cast<uint32_t>(wait_result)) + "). Restart the application.";
+    _recovery_blocked = true;
+    log::error("%s", _runtime_failure_reason.c_str());
+    return false;
+  }
+  _runtime_failure_reason.clear();
+  _recovery_blocked = false;
+  set_output_dimensions(ctx, scene.camera().film_size);
+  if (_runtime_failure_reason.empty() == false) {
+    return false;
+  }
+  _integrator_thread.reset_scene_hashes();
+  restart();
+  const RendererStatusState state = status().state;
+  return (state != RendererStatusState::Failed) && (state != RendererStatusState::Blocked);
 }
 
 void CPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
@@ -367,6 +409,9 @@ bool CPURaytracingRenderer::update_image(RHIContext& ctx, RHICommandBuffer cmd, 
 }
 
 void CPURaytracingRenderer::set_output_dimensions(RHIContext& ctx, const uint2& dim) {
+  if (_recovery_blocked) {
+    return;
+  }
   const uint2 output_dimensions = {max(1u, dim.x), max(1u, dim.y)};
   const bool output_state_matches_context = ctx.valid() ? _output_texture.valid() : (_output_texture.valid() == false);
   if ((_output_dimensions == output_dimensions) && output_state_matches_context) {

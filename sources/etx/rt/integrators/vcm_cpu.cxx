@@ -132,9 +132,15 @@ struct CPUVCMImpl {
       LightStepResult step_result = {};
       step_result.continue_tracing = (state.flags & VCMPathState::Valid) == VCMPathState::Valid;
 
+      BoundaryRayTraversal traversal = {};
+      traversal.reset(state.ray);
       uint32_t path_begin = static_cast<uint32_t>(local_vertices.size());
       while (step_result.continue_tracing && running()) {
-        step_result = vcm_light_step(scene, camera, vcm_iteration, vcm_options, static_cast<uint32_t>(i), state, rt);
+        const uint32_t previous_depth = state.total_path_depth;
+        step_result = vcm_light_step(scene, camera, vcm_iteration, vcm_options, static_cast<uint32_t>(i), state, rt, traversal);
+        if (state.total_path_depth != previous_depth) {
+          traversal.reset(state.ray);
+        }
         if (step_result.add_vertex) {
           local_vertices.emplace_back(step_result.vertex_to_add);
         }
@@ -173,9 +179,15 @@ struct CPUVCMImpl {
       const auto& light_path = _light_paths[pi];
 
       VCMPathState state = vcm_generate_camera_state(pixel, pi, scene, camera, vcm_iteration, light_path.spect);
+      BoundaryRayTraversal traversal = {};
+      traversal.reset(state.ray);
       const VCMIteration& measurement = vcm_iteration;
       while (running()) {
-        bool continue_tracing = vcm_camera_step(scene, measurement, vcm_options, light_paths, light_vertices, state, rt, _current_grid.data);
+        const uint32_t previous_depth = state.total_path_depth;
+        bool continue_tracing = vcm_camera_step(scene, measurement, vcm_options, light_paths, light_vertices, state, rt, _current_grid.data, traversal);
+        if (state.total_path_depth != previous_depth) {
+          traversal.reset(state.ray);
+        }
 
         if (continue_tracing == false) {
           break;

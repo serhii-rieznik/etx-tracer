@@ -116,6 +116,9 @@
     #message { min-height: 36px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
     #message[data-tone="success"] { color: var(--success); }
     #message[data-tone="error"] { color: var(--danger); }
+    #renderer-diagnostic { margin-top: 14px; font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #renderer-diagnostic[data-tone="warning"] { color: var(--warning); }
+    #renderer-diagnostic[data-tone="error"] { color: var(--danger); }
     .image-head { min-height: 36px; display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
     .image-head strong { font-size: 13px; font-weight: 650; }
     .image-head button { min-height: 32px; margin-left: auto; font-size: 12px; }
@@ -183,6 +186,7 @@
         <dt>Samples</dt><dd id="samples">—</dd>
         <dt>Elapsed</dt><dd id="elapsed">—</dd>
       </dl>
+      <div id="renderer-diagnostic" class="hidden" role="status" aria-live="polite"></div>
       <div id="message" role="status" aria-live="polite"></div>
     </aside>
     <section aria-label="Rendered image">
@@ -538,9 +542,20 @@
       byId('finish').disabled = !serverConnected || !state.controls.can_finish || commandPending('finish');
       byId('stop').disabled = !serverConnected || !state.controls.can_stop || commandPending('stop');
       byId('restart').disabled = !serverConnected || !state.controls.can_restart || commandPending('restart');
+      byId('restart').textContent = state.diagnostic?.recovery === 'restart' ? 'Retry and restart' : 'Restart';
       byId('denoise').disabled = !serverConnected || !state.can_denoise || commandPending('denoise');
-      if ((state.run_state === 'failed') && state.runtime.failure_reason && !pendingCommands.size && !submittingCommands.size) {
-        setMessage(state.runtime.failure_reason, 'error');
+      const diagnostic = state.diagnostic;
+      const diagnosticElement = byId('renderer-diagnostic');
+      const diagnosticVisible = diagnostic && diagnostic.severity !== 'none' && diagnostic.message;
+      diagnosticElement.classList.toggle('hidden', !diagnosticVisible);
+      if (diagnosticVisible) {
+        const recovery = diagnostic.recovery === 'change_settings' ? '\nChoose compatible renderer or scene settings.' :
+          diagnostic.recovery === 'restart_application' ? '\nRestart the application to recover.' : '';
+        const text = diagnostic.message + recovery;
+        if (diagnosticElement.textContent !== text) diagnosticElement.textContent = text;
+        diagnosticElement.dataset.tone = diagnostic.severity;
+      } else if (diagnosticElement.textContent) {
+        diagnosticElement.textContent = '';
       }
 
       if (state.scene_file !== currentSceneFile) {
