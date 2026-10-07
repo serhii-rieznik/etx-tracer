@@ -94,9 +94,39 @@ bool prepare_thermal_medium(SceneData& data, Material& material, uint32_t materi
     log::error("Thermal material %u has an invalid internal medium", material_index);
     return false;
   }
+  SceneData::ThermalMediumResources& resources = data.thermal_medium_resources[material_index];
+  uint32_t absorption_index = data.mediums_vector[material.int_medium].absorption_index;
+  const auto author = data.spectrum_sources.find(material.int_ior.k_index);
+  const bool bulk_profile = (material.cls == MaterialClass::Dielectric) && (author != data.spectrum_sources.end()) && (author->second.temperature_profile != nullptr) &&
+                            (author->second.temperature_profile->cls == SpectralDistribution::Dielectric);
+  if (bulk_profile) {
+    const SpectrumSource& source = author->second;
+    SpectralDistribution eta, extinction;
+    if (source.temperature_profile->evaluate(source.temperature_profile_enabled ? material.temperature_kelvin : 0.0f, source.temperature_profile_hold_endpoints, eta, extinction) ==
+        false) {
+      return false;
+    }
+    float2 samples[WavelengthCount];
+    for (uint32_t i = 0u; i < WavelengthCount; ++i) {
+      const float wavelength = kShortestWavelength + float(i);
+      samples[i] = {wavelength, extinction.spectral_entries[i].power * source.strength};
+      if (std::isfinite(samples[i].y) == false) {
+        log::error("Material %u optical absorption exceeds the supported numeric range", material_index);
+        return false;
+      }
+    }
+    const SpectralDistribution absorption = SpectralDistribution::from_samples(samples, WavelengthCount);
+    if (resources.absorption_spectrum_index == kInvalidIndex) {
+      resources.absorption_spectrum_index = data.add_spectrum(absorption);
+    } else {
+      data.spectrum_values[resources.absorption_spectrum_index] = absorption;
+    }
+    absorption_index = resources.absorption_spectrum_index;
+  }
   for (uint32_t i = 0u; i < data.thermal_medium_states.size(); ++i) {
     const SceneData::ThermalMediumState& state = data.thermal_medium_states[i];
-    if ((state.base_medium_index == material.int_medium) && (state.temperature_kelvin == material.temperature_kelvin)) {
+    if ((state.base_medium_index == material.int_medium) && (state.temperature_kelvin == material.temperature_kelvin) &&
+        (state.absorption_spectrum_index == (bulk_profile ? absorption_index : kInvalidIndex))) {
       material.thermal_int_medium_index = uint32_t(data.mediums_vector.size()) + i;
       return true;
     }
@@ -111,13 +141,12 @@ bool prepare_thermal_medium(SceneData& data, Material& material, uint32_t materi
     log::error("Thermal material %u has an unsupported medium configuration", material_index);
     return false;
   }
-  const SpectralDistribution& absorption = data.spectrum_values[medium.absorption_index];
+  const SpectralDistribution& absorption = data.spectrum_values[absorption_index];
   const SpectralDistribution& scattering = data.spectrum_values[medium.scattering_index];
   uint64_t hash = etx_hash64(&material.temperature_kelvin, sizeof(material.temperature_kelvin));
   hash = etx_hash64_continue(&material.int_medium, sizeof(material.int_medium), hash);
   hash = etx_hash64_continue(&absorption, sizeof(absorption), hash);
   hash = etx_hash64_continue(&scattering, sizeof(scattering), hash);
-  SceneData::ThermalMediumResources& resources = data.thermal_medium_resources[material_index];
   if ((resources.source_spectrum_index == kInvalidIndex) || (resources.input_hash != hash)) {
     float2 samples[WavelengthCount] = {};
     for (uint32_t i = 0u; i < WavelengthCount; ++i) {
@@ -147,8 +176,21 @@ bool prepare_thermal_medium(SceneData& data, Material& material, uint32_t materi
     }
     resources.input_hash = hash;
   }
+  uint32_t emission_flags = medium.emission_flags;
+  if (bulk_profile && ((emission_flags & Medium::EmissionEnabled) != 0u)) {
+    emission_flags &= ~Medium::EmissionRequiresBoundedRegion;
+    const SpectralDistribution& emission = data.spectrum_values[medium.emission_index];
+    const SpectralDistribution& effective_absorption = data.spectrum_values[absorption_index];
+    for (uint32_t i = 0u; i < WavelengthCount; ++i) {
+      const SpectralQuery spect = {kShortestWavelength + float(i), SpectralFlags::Spectral};
+      if ((emission(spect).value > 0.0f) && (effective_absorption(spect).value == 0.0f)) {
+        emission_flags |= Medium::EmissionRequiresBoundedRegion;
+      }
+    }
+  }
   material.thermal_int_medium_index = uint32_t(data.mediums_vector.size() + data.thermal_medium_states.size());
-  data.thermal_medium_states.push_back({material.int_medium, resources.source_spectrum_index, material.temperature_kelvin});
+  data.thermal_medium_states.push_back(
+    {material.int_medium, resources.source_spectrum_index, material.temperature_kelvin, bulk_profile ? absorption_index : kInvalidIndex, emission_flags});
   return true;
 }
 
@@ -202,8 +244,9 @@ std::vector<ThermalQuadratureNode> thermal_quadrature_rule(uint32_t count) {
   return result;
 }
 
-bool prepare_thermal_conductor(SceneData& data, Material& material, SceneData::ThermalSurfaceResources& resources, uint64_t input_hash) {
-  if ((material.cls != MaterialClass::Conductor) || (max(material.roughness.value.x, material.roughness.value.y) <= kDeltaAlphaTreshold)) {
+bool prepare_thermal_surface_reflection(SceneData& data, Material& material, SceneData::ThermalSurfaceResources& resources, uint64_t input_hash) {
+  if (((material.cls != MaterialClass::Conductor) && (material.cls != MaterialClass::Plastic)) ||
+      ((material.cls == MaterialClass::Conductor) && (max(material.roughness.value.x, material.roughness.value.y) <= kDeltaAlphaTreshold))) {
     return true;
   }
   if ((resources.conductor_image_index != kInvalidIndex) && (resources.scattering_input_hash == input_hash)) {
@@ -225,11 +268,21 @@ bool prepare_thermal_conductor(SceneData& data, Material& material, SceneData::T
   const BSDFResourceContext context = make_bsdf_resource_cpu_context(scene);
   std::array<::RefractiveIndexSample, WavelengthCount> external_iors;
   std::array<::RefractiveIndexSample, WavelengthCount> internal_iors;
+  bool uniform_iors = true;
   for (uint32_t wavelength_index = 0u; wavelength_index < WavelengthCount; ++wavelength_index) {
     const ::SpectralQuery spect = {kShortestWavelength + float(wavelength_index), SpectralFlags::Spectral};
     external_iors[wavelength_index] = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, spect);
     internal_iors[wavelength_index] = bsdf_resource_evaluate_refractive_index(context, material.int_ior, spect);
+    const ::RefractiveIndexSample& int_ior = internal_iors[wavelength_index];
+    if ((material.cls == MaterialClass::Plastic) && ((std::isfinite(int_ior.eta.value) == false) || (int_ior.eta.value <= 0.0f) || (int_ior.k.value != 0.0f))) {
+      log::error("Thermal Plastic requires a lossless dielectric coating with real positive IOR; choose a dielectric IOR preset");
+      return false;
+    }
+    uniform_iors = uniform_iors && (external_iors[wavelength_index].eta.value == external_iors[0].eta.value) &&
+                   (external_iors[wavelength_index].k.value == external_iors[0].k.value) && (int_ior.eta.value == internal_iors[0].eta.value) &&
+                   (int_ior.k.value == internal_iors[0].k.value);
   }
+  const uint32_t ior_sample_count = uniform_iors ? 1u : WavelengthCount;
   const double alpha = bsdf_energy_compensated_scalar_roughness_from_value({material.roughness.value.x, material.roughness.value.y});
   const ::ThinfilmEval no_film = {};
   std::vector<float4> pixels(size_t(kThermalConductorDirectionCount) * WavelengthCount);
@@ -285,7 +338,7 @@ bool prepare_thermal_conductor(SceneData& data, Material& material, SceneData::T
               geometric_integral += weight;
               visible_probability += measure_weight * 2.0 * (mu + a * t) / (mu + g_i);
               const float fresnel_cosine = float((mu + a * t) / std::sqrt(1.0 + t * t));
-              for (uint32_t wavelength_index = 0u; wavelength_index < WavelengthCount; ++wavelength_index) {
+              for (uint32_t wavelength_index = 0u; wavelength_index < ior_sample_count; ++wavelength_index) {
                 const ::SpectralQuery spect = {kShortestWavelength + float(wavelength_index), SpectralFlags::Spectral};
                 integral[wavelength_index] +=
                   weight * bsdf_fresnel_calculate(spect, fresnel_cosine, external_iors[wavelength_index], internal_iors[wavelength_index], no_film).value;
@@ -294,7 +347,7 @@ bool prepare_thermal_conductor(SceneData& data, Material& material, SceneData::T
           }
         }
         double maximum_error = std::max(std::abs(geometric_integral - previous_geometry), std::abs(visible_probability - previous_visibility));
-        for (uint32_t wavelength_index = 0u; wavelength_index < WavelengthCount; ++wavelength_index) {
+        for (uint32_t wavelength_index = 0u; wavelength_index < ior_sample_count; ++wavelength_index) {
           if (std::isfinite(integral[wavelength_index]) == false) {
             log::error("Thermal conductor has non-finite directional scattering");
             failed[direction_index] = true;
@@ -316,7 +369,7 @@ bool prepare_thermal_conductor(SceneData& data, Material& material, SceneData::T
         return;
       }
       for (uint32_t wavelength_index = 0u; wavelength_index < WavelengthCount; ++wavelength_index) {
-        pixels[size_t(wavelength_index) * kThermalConductorDirectionCount + direction_index] = {float(integral[wavelength_index]), float(geometric_integral),
+        pixels[size_t(wavelength_index) * kThermalConductorDirectionCount + direction_index] = {float(integral[uniform_iors ? 0u : wavelength_index]), float(geometric_integral),
           float(visible_probability), 0.0f};
       }
     }
@@ -361,7 +414,7 @@ bool prepare_thermal_conductor(SceneData& data, Material& material, SceneData::T
 
 bool thermal_medium_binding_valid(const SceneData& data, uint32_t index) {
   if ((index != kInvalidIndex) && (data.transport_medium_index(index) == kInvalidIndex)) {
-    log::error("Medium %u has interiors at different temperatures; external and camera bindings require a distinct authored medium", index);
+    log::error("Medium %u has interiors at different temperatures or optical coefficients; external and camera bindings require a distinct authored medium", index);
     return false;
   }
   return true;
@@ -383,11 +436,17 @@ bool prepare_thermal_materials(SceneData& data, uint32_t camera_medium_index) {
       return false;
     }
     if (material.temperature_kelvin == 0.0f) {
+      const auto source = data.spectrum_sources.find(material.int_ior.k_index);
+      if ((material.cls == MaterialClass::Dielectric) && (source != data.spectrum_sources.end()) && (source->second.temperature_profile != nullptr) &&
+          (source->second.temperature_profile->cls == SpectralDistribution::Dielectric) && (prepare_thermal_medium(data, material, index) == false)) {
+        return false;
+      }
       continue;
     }
     if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Boundary)) {
       if ((material.subsurface_cls != SubsurfaceMaterial::Disabled) || (material.opacity != 1.0f) || bsdf_resource_thinfilm_enabled(material.thinfilm) ||
-          (material.normal_image_index != kInvalidIndex) || (material.reflectance.image_index != kInvalidIndex) || (material.scattering.image_index != kInvalidIndex)) {
+          (material.normal_image_index != kInvalidIndex) ||
+          (material.reflectance.image_index != kInvalidIndex) || (material.scattering.image_index != kInvalidIndex)) {
         log::error("Thermal material %u requires a lossless dielectric interface or medium boundary", index);
         return false;
       }
@@ -419,19 +478,19 @@ bool prepare_thermal_materials(SceneData& data, uint32_t camera_medium_index) {
       }
       continue;
     }
-    if (((material.cls != MaterialClass::Diffuse) && (material.cls != MaterialClass::Conductor)) || (material.subsurface_cls != SubsurfaceMaterial::Disabled) ||
-        (material.opacity != 1.0f) || (material.normal_image_index != kInvalidIndex) || (material.roughness.image_index != kInvalidIndex) ||
-        (material.scattering.image_index != kInvalidIndex) || (material.reflectance.image_index != kInvalidIndex) || bsdf_resource_thinfilm_enabled(material.thinfilm) ||
-        (bsdf_energy_compensated_roughness_isotropic({material.roughness.value.x, material.roughness.value.y}) == false)) {
+    if (((material.cls != MaterialClass::Diffuse) && (material.cls != MaterialClass::Conductor) && (material.cls != MaterialClass::Plastic)) ||
+        (material.subsurface_cls != SubsurfaceMaterial::Disabled) || (material.opacity != 1.0f) || (material.normal_image_index != kInvalidIndex) ||
+        (material.roughness.image_index != kInvalidIndex) || (material.scattering.image_index != kInvalidIndex) || (material.reflectance.image_index != kInvalidIndex) ||
+        bsdf_resource_thinfilm_enabled(material.thinfilm) || (bsdf_energy_compensated_roughness_isotropic({material.roughness.value.x, material.roughness.value.y}) == false)) {
       log::error("Material %u has no supported thermal surface model for its scattering configuration", index);
       return false;
     }
-    if ((material.cls == MaterialClass::Diffuse) && (material.scattering.spectrum_index < data.spectrum_values.size())) {
+    if (((material.cls == MaterialClass::Diffuse) || (material.cls == MaterialClass::Plastic)) && (material.scattering.spectrum_index < data.spectrum_values.size())) {
       const SpectralDistribution& albedo = data.spectrum_values[material.scattering.spectrum_index];
       for (uint32_t wavelength_index = 0u; wavelength_index < WavelengthCount; ++wavelength_index) {
         const float value = albedo({kShortestWavelength + float(wavelength_index), SpectralFlags::Spectral}).value;
         if ((std::isfinite(value) == false) || (value < 0.0f) || (value > 1.0f)) {
-          log::error("Thermal diffuse material %u requires finite spectral albedo in [0, 1]", index);
+          log::error("Thermal material %u requires finite diffuse-layer spectral albedo in [0, 1]", index);
           return false;
         }
       }
@@ -449,7 +508,7 @@ bool prepare_thermal_materials(SceneData& data, uint32_t camera_medium_index) {
     }
 
     SceneData::ThermalSurfaceResources& resources = data.thermal_surface_resources[index];
-    if (prepare_thermal_conductor(data, material, resources, scattering_input_hash) == false) {
+    if (prepare_thermal_surface_reflection(data, material, resources, scattering_input_hash) == false) {
       return false;
     }
 

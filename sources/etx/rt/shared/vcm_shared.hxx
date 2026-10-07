@@ -345,8 +345,8 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
   state.throughput *= bsdf_sample.weight;
   ETX_VALIDATE(state.throughput);
 
+  const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, intersection.instance_index);
   if (path_source == PathSource::Light) {
-    const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, intersection.instance_index);
     state.throughput *= fix_shading_normal(geo_normal, intersection.nrm, intersection.w_i, bsdf_sample.w_o);
   }
 
@@ -367,7 +367,7 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
     state.medium_index = bsdf_sample.medium_index;
   }
 
-  float cos_theta_bsdf = fabsf(dot(intersection.nrm, bsdf_sample.w_o));
+  float cos_theta_bsdf = fabsf(dot(geo_normal, bsdf_sample.w_o));
 
   if (bsdf_sample.is_delta()) {
     state.d_vc_base *= cos_theta_bsdf;
@@ -619,12 +619,13 @@ ETX_SHARED_INLINE bool vcm_handle_boundary_bsdf(const Scene& scene, const PathSo
   return true;
 }
 
-ETX_SHARED_INLINE void vcm_update_light_vcm(const Intersection& intersection, VCMPathState& state) {
+ETX_SHARED_INLINE void vcm_update_light_vcm(const Scene& scene, const Intersection& intersection, VCMPathState& state) {
   if ((state.total_path_depth > 0) || state.local_emitter()) {
     state.d_vcm *= sqr(state.path_distance + intersection.t);
   }
 
-  float cos_to_prev = fabsf(dot(intersection.nrm, -state.ray.d));
+  const float3 geo_normal = scene_triangle_world_geometric_normal(scene, scene.triangles[intersection.triangle_index], intersection.instance_index);
+  float cos_to_prev = fabsf(dot(geo_normal, -state.ray.d));
   state.d_vcm /= cos_to_prev;
   state.d_vc_base /= cos_to_prev;
   state.d_vm_base /= cos_to_prev;
@@ -671,6 +672,8 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
     reverse_pdf = bsdf::reverse_pdf(data, w_o, mat, state.sampler);
 
     const auto& tri = scene.triangles[isect->triangle_index];
+    const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, isect->instance_index);
+    scatter *= fix_shading_normal(geo_normal, isect->nrm, isect->w_i, w_o);
     origin = shading_pos(scene, tri, isect->barycentric, w_o, isect->instance_index);
   } else {
     const auto medium = vcm_phase_medium(scene, state);
@@ -692,7 +695,9 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
     return {};
   }
 
-  float camera_pdf = camera_sample.pdf_dir_out * (camera_at_medium ? 1.0f : fabsf(dot(isect->nrm, w_o))) / dist2;
+  const float camera_cosine =
+    camera_at_medium ? 1.0f : fabsf(dot(scene_triangle_world_geometric_normal(scene, scene.triangles[isect->triangle_index], isect->instance_index), w_o));
+  float camera_pdf = camera_sample.pdf_dir_out * camera_cosine / dist2;
   camera_pdf *= flight_pdf_reverse;
   ETX_VALIDATE(camera_pdf);
 
@@ -773,8 +778,9 @@ ETX_SHARED_INLINE void vcm_cam_handle_miss(const VCMOptions& options, const VCMI
   }
 }
 
-ETX_SHARED_INLINE void vcm_update_camera_vcm(const Intersection& intersection, VCMPathState& state) {
-  float cos_to_prev = fabsf(dot(intersection.nrm, -state.ray.d));
+ETX_SHARED_INLINE void vcm_update_camera_vcm(const Scene& scene, const Intersection& intersection, VCMPathState& state) {
+  const float3 geo_normal = scene_triangle_world_geometric_normal(scene, scene.triangles[intersection.triangle_index], intersection.instance_index);
+  float cos_to_prev = fabsf(dot(geo_normal, -state.ray.d));
   state.d_vcm *= sqr(state.path_distance + intersection.t) / cos_to_prev;
   state.d_vc_base /= cos_to_prev;
   state.d_vm_base /= cos_to_prev;
@@ -886,8 +892,10 @@ ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Raytracing& rt, const S
 
   float w_dot_l = 1.0f;
   if (light_vertex.is_medium == false) {
-    w_dot_l = -dot(light_v.nrm, w_o);
+    w_dot_l = -dot(scene_triangle_world_geometric_normal(scene, scene.triangles[light_vertex.triangle_index], light_vertex.instance_index), w_o);
   }
+  const float camera_cosine =
+    camera_at_medium ? 1.0f : fabsf(dot(scene_triangle_world_geometric_normal(scene, scene.triangles[camera_isect->triangle_index], camera_isect->instance_index), w_o));
 
   float camera_area_pdf = 0.0f;
   float camera_rev_pdf = 0.0f;
@@ -931,7 +939,7 @@ ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Raytracing& rt, const S
       return false;
     float p_rev = medium_phase_function(med, -w_o, light_vertex.w_i);
     ETX_VALIDATE(p_rev);
-    light_area_pdf = p * (camera_at_medium ? 1.0f : fabsf(dot(camera_isect->nrm, w_o))) / distance_squared;
+    light_area_pdf = p * camera_cosine / distance_squared;
     ETX_VALIDATE(light_area_pdf);
     light_rev_pdf = p_rev;
     light_scatter = {spect, p};
@@ -946,8 +954,7 @@ ETX_SHARED_INLINE bool vcm_connect_to_light_vertex(const Raytracing& rt, const S
     if (camera_at_medium) {
       light_area_pdf = light_bsdf.pdf / distance_squared;
     } else {
-      float w_dot_c = dot(camera_isect->nrm, w_o);
-      light_area_pdf = light_bsdf.pdf * fabsf(w_dot_c) / distance_squared;
+      light_area_pdf = light_bsdf.pdf * camera_cosine / distance_squared;
     }
     ETX_VALIDATE(light_area_pdf);
     light_rev_pdf = bsdf::reverse_pdf(light_data, -w_o, light_mat, state.sampler);
@@ -1252,7 +1259,7 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   bool is_connectible = (bsdf_sample.properties & BSDFSample::Delta) == 0;  // Store connectibility like BDPT
   state.sampler.pop_fixed();
 
-  vcm_update_camera_vcm(intersection, state);
+  vcm_update_camera_vcm(scene, intersection, state);
   vcm_handle_direct_hit(scene, options, iteration, intersection, state);
 
   if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler
@@ -1397,7 +1404,7 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
   state.sampler.pop_fixed();
   ETX_VALIDATE(bsdf_sample.weight);
 
-  vcm_update_light_vcm(intersection, state);
+  vcm_update_light_vcm(scene, intersection, state);
 
   if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler
     result.add_vertex = true;

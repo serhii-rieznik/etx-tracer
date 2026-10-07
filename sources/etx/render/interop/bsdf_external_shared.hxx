@@ -35,8 +35,7 @@ ETX_SHARED_INLINE BSDFExternalRayInfo bsdf_external_ray_info_make(ETX_IN(float3,
     return result;
   }
 
-  float theta = acos(cos_theta);
-  float sin_theta = sin(theta);
+  float sin_theta = sqrt(max(0.0f, 1.0f - cos_theta * cos_theta));
   float tan_theta = sin_theta / cos_theta;
   float sin_theta_sq = max(kEpsilon, 1.0f - result.w.z * result.w.z);
   float inv_sin_theta_2 = 1.0f / sin_theta_sq;
@@ -125,51 +124,6 @@ ETX_SHARED_INLINE float bsdf_external_d_ggx(ETX_IN(float3, wm), ETX_IN(float2, a
   return p22 / (wm.z * wm.z * wm.z * wm.z);
 }
 
-ETX_SHARED_INLINE float2 bsdf_external_sample_p22_11(float theta_i, ETX_IN(float2, rnd), ETX_IN(float2, alpha)) {
-  (void)alpha;
-
-  float2 slope = float2(0.0f, 0.0f);
-  if (theta_i < 0.0001f) {
-    float r = sqrt(rnd.x / (1.0f - rnd.x));
-    float phi = kDoublePi * rnd.y;
-    slope.x = r * cos(phi);
-    slope.y = r * sin(phi);
-    return slope;
-  }
-
-  float sin_theta_i = sin(theta_i);
-  float cos_theta_i = cos(theta_i);
-  float tan_theta_i = sin_theta_i / cos_theta_i;
-
-  float projected_area = 0.5f * (cos_theta_i + 1.0f);
-  if (projected_area < 0.0001f) {
-    return slope;
-  }
-
-  float c = 1.0f / projected_area;
-  float a = 2.0f * rnd.x / cos_theta_i / c - 1.0f;
-  float b = tan_theta_i;
-  float tmp = 1.0f / (a * a - 1.0f);
-  float d = sqrt(max(0.0f, b * b * tmp * tmp - (a * a - b * b) * tmp));
-  float slope_x_1 = b * tmp - d;
-  float slope_x_2 = b * tmp + d;
-  slope.x = ((a < 0.0f) || (slope_x_2 > (1.0f / tan_theta_i))) ? slope_x_1 : slope_x_2;
-
-  float u2 = 0.0f;
-  float sign = 0.0f;
-  if (rnd.y > 0.5f) {
-    sign = 1.0f;
-    u2 = 2.0f * (rnd.y - 0.5f);
-  } else {
-    sign = -1.0f;
-    u2 = 2.0f * (0.5f - rnd.y);
-  }
-
-  float z = (u2 * (u2 * (u2 * 0.27385f - 0.73369f) + 0.46341f)) / (u2 * (u2 * (u2 * 0.093073f + 0.309420f) - 1.0f) + 0.597999f);
-  slope.y = sign * z * sqrt(1.0f + slope.x * slope.x);
-  return slope;
-}
-
 ETX_SHARED_INLINE float bsdf_external_abgam(float x) {
   const float gam[7] = {
     1.0f / 12.0f,
@@ -188,19 +142,40 @@ ETX_SHARED_INLINE float bsdf_external_gamma(float x) {
   return exp(bsdf_external_abgam(x + 5.0f)) / (x * (x + 1.0f) * (x + 2.0f) * (x + 3.0f) * (x + 4.0f));
 }
 
-ETX_SHARED_INLINE float bsdf_external_log_gamma_approx(float x) {
-  return bsdf_external_abgam(x + 5.0f) - log(x) - log(x + 1.0f) - log(x + 2.0f) - log(x + 3.0f) - log(x + 4.0f);
+ETX_SHARED_INLINE float bsdf_external_log_one_plus(float x) {
+  if (x > 0.5f) {
+    return log(1.0f + x);
+  }
+  const float z = x / (2.0f + x);
+  const float z2 = z * z;
+  // log(1+x) = 2*atanh(x/(2+x)); the omitted tail is below float precision for x <= 0.5.
+  return 2.0f * z * (1.0f + z2 * (1.0f / 3.0f + z2 * (1.0f / 5.0f + z2 * (1.0f / 7.0f + z2 * (1.0f / 9.0f + z2 * (1.0f / 11.0f + z2 / 13.0f))))));
 }
 
 ETX_SHARED_INLINE float bsdf_external_beta(float m, float n) {
   if ((isfinite(m) == false) || (isfinite(n) == false) || (m <= 0.0f) || (n <= 0.0f) || (m > kBSDFExternalLambdaMax) || (n > kBSDFExternalLambdaMax)) {
     return 0.0f;
   }
-#if (ETX_CPP)
-  return exp(lgamma(m) + lgamma(n) - lgamma(m + n));
-#else
-  return exp(bsdf_external_log_gamma_approx(m) + bsdf_external_log_gamma_approx(n) - bsdf_external_log_gamma_approx(m + n));
-#endif
+  float recurrence = 0.0f;
+  while (m < 8.0f) {
+    recurrence += bsdf_external_log_one_plus(n / m);
+    m += 1.0f;
+  }
+  while (n < 8.0f) {
+    recurrence += bsdf_external_log_one_plus(m / n);
+    n += 1.0f;
+  }
+  const float sum = m + n;
+  const float m_log = bsdf_external_log_one_plus(n / m);
+  const float n_log = bsdf_external_log_one_plus(m / n);
+  const float m_inv = 1.0f / m;
+  const float n_inv = 1.0f / n;
+  const float sum_inv = 1.0f / sum;
+  const float correction = (m_inv + n_inv - sum_inv) / 12.0f - (m_inv * m_inv * m_inv + n_inv * n_inv * n_inv - sum_inv * sum_inv * sum_inv) / 360.0f +
+                           (pow(m_inv, 5.0f) + pow(n_inv, 5.0f) - pow(sum_inv, 5.0f)) / 1260.0f;
+  // The ratio form avoids subtracting large log-gamma values at grazing incidence.
+  const float log_beta = recurrence - (m - 0.5f) * m_log - (n - 0.5f) * n_log - 0.5f * log(sum) + 0.9189385332f + correction;
+  return exp(log_beta);
 }
 
 ETX_SHARED_INLINE float3 bsdf_external_refract(ETX_IN(float3, wi), ETX_IN(float3, wm), float eta) {
@@ -219,23 +194,22 @@ struct BSDFExternalDielectricSample {
   bool reflection ETX_INIT(false);
 };
 
+ETX_SHARED_INLINE float3 bsdf_external_sample_vndf_local(ETX_IN(float3, w_i), ETX_IN(float2, alpha), ETX_IN(float2, rnd)) {
+  const float3 view = normalize(float3(alpha.x * w_i.x, alpha.y * w_i.y, w_i.z));
+  const float tangent_length_squared = view.x * view.x + view.y * view.y;
+  const float3 tangent = (tangent_length_squared > 0.0f) ? float3(-view.y, view.x, 0.0f) / sqrt(tangent_length_squared) : float3(1.0f, 0.0f, 0.0f);
+  const float3 bitangent = cross(view, tangent);
+  const float radius = sqrt(rnd.x);
+  const float azimuth = kDoublePi * rnd.y;
+  const float disk_x = radius * cos(azimuth);
+  const float hemisphere_fraction = 0.5f * (1.0f + view.z);
+  const float disk_y = (1.0f - hemisphere_fraction) * sqrt(max(0.0f, 1.0f - disk_x * disk_x)) + hemisphere_fraction * radius * sin(azimuth);
+  const float3 normal = disk_x * tangent + disk_y * bitangent + sqrt(max(0.0f, 1.0f - disk_x * disk_x - disk_y * disk_y)) * view;
+  return normalize(float3(alpha.x * normal.x, alpha.y * normal.y, max(0.0f, normal.z)));
+}
+
 ETX_SHARED_INLINE float3 bsdf_external_sample_vndf_local(ETX_IN(float3, w_i), float alpha, ETX_IN(float2, rnd)) {
-  const float3 w_i_11 = normalize(float3(alpha * w_i.x, alpha * w_i.y, w_i.z));
-  const float2 slope_11 = bsdf_external_sample_p22_11(acos(saturate(w_i_11.z)), rnd, float2(alpha, alpha));
-
-  float2 slope = slope_11;
-  const float wi_xy_length_sq = (w_i_11.x * w_i_11.x) + (w_i_11.y * w_i_11.y);
-  if (wi_xy_length_sq > (kEpsilon * kEpsilon)) {
-    const float phi = atan2(w_i_11.y, w_i_11.x);
-    slope = float2(cos(phi) * slope_11.x - sin(phi) * slope_11.y, sin(phi) * slope_11.x + cos(phi) * slope_11.y);
-  }
-  slope.x *= alpha;
-  slope.y *= alpha;
-
-  if ((slope.x != slope.x) || isinf(slope.x)) {
-    return (w_i.z > 0.0f) ? float3(0.0f, 0.0f, 1.0f) : normalize(float3(w_i.x, w_i.y, 0.0f));
-  }
-  return normalize(float3(-slope.x, -slope.y, 1.0f));
+  return bsdf_external_sample_vndf_local(w_i, float2(alpha, alpha), rnd);
 }
 
 ETX_SHARED_INLINE float bsdf_external_vndf_pdf(ETX_IN(float3, w_i), ETX_IN(float3, m), float alpha) {
@@ -246,24 +220,7 @@ ETX_SHARED_INLINE float bsdf_external_vndf_pdf(ETX_IN(float3, w_i), ETX_IN(float
 
 ETX_SHARED_INLINE BSDFExternalDielectricSample bsdf_external_sample_phase_function_dielectric(ETX_IN(SpectralQuery, spect), ETX_IN(float2, rnd_slope), float rnd_reflection,
   ETX_IN(float3, wi), ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm)) {
-  float3 wi_11 = normalize(float3(alpha.x * wi.x, alpha.y * wi.y, wi.z));
-  float2 slope_11 = bsdf_external_sample_p22_11(acos(wi_11.z), rnd_slope, alpha);
-
-  float2 slope = slope_11;
-  const float wi_xy_length_sq = (wi_11.x * wi_11.x) + (wi_11.y * wi_11.y);
-  if (wi_xy_length_sq > (kEpsilon * kEpsilon)) {
-    const float phi = atan2(wi_11.y, wi_11.x);
-    slope = float2(cos(phi) * slope_11.x - sin(phi) * slope_11.y, sin(phi) * slope_11.x + cos(phi) * slope_11.y);
-  }
-  slope.x *= alpha.x;
-  slope.y *= alpha.y;
-
-  float3 wm = float3(0.0f, 0.0f, 0.0f);
-  if (isnan(slope.x) || isinf(slope.x)) {
-    wm = (wi.z > 0.0f) ? float3(0.0f, 0.0f, 1.0f) : normalize(float3(wi.x, wi.y, 0.0f));
-  } else {
-    wm = normalize(float3(-slope.x, -slope.y, 1.0f));
-  }
+  const float3 wm = bsdf_external_sample_vndf_local(wi, alpha, rnd_slope);
 
   float i_dot_m = dot(wi, wm);
   SpectralResponse f = bsdf_fresnel_calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);

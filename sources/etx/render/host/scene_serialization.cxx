@@ -2039,7 +2039,47 @@ struct SceneSerializationImpl {
     };
 
     if (get_param(material, "int_ior")) {
-      load_ior(mtl.int_ior, _data_buffer);
+      std::filesystem::path path = std::filesystem::u8path(_data_buffer);
+      if (path.is_absolute() == false) {
+        path = std::filesystem::u8path(base_dir) / path;
+      }
+      std::error_code path_error;
+      if (std::filesystem::is_regular_file(path, path_error) == false) {
+        if (const auto* definition = database.find_by_name(_data_buffer); definition != nullptr) {
+          path = std::filesystem::u8path(definition->filename);
+        } else {
+          path = locate_spectrum_file(_data_buffer, {"conductor", "dielectric"});
+        }
+      }
+      bool recognized = false;
+      const auto profile = load_temperature_optics(path_to_utf8(path).c_str(), recognized);
+      if (recognized && (profile == nullptr)) {
+        log::error("Material %s has an invalid temperature optical profile", material.name.c_str());
+        mtl.temperature_kelvin = std::numeric_limits<float>::quiet_NaN();
+        return;
+      }
+      if (profile != nullptr) {
+        mtl.int_ior.cls = profile->cls;
+        mtl.int_ior.eta_index = data.add_spectrum(profile->samples.front().eta);
+        mtl.int_ior.k_index = data.add_spectrum(profile->cls == SpectralDistribution::Conductor ? profile->samples.front().k : SpectralDistribution::constant(0.0f));
+        const bool hold_endpoints = get_param(material, "temperature_optics_endpoint_hold") && (std::strcmp(_data_buffer, "1") == 0);
+        const bool enabled = (get_param(material, "temperature_optics") == false) || (std::strcmp(_data_buffer, "0") != 0);
+        for (uint32_t component = 0u; component < 2u; ++component) {
+          const uint32_t index = component == 0u ? mtl.int_ior.eta_index : mtl.int_ior.k_index;
+          SpectrumSource source;
+          source.kind = SpectrumSource::Kind::IOR;
+          source.base = data.spectrum_values[index];
+          source.title = profile->title;
+          source.path = path_to_utf8(path);
+          source.temperature_profile = profile;
+          source.temperature_profile_component = component;
+          source.temperature_profile_enabled = enabled;
+          source.temperature_profile_hold_endpoints = hold_endpoints;
+          data.spectrum_sources[index] = std::move(source);
+        }
+      } else {
+        load_ior(mtl.int_ior, _data_buffer);
+      }
     } else {
       mtl.int_ior.cls = SpectralDistribution::Dielectric;
       mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.5f));

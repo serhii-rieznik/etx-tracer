@@ -131,4 +131,9 @@ std::string utf8_file_name(const std::string& path) {
   return {reinterpret_cast<const char*>(file_name.data()), file_name.size()};
 }
 
+std::string path_to_utf8(const std::filesystem::path& path) {
+  const auto value = path.generic_u8string();
+  return {reinterpret_cast<const char*>(value.data()), value.size()};
+}
+
 }  // namespace etx

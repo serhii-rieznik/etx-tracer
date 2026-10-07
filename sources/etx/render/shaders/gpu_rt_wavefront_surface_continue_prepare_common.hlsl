@@ -374,7 +374,7 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   bool continue_path = sample_valid && ((state.path_length + 1u) <= resources.max_path_length);
   state.reserved0 = GPUWavefrontPendingContinuationFlags::Prepared;
   if (continue_path) {
-    float cos_theta_bsdf = abs(dot(hit.vertex.nrm, bsdf_sample.w_o));
+    float cos_theta_bsdf = abs(dot(hit.geo_normal, bsdf_sample.w_o));
     if (bsdf_sample_is_delta(bsdf_sample)) {
       state.forward_pdf = 0.0f;
       state.reverse_pdf = current_d_vc * cos_theta_bsdf;

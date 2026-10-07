@@ -1267,6 +1267,10 @@ nlohmann::json serialize_scene_spectral_overrides(const SceneData& data, const s
       value["source"] = {{"mode", static_cast<uint32_t>(author.mode)}, {"kind", static_cast<uint32_t>(author.kind)}, {"color", {author.color.x, author.color.y, author.color.z}},
         {"temperature", author.temperature}, {"strength", author.strength}, {"base", serialize_spectral_distribution(author.base)}, {"points", std::move(points)},
         {"title", author.title}, {"path", author.path}, {"classification", author.classification}};
+      if (author.temperature_profile != nullptr) {
+        value["source"]["temperature_optics"] = {{"text", author.temperature_profile->text}, {"component", author.temperature_profile_component},
+          {"enabled", author.temperature_profile_enabled}, {"hold_endpoints", author.temperature_profile_hold_endpoints}};
+      }
     }
     values.push_back(std::move(value));
     return serialized_index;
@@ -1387,6 +1391,22 @@ bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& dat
     }
     author.title = saved["title"].get<std::string>();
     author.path = saved["path"].get<std::string>();
+    if (saved.contains("temperature_optics")) {
+      const auto& profile = saved["temperature_optics"];
+      if ((author.kind != SpectrumSource::Kind::IOR) || (profile.is_object() == false) || (profile.contains("text") == false) || (profile["text"].is_string() == false) ||
+          (profile.contains("component") == false) || (profile["component"].is_number_unsigned() == false) || (profile["component"].get<uint64_t>() > 1u) ||
+          (profile.contains("enabled") == false) || (profile["enabled"].is_boolean() == false) || (profile.contains("hold_endpoints") == false) ||
+          (profile["hold_endpoints"].is_boolean() == false)) {
+        return false;
+      }
+      author.temperature_profile = parse_temperature_optics(profile["text"].get<std::string>());
+      if (author.temperature_profile == nullptr) {
+        return false;
+      }
+      author.temperature_profile_component = profile["component"].get<uint32_t>();
+      author.temperature_profile_enabled = profile["enabled"].get<bool>();
+      author.temperature_profile_hold_endpoints = profile["hold_endpoints"].get<bool>();
+    }
     if (author.matches(decoded_values[i]) == false) {
       return false;
     }
@@ -4296,6 +4316,9 @@ void SceneRepresentationImpl::set_scattering_rhi(RHIContext& rhi_context) {
 }
 
 bool SceneRepresentationImpl::ensure_energy_compensation_interfaces() {
+  if (prepare_temperature_optics(data) == false) {
+    return false;
+  }
   const bool scattering_ready =
     ((rhi != nullptr) && rhi->valid()) ? etx::ensure_energy_compensation_interfaces(data, scheduler, *rhi) : etx::ensure_energy_compensation_interfaces(data, scheduler);
   if ((scattering_ready == false) || (subsurface_materials_valid(data) == false) || (prepare_thermal_materials(data, active_camera.medium_index) == false)) {
@@ -4306,6 +4329,10 @@ bool SceneRepresentationImpl::ensure_energy_compensation_interfaces() {
 }
 
 bool SceneRepresentationImpl::begin_energy_compensation_interface_preparation() {
+  if (prepare_temperature_optics(data) == false) {
+    energy_compensation_preparation_state = EnergyCompensationPreparationState::Failed;
+    return false;
+  }
   if ((rhi == nullptr) || (rhi->valid() == false)) {
     energy_compensation_preparation_state = EnergyCompensationPreparationState::Failed;
     return false;
@@ -6082,7 +6109,9 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     }
 
     int matched_int_index = -1;
-    if (material.int_ior.cls != SpectralDistribution::Invalid) {
+    const auto internal_source = impl->data.spectrum_sources.find(material.int_ior.eta_index);
+    const bool temperature_profile = (internal_source != impl->data.spectrum_sources.end()) && (internal_source->second.temperature_profile != nullptr);
+    if ((material.int_ior.cls != SpectralDistribution::Invalid) && (temperature_profile == false)) {
       matched_int_index = database.find_matching_index(spectrum_by_index(material.int_ior.eta_index), spectrum_by_index(material.int_ior.k_index), material.int_ior.cls);
     }
     if ((matched_int_index >= 0) && (matched_int_index < static_cast<int>(database.definitions.size()))) {

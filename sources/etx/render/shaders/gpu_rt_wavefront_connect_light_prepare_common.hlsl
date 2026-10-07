@@ -135,7 +135,7 @@ float wavefront_connect_light_vertex_to_vertex_area_pdf(float pdf_dir, GPUWavefr
   if (wavefront_path_vertex_is_infinite_emitter(to_vertex)) {
     return pdf_dir;
   }
-  return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, from_vertex.position, to_vertex.position, wavefront_path_vertex_is_surface(to_vertex), to_vertex.normal);
+  return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, from_vertex.position, to_vertex.position, wavefront_path_vertex_is_surface(to_vertex), to_vertex.geo_normal);
 }
 
 float3 wavefront_connect_light_shadow_origin(GPUWavefrontPathVertex vertex, float3 outgoing_direction) {

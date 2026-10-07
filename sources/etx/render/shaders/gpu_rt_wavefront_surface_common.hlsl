@@ -107,7 +107,7 @@ float wavefront_vertex_to_vertex_area_pdf(float pdf_dir, GPUWavefrontPathVertex 
   if (wavefront_path_vertex_is_infinite_emitter(to_vertex)) {
     return pdf_dir;
   }
-  return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, from_vertex.position, to_vertex.position, wavefront_path_vertex_is_surface(to_vertex), to_vertex.normal);
+  return wavefront_convert_solid_angle_pdf_to_area(pdf_dir, from_vertex.position, to_vertex.position, wavefront_path_vertex_is_surface(to_vertex), to_vertex.geo_normal);
 }
 
 float wavefront_distant_emitter_sample_pdf(uint emitter_index, float3 in_direction) {
@@ -755,7 +755,7 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
   if (wavefront_path_vertex_valid(previous_vertex)) {
     current_vertex.flight_pdf = state.flight_pdf;
     current_vertex.pdf_from_prev = wavefront_vertex_to_vertex_area_pdf(state.sampled_bsdf_pdf, previous_vertex, current_vertex) * state.flight_pdf.x;
-    float cos_to_prev = abs(dot(hit.vertex.nrm, -state.ray.d));
+    float cos_to_prev = abs(dot(hit.geo_normal, -state.ray.d));
     if (cos_to_prev > 0.0f) {
       current_vertex.forward_pdf = wavefront_safe_div(state.forward_pdf * hit.hit_t * hit.hit_t, cos_to_prev);
       current_vertex.reverse_pdf = wavefront_safe_div(state.reverse_pdf, cos_to_prev);

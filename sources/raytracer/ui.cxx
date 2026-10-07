@@ -1468,6 +1468,11 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
     state.source.base = spectrum;
     state.source.title = title;
     state.source.path = path;
+    if ((channel == SpectrumTarget::Channel::InsideEta) || (channel == SpectrumTarget::Channel::InsideK)) {
+      bool recognized = false;
+      state.source.temperature_profile = load_temperature_optics(path.c_str(), recognized);
+      state.source.temperature_profile_component = channel == SpectrumTarget::Channel::InsideEta ? 0u : 1u;
+    }
     state.source.color = float3{spectrum.spectral_entries[spectrum.spectral_entry_count / 2u].power};
     state.custom = state.source;
     state.curve.document.points.clear();
@@ -1523,6 +1528,11 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
     eta_rgb = spectral_distribution_display_rgb(matched_definition.eta);
     k_rgb = spectral_distribution_display_rgb(matched_definition.k);
     tooltip_class = matched_definition.cls;
+  }
+  const auto profile_source = scene.data().spectrum_sources.find(ior.eta_index);
+  if ((mixed == false) && (profile_source != scene.data().spectrum_sources.end()) && (profile_source->second.temperature_profile != nullptr)) {
+    preview_text = profile_source->second.temperature_profile->title.c_str();
+    tooltip_title = preview_text;
   }
   std::string button_label = std::string(preview_text) + "##ior_" + name;
   const std::string popup_id = format_string("ior_popup##%s", name);
@@ -1616,6 +1626,51 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
 
   if (const auto found = _spectrum_controls.find(ior.eta_index); (found != _spectrum_controls.end()) && (found->second.error.empty() == false))
     ImGui::TextWrapped("%s", found->second.error.c_str());
+  if ((eta_channel == SpectrumTarget::Channel::InsideEta) && (profile_source != scene.data().spectrum_sources.end()) && (profile_source->second.temperature_profile != nullptr)) {
+    const SpectrumSource author = profile_source->second;
+    bool enabled = author.temperature_profile_enabled;
+    bool hold_endpoints = author.temperature_profile_hold_endpoints;
+    ImGui::TextDisabled("Optical data: %.1f - %.1f K", author.temperature_profile->samples.front().temperature_kelvin,
+      author.temperature_profile->samples.back().temperature_kelvin);
+    if (author.temperature_profile->cls == SpectralDistribution::Dielectric) {
+      ImGui::TextWrapped("The profile sets bulk absorption in m^-1. Internal-medium scattering and density use their authored settings.");
+    }
+    const bool enabled_changed = ImGui::Checkbox("Temperature-dependent optics", &enabled);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("When disabled, use this profile's first optical table at every temperature. Select another IOR to replace the profile.");
+    }
+    const bool hold_endpoints_changed = ImGui::Checkbox("Use endpoint optics outside measured range", &hold_endpoints);
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Outside the data range, hold the nearest optical table. Emission still uses the material temperature. Phase changes are not modeled.");
+    }
+    if (enabled_changed || hold_endpoints_changed) {
+      if (_editing_material_indices != nullptr) {
+        for (const uint32_t material_index : *_editing_material_indices) {
+          const RefractiveIndex& target_ior = scene.data().materials[material_index].int_ior;
+          for (uint32_t component = 0u; component < 2u; ++component) {
+            const uint32_t index = component == 0u ? target_ior.eta_index : target_ior.k_index;
+            const auto source = scene.data().spectrum_sources.find(index);
+            if ((source == scene.data().spectrum_sources.end()) || (source->second.temperature_profile == nullptr)) {
+              continue;
+            }
+            auto& state = _spectrum_controls[index];
+            state = {};
+            state.initialized = true;
+            state.observed = scene.data().spectrum_values[index];
+            state.source = source->second;
+            if (enabled_changed) {
+              state.source.temperature_profile_enabled = enabled;
+            }
+            if (hold_endpoints_changed) {
+              state.source.temperature_profile_hold_endpoints = hold_endpoints;
+            }
+            state.targets.push_back({.material_index = material_index, .spectrum_index = index, .channel = component == 0u ? eta_channel : k_channel});
+            state.pending = true;
+          }
+        }
+      }
+    }
+  }
   return false;
 }
 
@@ -2954,13 +3009,18 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
       const bool temperature_mixed = material_values_mixed([](const Material& value) {
         return value.temperature_kelvin;
       });
-      ImGui::TextUnformatted("Temperature (K)");
+      ImGui::TextUnformatted("Thermal temperature (K)");
       full_width_item();
       if (mixed_control(temperature_mixed, [&]() {
             return ImGui::DragFloat("##material_temperature_kelvin", &temperature_kelvin, 1.0f, 0.0f, 40000.0f, temperature_mixed ? "mixed" : "%.1f", ImGuiSliderFlags_AlwaysClamp);
           })) {
         material.temperature_kelvin = temperature_kelvin;
         changed = true;
+      }
+      if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip(
+          "0 disables thermal emission. Planck radiance is scaled by absorption: a perfectly reflective material emits nothing. "
+          "Glass emits through absorption in its internal medium.");
       }
 
       float collimation = material.emission_collimation;

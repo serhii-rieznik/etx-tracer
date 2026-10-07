@@ -13,6 +13,7 @@
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/scene_hierarchy.hxx>
+#include <etx/render/host/temperature_optics.hxx>
 
 #include <unordered_map>
 namespace etx {
@@ -30,6 +31,10 @@ struct SpectrumSource {
   std::string title = "Custom spectrum";
   std::string classification;
   std::string path;
+  std::shared_ptr<const TemperatureOpticalProfile> temperature_profile;
+  uint32_t temperature_profile_component = 0u;
+  bool temperature_profile_enabled = true;
+  bool temperature_profile_hold_endpoints = false;
 
   SpectralDistribution output() const;
   void generate();
@@ -216,10 +221,13 @@ struct SceneData {
     uint32_t base_medium_index = kInvalidIndex;
     uint32_t source_spectrum_index = kInvalidIndex;
     float temperature_kelvin = 0.0f;
+    uint32_t absorption_spectrum_index = kInvalidIndex;
+    uint32_t emission_flags = 0u;
   };
   struct ThermalMediumResources {
     uint64_t input_hash = 0u;
     uint32_t source_spectrum_index = kInvalidIndex;
+    uint32_t absorption_spectrum_index = kInvalidIndex;
   };
   std::vector<ThermalMediumState> thermal_medium_states;
   std::unordered_map<uint32_t, ThermalMediumResources> thermal_medium_resources;

@@ -23,7 +23,7 @@ namespace etx {
 
 namespace {
 
-constexpr uint32_t kEnergyCompensationGeneratorVersion = 33u;
+constexpr uint32_t kEnergyCompensationGeneratorVersion = 37u;
 constexpr uint32_t kEnergyCompensationConductorLutSize = kBSDFEnergyCompensationConductorLutSize;
 constexpr uint32_t kEnergyCompensationDielectricLutSize = kBSDFEnergyCompensationDielectricLutSize;
 constexpr uint32_t kEnergyCompensationConductorSampleCount = 2048u;
@@ -778,7 +778,6 @@ SpectralDirectionalAlbedoResult integrate_conductor_directional(const SpectralQu
   const float3 w_i = incident_direction_from_mu(mu_i);
   const float lambda_i = bsdf_external_ray_info_make(w_i, alpha2).Lambda;
   const float g1_i = 1.0f / (1.0f + lambda_i);
-  const auto texture = spectral_response_make(spect, 1.0f);
 
   for (uint32_t sample_index = 0u; sample_index < kEnergyCompensationConductorSampleCount; ++sample_index) {
     const float3 m = bsdf_energy_compensated_sample_vndf_local(w_i, alpha, hammersley(sample_index, kEnergyCompensationConductorSampleCount));
@@ -789,17 +788,12 @@ SpectralDirectionalAlbedoResult integrate_conductor_directional(const SpectralQu
 
     const float3 w_o = -w_i + 2.0f * m * i_dot_m;
     if (w_o.z > 0.0f) {
-      const float vndf_pdf = bsdf_energy_compensated_vndf_pdf(w_i, m, alpha);
-      const float raw_specular_pdf = vndf_pdf / max(kEpsilon, 4.0f * dot(w_o, m));
-      const BSDFEnergyCompensatedLobe lobe = bsdf_energy_compensated_conductor_base_lobe(spect, w_i, w_o, alpha, ext_ior, int_ior, thinfilm, texture);
-      if ((raw_specular_pdf > kEpsilon) && (lobe.pdf > kEpsilon)) {
-        const float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
-        result.albedo += albedo / raw_specular_pdf;
-        const float lambda_o = bsdf_external_ray_info_make(w_o, alpha2).Lambda;
-        const float d = bsdf_external_d_ggx(m, alpha2);
-        const float g2 = 1.0f / (1.0f + lambda_i + lambda_o);
-        result.geometric_albedo += (d * g2 / (4.0f * w_i.z)) / raw_specular_pdf;
-      }
+      const float lambda_o = bsdf_external_ray_info_make(w_o, alpha2).Lambda;
+      const float geometric_weight = (1.0f + lambda_i) / (1.0f + lambda_i + lambda_o);
+      const auto fresnel = bsdf_fresnel_calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
+      const float3 albedo = spectral_response_is_spectral(fresnel) ? float3(fresnel.value, 0.0f, 0.0f) : fresnel.integrated;
+      result.albedo += albedo * geometric_weight;
+      result.geometric_albedo += geometric_weight;
       if (g1_i > kEpsilon) {
         result.visible_probability += 1.0f;
       }
@@ -822,7 +816,6 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
 
   const float3 w_i = incident_direction_from_mu(mu_i);
   const float eta = spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta));
-  const auto texture = spectral_response_make(spect, 1.0f);
   const uint32_t incident_side = dielectric_side(incident_outside);
   const uint32_t opposite_side = 1u - incident_side;
 
@@ -834,6 +827,7 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
     return result;
   }
 
+  const float lambda_i = bsdf_external_ray_info_make(w_i, float2(alpha, alpha)).Lambda;
   for (uint32_t sample_index = 0u; sample_index < kEnergyCompensationSampleCount; ++sample_index) {
     const float3 m = bsdf_energy_compensated_sample_vndf_local(w_i, alpha, hammersley(sample_index, kEnergyCompensationSampleCount));
     const float i_dot_m = dot(w_i, m);
@@ -846,29 +840,27 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
     const float cos_theta_t2 = 1.0f - (1.0f - i_dot_m * i_dot_m) / (eta * eta);
 
     const float3 w_o_r = -w_i + 2.0f * m * i_dot_m;
-    if ((w_i.z * w_o_r.z) > kEpsilon) {
+    if (w_o_r.z > kEpsilon) {
       result.branch_visible_probability[incident_side] += fresnel_probability;
     }
-    if (w_o_r.z > 0.0f) {
-      const auto lobe = bsdf_energy_compensated_dielectric_base_lobe(spect, w_i, w_o_r, alpha, ext_ior, int_ior, thinfilm, texture);
-      if ((fresnel_probability > kEpsilon) && (lobe.pdf > kEpsilon)) {
-        const float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
-        result.branch_albedo[incident_side] += albedo * (fresnel_probability / lobe.pdf);
-      }
+    if (w_o_r.z > kEpsilon) {
+      const float lambda_o = bsdf_external_ray_info_make(w_o_r, float2(alpha, alpha)).Lambda;
+      const float weight = (1.0f + lambda_i) / (1.0f + lambda_i + lambda_o);
+      const float3 albedo = spectral_response_is_spectral(fresnel) ? float3(fresnel.value, 0.0f, 0.0f) : fresnel.integrated;
+      result.branch_albedo[incident_side] += albedo * weight;
     }
 
     if ((fresnel_probability < 1.0f) && (cos_theta_t2 > 0.0f)) {
       const float3 w_o_t = normalize(bsdf_external_refract(w_i, m, eta));
-      if ((w_i.z * w_o_t.z) < -kEpsilon) {
+      if (w_o_t.z < -kEpsilon) {
         result.branch_visible_probability[opposite_side] += 1.0f - fresnel_probability;
       }
-      if (w_o_t.z < 0.0f) {
-        const auto lobe = bsdf_energy_compensated_dielectric_base_lobe(spect, w_i, w_o_t, alpha, ext_ior, int_ior, thinfilm, texture);
-        const float transmission_probability = 1.0f - fresnel_probability;
-        if ((transmission_probability > kEpsilon) && (lobe.pdf > kEpsilon)) {
-          const float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
-          result.branch_albedo[opposite_side] += albedo * (transmission_probability / lobe.pdf);
-        }
+      if (w_o_t.z < -kEpsilon) {
+        const float lambda_o = bsdf_external_ray_info_make(-w_o_t, float2(alpha, alpha)).Lambda;
+        const float weight = (1.0f + lambda_i) * bsdf_external_beta(1.0f + lambda_i, 1.0f + lambda_o);
+        const auto transmission = spectral_response_sub(spectral_response_make(spect, 1.0f), fresnel);
+        const float3 albedo = spectral_response_is_spectral(transmission) ? float3(transmission.value, 0.0f, 0.0f) : transmission.integrated;
+        result.branch_albedo[opposite_side] += albedo * weight;
       }
     }
   }
@@ -974,16 +966,13 @@ float3 integrate_average(const std::vector<SpectralDirectionalAlbedoResult>& dir
 float3 integrate_dielectric_branch_average(const std::vector<DielectricDirectionalAlbedoResult>& directional, uint32_t alpha_index, uint32_t incident_side,
   uint32_t outgoing_side) {
   float3 total = {};
-  const float h = 1.0f / static_cast<float>(kEnergyCompensationDielectricLutSize - 1u);
   const uint32_t side_entry_count = kEnergyCompensationDielectricLutSize * kEnergyCompensationDielectricLutSize;
   const uint32_t side_offset = incident_side * side_entry_count;
   for (uint32_t mu_index = 0u; mu_index < (kEnergyCompensationDielectricLutSize - 1u); ++mu_index) {
-    const float mu = static_cast<float>(mu_index) * h;
-    const float weight_0 = h * mu + h * h / 3.0f;
-    const float weight_1 = h * mu + 2.0f * h * h / 3.0f;
+    const float2 weights = bsdf_energy_compensated_dielectric_average_weights(mu_index, kEnergyCompensationDielectricLutSize);
     const float3 value_0 = directional[side_offset + alpha_index * kEnergyCompensationDielectricLutSize + mu_index].branch_albedo[outgoing_side];
     const float3 value_1 = directional[side_offset + alpha_index * kEnergyCompensationDielectricLutSize + mu_index + 1u].branch_albedo[outgoing_side];
-    total += value_0 * weight_0 + value_1 * weight_1;
+    total += value_0 * weights.x + value_1 * weights.y;
   }
   return saturate(total);
 }
@@ -1144,8 +1133,8 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
       const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
       const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
       const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
-      directional[index] = integrate_dielectric_directional(spect, source_ior, target_ior, thinfilm, side == 0u, mu_parameter(mu_index, kEnergyCompensationDielectricLutSize),
-        alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
+      directional[index] = integrate_dielectric_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
+        bsdf_energy_compensated_dielectric_mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
     }
   });
   scheduler.execute(side_entry_count * 2u, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
@@ -1158,7 +1147,7 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
       const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
       const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
       multiscatter_directional[index] = integrate_dielectric_multiscatter_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
-        mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
+        bsdf_energy_compensated_dielectric_mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
     }
   });
 
@@ -1285,8 +1274,8 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
         const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
         const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
         const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
-        directional[index] = integrate_dielectric_directional(spect, source_ior, target_ior, thinfilm, side == 0u, mu_parameter(mu_index, kEnergyCompensationDielectricLutSize),
-          alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
+        directional[index] = integrate_dielectric_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
+          bsdf_energy_compensated_dielectric_mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
       }
     });
     scheduler.execute(side_entry_count * 2u, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
@@ -1299,7 +1288,7 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
         const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
         const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
         multiscatter_directional[index] = integrate_dielectric_multiscatter_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
-          mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
+          bsdf_energy_compensated_dielectric_mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
       }
     });
 
@@ -2179,9 +2168,9 @@ bool ensure_energy_compensation_interfaces_impl(SceneData& data, TaskScheduler& 
     result = bind_energy_compensation_interface(data, material, material_class, cache_mode, previous_interfaces, interface_cache, scheduler, rhi, &gpu_pipeline,
                material.energy_compensation_interface_index) &&
              result;
-    if ((material.cls == MaterialClass::Conductor) && (material.temperature_kelvin > 0.0f)) {
-      result = bind_energy_compensation_interface(data, material, MaterialClass::Conductor, kBSDFEnergyCompensationCacheModeSpectralScalar, previous_interfaces, interface_cache,
-                 scheduler, rhi, &gpu_pipeline, material.thermal_energy_compensation_interface_index) &&
+    if (((material.cls == MaterialClass::Conductor) || (material.cls == MaterialClass::Plastic)) && (material.temperature_kelvin > 0.0f)) {
+      result = bind_energy_compensation_interface(data, material, material_class, kBSDFEnergyCompensationCacheModeSpectralScalar, previous_interfaces, interface_cache, scheduler,
+                 rhi, &gpu_pipeline, material.thermal_energy_compensation_interface_index) &&
                result;
     }
   }

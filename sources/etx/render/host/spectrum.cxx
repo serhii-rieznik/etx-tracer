@@ -1,5 +1,6 @@
 #include <etx/core/log.hxx>
 #include <etx/render/shared/spectrum.hxx>
+#include <etx/render/host/temperature_optics.hxx>
 namespace etx {
 
 SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths_power[], uint64_t count) {
@@ -358,6 +359,17 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
 }
 
 SpectralDistribution::Class SpectralDistribution::load_refractive_index(const char* file_name, SpectralDistribution& out_eta, SpectralDistribution& out_k, std::string& out_title) {
+  bool temperature_profile = false;
+  const auto profile = load_temperature_optics(file_name, temperature_profile);
+  if (temperature_profile) {
+    if (profile == nullptr) {
+      return SpectralDistribution::Invalid;
+    }
+    out_eta = profile->samples.front().eta;
+    out_k = profile->cls == SpectralDistribution::Dielectric ? SpectralDistribution::constant(0.0f) : profile->samples.front().k;
+    out_title = profile->title;
+    return profile->cls;
+  }
   SpectralDistribution::Class cls = SpectralDistribution::load_from_file(file_name, out_eta, &out_k, true, out_title);
   if (cls != SpectralDistribution::Invalid) {
     out_eta.integrated_value = rgb_to_xyz(out_eta.integrated_value);

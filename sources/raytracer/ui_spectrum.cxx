@@ -87,6 +87,17 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
   }
   const uint32_t index = *slot;
   const SpectralDistribution& actual = data.spectrum_values[index];
+  for (const SpectrumTarget& target : targets) {
+    const uint32_t* target_slot = target.spectrum_slot(data);
+    if (target_slot == nullptr) {
+      continue;
+    }
+    if (const auto found = data.spectrum_sources.find(*target_slot); (found != data.spectrum_sources.end()) && (found->second.temperature_profile != nullptr)) {
+      ImGui::TextUnformatted(label);
+      ImGui::TextWrapped("%s: prepared from the material temperature. Select another internal IOR to replace this profile.", found->second.temperature_profile->title.c_str());
+      return false;
+    }
+  }
   auto& state = _spectrum_controls[index];
   if ((state.initialized == false) || ((state.pending == false) && (same_spectrum(state.observed, actual) == false))) {
     state = {};
@@ -249,7 +260,7 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
     }
     state.interacting |= ImGui::IsItemActive();
     if (ImGui::IsItemHovered())
-      ImGui::SetTooltip(kind == SpectrumSource::Kind::Emission ? "Blackbody emission temperature" : "Temperature color for reflectance");
+      ImGui::SetTooltip(kind == SpectrumSource::Kind::Emission ? "Normalized blackbody spectrum; Strength controls brightness" : "Temperature color for reflectance");
   } else {
     if (ImGui::Button((source.title + "##source").c_str(), ImVec2(value_width, 0.0f)))
       ImGui::OpenPopup("source");

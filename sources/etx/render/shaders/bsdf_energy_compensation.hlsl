@@ -50,11 +50,6 @@ struct EnergyCompensationDielectricResult {
   float visible_probability;
 };
 
-struct EnergyCompensationLobe {
-  SpectralResponse bsdf;
-  float pdf;
-};
-
 [[vk::push_constant]] EnergyCompensationPushConstants constants;
 
 uint load_u32(ByteAddressBuffer buffer, uint byte_offset) {
@@ -252,98 +247,6 @@ SpectralResponse ec_conductor_fms(SpectralQuery spect, RefractiveIndexSample ext
   return spectral_response_div(numerator, spectral_response_max(denominator, kEpsilon));
 }
 
-EnergyCompensationLobe ec_conductor_base_lobe(SpectralQuery spect, float3 w_i, float3 w_o, float alpha, RefractiveIndexSample ext_ior,
-  RefractiveIndexSample int_ior, ThinfilmEval thinfilm) {
-  EnergyCompensationLobe result = (EnergyCompensationLobe)0;
-  result.bsdf = spectral_response_make(spect, 0.0f);
-  if ((w_i.z <= kEpsilon) || (w_o.z <= kEpsilon)) {
-    return result;
-  }
-  float3 half_vector_sum = w_i + w_o;
-  if (dot(half_vector_sum, half_vector_sum) <= kEpsilon) {
-    return result;
-  }
-  float3 m = normalize(half_vector_sum);
-  if ((m.z <= kEpsilon) || (dot(w_i, m) <= kEpsilon) || (dot(w_o, m) <= kEpsilon)) {
-    return result;
-  }
-  SpectralResponse fresnel = bsdf_fresnel_calculate(spect, dot(w_i, m), ext_ior, int_ior, thinfilm);
-  float lambda_i = bsdf_external_ray_info_make(w_i, float2(alpha, alpha)).Lambda;
-  float lambda_o = bsdf_external_ray_info_make(w_o, float2(alpha, alpha)).Lambda;
-  float d = bsdf_external_d_ggx(m, float2(alpha, alpha));
-  float g2 = 1.0f / (1.0f + lambda_i + lambda_o);
-  result.bsdf = spectral_response_mul(fresnel, d * g2 / (4.0f * w_i.z));
-  float vndf_pdf = bsdf_external_vndf_pdf(w_i, m, alpha);
-  result.pdf = vndf_pdf / max(kEpsilon, 4.0f * dot(w_o, m));
-  return result;
-}
-
-EnergyCompensationLobe ec_dielectric_base_lobe(SpectralQuery spect, float3 w_i_local, float3 w_o_local, float alpha, RefractiveIndexSample ext_ior,
-  RefractiveIndexSample int_ior, ThinfilmEval thinfilm) {
-  EnergyCompensationLobe result = (EnergyCompensationLobe)0;
-  result.bsdf = spectral_response_make(spect, 0.0f);
-  if ((abs(w_i_local.z) <= kEpsilon) || (abs(w_o_local.z) <= kEpsilon)) {
-    return result;
-  }
-  bool outside = w_i_local.z > 0.0f;
-  float direction_scale = outside ? 1.0f : -1.0f;
-  float3 w_i = direction_scale * w_i_local;
-  float3 w_o = direction_scale * w_o_local;
-  bool reflection = w_o.z > 0.0f;
-  RefractiveIndexSample phase_ext_ior = ec_select_refractive_index(outside, ext_ior, int_ior);
-  RefractiveIndexSample phase_int_ior = ec_select_refractive_index(outside, int_ior, ext_ior);
-  float eta = spectral_response_monochromatic(spectral_response_div(phase_int_ior.eta, phase_ext_ior.eta));
-  float lambda_i = bsdf_external_ray_info_make(w_i, float2(alpha, alpha)).Lambda;
-
-  if (reflection) {
-    float3 half_vector_sum = w_i + w_o;
-    if (dot(half_vector_sum, half_vector_sum) <= kEpsilon) {
-      return result;
-    }
-    float3 m = normalize(half_vector_sum);
-    if ((m.z <= kEpsilon) || (dot(w_i, m) <= kEpsilon) || (dot(w_o, m) <= kEpsilon)) {
-      return result;
-    }
-    SpectralResponse fresnel = bsdf_fresnel_calculate(spect, dot(w_i, m), phase_ext_ior, phase_int_ior, thinfilm);
-    float lambda_o = bsdf_external_ray_info_make(w_o, float2(alpha, alpha)).Lambda;
-    float d = bsdf_external_d_ggx(m, float2(alpha, alpha));
-    float g2 = 1.0f / (1.0f + lambda_i + lambda_o);
-    result.bsdf = spectral_response_mul(fresnel, d * g2 / (4.0f * w_i.z));
-    float vndf_pdf = bsdf_external_vndf_pdf(w_i, m, alpha);
-    float fresnel_probability = spectral_response_monochromatic(fresnel);
-    result.pdf = fresnel_probability * vndf_pdf / max(kEpsilon, 4.0f * dot(w_o, m));
-    return result;
-  }
-
-  float3 m = normalize(w_i + w_o * eta);
-  m *= (m.z >= 0.0f) ? 1.0f : -1.0f;
-  float i_dot_m = dot(w_i, m);
-  float o_dot_m = dot(w_o, m);
-  float denominator = i_dot_m + eta * o_dot_m;
-  if ((m.z <= kEpsilon) || (i_dot_m <= kEpsilon) || (o_dot_m >= -kEpsilon) || (abs(denominator) <= kEpsilon)) {
-    return result;
-  }
-  SpectralResponse fresnel = bsdf_fresnel_calculate(spect, i_dot_m, phase_ext_ior, phase_int_ior, thinfilm);
-  SpectralResponse one_minus_fresnel = spectral_response_sub(spectral_response_make(spect, 1.0f), fresnel);
-  float3 oriented_w_o = -w_o;
-  float lambda_o = bsdf_external_ray_info_make(oriented_w_o, float2(alpha, alpha)).Lambda;
-  float d = bsdf_external_d_ggx(m, float2(alpha, alpha));
-  float g2 = bsdf_external_beta(1.0f + lambda_i, 1.0f + lambda_o);
-  if (isfinite(g2) == false) {
-    return result;
-  }
-  float scalar = i_dot_m * max(0.0f, -o_dot_m) * d * g2 / (w_i.z * denominator * denominator);
-  if (isfinite(scalar) == false) {
-    return result;
-  }
-  result.bsdf = spectral_response_mul(one_minus_fresnel, scalar * eta * eta);
-  float vndf_pdf = bsdf_external_vndf_pdf(w_i, m, alpha);
-  float fresnel_probability = 1.0f - spectral_response_monochromatic(fresnel);
-  float dwh_dwo = (eta * eta) * abs(o_dot_m) / (denominator * denominator);
-  result.pdf = fresnel_probability * vndf_pdf * dwh_dwo;
-  return result;
-}
-
 EnergyCompensationDirectionalResult ec_integrate_conductor_directional(EnergyCompensationParams params, uint channel, float mu_i, float alpha) {
   EnergyCompensationDirectionalResult result = (EnergyCompensationDirectionalResult)0;
   if (mu_i <= kEpsilon) {
@@ -366,17 +269,12 @@ EnergyCompensationDirectionalResult ec_integrate_conductor_directional(EnergyCom
     }
     float3 w_o = -w_i + 2.0f * m * i_dot_m;
     if (w_o.z > 0.0f) {
-      float vndf_pdf = bsdf_external_vndf_pdf(w_i, m, alpha);
-      float raw_specular_pdf = vndf_pdf / max(kEpsilon, 4.0f * dot(w_o, m));
-      EnergyCompensationLobe lobe = ec_conductor_base_lobe(spect, w_i, w_o, alpha, ext_ior, int_ior, thinfilm);
-      if ((raw_specular_pdf > kEpsilon) && (lobe.pdf > kEpsilon)) {
-        float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
-        result.albedo += float4(albedo / raw_specular_pdf, 0.0f);
-        float lambda_o = bsdf_external_ray_info_make(w_o, alpha2).Lambda;
-        float d = bsdf_external_d_ggx(m, alpha2);
-        float g2 = 1.0f / (1.0f + lambda_i + lambda_o);
-        result.geometric_albedo += (d * g2 / (4.0f * w_i.z)) / raw_specular_pdf;
-      }
+      float lambda_o = bsdf_external_ray_info_make(w_o, alpha2).Lambda;
+      float geometric_weight = (1.0f + lambda_i) / (1.0f + lambda_i + lambda_o);
+      SpectralResponse fresnel = bsdf_fresnel_calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
+      float3 albedo = spectral_response_is_spectral(fresnel) ? float3(fresnel.value, 0.0f, 0.0f) : fresnel.integrated;
+      result.albedo += float4(albedo * geometric_weight, 0.0f);
+      result.geometric_albedo += geometric_weight;
       if (g1_i > kEpsilon) {
         result.visible_probability += 1.0f;
       }
@@ -424,6 +322,7 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
   }
 
   float3 w_i = ec_incident_direction_from_mu(mu_i);
+  float lambda_i = bsdf_external_ray_info_make(w_i, float2(alpha, alpha)).Lambda;
   if (multiscatter == false) {
     for (uint sample_index = 0u; sample_index < params.sample_count; ++sample_index) {
       float3 m = bsdf_external_sample_vndf_local(w_i, alpha, ec_hammersley(sample_index, params.sample_count));
@@ -435,28 +334,26 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
       float fresnel_probability = spectral_response_monochromatic(fresnel);
       float cos_theta_t2 = 1.0f - (1.0f - i_dot_m * i_dot_m) / (eta * eta);
       float3 w_o_r = -w_i + 2.0f * m * i_dot_m;
-      if ((w_i.z * w_o_r.z) > kEpsilon) {
+      if (w_o_r.z > kEpsilon) {
         result.branch_visible_probability[incident_side] += fresnel_probability;
       }
-      if (w_o_r.z > 0.0f) {
-        EnergyCompensationLobe lobe = ec_dielectric_base_lobe(spect, w_i, w_o_r, alpha, source_ior, target_ior, thinfilm);
-        if ((fresnel_probability > kEpsilon) && (lobe.pdf > kEpsilon)) {
-          float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
-          result.branch_albedo[incident_side] += float4(albedo * (fresnel_probability / lobe.pdf), 0.0f);
-        }
+      if (w_o_r.z > kEpsilon) {
+        float lambda_o = bsdf_external_ray_info_make(w_o_r, float2(alpha, alpha)).Lambda;
+        float weight = (1.0f + lambda_i) / (1.0f + lambda_i + lambda_o);
+        float3 albedo = spectral_response_is_spectral(fresnel) ? float3(fresnel.value, 0.0f, 0.0f) : fresnel.integrated;
+        result.branch_albedo[incident_side] += float4(albedo * weight, 0.0f);
       }
       if ((fresnel_probability < 1.0f) && (cos_theta_t2 > 0.0f)) {
         const float3 w_o_t = normalize(bsdf_external_refract(w_i, m, eta));
-        if ((w_i.z * w_o_t.z) < -kEpsilon) {
+        if (w_o_t.z < -kEpsilon) {
           result.branch_visible_probability[opposite_side] += 1.0f - fresnel_probability;
         }
-        if (w_o_t.z < 0.0f) {
-          EnergyCompensationLobe lobe = ec_dielectric_base_lobe(spect, w_i, w_o_t, alpha, source_ior, target_ior, thinfilm);
-          float transmission_probability = 1.0f - fresnel_probability;
-          if ((transmission_probability > kEpsilon) && (lobe.pdf > kEpsilon)) {
-            float3 albedo = spectral_response_is_spectral(lobe.bsdf) ? float3(lobe.bsdf.value, 0.0f, 0.0f) : lobe.bsdf.integrated;
-            result.branch_albedo[opposite_side] += float4(albedo * (transmission_probability / lobe.pdf), 0.0f);
-          }
+        if (w_o_t.z < -kEpsilon) {
+          float lambda_o = bsdf_external_ray_info_make(-w_o_t, float2(alpha, alpha)).Lambda;
+          float weight = (1.0f + lambda_i) * bsdf_external_beta(1.0f + lambda_i, 1.0f + lambda_o);
+          SpectralResponse transmission = spectral_response_sub(spectral_response_make(spect, 1.0f), fresnel);
+          float3 albedo = spectral_response_is_spectral(transmission) ? float3(transmission.value, 0.0f, 0.0f) : transmission.integrated;
+          result.branch_albedo[opposite_side] += float4(albedo * weight, 0.0f);
         }
       }
     }
@@ -531,17 +428,14 @@ float4 ec_integrate_average(uint buffer_index, uint alpha_index, uint lut_size, 
 
 float4 ec_integrate_dielectric_branch_average(uint buffer_index, uint alpha_index, uint branch) {
   float4 total = float4(0.0f, 0.0f, 0.0f, 0.0f);
-  float h = 1.0f / float(kBSDFEnergyCompensationDielectricLutSize - 1u);
   uint width = kBSDFEnergyCompensationDielectricBranchCount * kBSDFEnergyCompensationDielectricLutSize;
   uint branch_offset = branch * kBSDFEnergyCompensationDielectricLutSize;
   uint row_offset = alpha_index * width;
   for (uint mu_index = 0u; mu_index < (kBSDFEnergyCompensationDielectricLutSize - 1u); ++mu_index) {
-    float mu = float(mu_index) * h;
-    float weight_0 = h * mu + h * h / 3.0f;
-    float weight_1 = h * mu + 2.0f * h * h / 3.0f;
+    float2 weights = bsdf_energy_compensated_dielectric_average_weights(mu_index, kBSDFEnergyCompensationDielectricLutSize);
     float4 value_0 = load_float4(buffer_index, row_offset + branch_offset + mu_index);
     float4 value_1 = load_float4(buffer_index, row_offset + branch_offset + mu_index + 1u);
-    total += value_0 * weight_0 + value_1 * weight_1;
+    total += value_0 * weights.x + value_1 * weights.y;
   }
   return ec_saturate4(total);
 }
@@ -643,7 +537,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     uint alpha_index = id.y - side * kBSDFEnergyCompensationDielectricLutSize;
     uint mu_index = id.x;
     bool incident_outside = side == 0u;
-    float mu = ec_mu_parameter(mu_index, kBSDFEnergyCompensationDielectricLutSize);
+    float mu = bsdf_energy_compensated_dielectric_mu_parameter(mu_index, kBSDFEnergyCompensationDielectricLutSize);
     float alpha = ec_alpha_parameter(alpha_index, kBSDFEnergyCompensationDielectricLutSize);
     float4 branch_albedo[2] = {float4(0.0f, 0.0f, 0.0f, 0.0f), float4(0.0f, 0.0f, 0.0f, 0.0f)};
     float4 total_albedo[2] = {float4(0.0f, 0.0f, 0.0f, 0.0f), float4(0.0f, 0.0f, 0.0f, 0.0f)};

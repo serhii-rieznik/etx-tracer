@@ -92,22 +92,7 @@ float3 incident_direction_from_mu(float mu) {
 }
 
 float3 sample_vndf_local(ETX_IN(float3, w_i), float alpha, ETX_IN(float2, rnd)) {
-  const float3 w_i_11 = normalize(float3(alpha * w_i.x, alpha * w_i.y, w_i.z));
-  const float2 slope_11 = bsdf_external_sample_p22_11(acos(lut_saturate(w_i_11.z)), rnd, float2(alpha, alpha));
-
-  const float phi = atan2(w_i_11.y, w_i_11.x);
-  float2 slope = float2(cos(phi) * slope_11.x - sin(phi) * slope_11.y, sin(phi) * slope_11.x + cos(phi) * slope_11.y);
-  slope.x *= alpha;
-  slope.y *= alpha;
-
-  if ((slope.x != slope.x) || (isinf(slope.x))) {
-    if (w_i.z > 0.0f) {
-      return float3(0.0f, 0.0f, 1.0f);
-    }
-    return normalize(float3(w_i.x, w_i.y, 0.0f));
-  }
-
-  return normalize(float3(-slope.x, -slope.y, 1.0f));
+  return bsdf_external_sample_vndf_local(w_i, alpha, rnd);
 }
 
 ThinfilmEval empty_thinfilm() {

@@ -3,6 +3,7 @@
 #include "thermal_radiation_shared.hxx"
 #include "bsdf_energy_compensated_shared.hxx"
 #include "bsdf_various_shared.hxx"
+#include "bsdf_plastic_shared.hxx"
 #include "scene_math_shared.hxx"
 
 ETX_STATIC_CONST uint32_t kThermalSurfaceDirectionCount = 256u;
@@ -12,16 +13,29 @@ ETX_SHARED_INLINE float thermal_surface_equilibrium_radiance(ETX_IN(BSDFResource
 }
 
 ETX_SHARED_INLINE float thermal_surface_directional_reflectance(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material), float mu) {
-  if (material.cls == MaterialClass::Diffuse) {
+  if ((material.cls == MaterialClass::Diffuse) || (material.cls == MaterialClass::Plastic)) {
     const float albedo = bsdf_resource_load_spectrum(context, material.scattering.spectrum_index, spect).value;
     const float roughness = saturate(0.5f * (material.roughness.value.x + material.roughness.value.y));
-    if (roughness <= kEpsilon) {
-      return albedo;
-    }
     const float e = bsdf_diffuse_eon_directional_albedo(mu, roughness);
     const float e_avg = bsdf_diffuse_eon_average_albedo(roughness);
     const float rho_ms = (albedo * albedo * e_avg) / (1.0f - albedo * (1.0f - e_avg));
-    return albedo * e + rho_ms * (1.0f - e);
+    const float diffuse_albedo = albedo * e + rho_ms * (1.0f - e);
+    if (material.cls == MaterialClass::Diffuse) {
+      return diffuse_albedo;
+    }
+
+    Material spectral_material = material;
+    spectral_material.energy_compensation_interface_index = material.thermal_energy_compensation_interface_index;
+    BSDFData data = ETX_ZERO(BSDFData);
+    data.spectrum_sample = spect;
+    const float alpha = bsdf_energy_compensated_scalar_roughness_from_value(float2(material.roughness.value.x, material.roughness.value.y));
+    const BSDFPlasticIncidentTerms terms =
+      bsdf_plastic_prepare_incident_terms(context, data, spectral_material, float3(sqrt(max(0.0f, 1.0f - mu * mu)), 0.0f, mu), spectral_response_make(spect, albedo), alpha, 0.0f);
+    const float cached_single_scattering = bsdf_energy_compensated_dielectric_branch_value(context, spect, spectral_material, mu, alpha, true, true, 0.0f).albedo.x;
+    const float compensation = bsdf_plastic_external_reflection_albedo(context, spect, spectral_material, mu, alpha, 0.0f).value - cached_single_scattering;
+    const float coating_albedo = bsdf_energy_compensated_conductor_prepared_albedo(context, spect, material, mu).x + compensation;
+    const float reflectance = bsdf_resource_load_spectrum(context, material.reflectance.spectrum_index, spect).value;
+    return reflectance * coating_albedo + terms.diffuse_scale.value * diffuse_albedo;
   }
 
   Material spectral_material = material;

@@ -69,7 +69,7 @@ float wavefront_connect_camera_weight(WavefrontConnectCameraPrepareInput input_v
 
   float current_from_camera_dir = camera_shared_film_pdf_out(input_value.camera, input_value.camera_sample.position, input_value.current_vertex.position);
   float current_from_camera = wavefront_convert_solid_angle_pdf_to_area(current_from_camera_dir, input_value.camera_sample.position, input_value.current_vertex.position,
-    wavefront_path_vertex_is_surface(input_value.current_vertex), input_value.current_vertex.normal);
+    wavefront_path_vertex_is_surface(input_value.current_vertex), input_value.current_vertex.geo_normal);
 
   BSDFData reverse_data =
     wavefront_connect_camera_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.hit.medium_index, -input_value.camera_sample.direction);

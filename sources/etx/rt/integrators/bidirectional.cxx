@@ -127,7 +127,12 @@ struct PathVertex {
     float inv_d_squared = 1.0f / d_squared;
     w_o *= sqrtf(inv_d_squared);
 
-    float cos_t = (to_vertex.is_surface_interaction() ? fabsf(dot(w_o, to_vertex.intersection.nrm)) : 1.0f);
+    float cos_t = 1.0f;
+    if (to_vertex.is_surface_interaction()) {
+      const auto& scene = scene_global_get();
+      const auto& intersection = to_vertex.intersection;
+      cos_t = fabsf(dot(w_o, scene_triangle_world_geometric_normal(scene, scene.triangles[intersection.triangle_index], intersection.instance_index)));
+    }
 
     float result = cos_t * pdf_dir * inv_d_squared;
     ETX_VALIDATE(result);
@@ -400,7 +405,10 @@ struct CPUBidirectionalImpl : public Task {
     }
 
     if (curr.is_surface_interaction()) {
-      const float cos_to_prev = fabsf(dot(curr.intersection.nrm, -curr.intersection.w_i));
+      const auto& scene = rt.scene();
+      const auto& intersection = curr.intersection;
+      const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, scene.triangles[intersection.triangle_index], intersection.instance_index);
+      const float cos_to_prev = fabsf(dot(geometric_normal, -intersection.w_i));
       if (cos_to_prev > 0.0f) {
         const bool finite_segment = (payload.mode == PathSource::Camera) || (first_interaction == false) || (emitter_sample.is_distant == false);
         if (finite_segment) {
@@ -425,7 +433,11 @@ struct CPUBidirectionalImpl : public Task {
       return;
     }
 
-    const float cos_theta = curr.is_surface_interaction() ? fabsf(dot(curr.intersection.nrm, sample.w_o)) : 1.0f;
+    const auto& scene = rt.scene();
+    const auto& intersection = curr.intersection;
+    const float cos_theta = curr.is_surface_interaction()
+                              ? fabsf(dot(scene_triangle_world_geometric_normal(scene, scene.triangles[intersection.triangle_index], intersection.instance_index), sample.w_o))
+                              : 1.0f;
     if (sample.properties & BSDFSample::Delta) {
       payload.d_vcm = 0.0f;
       payload.d_vc *= cos_theta;

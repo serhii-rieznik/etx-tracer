@@ -30,6 +30,10 @@ Medium SceneData::transport_medium(size_t index) const {
   const ThermalMediumState& state = thermal_medium_states[index - mediums_vector.size()];
   Medium result = mediums_vector[state.base_medium_index];
   result.thermal_source_index = state.source_spectrum_index;
+  result.emission_flags = state.emission_flags;
+  if (state.absorption_spectrum_index != kInvalidIndex) {
+    result.absorption_index = state.absorption_spectrum_index;
+  }
   return result;
 }
 
@@ -49,9 +53,17 @@ uint32_t SceneData::transport_medium_index(uint32_t index) const {
     if (found && (temperature != material.temperature_kelvin)) {
       return kInvalidIndex;
     }
+    const uint32_t candidate = (material.thermal_int_medium_index != kInvalidIndex) ? material.thermal_int_medium_index : index;
+    if (found) {
+      const uint32_t absorption = transport_medium(result).absorption_index;
+      const uint32_t candidate_absorption = transport_medium(candidate).absorption_index;
+      if ((absorption != candidate_absorption) && (std::memcmp(&spectrum_values[absorption], &spectrum_values[candidate_absorption], sizeof(SpectralDistribution)) != 0)) {
+        return kInvalidIndex;
+      }
+    }
     found = true;
     temperature = material.temperature_kelvin;
-    result = (material.thermal_int_medium_index != kInvalidIndex) ? material.thermal_int_medium_index : index;
+    result = candidate;
   }
   return result;
 }
