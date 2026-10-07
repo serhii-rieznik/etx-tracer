@@ -39,6 +39,7 @@ struct SpectrumSource {
 
   SpectralDistribution output() const;
   void generate();
+  void update_integrated_value();
   bool matches(const SpectralDistribution& spectrum) const;
 };
 

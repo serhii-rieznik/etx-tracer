@@ -442,11 +442,17 @@ void SpectrumSource::generate() {
     base = kind == Kind::IOR        ? SpectralDistribution::constant(color.x)
            : kind == Kind::Emission ? SpectralDistribution::rgb_luminance(color)
                                     : SpectralDistribution::rgb_reflectance(color);
-    if (kind == Kind::IOR) {
-      const float2 values[] = {{kShortestWavelength, color.x}, {kLongestWavelength, color.x}};
-      base = SpectralDistribution::from_samples(values, 2u);
-      base.integrated_value = rgb_to_xyz(base.integrated());
-    }
+  }
+}
+
+void SpectrumSource::update_integrated_value() {
+  if (kind == Kind::IOR) {
+    base.update_integrated_value(SpectralDistribution::Integration::Coefficient);
+  } else if (mode == Mode::Spectrum) {
+    const auto integration = kind == Kind::Reflectance ? SpectralDistribution::Integration::Reflectance
+                             : kind == Kind::Emission  ? SpectralDistribution::Integration::Radiance
+                                                       : SpectralDistribution::Integration::Coefficient;
+    base.update_integrated_value(integration);
   }
 }
 

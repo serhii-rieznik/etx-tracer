@@ -1423,6 +1423,8 @@ bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& dat
     if (author.matches(decoded_values[i]) == false) {
       return false;
     }
+    author.update_integrated_value();
+    data.spectrum_values[spectrum_mapping[i]] = author.output();
     data.spectrum_sources.emplace(spectrum_mapping[i], std::move(author));
   }
 

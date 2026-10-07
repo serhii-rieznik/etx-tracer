@@ -72,8 +72,8 @@ std::shared_ptr<const TemperatureOpticalProfile> parse_temperature_optics(const 
     }
     sample.eta = SpectralDistribution::from_samples(eta_grid.data(), eta_grid.size());
     sample.k = SpectralDistribution::from_samples(k_grid.data(), k_grid.size());
-    sample.eta.integrated_value = rgb_to_xyz(sample.eta.integrated_value);
-    sample.k.integrated_value = rgb_to_xyz(sample.k.integrated_value);
+    sample.eta.update_integrated_value(SpectralDistribution::Integration::Coefficient);
+    sample.k.update_integrated_value(SpectralDistribution::Integration::Coefficient);
     if ((valid_value(sample.eta.integrated()) == false) || (valid_value(sample.k.integrated()) == false)) {
       return false;
     }

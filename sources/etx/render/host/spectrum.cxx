@@ -82,10 +82,31 @@ SpectralDistribution SpectralDistribution::from_samples(const float2 wavelengths
   }
   ETX_ASSERT(result.valid());
 
-  float3 xyz = result.integrate_to_xyz();
-  result.integrated_value = xyz_to_rgb(xyz);
-  result.integrated_value = max(result.integrated_value, float3{0.0f, 0.0f, 0.0f});
+  result.update_integrated_value(Integration::Radiance);
   return result;
+}
+
+void SpectralDistribution::update_integrated_value(Integration integration) {
+  if (integration == Integration::Radiance) {
+    integrated_value = max(xyz_to_rgb(integrate_to_xyz()), float3{});
+    return;
+  }
+  if (integration == Integration::Coefficient) {
+    static const float3 unit_xyz = SpectralDistribution::constant(1.0f).integrate_to_xyz();
+    integrated_value = integrate_to_xyz() / unit_xyz;
+    return;
+  }
+
+  static const SpectralDistribution white_illuminant = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
+  static const float3 white_rgb = xyz_to_rgb(white_illuminant.integrate_to_xyz());
+  SpectralDistribution illuminated = *this;
+  for (uint32_t i = 0u; i < spectral_entry_count; ++i) {
+    const SpectralQuery query(spectral_entries[i].wavelength, SpectralFlags::Spectral);
+    illuminated.spectral_entries[i].power *= white_illuminant.query(query).value;
+  }
+  // Project out-of-gamut colors into the representable RGB albedo range.
+  const float maximum = maximum_spectral_power();
+  integrated_value = min(max(xyz_to_rgb(illuminated.integrate_to_xyz()) / white_rgb, float3{}), float3{maximum, maximum, maximum});
 }
 
 void SpectralDistribution::scale(float factor) {
@@ -337,6 +358,12 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
 
   values0 = from_samples(samples0.data(), samples0.size());
 
+  if (cls == Reflectance) {
+    values0.update_integrated_value(Integration::Reflectance);
+  } else if ((cls == Conductor) || (cls == Dielectric)) {
+    values0.update_integrated_value(Integration::Coefficient);
+  }
+
   if (values1) {
     if (samples1.empty()) {
       float2 zero_samples[2] = {
@@ -346,6 +373,9 @@ SpectralDistribution::Class SpectralDistribution::load_from_file(const char* fil
       *values1 = from_samples(zero_samples, 2);
     } else {
       *values1 = from_samples(samples1.data(), samples1.size());
+    }
+    if ((cls == Conductor) || (cls == Dielectric)) {
+      values1->update_integrated_value(Integration::Coefficient);
     }
   }
 
@@ -372,10 +402,7 @@ SpectralDistribution::Class SpectralDistribution::load_refractive_index(const ch
     return profile->cls;
   }
   SpectralDistribution::Class cls = SpectralDistribution::load_from_file(file_name, out_eta, &out_k, true, out_title);
-  if (cls != SpectralDistribution::Invalid) {
-    out_eta.integrated_value = rgb_to_xyz(out_eta.integrated_value);
-    out_k.integrated_value = rgb_to_xyz(out_k.integrated_value);
-  } else {
+  if (cls == SpectralDistribution::Invalid) {
     out_eta = SpectralDistribution::constant(1.0f);
     out_k = SpectralDistribution::constant(0.0f);
   }

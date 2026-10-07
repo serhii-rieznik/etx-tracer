@@ -24,7 +24,7 @@ ETX_STATIC_CONST float kRGBResponseShortestWavelength = float(RGBResponseShortes
 ETX_STATIC_CONST float kRGBResponseLongestWavelength = float(RGBResponseLongestWavelength);
 ETX_STATIC_CONST float kRGBResponseWavelengthCount = float(RGBResponseWavelengthCount);
 ETX_STATIC_CONST float kUndefinedWavelength = -1.0f;
-ETX_STATIC_CONST float kInvCIEYIntegral = 1.0f / 106.856895f;
+ETX_STATIC_CONST float kInvCIEYIntegral = 1.0f / 118.517887f;
 ETX_STATIC_CONST float kWavelengthSamplingUniformMixture = 0.05f;
 ETX_STATIC_CONST float3 kSpectralDistributionRGBLuminanceScale = float3(0.817660332f, 1.05418909f, 1.09945524f);
 

@@ -32,9 +32,7 @@ void set_document(SpectrumSource& source, const SpectrumDocument& document) {
   source.path = document.path;
   source.classification = document.classification;
   source.base = document.distribution();
-  if (source.kind == SpectrumSource::Kind::IOR) {
-    source.base.integrated_value = rgb_to_xyz(source.base.integrated());
-  }
+  source.update_integrated_value();
 }
 }  // namespace
 

@@ -377,9 +377,12 @@ struct SpectralDistribution : public ::SpectralDistribution {
  public:
   SpectralDistribution() = default;
 
+  enum class Integration { Radiance, Reflectance, Coefficient };
+
   void scale(float factor);
 
   float3 integrate_to_xyz() const;
+  void update_integrated_value(Integration integration);
 
   const float3& integrated() const;
 
