@@ -38,8 +38,9 @@ target_link_libraries(bsdf_validation
   PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
 )
 
+add_dependencies(procedural_geometry etx-import-obj etx-import-gltf etx-import-tungsten etx-import-legacy)
 target_link_libraries(procedural_geometry
-  PRIVATE imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
+  PRIVATE etx-import imgui sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
 )
 
 target_link_libraries(scene_hierarchy

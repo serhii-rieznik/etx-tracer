@@ -1,3 +1,4 @@
+#include <etx/core/core.hxx>
 #include <etx/core/log.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/host/temperature_optics.hxx>
@@ -148,7 +149,7 @@ SpectralDistribution SpectralDistribution::rgb_luminance(const float3& rgb) {
 
 SpectralDistribution::Class SpectralDistribution::load_from_file(const char* file_name, SpectralDistribution& values0, SpectralDistribution* values1, bool extend_range,
   std::string& out_title) {
-  auto file = fopen(file_name, "r");
+  auto file = fopen_utf8(file_name, "r");
   if (file == nullptr) {
     log::error("Failed to load SpectralDistribution from file: %s\n", file_name);
     return SpectralDistribution::Invalid;

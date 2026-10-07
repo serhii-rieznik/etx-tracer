@@ -136,4 +136,12 @@ std::string path_to_utf8(const std::filesystem::path& path) {
   return {reinterpret_cast<const char*>(value.data()), value.size()};
 }
 
+FILE* fopen_utf8(const char* path, const char* mode) {
+#if (ETX_PLATFORM_WINDOWS)
+  return _wfopen(std::filesystem::u8path(path).c_str(), std::filesystem::u8path(mode).c_str());
+#else
+  return fopen(path, mode);
+#endif
+}
+
 }  // namespace etx

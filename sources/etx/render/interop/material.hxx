@@ -113,6 +113,11 @@ struct ETX_ALIGNED Material {
   uint32_t thermal_conductor_image_index ETX_INIT(kInvalidIndex);
   float subsurface_packing ETX_INIT(0.0f);
   float subsurface_anisotropy ETX_INIT(0.0f);
+#if (ETX_CPP)
+  // GPU visibility and shading load map bindings through MaterialAccess rather than the BSDF material view.
+  SampledImage alpha_mask ETX_INIT({{1.0f, 1.0f, 1.0f, 1.0f}, kInvalidIndex, kInvalidIndex});
+  SampledImage bump ETX_INIT({{0.0f, 0.0f, 0.0f, 0.0f}, kInvalidIndex, 0u});
+#endif
 };
 
 ETX_SHARED_INLINE uint32_t material_boundary_class(uint32_t material_class, uint32_t subsurface_class) {

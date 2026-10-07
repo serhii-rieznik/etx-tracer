@@ -51,6 +51,13 @@ ETX_SHARED_INLINE ::Image make_gpu_image_descriptor(const Image& image, PackedPa
   result.pixel_data_chunk_index = pixel_payload.chunk_index;
   result.x_distribution_chunk_index = x_distribution_payload.chunk_index;
   result.y_distribution_chunk_index = y_distribution_payload.chunk_index;
+  result.texture_uv_scale = {1.0f, 1.0f};
+  if ((image.options & Image::TextureUVTransform) != 0u) {
+    result.texture_uv_offset = {image.offset.x, image.offset.y};
+    result.texture_uv_scale = {image.scale.x, image.scale.y};
+  }
+  if (((image.options & Image::TexelCenteredUV) != 0u) && (image.fsize.x > 0.0f) && (image.fsize.y > 0.0f))
+    result.texture_uv_offset -= float2{0.5f / image.fsize.x, 0.5f / image.fsize.y};
   return result;
 }
 

@@ -135,18 +135,14 @@ ETX_SHARED_INLINE ThinfilmEval bsdf_resource_evaluate_thinfilm(ETX_IN(BSDFResour
   return result;
 }
 
+#if (ETX_CPP)
 ETX_SHARED_INLINE bool bsdf_alpha_test_pass(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv), ETX_INOUT(Sampler, sampler)) {
   if (material.cls == MaterialClass::Void) {
     return true;
   }
 
-  float material_alpha = material.opacity;
-  float alpha_diffuse = 1.0f;
-  if ((material.scattering.image_index != kInvalidIndex) && bsdf_resource_image_has_alpha(context, material.scattering.image_index)) {
-    alpha_diffuse = bsdf_resource_image_sample_channel_or_default(context, material.scattering.image_index, 3u, uv, 1.0f);
-  }
-
-  float alpha_test_value = alpha_diffuse * material_alpha;
+  const float alpha_mask = bsdf_resource_evaluate_sampled_image(context, material.alpha_mask, uv, 1.0f);
+  float alpha_test_value = alpha_mask * material.alpha_mask.value.x * material.opacity;
   if (alpha_test_value <= 0.0f) {
     return true;
   }
@@ -155,3 +151,4 @@ ETX_SHARED_INLINE bool bsdf_alpha_test_pass(ETX_IN(BSDFResourceContext, context)
   }
   return alpha_test_value <= bsdf_sampler_next(sampler);
 }
+#endif

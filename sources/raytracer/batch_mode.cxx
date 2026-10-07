@@ -389,6 +389,8 @@ const char* full_comparison_group_name(const BDPTMode mode) {
 
 const char* batch_usage_string() {
   return "Usage:\n"
+         "  raytracer --import <source-file> --output <native.etx.json> [--importer <id>]\n"
+         "  raytracer --list-importers\n"
          "  raytracer --render --scene <scene-file> --output <output-file> [options]\n"
          "  raytracer --full-comparison --scene <scene-file> [options]\n"
          "  raytracer --cpu-comparison --scene <scene-file> [options]\n"

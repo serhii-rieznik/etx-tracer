@@ -1,4 +1,5 @@
 #include <etx/render/host/exr.hxx>
+#include <etx/core/core.hxx>
 
 #include <exr.h>
 
@@ -107,8 +108,13 @@ bool load_exr_image(const char* path, std::vector<float4>& pixels, uint2& dimens
     return false;
   }
 
+  std::vector<uint8_t> contents;
+  if (load_binary_file(path, contents) == false) {
+    set_error(error, EXR_ERROR_IO);
+    return false;
+  }
   exr_image image = {};
-  const exr_result load_result = exr_load_from_file(path, nullptr, &image);
+  const exr_result load_result = exr_load_from_memory(contents.data(), contents.size(), nullptr, &image);
   if (!EXR_OK(load_result)) {
     set_error(error, load_result);
     return false;
@@ -204,12 +210,24 @@ bool save_exr_image(const char* path, const float4* pixels, uint2 dimensions, st
   if (prepare_exr_write_image(pixels, dimensions, write_image, error) == false) {
     return false;
   }
-  const exr_result save_result = exr_save_to_file(path, &write_image.image, write_image.compression);
+  void* contents = nullptr;
+  size_t size = 0u;
+  const exr_result save_result = exr_save_to_memory(&contents, &size, nullptr, &write_image.image, write_image.compression);
   if (EXR_OK(save_result) == false) {
     set_error(error, save_result);
     return false;
   }
-  return true;
+  FILE* file = fopen_utf8(path, "wb");
+  bool saved = false;
+  if (file != nullptr) {
+    const size_t written = fwrite(contents, 1u, size, file);
+    const bool closed = fclose(file) == 0;
+    saved = (written == size) && closed;
+  }
+  free(contents);
+  if (saved == false)
+    set_error(error, EXR_ERROR_IO);
+  return saved;
 }
 
 }  // namespace etx

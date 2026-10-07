@@ -6,6 +6,7 @@
 #include <etx/render/interop/material_scattering_shared.hxx>
 #include <etx/render/interop/surface_point_shared.hxx>
 #include <etx/render/interop/scene_math_shared.hxx>
+#include <etx/render/interop/bump_mapping_shared.hxx>
 #include <etx/render/shared/spectrum.hxx>
 #include <etx/render/shared/camera.hxx>
 #include <etx/render/shared/image.hxx>
@@ -16,6 +17,8 @@
 #include <etx/render/shared/bsdf.hxx>
 
 namespace etx {
+
+using SurfaceDerivatives = ::SurfaceDerivatives;
 
 constexpr uint32_t kMaximumPathLength = 1024u;
 
@@ -345,6 +348,26 @@ ETX_SHARED_INLINE float3 scene_triangle_world_geometric_normal(const Scene& scen
   return scene_instance_transform_normal(instance.world_to_object, triangle.geo_n) * orientation;
 }
 
+ETX_SHARED_INLINE bool evaluate_surface_derivatives(const Scene& scene, const Intersection& intersection, SurfaceDerivatives& derivatives) {
+  derivatives = {};
+  if ((intersection.triangle_index >= scene.triangles.count) || (scene.vertices.tex.count == 0u)) {
+    return false;
+  }
+  const Triangle& triangle = scene.triangles[intersection.triangle_index];
+  AffineTransform object_to_world = {};
+  AffineTransform world_to_object = {};
+  float orientation = 1.0f;
+  if ((intersection.instance_index != kInvalidIndex) && (intersection.instance_index < scene.instances.count)) {
+    const SceneInstance& instance = scene.instances[intersection.instance_index];
+    object_to_world = instance.object_to_world;
+    world_to_object = instance.world_to_object;
+    orientation = (instance.flags & SceneInstance::Mirrored) != 0u ? -1.0f : 1.0f;
+  }
+  return surface_derivatives_shared_compute_triangle(scene.vertices.pos[triangle.i[0]], scene.vertices.pos[triangle.i[1]], scene.vertices.pos[triangle.i[2]],
+    scene.vertices.nrm[triangle.i[0]], scene.vertices.nrm[triangle.i[1]], scene.vertices.nrm[triangle.i[2]], scene.vertices.tex[triangle.i[0]], scene.vertices.tex[triangle.i[1]],
+    scene.vertices.tex[triangle.i[2]], intersection.barycentric, object_to_world, world_to_object, orientation, derivatives);
+}
+
 ETX_SHARED_INLINE float3 shading_pos(const Scene& scene, const Triangle& triangle, const float3& bc, const float3& w_o, uint32_t instance_index) {
   const float3 g0 = scene_triangle_world_position(scene, triangle, 0u, instance_index);
   const float3 g1 = scene_triangle_world_position(scene, triangle, 1u, instance_index);
@@ -415,6 +438,26 @@ ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float
     ETX_ASSERT(is_valid_vector(result_intersection.btn));
   }
 
+  if (((mat.normal_image_index == kInvalidIndex) || (mat.normal_scale <= kEpsilon)) && (mat.bump.value.x != 0.0f)) {
+    SurfaceDerivatives derivatives;
+    if (evaluate_surface_derivatives(scene, result_intersection, derivatives)) {
+      float height = 1.0f;
+      float2 gradient = {};
+      if (mat.bump.image_index != kInvalidIndex) {
+        const Image& image = scene.images[mat.bump.image_index];
+        const float2 uv = image_texture_uv(result_intersection.tex, image.offset, image.scale, image.fsize, image.options);
+        const float2 fsize = {image.fsize.x, image.fsize.y};
+        const uint2 size = {image.isize.x, image.isize.y};
+        const auto address = image_filter_shared_address(uv, fsize, size, image.options);
+        const float2 uv_scale = (image.options & Image::TextureUVTransform) != 0u ? float2{image.scale.x, image.scale.y} : float2{1.0f, 1.0f};
+        bump_mapping_shared_sample(image.pixel(address.col_0, address.row_0), image.pixel(address.col_1, address.row_0), image.pixel(address.col_0, address.row_1),
+          image.pixel(address.col_1, address.row_1), address, uv, fsize, uv_scale, image.options, mat.bump.channel, height, gradient);
+      }
+      bump_mapping_shared_apply(derivatives, height * mat.bump.value.x, gradient * mat.bump.value.x, world_geo_n, w_i, result_intersection.nrm, result_intersection.tan,
+        result_intersection.btn);
+    }
+  }
+
   return result_intersection;
 }
 
@@ -457,7 +500,6 @@ ETX_SHARED_INLINE SpectralResponse apply_rgb(const SpectralQuery spect, Spectral
 
 float4 sample_whole_image(const SampledImage& img, const float2& uv);
 float evaluate_image_channel(uint32_t image_index, uint32_t channel, const float2& uv, float default_value);
-bool image_has_alpha_channel(uint32_t image_index);
 float2 sample_image_uv(uint32_t image_index, const float2& rnd);
 float2 sample_image_uv(uint32_t image_index, const float2& rnd, float& pdf, uint2& location, float4& value);
 float evaluate_image(const SampledImage& img, const float2& uv, float default_value);

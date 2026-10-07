@@ -127,13 +127,18 @@ bool emitter_access_try_load_image_params(EmitterAccessGPUContext context, uint 
   image_u_scale = 1.0f;
 
   ImageAccessGPUContext image_context = {context.images_descriptor_index};
-  ETX_ZERO_INIT(ImageAccessGPUDesc, image_access);
-  if (image_access_try_load(image_context, emission_image_index, image_access) == false) {
+  if (image_access_gpu_has_images(image_context) == false) {
     return false;
   }
 
-  image_offset = image_access.uv_offset.xy;
-  image_u_scale = image_access.uv_scale.x;
+  ByteAddressBuffer image_blob = bindless_buffers[NonUniformResourceIndex(context.images_descriptor_index)];
+  if (emission_image_index >= image_access_gpu_blob_image_count(image_blob)) {
+    return false;
+  }
+
+  const uint image_desc_offset = image_access_gpu_blob_desc_offset(image_blob, emission_image_index);
+  image_offset = image_access_gpu_blob_load_f32x2(image_blob, image_desc_offset + kImageDescOffsetOffset);
+  image_u_scale = asfloat(image_access_gpu_blob_load_u32(image_blob, image_desc_offset + kImageDescScaleOffset));
   return true;
 }
 

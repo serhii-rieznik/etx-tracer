@@ -1,4 +1,5 @@
-#include <etx/render/host/scene_obj_loader.hxx>
+#include <etx/std.hxx>
+#include "scene_obj_loader.hxx"
 
 #include <etx/core/core.hxx>
 #include <etx/core/log.hxx>
@@ -10,6 +11,7 @@
 #include <etx/render/host/scene_serialization.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
 #include <tiny_obj_loader.hxx>
+#include <stdexcept>
 
 namespace etx {
 
@@ -20,7 +22,7 @@ bool load_materials(SceneData& data, const IORDatabase& ior_database, TaskSchedu
   SceneSerialization serialization;
 
   if (materials_file && materials_file[0]) {
-    if (!serialization.parse_materials_file(materials_file, base_dir, data, ior_database, scheduler)) {
+    if (serialization.parse_materials_file(std::filesystem::u8path(materials_file), base_dir, data, ior_database, scheduler) == false) {
       log::warning("Failed to parse materials from %s", materials_file);
       return false;
     }
@@ -53,39 +55,48 @@ struct ObjFileData {
   tinyobj::attrib_t attrib;
   std::vector<tinyobj::shape_t> shapes;
   std::vector<tinyobj::material_t> materials;
+  std::vector<std::filesystem::path> material_files;
   std::string base_dir;
+};
+
+struct ObjMaterialReader : tinyobj::MaterialReader {
+  ObjMaterialReader(const std::filesystem::path& base_directory, std::vector<std::filesystem::path>& material_files)
+    : _base_directory(base_directory)
+    , _material_files(material_files) {
+  }
+
+  bool operator()(const std::string& name, std::vector<tinyobj::material_t>* materials, std::map<std::string, int>* mapping, std::string* warning, std::string* error) override {
+    const auto path = _base_directory / std::filesystem::u8path(name);
+    std::ifstream stream(path);
+    if (stream.is_open() == false) {
+      if (warning != nullptr)
+        *warning += "Failed to open material file: " + path_to_utf8(path) + "\n";
+      return false;
+    }
+    tinyobj::LoadMtl(mapping, materials, &stream, warning, error);
+    if (std::find(_material_files.begin(), _material_files.end(), path) == _material_files.end())
+      _material_files.push_back(path);
+    return true;
+  }
+
+ private:
+  std::filesystem::path _base_directory;
+  std::vector<std::filesystem::path>& _material_files;
 };
 
 bool load_obj_file_data(const char* obj_file_name, const char* mtl_file_name, ObjFileData& result) {
   constexpr auto kDataBufferSize = 2048llu;
-  static char base_dir[kDataBufferSize] = {};
+  char base_dir[kDataBufferSize] = {};
   get_base_directory(obj_file_name, base_dir, sizeof(base_dir));
   result.base_dir = base_dir;
-
-  std::string materials_to_load = {};
-
-  if ((mtl_file_name == nullptr) || (mtl_file_name[0] == 0)) {
-    std::ifstream obj_file(obj_file_name);
-    std::string line;
-    while (std::getline(obj_file, line)) {
-      if (line.substr(0, 6) == "mtllib") {
-        std::istringstream iss(line.substr(7));
-        std::string mtl_path;
-        iss >> mtl_path;
-        std::filesystem::path obj_path(obj_file_name);
-        std::filesystem::path mtl_full_path = obj_path.parent_path() / mtl_path;
-        materials_to_load = mtl_full_path.string().c_str();
-        break;
-      }
-    }
-  } else {
-    materials_to_load = mtl_file_name;
-  }
 
   std::string warnings;
   std::string errors;
 
-  if (tinyobj::LoadObj(&result.attrib, &result.shapes, &result.materials, &warnings, &errors, obj_file_name, base_dir, materials_to_load.c_str()) == false) {
+  std::ifstream stream(std::filesystem::u8path(obj_file_name));
+  ObjMaterialReader material_reader(std::filesystem::u8path(base_dir), result.material_files);
+  if ((stream.is_open() == false) ||
+      (tinyobj::LoadObj(&result.attrib, &result.shapes, &result.materials, &warnings, &errors, &stream, &material_reader, mtl_file_name, true, true) == false)) {
     log::error("Failed to load OBJ from file: `%s`\n%s", obj_file_name, errors.c_str());
     return false;
   }
@@ -97,38 +108,27 @@ bool load_obj_file_data(const char* obj_file_name, const char* mtl_file_name, Ob
   return true;
 }
 
-void setup_materials_for_obj(const ObjFileData& obj_data, const char* mtl_file_name, const char* obj_file_name, SceneData& data, const IORDatabase& ior_database,
-  TaskScheduler& scheduler) {
-  std::string materials_to_load = {};
-
-  if ((mtl_file_name == nullptr) || (mtl_file_name[0] == 0)) {
-    std::ifstream obj_file(obj_file_name);
-    std::string line;
-    while (std::getline(obj_file, line)) {
-      if (line.substr(0, 6) == "mtllib") {
-        std::istringstream iss(line.substr(7));
-        std::string mtl_path;
-        iss >> mtl_path;
-        std::filesystem::path obj_path(obj_file_name);
-        std::filesystem::path mtl_full_path = obj_path.parent_path() / mtl_path;
-        materials_to_load = mtl_full_path.string().c_str();
-        break;
-      }
+bool setup_materials_for_obj(const ObjFileData& obj_data, const char* mtl_file_name, SceneData& data, const IORDatabase& ior_database, TaskScheduler& scheduler) {
+  const auto load_file = [&](const std::filesystem::path& path) {
+    const std::string name = path_to_utf8(path);
+    const std::string directory = path_to_utf8(path.parent_path());
+    return load_materials(data, ior_database, scheduler, name.c_str(), directory.c_str(), {});
+  };
+  if ((mtl_file_name != nullptr) && (mtl_file_name[0] != 0))
+    return load_file(std::filesystem::u8path(mtl_file_name));
+  if (obj_data.material_files.empty() == false) {
+    for (const auto& path : obj_data.material_files) {
+      if (load_file(path) == false)
+        return false;
     }
-  } else {
-    materials_to_load = mtl_file_name;
+    return true;
   }
-
-  if (materials_to_load.empty() == false) {
-    load_materials(data, ior_database, scheduler, materials_to_load.c_str(), obj_data.base_dir.c_str(), {});
-  } else {
-    std::vector<etx::MaterialDefinition> material_definitions;
-    material_definitions.reserve(obj_data.materials.size());
-    for (const auto& material : obj_data.materials) {
-      material_definitions.emplace_back(convert_tinyobj_to_material_definition(material));
-    }
-    load_materials(data, ior_database, scheduler, nullptr, obj_data.base_dir.c_str(), material_definitions);
+  std::vector<etx::MaterialDefinition> material_definitions;
+  material_definitions.reserve(obj_data.materials.size());
+  for (const auto& material : obj_data.materials) {
+    material_definitions.emplace_back(convert_tinyobj_to_material_definition(material));
   }
+  return load_materials(data, ior_database, scheduler, nullptr, obj_data.base_dir.c_str(), material_definitions);
 }
 
 void process_obj_shape(const tinyobj::shape_t& shape, const tinyobj::attrib_t& obj_attrib, const std::vector<tinyobj::material_t>& obj_materials, SceneData& data,
@@ -208,6 +208,8 @@ void process_obj_shape(const tinyobj::shape_t& shape, const tinyobj::attrib_t& o
       for (uint64_t vertex_index = 0; vertex_index < 3; ++vertex_index) {
         ++total_vertices_processed;
         const auto& index = face_data.indices[vertex_index];
+        if ((index.vertex_index < 0) || (static_cast<size_t>(index.vertex_index) >= obj_attrib.vertex_x.size()))
+          throw std::runtime_error("OBJ face references an invalid vertex.");
 
         float3 position = {static_cast<float>(obj_attrib.vertex_x[index.vertex_index]), static_cast<float>(obj_attrib.vertex_y[index.vertex_index]),
           static_cast<float>(obj_attrib.vertex_z[index.vertex_index])};
@@ -313,7 +315,8 @@ uint32_t load_from_obj_file(const char* obj_file_name, const char* mtl_file_name
     return SceneLoadFailed;
   }
 
-  setup_materials_for_obj(obj_data, mtl_file_name, obj_file_name, data, ior_database, scheduler);
+  if (setup_materials_for_obj(obj_data, mtl_file_name, data, ior_database, scheduler) == false)
+    return SceneLoadFailed;
 
   auto processing_start = std::chrono::high_resolution_clock::now();
   process_obj_shapes(obj_data, data);

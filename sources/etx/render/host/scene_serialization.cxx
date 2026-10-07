@@ -196,11 +196,11 @@ struct SceneSerializationImpl {
       return false;
     }
 
-    std::filesystem::path file_path = base;
+    std::filesystem::path file_path = std::filesystem::u8path(base);
     if (file_path.is_relative()) {
-      file_path = std::filesystem::path(base_dir) / file_path;
+      file_path = std::filesystem::u8path(base_dir) / file_path;
     }
-    const std::string resolved_path = file_path.lexically_normal().generic_string();
+    const std::string resolved_path = path_to_utf8(file_path.lexically_normal());
     if (resolved_path.size() >= sizeof(_file_buffer)) {
       log::error("Resolved asset path is too long: %s", resolved_path.c_str());
       return false;
@@ -518,7 +518,7 @@ struct SceneSerializationImpl {
   bool write_to_file(const SceneData& data, const std::filesystem::path& path, const SceneSerialization::MaterialNameMapping& serialized_material_names) {
     std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
     if (file.is_open() == false) {
-      log::error("Failed to open file for writing: %s", path.string().c_str());
+      log::error("Failed to open file for writing: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -548,11 +548,11 @@ struct SceneSerializationImpl {
     file.close();
 
     if (file.good() == false) {
-      log::error("Failed to finalize file: %s", path.string().c_str());
+      log::error("Failed to finalize file: %s", path_to_utf8(path).c_str());
       return false;
     }
 
-    log::info("Binary geometry saved to %s (%zu bytes)", path.string().c_str(), header.total_size);
+    log::info("Binary geometry saved to %s (%zu bytes)", path_to_utf8(path).c_str(), header.total_size);
 
     return true;
   }
@@ -565,7 +565,7 @@ struct SceneSerializationImpl {
 
     std::ifstream file(path, std::ios::in | std::ios::binary | std::ios::ate);
     if (file.is_open() == false) {
-      log::error("Failed to open file for reading: %s", path.string().c_str());
+      log::error("Failed to open file for reading: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -573,7 +573,7 @@ struct SceneSerializationImpl {
     file.seekg(0);
 
     if (file_size < sizeof(BinaryGeometryFileHeader)) {
-      log::error("File too small for binary geometry header: %s", path.string().c_str());
+      log::error("File too small for binary geometry header: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -582,7 +582,7 @@ struct SceneSerializationImpl {
     file.close();
 
     if (file.good() == false) {
-      log::error("Failed to read file: %s", path.string().c_str());
+      log::error("Failed to read file: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -606,7 +606,7 @@ struct SceneSerializationImpl {
       return true;
     }
 
-    if (parse_materials_file(materials_file, base_dir, data, database, scheduler, false) == false) {
+    if (parse_materials_file(std::filesystem::u8path(materials_file), base_dir, data, database, scheduler, false) == false) {
       log::error("Failed to load materials from %s", materials_file);
       return false;
     }
@@ -989,7 +989,7 @@ struct SceneSerializationImpl {
     bool generate_procedural) {
     std::ifstream file(path);
     if (file.is_open() == false) {
-      log::error("Failed to open materials file: %s", path.string().c_str());
+      log::error("Failed to open materials file: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -1304,11 +1304,11 @@ struct SceneSerializationImpl {
       memcpy(buffer, _data_buffer, kDataBufferSize);
       std::string decoded_path;
       if (decode_path_value(buffer, decoded_path)) {
-        std::filesystem::path source_path = decoded_path;
+        std::filesystem::path source_path = std::filesystem::u8path(decoded_path);
         if (source_path.is_relative()) {
-          source_path = std::filesystem::path(base_dir) / source_path;
+          source_path = std::filesystem::u8path(base_dir) / source_path;
         }
-        volume_path = source_path.lexically_normal().generic_string();
+        volume_path = path_to_utf8(source_path.lexically_normal());
         cls = Medium::Heterogeneous;
       }
     }
@@ -1699,7 +1699,7 @@ struct SceneSerializationImpl {
     }
   }
 
-  void parse_material(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database) {
+  void parse_material(const char* base_dir, const MaterialDefinition& material, SceneData& data, const IORDatabase& database, bool legacy_alpha_masks) {
     auto& material_mapping = data.material_mapping;
 
     uint32_t material_index = kInvalidIndex;
@@ -1985,6 +1985,63 @@ struct SceneSerializationImpl {
       }
     }
 
+    const bool explicit_bump = get_param(material, "bump_strength");
+    if (explicit_bump) {
+      float value;
+      if ((sscanf(_data_buffer, "%f", &value) != 1) || (std::isfinite(value) == false))
+        value = std::numeric_limits<float>::quiet_NaN();
+      mtl.bump.value.x = value;
+    }
+    if (get_param(material, "map_bump")) {
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      const auto params = split_params(buffer);
+      const char* path = params.empty() == false ? params[0] : nullptr;
+      uint32_t channel = 0u;
+      for (uint64_t i = 0u; (i + 1u) < params.size(); ++i) {
+        if (strcmp(params[i], "channel") == 0) {
+          char trailing = 0;
+          if ((sscanf(params[i + 1u], "%u%c", &channel, &trailing) != 1) || (channel > 4u))
+            channel = kInvalidIndex;
+          ++i;
+        }
+      }
+      if (path && get_file(base_dir, path)) {
+        mtl.bump.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
+        mtl.bump.channel = channel;
+        if ((explicit_bump == false) && (base_applied == false))
+          mtl.bump.value.x = 1.0f;
+      }
+    }
+
+    const bool explicit_alpha_mask = get_param(material, "alpha_mask");
+    if (explicit_alpha_mask) {
+      float value = 1.0f;
+      if ((sscanf(_data_buffer, "%f", &value) != 1) || (std::isfinite(value) == false))
+        value = std::numeric_limits<float>::quiet_NaN();
+      mtl.alpha_mask.value = {std::isfinite(value) ? max(0.0f, value) : value, 1.0f, 1.0f, 1.0f};
+    }
+    const bool explicit_alpha_image = get_param(material, "map_d");
+    if (explicit_alpha_image) {
+      char buffer[kDataBufferSize] = {};
+      memcpy(buffer, _data_buffer, kDataBufferSize);
+      auto params = split_params(buffer);
+      const char* path = params.empty() == false ? params[0] : nullptr;
+      uint32_t channel = 0u;
+      for (uint64_t i = 0u; (i + 1u) < params.size(); ++i) {
+        if (strcmp(params[i], "channel") == 0) {
+          char trailing = 0;
+          if ((sscanf(params[i + 1u], "%u%c", &channel, &trailing) != 1) || (channel > 4u))
+            channel = kInvalidIndex;
+          ++i;
+        }
+      }
+      if (path && get_file(base_dir, path)) {
+        mtl.alpha_mask.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
+        mtl.alpha_mask.channel = channel;
+      }
+    }
+
     if (mtl.cls == MaterialClass::Translucent) {
       if (((base_applied == false) && (explicit_reflectance == false)) && explicit_transmission) {
         SpectralImage black = {};
@@ -1996,6 +2053,11 @@ struct SceneSerializationImpl {
         black.spectrum_index = data.add_spectrum(data.spectrum_values[data.defaults.black_spectrum]);
         mtl.scattering = black;
       }
+    }
+
+    if (legacy_alpha_masks && (explicit_alpha_mask == false) && (explicit_alpha_image == false) && (mtl.scattering.image_index != kInvalidIndex)) {
+      mtl.alpha_mask.image_index = mtl.scattering.image_index;
+      mtl.alpha_mask.channel = 3u;
     }
 
     auto load_ior = [&](RefractiveIndex& target, const char* buffer) {
@@ -2017,7 +2079,7 @@ struct SceneSerializationImpl {
           std::filesystem::path fallback = locate_spectrum_file(buffer, {});
           if (fallback.empty() == false) {
             std::string title = {};
-            cls = SpectralDistribution::load_refractive_index(fallback.string().c_str(), eta_spd, k_spd, title);
+            cls = SpectralDistribution::load_refractive_index(path_to_utf8(fallback).c_str(), eta_spd, k_spd, title);
           }
         }
 
@@ -2166,7 +2228,7 @@ struct SceneSerializationImpl {
               std::filesystem::path fallback = locate_spectrum_file(params[i + 1], {});
               if (fallback.empty() == false) {
                 std::string title = {};
-                cls = SpectralDistribution::load_refractive_index(fallback.string().c_str(), eta_spd, k_spd, title);
+                cls = SpectralDistribution::load_refractive_index(path_to_utf8(fallback).c_str(), eta_spd, k_spd, title);
               }
             }
 
@@ -2325,6 +2387,11 @@ struct SceneSerializationImpl {
     bool generate_procedural) {
     _pending_procedural_geometry.clear();
 
+    // Explicit masks select independent alpha for the material library, including inherited materials.
+    const bool legacy_alpha_masks = std::none_of(materials.begin(), materials.end(), [](const MaterialDefinition& material) {
+      return (material.properties.contains("alpha_mask")) || (material.properties.contains("map_d"));
+    });
+
     for (const auto& material : materials) {
       if (is_procedural_geometry_entry(material.name)) {
         ProceduralGeometryDefinition definition = {};
@@ -2344,7 +2411,7 @@ struct SceneSerializationImpl {
       } else if (special_name_equals(material.name, "spectrum")) {
         parse_spectrum(base_dir, material, data, database);
       } else {
-        parse_material(base_dir, material, data, database);
+        parse_material(base_dir, material, data, database, legacy_alpha_masks);
       }
     }
 

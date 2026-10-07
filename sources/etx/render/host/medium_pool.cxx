@@ -251,7 +251,10 @@ struct MediumPoolImpl {
     d = {};
     density.clear();
 
-    auto handle = nanovdb::io::readGrid(file_name);
+    std::ifstream stream(std::filesystem::u8path(file_name), std::ios::binary);
+    if (stream.is_open() == false)
+      throw std::runtime_error("Failed to open volume grid.");
+    auto handle = nanovdb::io::readGrid(stream);
     auto grid = handle.grid<float>(0);
     if (grid == nullptr) {
       return;

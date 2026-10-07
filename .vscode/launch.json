@@ -11,7 +11,7 @@
             "preLaunchTask": "Build Raytracer",
             "windows": {
                 "type": "cppvsdbg",
-                "program": "${workspaceFolder}/bin/raytracer.exe",
+                "program": "${workspaceFolder}/bin/raytracer_debug.exe",
                 "environment": [
                     {
                         "name": "PATH",
@@ -21,7 +21,7 @@
             },
             "linux": {
                 "type": "cppdbg",
-                "program": "${workspaceFolder}/bin/raytracer",
+                "program": "${workspaceFolder}/bin/raytracer_debug",
                 "MIMode": "gdb",
                 "environment": [
                     {
@@ -32,7 +32,7 @@
             },
             "osx": {
                 "type": "cppdbg",
-                "program": "${workspaceFolder}/bin/raytracer",
+                "program": "${workspaceFolder}/bin/raytracer_debug",
                 "MIMode": "lldb",
                 "environment": [
                     {
@@ -43,16 +43,16 @@
             }
         },
         {
-            "name": "Release Raytracer",
+            "name": "Development Raytracer",
             "type": "cppdbg",
             "request": "launch",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/bin",
             "console": "internalConsole",
-            "preLaunchTask": "Build Raytracer (Release)",
+            "preLaunchTask": "Build Raytracer (Development)",
             "windows": {
                 "type": "cppvsdbg",
-                "program": "${workspaceFolder}/bin/raytracer.exe",
+                "program": "${workspaceFolder}/bin/raytracer_dev.exe",
                 "environment": [
                     {
                         "name": "PATH",
@@ -62,7 +62,7 @@
             },
             "linux": {
                 "type": "cppdbg",
-                "program": "${workspaceFolder}/bin/raytracer",
+                "program": "${workspaceFolder}/bin/raytracer_dev",
                 "MIMode": "gdb",
                 "environment": [
                     {
@@ -73,7 +73,7 @@
             },
             "osx": {
                 "type": "cppdbg",
-                "program": "${workspaceFolder}/bin/raytracer",
+                "program": "${workspaceFolder}/bin/raytracer_dev",
                 "MIMode": "lldb",
                 "environment": [
                     {

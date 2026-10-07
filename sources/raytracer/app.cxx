@@ -113,7 +113,7 @@ std::string normalized_existing_scene_path(const std::string& value) {
     return {};
   }
 
-  std::filesystem::path path(env().resolve_to_absolute(value));
+  std::filesystem::path path = std::filesystem::u8path(env().resolve_to_absolute(value));
   if (path.empty()) {
     return {};
   }
@@ -125,7 +125,9 @@ std::string normalized_existing_scene_path(const std::string& value) {
     bool recovery_file_exists = false;
     for (const char* suffix : recovery_suffixes) {
       ec.clear();
-      recovery_file_exists = std::filesystem::is_regular_file(path.string() + suffix, ec);
+      auto recovery_path = path;
+      recovery_path += suffix;
+      recovery_file_exists = std::filesystem::is_regular_file(recovery_path, ec);
       if (recovery_file_exists) {
         break;
       }
@@ -140,7 +142,7 @@ std::string normalized_existing_scene_path(const std::string& value) {
     path = canonical_path;
   }
 
-  return path.generic_string();
+  return path_to_utf8(path);
 }
 
 std::string portable_scene_path(const std::string& value) {
@@ -149,12 +151,12 @@ std::string portable_scene_path(const std::string& value) {
   }
 
   std::error_code ec = {};
-  const std::filesystem::path resource_root = std::filesystem::weakly_canonical(env().data_folder(), ec);
+  const std::filesystem::path resource_root = std::filesystem::weakly_canonical(std::filesystem::u8path(env().data_folder()), ec);
   if (ec) {
     return value;
   }
 
-  const std::filesystem::path scene_path = std::filesystem::weakly_canonical(value, ec);
+  const std::filesystem::path scene_path = std::filesystem::weakly_canonical(std::filesystem::u8path(value), ec);
   if (ec) {
     return value;
   }
@@ -163,7 +165,7 @@ std::string portable_scene_path(const std::string& value) {
   if (relative_path.empty() || (*relative_path.begin() == "..")) {
     return value;
   }
-  return relative_path.generic_string();
+  return path_to_utf8(relative_path);
 }
 
 }  // namespace
@@ -180,6 +182,7 @@ RTApplication::RTApplication()
 }
 
 RTApplication::~RTApplication() {
+  cancel_scene_import();
   if (_initialized) {
     save_options();
   }
@@ -315,6 +318,18 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.scene_file_selected = [this](std::string path) {
       submit_command({.type = ApplicationCommandType::LoadScene, .path = std::move(path)});
     };
+    ui.callbacks.import_file_selected = [this](std::string path, bool add, std::string importer_id) {
+      submit_command({.type = add ? ApplicationCommandType::ImportIntoScene : ApplicationCommandType::ImportScene, .path = std::move(path), .importer_id = std::move(importer_id)});
+    };
+    ui.callbacks.convert_file_selected = [this](std::string path, std::string output, std::string importer_id) {
+      ApplicationCommand command = {.type = ApplicationCommandType::ConvertScene, .path = std::move(path)};
+      command.output_path = std::move(output);
+      command.importer_id = std::move(importer_id);
+      submit_command(std::move(command));
+    };
+    ui.callbacks.add_native_file_selected = [this](std::string path) {
+      submit_command({.type = ApplicationCommandType::AddNativeScene, .path = std::move(path)});
+    };
     ui.callbacks.save_scene_file_selected = [this](std::string path) {
       std::string message = {};
       return execute_application_command({.type = ApplicationCommandType::SaveScene, .path = std::move(path)}, message);
@@ -357,7 +372,7 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.medium_renamed = std::bind(&RTApplication::on_medium_renamed, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.medium_changed = std::bind(&RTApplication::on_medium_changed, this, std::placeholders::_1);
     ui.callbacks.mesh_material_changed =
-      std::bind(&RTApplication::on_mesh_material_changed, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4);
+      std::bind(&RTApplication::on_mesh_material_changed, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5);
     ui.callbacks.emitter_changed = std::bind(&RTApplication::on_emitter_changed, this, std::placeholders::_1);
     ui.callbacks.emitter_added = std::bind(&RTApplication::on_emitter_added, this, std::placeholders::_1);
     ui.callbacks.emitter_duplicated = std::bind(&RTApplication::on_emitter_duplicated, this, std::placeholders::_1);
@@ -499,7 +514,9 @@ void RTApplication::save_options() {
   for (const auto& recent : _recent_files) {
     _options.set_string("recent-" + std::to_string(i++), portable_scene_path(recent), "Recent File");
   }
-  if ((_application_config.runtime_mode == RuntimeMode::Desktop) && !_current_scene_file.empty()) {
+  if (_document_unsaved)
+    _options.set_string("scene", "", "Scene");
+  if ((_application_config.runtime_mode == RuntimeMode::Desktop) && !_current_scene_file.empty() && (_document_unsaved == false)) {
     _options.set_string("scene", portable_scene_path(_current_scene_file), "Scene");
   }
   _options.save_to_file(env().file_in_config("options.json"));
@@ -760,6 +777,7 @@ void RTApplication::frame() {
 }
 
 void RTApplication::cleanup() {
+  cancel_scene_import();
   ETX_PROFILER_SCOPE();
 
   if (_initialized.exchange(false)) {
@@ -864,6 +882,10 @@ void RTApplication::add_to_recent(const std::string& value) {
 }
 
 bool RTApplication::load_scene_file(const std::string& file_name, uint32_t options, bool start_rendering) {
+  return load_scene_file(file_name, options, start_rendering, false);
+}
+
+bool RTApplication::load_scene_file(const std::string& file_name, uint32_t options, bool start_rendering, bool unsaved) {
   ETX_PROFILER_SCOPE();
 
   const std::string scene_file = normalized_existing_scene_path(file_name);
@@ -877,6 +899,7 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     return false;
   }
 
+  auto retained_owners = (_current_scene_file == scene_file) ? _document_imports : std::vector<std::shared_ptr<ImportArtifact>>{};
   log::warning("Loading scene %s...", scene_file.c_str());
   SceneRepresentation::IntegratorData integrator_data;
   SceneRepresentation loaded_scene(scheduler, _ior_database);
@@ -894,6 +917,13 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
     _active_renderer->stop();
   }
   scene.replace_loaded_scene(loaded_scene);
+  ++_document_identity;
+  _document_unsaved = unsaved;
+  _document_imports = std::move(retained_owners);
+  if (unsaved) {
+    scene.data().owns_assets = true;
+    scene.data().json_file_name.clear();
+  }
   if ((_active_renderer != nullptr) && (_active_renderer->camera_controller() != nullptr)) {
     _active_renderer->camera_controller()->sync_from_camera();
   }
@@ -946,8 +976,9 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   ui.set_current_integrator(integrator);
   notify_scene_might_have_changed();
 
-  add_to_recent(_current_scene_file);
-  _scene_dirty = false;
+  if (_document_unsaved == false)
+    add_to_recent(_current_scene_file);
+  _scene_dirty = _document_unsaved;
   save_options();
 
   if (start_rendering && (_active_renderer != nullptr)) {
@@ -975,6 +1006,7 @@ std::string RTApplication::save_scene_file(const std::string& file_name) {
   }
 
   _current_scene_file = env().resolve_to_absolute(saved_path);
+  _document_unsaved = false;
   add_to_recent(_current_scene_file);
   _scene_dirty = false;
   save_options();
@@ -1420,18 +1452,18 @@ void RTApplication::on_medium_changed(uint32_t index) {
   on_material_changed(index);
 }
 
-SceneEditResult RTApplication::on_mesh_material_changed(uint32_t node_index, uint32_t mesh_index, uint32_t material_index, bool make_unique) {
+SceneEditResult RTApplication::on_mesh_material_changed(uint32_t node_index, uint32_t mesh_index, uint32_t source_material, uint32_t material_index, bool make_unique) {
   const bool cpu_was_running = cpu_renderer.is_running();
   if (cpu_was_running) {
     cpu_renderer.stop();
   }
-  const SceneEditResult result = scene.set_node_mesh_material(node_index, mesh_index, material_index, make_unique);
+  const SceneEditResult result = scene.set_node_mesh_material(node_index, mesh_index, source_material, material_index, make_unique);
   if (result.succeeded()) {
     mark_scene_dirty();
     const Mesh& mesh = scene.data().meshes[result.mesh_index];
     if (make_unique && (mesh.triangle_count > 0u)) {
       _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
-      on_material_changed(scene.data().triangles[mesh.triangle_offset].material_index);
+      on_material_changed(result.material_index);
     } else {
       scene.create_area_emitters_from_materials();
       notify_scene_might_have_changed();
@@ -2196,6 +2228,15 @@ RendererControlState RTApplication::current_renderer_controls() const {
 }
 
 RendererPreparationStatus RTApplication::current_renderer_preparation() const {
+  if (_import_job != nullptr) {
+    std::lock_guard<std::mutex> lock(_import_job->mutex);
+    return {.state = RendererPreparationState::Preparing,
+      .phase = "Import",
+      .message = _import_job->stage,
+      .completed_steps = _import_job->completed,
+      .total_steps = _import_job->total,
+      .cancelable = _import_job->state.load() == SceneImportJob::State::Converting};
+  }
   if (gpu_renderer.runtime_failed() && (gpu_renderer.status().diagnostic.recovery == RendererRecovery::RestartApplication)) {
     return gpu_renderer.preparation_status();
   }
@@ -2225,6 +2266,9 @@ RendererPreparationStatus RTApplication::current_renderer_preparation() const {
 }
 
 void RTApplication::sync_ui_renderer_state() {
+  ui.set_document_state(scene.valid(), _document_unsaved);
+  ui.set_output_image_available(
+    (_active_renderer != nullptr) && (_active_renderer->mode() != RendererMode::Rasterization) && (_preview_active == false) && _active_renderer->output_texture().valid());
   ui.set_current_renderer_preparation(current_renderer_preparation());
   ui.set_current_renderer_status(current_renderer_status());
   ui.set_memory_stats(render_context.get_context().device().get_memory_statistics(), _active_renderer ? _active_renderer->memory_stats() : RendererMemoryStats{});
@@ -2234,6 +2278,7 @@ void RTApplication::sync_ui_renderer_state() {
 }
 
 void RTApplication::process_application_commands() {
+  poll_scene_import();
   std::vector<ApplicationCommand> commands = {};
   {
     std::lock_guard<std::mutex> lock(_application_control_mutex);
@@ -2249,6 +2294,13 @@ void RTApplication::process_application_commands() {
   results.reserve(commands.size());
   for (const ApplicationCommand& command : commands) {
     std::string message = {};
+    if ((command.type == ApplicationCommandType::ImportScene) || (command.type == ApplicationCommandType::ImportIntoScene) ||
+        (command.type == ApplicationCommandType::ConvertScene)) {
+      if (begin_scene_import(command, message))
+        continue;
+      results.push_back({command.id, false, std::move(message)});
+      continue;
+    }
     const bool success = execute_application_command(command, message);
     results.push_back({
       .command_id = command.id,
@@ -2282,19 +2334,48 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
 
 bool RTApplication::execute_application_command_impl(const ApplicationCommand& command, std::string& message) {
   switch (command.type) {
+    case ApplicationCommandType::CancelImport:
+      if (_import_job == nullptr) {
+        message = "No import is running.";
+        return false;
+      }
+      if (_import_job->request_cancel() == false) {
+        message = "The native document is being published and cannot be cancelled.";
+        return false;
+      }
+      message = "Import cancellation requested.";
+      return true;
+    case ApplicationCommandType::AddNativeScene:
+      if (add_scene_file(command.path, message, command.input_owner != nullptr) == false)
+        return false;
+      if (command.input_owner != nullptr)
+        _document_imports.push_back(command.input_owner);
+      message = "Native document added.";
+      return true;
+    case ApplicationCommandType::ImportScene:
+    case ApplicationCommandType::ImportIntoScene:
+    case ApplicationCommandType::ConvertScene:
+      return begin_scene_import(command, message);
     case ApplicationCommandType::LoadScene:
       if (command.path.empty()) {
         message = "Scene path is required";
         return false;
       }
-      if (!load_scene_file(command.path, SceneRepresentation::LoadEverything, false)) {
+      if (!load_scene_file(command.path, SceneRepresentation::LoadEverything, false, command.input_owner != nullptr)) {
         message = "Scene loading failed";
         return false;
+      }
+      if (command.input_owner != nullptr) {
+        _document_imports.push_back(command.input_owner);
       }
       message = "Scene loaded";
       return true;
 
     case ApplicationCommandType::SaveScene:
+      if (_document_unsaved && command.path.empty()) {
+        message = "Save As requires a destination for this imported document.";
+        return false;
+      }
       if (command.path.empty() && _current_scene_file.empty()) {
         message = "No scene path is available";
         return false;
@@ -2448,7 +2529,7 @@ bool RTApplication::execute_application_command_impl(const ApplicationCommand& c
       }
       {
         const bool was_running = (_active_renderer != nullptr) && _active_renderer->is_running();
-        const bool reloaded = load_scene_file(_current_scene_file, SceneRepresentation::LoadEverything, was_running);
+        const bool reloaded = load_scene_file(_current_scene_file, SceneRepresentation::LoadEverything, was_running, _document_unsaved);
         message = reloaded ? "Scene reloaded" : "Scene reload failed";
         return reloaded;
       }
@@ -2460,7 +2541,7 @@ bool RTApplication::execute_application_command_impl(const ApplicationCommand& c
       }
       {
         const bool was_running = (_active_renderer != nullptr) && _active_renderer->is_running();
-        const bool reloaded = load_scene_file(_current_scene_file, SceneRepresentation::LoadGeometry, was_running);
+        const bool reloaded = load_scene_file(_current_scene_file, SceneRepresentation::LoadGeometry, was_running, _document_unsaved);
         message = reloaded ? "Geometry reloaded" : "Geometry reload failed";
         return reloaded;
       }
@@ -2475,6 +2556,14 @@ bool RTApplication::execute_application_command_impl(const ApplicationCommand& c
       return true;
 
     case ApplicationCommandType::CancelPreparation:
+      if (_import_job != nullptr) {
+        if (_import_job->request_cancel() == false) {
+          message = "The native document is being published and cannot be cancelled.";
+          return false;
+        }
+        message = "Import cancellation requested.";
+        return true;
+      }
       if ((_active_renderer != &gpu_renderer) || (gpu_renderer.preparation_status().state != RendererPreparationState::Preparing)) {
         message = "Renderer preparation is not active";
         return false;
@@ -2540,6 +2629,20 @@ void RTApplication::publish_application_state() {
   state.scene_loaded = !_current_scene_file.empty() && scene.valid();
   state.gpu_renderer_available = _gpu_renderer_supported;
   state.scene_file = _current_scene_file;
+  state.scene_unsaved = _document_unsaved;
+  state.import_active = _import_job != nullptr;
+  state.import_cancelable = (_import_job != nullptr) && (_import_job->state.load() == SceneImportJob::State::Converting);
+  if (_import_job != nullptr) {
+    std::lock_guard<std::mutex> lock(_import_job->mutex);
+    state.import_completed = _import_job->completed;
+    state.import_total = _import_job->total;
+    state.import_stage = _import_job->stage;
+  }
+  state.importers = import_service().modules();
+  state.importer_directory = path_to_utf8(import_service().plugin_directory());
+  state.importer_discovery_error = import_service().discovery_error();
+  for (const auto& importer : import_service().importers())
+    state.import_formats.push_back(importer.extensions);
   state.renderer_mode = _active_renderer ? _active_renderer->mode() : RendererMode::CPURaytracing;
   state.renderer_name = _active_renderer ? _active_renderer->name() : "None";
   state.preparation = current_renderer_preparation();

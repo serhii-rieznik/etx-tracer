@@ -24,6 +24,11 @@ struct IORDatabase;
 enum class MenuCommand : uint32_t {
   Quit,
   OpenScene,
+  ImportScene,
+  ImportIntoScene,
+  ConvertScene,
+  ImportPlugins,
+  AddNativeScene,
   ReloadScene,
   ReloadGeometry,
   OpenRecentScene,
@@ -52,6 +57,16 @@ enum class MenuCommand : uint32_t {
   ToggleProperties,
   ToggleMemoryDiagnostics,
   ResetLayout,
+  KeyboardShortcuts,
+  About,
+  Count,
+};
+
+struct MenuCommandInfo {
+  const char* label = nullptr;
+  int key = 0;
+  uint32_t modifiers = 0u;
+  const char* key_name = nullptr;
 };
 
 struct UI {
@@ -79,6 +94,14 @@ struct UI {
 
   void build(SceneRepresentation& scene_rep, const FrameData& data);
   void reset_scene_state();
+  void set_document_state(bool available, bool unsaved) {
+    _scene_available = available;
+    _scene_unsaved = unsaved;
+  }
+
+  bool scene_available() const {
+    return _scene_available;
+  }
 
   void set_integrator_list(Integrator* i[], uint64_t count) {
     _integrators = {i, count};
@@ -148,7 +171,13 @@ struct UI {
   void invalidate_scene_resources() {
     _mesh_materials_dirty = true;
   }
+  static const MenuCommandInfo& menu_command_info(MenuCommand command);
+  static std::string menu_command_shortcut(MenuCommand command);
+  bool menu_command_available(MenuCommand command) const;
   void execute_menu_command(MenuCommand command, uint32_t argument = 0u, const std::string& value = {});
+  void set_output_image_available(bool available) {
+    _output_image_available = available;
+  }
 
   void set_embedded_menu_enabled(bool value) {
     _embedded_menu_enabled = value;
@@ -227,6 +256,9 @@ struct UI {
     std::function<void(std::string)> reference_image_selected;
     std::function<void(std::string, SaveImageMode)> save_image_selected;
     std::function<void(std::string)> scene_file_selected;
+    std::function<void(std::string, bool, std::string)> import_file_selected;
+    std::function<void(std::string, std::string, std::string)> convert_file_selected;
+    std::function<void(std::string)> add_native_file_selected;
     std::function<bool(std::string)> save_scene_file_selected;
     std::function<void(RendererMode, Integrator::Type)> render_configuration_selected;
     std::function<void(bool)> stop_selected;
@@ -249,7 +281,7 @@ struct UI {
     std::function<SceneResourceEditResult(uint32_t)> medium_deleted;
     std::function<std::string(uint32_t, const std::string&)> medium_renamed;
     std::function<void(uint32_t)> medium_changed;
-    std::function<SceneEditResult(uint32_t, uint32_t, uint32_t, bool)> mesh_material_changed;
+    std::function<SceneEditResult(uint32_t, uint32_t, uint32_t, uint32_t, bool)> mesh_material_changed;
     std::function<void(uint32_t)> emitter_changed;
     std::function<SceneResourceEditResult(uint32_t)> emitter_added;  // 0=environment, 1=directional, 2=atmosphere
     std::function<SceneResourceEditResult(uint32_t)> emitter_duplicated;
@@ -289,6 +321,20 @@ struct UI {
 
  private:
   void full_width_item();
+  enum class PropertySection : uint32_t {
+    Transform,
+    Surface,
+    Subsurface,
+    Emission,
+    Optics,
+    Geometry,
+    Camera,
+    Volume,
+    Rendering,
+    Textures,
+  };
+  void property_label(const char* label);
+  bool property_section(PropertySection section, const char* label, const char* summary, bool default_open);
   bool labeled_control(const char* label, std::function<bool()>&& control_func);
   bool validated_float_control(const char* label, float& value, float min_val, float max_val, const char* format = "%.3f");
   bool validated_int_control(const char* label, int32_t& value, int32_t min_val, int32_t max_val);
@@ -306,7 +352,26 @@ struct UI {
 
   bool build_options(Options&);
   void quit();
+  bool _scene_unsaved = false;
+  bool _scene_available = false;
+  bool _import_plugins_modal_requested = false;
   void select_scene_file() const;
+  bool _output_image_available = false;
+  std::string _selected_import_source;
+  bool _conversion_dialog_requested = false;
+  std::string _conversion_importer;
+  std::string _conversion_source;
+  std::string _conversion_output;
+  bool _keyboard_shortcuts_requested = false;
+  bool _about_requested = false;
+  bool menu_item(MenuCommand command);
+  bool menu_item(MenuCommand command, bool selected);
+  void select_import_file(MenuCommand command, const std::string& importer_id);
+  void build_import_menu_items(MenuCommand command);
+  void build_conversion_dialog();
+  void build_help_modals();
+  void build_import_plugins_modal();
+  void select_native_add_file() const;
   bool save_scene_file() const;
   bool save_scene_file_as() const;
   void save_image(SaveImageMode mode) const;
@@ -390,7 +455,8 @@ struct UI {
   void build_emitter_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_camera_resource_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_atmosphere_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx);
-  uint32_t build_mesh_material_assignment(SceneRepresentation& scene_rep, uint32_t node_index, uint32_t& mesh_index);
+  uint32_t build_mesh_material_assignment(SceneRepresentation& scene_rep, uint32_t node_index, uint32_t& mesh_index, uint32_t source_material);
+  void build_node_geometry_actions(SceneRepresentation& scene_rep, uint32_t node_index);
   void update_mesh_material_usage(const SceneData& scene);
   uint32_t material_mesh_usage_count(const SceneRepresentation& scene_rep, uint32_t material_index);
   void build_node_appearance_properties(SceneRepresentation& scene_rep, const SceneNode& node, uint32_t attachment_end, const FrameData& data);
@@ -556,7 +622,7 @@ struct UI {
   bool _spectrum_tab_requested = false;
   const IORDatabase* _spectrum_database = nullptr;
   void build_spectrum_editor(SceneRepresentation& scene_rep);
-  void edit_spectrum_button(SceneRepresentation& scene_rep, const char* label, SpectrumTarget::Channel channel, uint32_t spectrum_index);
+  void edit_spectrum_button(SceneRepresentation& scene_rep, const char* label, SpectrumTarget::Channel channel, uint32_t spectrum_index, float width);
   std::unordered_map<std::string, bool> _material_anisotropy;
   std::vector<int32_t> _selected_material_positions;
   std::vector<uint32_t> _pending_material_selection_indices;
@@ -575,7 +641,9 @@ struct UI {
   uint32_t _viewport_zoom_option = 4u;
   float _explorer_width = 300.0f;
   float _inspector_width = 400.0f;
+  uint32_t _compact_workspace_tab = 0u;
   float _diagnostics_height = 260.0f;
+  bool _renderer_diagnostic_details = false;
   uint32_t _viewport_mouse_buttons = 0u;
   bool _reset_layout_requested = false;
   bool _scene_dirty = false;
@@ -583,6 +651,7 @@ struct UI {
   bool _unsaved_save_failed = false;
   bool _skip_unsaved_check_once = false;
   MenuCommand _pending_menu_command = MenuCommand::Quit;
+  uint32_t _pending_menu_argument = 0u;
   std::string _pending_menu_value = {};
   char _resource_filter[128] = {};
   double _last_fps_update_time = 0.0;

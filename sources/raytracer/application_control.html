@@ -116,7 +116,9 @@
     #message { min-height: 36px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
     #message[data-tone="success"] { color: var(--success); }
     #message[data-tone="error"] { color: var(--danger); }
-    #renderer-diagnostic { margin-top: 14px; font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #renderer-diagnostic { margin-top: 14px; padding: 0; border: 0; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+    #renderer-diagnostic summary { color: inherit; }
+    #renderer-diagnostic-message { margin-top: 8px; white-space: pre-wrap; }
     #renderer-diagnostic[data-tone="warning"] { color: var(--warning); }
     #renderer-diagnostic[data-tone="error"] { color: var(--danger); }
     .image-head { min-height: 36px; display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
@@ -144,26 +146,69 @@
   <main>
     <aside aria-label="Renderer controls">
       <fieldset>
-        <legend>Scene</legend>
+        <legend>Native document</legend>
+        <label for="native-path">Host file (.etx or .etx.json)</label>
+        <input id="native-path" type="text" autocomplete="off">
+        <select id="native-action" aria-label="Native document action">
+          <option value="open">Open</option>
+          <option value="add_native">Add to current scene</option>
+        </select>
+        <div class="row">
+          <button id="native-load" type="button" disabled>Open</button>
+          <button id="native-folder" type="button" disabled>Upload Folder…</button>
+        </div>
+        <details>
+          <summary>Save As</summary>
+          <label for="native-output">Native destination</label>
+          <input id="native-output" type="text" autocomplete="off">
+          <button id="save-native" type="button" disabled>Save As</button>
+        </details>
+      </fieldset>
+      <fieldset>
+        <legend>Import</legend>
+        <label for="importer">Importer</label>
+        <select id="importer" disabled><option value="">Auto detect</option></select>
+        <label for="import-action">Destination</label>
+        <select id="import-action" disabled>
+          <option value="import">New document</option>
+          <option value="import_into_scene">Current scene</option>
+          <option value="convert">Native file</option>
+        </select>
+        <label for="path">Source file on host</label>
+        <input id="path" type="text" autocomplete="off">
+        <div id="import-output-fields" class="hidden">
+          <label for="import-output">Native destination</label>
+          <input id="import-output" type="text" autocomplete="off">
+        </div>
+        <div class="row">
+          <button id="load" type="button" disabled>Import</button>
+          <button id="import-folder" type="button" disabled>Upload Folder…</button>
+        </div>
+        <div id="import-status" class="hint hidden"></div>
+        <button id="cancel-import" class="hidden" type="button" disabled>Cancel import</button>
+        <details id="importer-plugins">
+          <summary id="importer-summary">Importer plugins</summary>
+          <div id="importer-directory" class="hint"></div>
+          <div id="importer-error" class="hint hidden"></div>
+          <div id="importer-catalog" class="hint"></div>
+        </details>
+      </fieldset>
+      <fieldset id="folder-fields" class="hidden">
+        <legend id="folder-action">Folder upload</legend>
+        <input id="scene-action" type="hidden" value="open">
         <input id="folder" type="file" webkitdirectory multiple hidden>
-        <button id="choose-folder" type="button">Choose scene folder…</button>
+        <button id="choose-folder" type="button">Choose another folder…</button>
         <div id="folder-summary" class="hint">No folder selected</div>
         <div id="entry-fields" class="hidden">
-          <label for="entry">Scene file</label>
+          <label for="entry">Entry file</label>
           <select id="entry"></select>
         </div>
         <progress id="upload-progress" class="hidden" max="1" value="0"></progress>
         <div id="upload-warning" class="hint hidden"></div>
         <div class="row upload-actions">
-          <button id="upload" class="primary" type="button" disabled>Upload and load</button>
+          <button id="upload" class="primary" type="button" disabled>Upload and open</button>
           <button id="cancel-upload" class="hidden" type="button">Cancel</button>
         </div>
-        <details>
-          <summary>Load from renderer host</summary>
-          <label for="path">File path</label>
-          <input id="path" type="text" autocomplete="off">
-          <button id="load" type="button" disabled>Load scene</button>
-        </details>
       </fieldset>
       <fieldset>
         <legend>Rendering</legend>
@@ -186,13 +231,16 @@
         <dt>Samples</dt><dd id="samples">—</dd>
         <dt>Elapsed</dt><dd id="elapsed">—</dd>
       </dl>
-      <div id="renderer-diagnostic" class="hidden" role="status" aria-live="polite"></div>
+      <details id="renderer-diagnostic" class="hidden">
+        <summary id="renderer-diagnostic-title" role="status" aria-live="polite"></summary>
+        <div id="renderer-diagnostic-message"></div>
+      </details>
       <div id="message" role="status" aria-live="polite"></div>
     </aside>
     <section aria-label="Rendered image">
       <div class="image-head"><strong>Output</strong><button id="refresh-image" type="button">Refresh image</button></div>
       <div id="image-stage" class="image-stage">
-        <div class="image-empty">Rendered output will appear here after you load and run a scene.</div>
+        <div class="image-empty">No Rendered Image</div>
         <img id="image" alt="Latest rendered output" decoding="async">
       </div>
     </section>
@@ -219,7 +267,13 @@
     const pendingCommands = new Map();
     const submittingCommands = new Set();
     const commandDetails = {
-      load_scene: {label: 'Load scene', control: 'load', pending: 'Loading…'},
+      load_scene: {label: 'Open', control: 'native-load', pending: 'Loading…'},
+      import_scene: {label: 'Import document', control: 'load', pending: 'Importing…'},
+      import_into_scene: {label: 'Import into scene', control: 'load', pending: 'Importing…'},
+      add_native_scene: {label: 'Add native document', control: 'native-load', pending: 'Adding…'},
+      convert_scene: {label: 'Convert document', control: 'load', pending: 'Converting…'},
+      cancel_import: {label: 'Cancel import', control: 'cancel-import'},
+      save_scene: {label: 'Save native document', control: 'save-native'},
       set_renderer: {label: 'Change renderer', control: 'renderer'},
       set_integrator: {label: 'Change integrator', control: 'integrator'},
       run: {label: 'Start rendering', control: 'run', pending: 'Starting…'},
@@ -310,6 +364,7 @@
       const details = commandDetails[type] || {label: type.replaceAll('_', ' ')};
       submittingCommands.add(type);
       setCommandPresentation(type, true);
+      if (latestState) applyState(latestState);
       setMessage(`${details.label} requested…`);
       try {
         const response = await fetchWithTimeout('/api/commands', {
@@ -343,14 +398,59 @@
       return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unit]}`;
     }
 
+    const sceneCommandTypes = ['load_scene', 'add_native_scene', 'import_scene', 'import_into_scene', 'convert_scene', 'upload_scene'];
+    const actionLabels = {open: 'Open', add_native: 'Add native document', import: 'Import as new document', import_into_scene: 'Import into current scene', convert: 'Convert to native file'};
+    const actionCommands = {open: 'load_scene', add_native: 'add_native_scene', import: 'import_scene', import_into_scene: 'import_into_scene', convert: 'convert_scene'};
+    function nativeAction(action) { return ['open', 'add_native'].includes(action); }
+    function selectedImporter() { return (latestState?.importers || []).find(item => item.loaded && item.id === byId('importer').value); }
+    function chooseActionFolder(action) {
+      byId('scene-action').value = action;
+      byId('folder-action').textContent = actionLabels[action] + ' · Folder upload';
+      byId('upload').textContent = 'Upload and ' + ({open: 'open', add_native: 'add', import: 'import', import_into_scene: 'import', convert: 'convert'})[action];
+      byId('folder-fields').classList.remove('hidden');
+      chooseFolder();
+    }
+    function updateImportDestination() {
+      const converting = byId('import-action').value === 'convert';
+      byId('import-output-fields').classList.toggle('hidden', !converting);
+      byId('load').textContent = converting ? 'Convert' : 'Import';
+      if (latestState) applyState(latestState);
+    }
+    function updateImporterCatalog(state) {
+      const modules = state.importers || [];
+      const key = JSON.stringify([modules, state.importer_directory, state.importer_discovery_error]);
+      const catalog = byId('importer-catalog');
+      if (catalog.dataset.modules === key) return;
+      catalog.dataset.modules = key;
+      const importerSelect = byId('importer');
+      const selection = importerSelect.value;
+      const automatic = document.createElement('option'); automatic.value = ''; automatic.textContent = 'Auto detect';
+      const loaded = modules.filter(item => item.loaded);
+      importerSelect.replaceChildren(automatic, ...loaded.map(item => {
+        const option = document.createElement('option'); option.value = item.id; option.textContent = `${item.name} (${item.extensions})`; return option;
+      }));
+      importerSelect.value = loaded.some(item => item.id === selection) ? selection : '';
+      byId('importer-summary').textContent = `Importer plugins · ${loaded.length} loaded`;
+      byId('importer-directory').textContent = state.importer_directory || '';
+      byId('importer-error').textContent = state.importer_discovery_error || '';
+      byId('importer-error').classList.toggle('hidden', !state.importer_discovery_error);
+      catalog.replaceChildren(...modules.map(item => {
+        const row = document.createElement('p');
+        row.textContent = `${item.name || sceneDisplayName(item.module)} · ${item.loaded ? 'Loaded' : 'Unavailable'} — ${item.loaded ? item.extensions : item.error}`;
+        row.title = `${item.module}${item.id ? ` · ${item.id}` : ''}`;
+        return row;
+      }));
+      if (!modules.length) catalog.textContent = 'No importer modules found. Install compiled importers in this directory and restart the application.';
+    }
+
     function chooseFolder() {
       if (uploadController) return;
       byId('folder').value = '';
       byId('folder').click();
     }
 
-    function folderSelected(event) {
-      const files = Array.from(event.target.files || []);
+    function folderSelected() {
+      const files = Array.from(byId('folder').files || []);
       folderFiles = [];
       const entry = byId('entry');
       entry.replaceChildren();
@@ -372,7 +472,9 @@
         return {file, path: stripRoot ? originalPath.slice(rootPrefix.length) : originalPath};
       });
 
-      const sceneExtensions = ['.etx.json', '.json', '.etx', '.obj', '.gltf', '.glb', '.wo3'];
+      const selected = selectedImporter();
+      const formats = selected ? [selected.extensions] : (latestState?.importers || []).filter(item => item.loaded).map(item => item.extensions);
+      const sceneExtensions = nativeAction(byId('scene-action').value) ? ['.etx.json', '.json', '.etx'] : formats.flatMap(value => value.split(',').map(ext => `.${ext}`));
       const sceneFiles = folderFiles.filter(item => sceneExtensions.some(extension => item.path.toLowerCase().endsWith(extension)));
       sceneFiles.sort((left, right) => {
         const leftNative = left.path.toLowerCase().endsWith('.etx.json') ? 0 : 1;
@@ -423,6 +525,7 @@
       byId('choose-folder').disabled = true;
       byId('upload').disabled = true;
       byId('cancel-upload').classList.remove('hidden');
+      if (latestState) applyState(latestState);
       byId('upload-progress').classList.remove('hidden');
       byId('upload-progress').max = 1;
       byId('upload-progress').value = 0;
@@ -433,6 +536,9 @@
       try {
         const manifest = {
           entry: byId('entry').value,
+          action: byId('scene-action').value,
+          importer_id: nativeAction(byId('scene-action').value) ? '' : byId('importer').value,
+          output_path: byId('import-output').value,
           files: folderFiles.map(item => ({path: item.path, size: item.file.size}))
         };
         const created = await responseJson(await fetch('/api/uploads', {
@@ -491,12 +597,13 @@
       } finally {
         currentUploadId = '';
         uploadController = null;
-        byId('upload').textContent = 'Upload and load';
+        byId('upload').textContent = 'Upload and ' + ({open: 'open', add_native: 'add', import: 'import', import_into_scene: 'import', convert: 'convert'})[byId('scene-action').value];
         byId('upload').removeAttribute('aria-busy');
         byId('choose-folder').disabled = false;
         byId('upload').disabled = !serverConnected || pendingUpload !== null || !folderFiles.length || !byId('entry').value;
         byId('cancel-upload').classList.add('hidden');
         byId('upload-progress').classList.add('hidden');
+        if (latestState) applyState(latestState);
       }
     }
 
@@ -517,7 +624,7 @@
     }
 
     function applyState(state) {
-      byId('scene-name').textContent = sceneDisplayName(state.scene_file);
+      byId('scene-name').textContent = state.scene_unsaved ? 'Untitled' : sceneDisplayName(state.scene_file);
       byId('renderer-name').textContent = state.renderer_name;
       byId('run-state').textContent = state.run_state;
       byId('samples').textContent = state.runtime.valid ? `${state.runtime.completed_samples} / ${state.runtime.target_samples}` : '—';
@@ -536,26 +643,55 @@
       }
       if (!commandPending('set_integrator')) integrator.value = String(state.integrator_value);
       integrator.disabled = !serverConnected || commandPending('set_integrator');
-      byId('load').disabled = !serverConnected || commandPending('load_scene');
-      byId('upload').disabled = !serverConnected || pendingUpload !== null || !folderFiles.length || !byId('entry').value;
+      updateImporterCatalog(state);
+      const scenePending = sceneCommandTypes.some(commandPending) || state.import?.active || uploadController !== null || pendingUpload !== null;
+      const sceneDisabled = !serverConnected || scenePending;
+      const importersAvailable = (state.importers || []).some(item => item.loaded);
+      const addNative = byId('native-action').value === 'add_native';
+      const importInto = byId('import-action').value === 'import_into_scene';
+      byId('native-action').querySelector('[value="add_native"]').disabled = !state.scene_loaded;
+      byId('import-action').querySelector('[value="import_into_scene"]').disabled = !state.scene_loaded;
+      byId('native-load').disabled = sceneDisabled || (addNative && !state.scene_loaded);
+      byId('native-folder').disabled = byId('native-load').disabled;
+      byId('load').disabled = sceneDisabled || !importersAvailable || (importInto && !state.scene_loaded);
+      byId('import-folder').disabled = byId('load').disabled;
+      for (const id of ['importer', 'native-action', 'import-action', 'choose-folder', 'entry']) byId(id).disabled = sceneDisabled;
+      byId('importer').disabled ||= !importersAvailable;
+      byId('import-action').disabled ||= !importersAvailable;
+      const uploadAction = byId('scene-action').value;
+      const uploadAllowed = nativeAction(uploadAction) ? (uploadAction === 'open' || state.scene_loaded) : (importersAvailable && (uploadAction !== 'import_into_scene' || state.scene_loaded));
+      byId('upload').disabled = sceneDisabled || !uploadAllowed || !folderFiles.length || !byId('entry').value;
       byId('run').disabled = !serverConnected || !state.controls.can_run || commandPending('run');
       byId('finish').disabled = !serverConnected || !state.controls.can_finish || commandPending('finish');
       byId('stop').disabled = !serverConnected || !state.controls.can_stop || commandPending('stop');
       byId('restart').disabled = !serverConnected || !state.controls.can_restart || commandPending('restart');
-      byId('restart').textContent = state.diagnostic?.recovery === 'restart' ? 'Retry and restart' : 'Restart';
+      if (!commandPending('restart')) byId('restart').textContent = 'Restart';
       byId('denoise').disabled = !serverConnected || !state.can_denoise || commandPending('denoise');
+      const importing = state.import?.active === true;
+      byId('import-status').classList.toggle('hidden', !importing);
+      byId('import-status').textContent = importing ? `${state.import.stage} (${state.import.completed}/${state.import.total})` : '';
+      byId('cancel-import').classList.toggle('hidden', !importing);
+      byId('cancel-import').disabled = !serverConnected || !state.import?.cancelable || commandPending('cancel_import');
+      byId('save-native').disabled = sceneDisabled || !state.scene_loaded || commandPending('save_scene');
       const diagnostic = state.diagnostic;
       const diagnosticElement = byId('renderer-diagnostic');
       const diagnosticVisible = diagnostic && diagnostic.severity !== 'none' && diagnostic.message;
       diagnosticElement.classList.toggle('hidden', !diagnosticVisible);
       if (diagnosticVisible) {
-        const recovery = diagnostic.recovery === 'change_settings' ? '\nChoose compatible renderer or scene settings.' :
-          diagnostic.recovery === 'restart_application' ? '\nRestart the application to recover.' : '';
-        const text = diagnostic.message + recovery;
-        if (diagnosticElement.textContent !== text) diagnosticElement.textContent = text;
+        const title = diagnostic.recovery === 'restart_application' ? 'Application Restart Required' :
+          diagnostic.recovery === 'change_settings' ? 'Unsupported Settings' :
+          diagnostic.severity === 'error' ? 'Render Interrupted' :
+          diagnostic.severity === 'warning' ? 'Warning' : 'Canceled';
+        const titleElement = byId('renderer-diagnostic-title');
+        if (titleElement.textContent !== title) titleElement.textContent = title;
+        const text = diagnostic.message;
+        const messageElement = byId('renderer-diagnostic-message');
+        if (messageElement.textContent !== text) messageElement.textContent = text;
         diagnosticElement.dataset.tone = diagnostic.severity;
-      } else if (diagnosticElement.textContent) {
-        diagnosticElement.textContent = '';
+      } else {
+        diagnosticElement.open = false;
+        byId('renderer-diagnostic-title').textContent = '';
+        byId('renderer-diagnostic-message').textContent = '';
       }
 
       if (state.scene_file !== currentSceneFile) {
@@ -580,7 +716,7 @@
     }
 
     function disableCommandControls() {
-      for (const id of ['load', 'upload', 'renderer', 'integrator', 'run', 'finish', 'stop', 'restart', 'denoise']) byId(id).disabled = true;
+      for (const id of ['native-load', 'native-folder', 'native-action', 'load', 'import-folder', 'import-action', 'importer', 'save-native', 'cancel-import', 'upload', 'renderer', 'integrator', 'run', 'finish', 'stop', 'restart', 'denoise']) byId(id).disabled = true;
     }
 
     async function updateState() {
@@ -603,11 +739,11 @@
       if (resultsRefreshPending) return;
       resultsRefreshPending = true;
       try {
-        const results = await responseJson(await fetchWithTimeout(`/api/results?after=${lastCommandResultId}`, {cache: 'no-store'}));
+        const results = await responseJson(await fetchWithTimeout(`/api/results?cursor=${lastCommandResultId}`, {cache: 'no-store'}));
         if (!Array.isArray(results)) throw new Error('The renderer returned invalid command results');
         for (const result of results) {
-          if (!Number.isSafeInteger(result.command_id) || (typeof result.success !== 'boolean')) continue;
-          lastCommandResultId = Math.max(lastCommandResultId, result.command_id);
+          if (!Number.isSafeInteger(result.command_id) || !Number.isSafeInteger(result.sequence) || (typeof result.success !== 'boolean')) continue;
+          lastCommandResultId = Math.max(lastCommandResultId, result.sequence);
           commandResults.set(result.command_id, result);
           processUploadResult(result);
           finishPendingCommand(result);
@@ -665,7 +801,16 @@
     byId('folder').onchange = folderSelected;
     byId('upload').onclick = uploadFolder;
     byId('cancel-upload').onclick = cancelUpload;
-    byId('load').onclick = () => command('load_scene', {path: byId('path').value});
+    byId('native-load').onclick = () => command(actionCommands[byId('native-action').value], {path: byId('native-path').value});
+    byId('native-action').onchange = () => { byId('native-load').textContent = byId('native-action').value === 'open' ? 'Open' : 'Add'; if (latestState) applyState(latestState); };
+    byId('native-folder').onclick = () => chooseActionFolder(byId('native-action').value);
+    byId('import-folder').onclick = () => chooseActionFolder(byId('import-action').value);
+    byId('load').onclick = () => command(actionCommands[byId('import-action').value], {path: byId('path').value, importer_id: byId('importer').value, output_path: byId('import-output').value});
+    byId('import-action').onchange = updateImportDestination;
+    byId('importer').onchange = () => { if (!nativeAction(byId('scene-action').value)) folderSelected(); };
+    byId('native-path').onkeydown = event => { if (event.key === 'Enter') byId('native-load').click(); };
+    byId('save-native').onclick = () => command('save_scene', {path: byId('native-output').value});
+    byId('cancel-import').onclick = () => command('cancel_import');
     byId('path').onkeydown = event => { if (event.key === 'Enter') byId('load').click(); };
     byId('renderer').onchange = e => command('set_renderer', {renderer: e.target.value});
     byId('integrator').onchange = e => command('set_integrator', {value: Number(e.target.value)});

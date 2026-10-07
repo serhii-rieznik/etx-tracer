@@ -1,10 +1,24 @@
 #pragma once
 
+#include <etx/render/interop/interop_base.hxx>
+#include <etx/render/shared/base.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
+#include <array>
 
 namespace etx {
 
 struct SceneData;
+
+struct BilinearPatch {
+  static constexpr uint32_t DefaultSubdivisions = 16u;
+  static constexpr uint32_t MaximumSubdivisions = 256u;
+  // Parameter order: (0,0), (1,0), (0,1), (1,1).
+  std::array<float3, 4> positions = {};
+  std::array<float3, 4> normals = {};
+  std::array<float2, 4> texcoords = {float2{0.0f, 0.0f}, float2{1.0f, 0.0f}, float2{0.0f, 1.0f}, float2{1.0f, 1.0f}};
+};
+
+bool tessellate_bilinear_patch(const BilinearPatch& patch, uint32_t subdivisions, std::vector<Vertex>& vertices, std::vector<uint3>& triangles);
 
 struct ProceduralGeometryDefinition {
   enum class Class : uint32_t {
@@ -20,6 +34,7 @@ struct ProceduralGeometryDefinition {
     Octahedron,
     Dodecahedron,
     Icosahedron,
+    Bilinear,
   };
 
   Class cls = Class::Invalid;
@@ -36,6 +51,7 @@ struct ProceduralGeometryDefinition {
   uint32_t subdivisions = 4u;
   uint32_t segments = 128u;
   uint32_t bevel_segments = 0u;
+  BilinearPatch bilinear = {};
 };
 
 bool is_procedural_geometry_entry(const std::string& name);

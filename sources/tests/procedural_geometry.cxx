@@ -1,3 +1,4 @@
+#include <etx/import/import_service.hxx>
 #include <array>
 
 #include <etx/render/host/emitter_packing.hxx>
@@ -463,7 +464,7 @@ bool test_empty_scene_environment_emitter_packs() {
   return true;
 }
 
-bool test_raw_obj_load_adds_default_camera_and_lighting() {
+bool test_obj_import_opens_with_camera_and_authored_lighting() {
   const std::filesystem::path obj_path = std::filesystem::path("build") / "raw_model_defaults.obj";
   std::filesystem::create_directories(obj_path.parent_path());
 
@@ -481,9 +482,15 @@ bool test_raw_obj_load_adds_default_camera_and_lighting() {
   TestContext context;
   etx::SceneRepresentation scene(context.scheduler, context.ior_database);
   const std::string obj_path_string = obj_path.string();
-  if (check_condition(scene.load_from_file(obj_path_string.c_str(), etx::SceneRepresentation::LoadEverything, nullptr), "raw obj scene loaded") == false) {
+  std::string error;
+  auto imported = etx::import_service().convert(
+    obj_path_string,
+    [](uint32_t, uint32_t, const char*) {
+      return true;
+    },
+    error);
+  if ((imported == nullptr) || (scene.load_from_file(imported->document.generic_string().c_str(), etx::SceneRepresentation::LoadEverything, nullptr) == false))
     return false;
-  }
 
   if (check_condition(scene.data().cameras.size() == 1u, "raw obj creates one default camera") == false) {
     return false;
@@ -501,30 +508,8 @@ bool test_raw_obj_load_adds_default_camera_and_lighting() {
     return false;
   }
 
-  uint32_t atmosphere_count = 0u;
-  uint32_t directional_count = 0u;
-  uint32_t atmosphere_index = kInvalidIndex;
-  uint32_t sun_reference = kInvalidIndex;
-  for (uint32_t i = 0u, e = static_cast<uint32_t>(scene.data().emitter_profiles.size()); i < e; ++i) {
-    const etx::EmitterProfile& profile = scene.data().emitter_profiles[i];
-    if ((profile.cls == etx::EmitterProfile::Class::Environment) && ((profile.meta & etx::EmitterProfile::Meta::Atmosphere) != 0u)) {
-      atmosphere_index = i;
-      ++atmosphere_count;
-    } else if (profile.cls == etx::EmitterProfile::Class::Directional) {
-      sun_reference = profile.reference_emitter_index;
-      ++directional_count;
-    }
-  }
-
-  if (check_condition(atmosphere_count == 1u, "raw obj creates atmosphere emitter") == false) {
+  if (check_condition(scene.data().emitter_profiles.empty(), "OBJ conversion preserves the absence of authored lights") == false)
     return false;
-  }
-  if (check_condition(directional_count == 1u, "raw obj creates directional sun emitter") == false) {
-    return false;
-  }
-  if (check_condition(sun_reference == atmosphere_index, "raw obj sun references atmosphere") == false) {
-    return false;
-  }
 
   std::filesystem::remove(obj_path);
   return true;
@@ -617,12 +602,19 @@ bool test_gltf_double_sided_material() {
   TestContext context;
   etx::SceneRepresentation scene(context.scheduler, context.ior_database);
   const std::string gltf_path_string = gltf_path.string();
-  bool result = check_condition(scene.load_from_file(gltf_path_string.c_str(), etx::SceneRepresentation::LoadEverything, nullptr), "glTF material test scene loaded");
+  std::string import_error;
+  auto imported = etx::import_service().convert(
+    gltf_path_string,
+    [](uint32_t, uint32_t, const char*) {
+      return true;
+    },
+    import_error);
+  bool result = check_condition((imported != nullptr) && scene.load_from_file(imported->document.generic_string().c_str(), etx::SceneRepresentation::LoadEverything, nullptr),
+    "glTF material test scene imported and opened");
   result &= check_condition(scene.data().triangles.size() == 1u, "glTF material test triangle loaded");
-  result &= check_condition(scene.data().gltf_material_mapping.count(0) == 1u, "glTF material index mapped");
-  if (scene.data().gltf_material_mapping.count(0) == 1u) {
-    const uint32_t material_index = scene.data().gltf_material_mapping.at(0);
-    result &= check_condition(scene.data().materials[material_index].two_sided == 1u, "glTF doubleSided maps to two_sided material flag");
+  if (scene.data().triangles.empty() == false) {
+    const uint32_t material_index = scene.data().triangles.front().material_index;
+    result &= check_condition(scene.data().materials.at(material_index).two_sided == 1u, "glTF doubleSided maps to two_sided material flag");
   }
 
   std::filesystem::remove(gltf_path);
@@ -645,7 +637,15 @@ bool test_native_scene_hierarchy_round_trip() {
   TestContext context;
   etx::SceneRepresentation source(context.scheduler, context.ior_database);
   const std::string obj_path_string = obj_path.string();
-  if (check_condition(source.load_from_file(obj_path_string.c_str(), etx::SceneRepresentation::LoadEverything, nullptr), "hierarchy source loaded") == false) {
+  std::string import_error;
+  auto imported = etx::import_service().convert(
+    obj_path_string,
+    [](uint32_t, uint32_t, const char*) {
+      return true;
+    },
+    import_error);
+  if (check_condition((imported != nullptr) && source.load_from_file(imported->document.generic_string().c_str(), etx::SceneRepresentation::LoadEverything, nullptr),
+        "hierarchy source imported and opened") == false) {
     return false;
   }
 
@@ -728,7 +728,8 @@ bool test_native_scene_hierarchy_round_trip() {
 
 }  // namespace
 
-int main() {
+int main(int, char* argv[]) {
+  etx::env().setup(argv[0]);
   struct TestCase {
     const char* name = nullptr;
     bool (*function)() = nullptr;
@@ -745,7 +746,7 @@ int main() {
     {"binary_load_skips_baked_procedural_geometry", test_binary_load_skips_baked_procedural_geometry},
     {"native_json_loads_text_only_procedural_geometry", test_native_json_loads_text_only_procedural_geometry},
     {"empty_scene_environment_emitter_packs", test_empty_scene_environment_emitter_packs},
-    {"raw_obj_load_adds_default_camera_and_lighting", test_raw_obj_load_adds_default_camera_and_lighting},
+    {"raw_obj_load_adds_default_camera_and_lighting", test_obj_import_opens_with_camera_and_authored_lighting},
     {"directional_use_as_sun_parse", test_directional_use_as_sun_parse},
     {"gltf_double_sided_material", test_gltf_double_sided_material},
     {"native_scene_hierarchy_round_trip", test_native_scene_hierarchy_round_trip},

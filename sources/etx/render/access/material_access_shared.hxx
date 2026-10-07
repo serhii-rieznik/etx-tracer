@@ -9,6 +9,8 @@ struct ETX_ALIGNED MaterialAccess {
   uint32_t scattering_spectrum_index ETX_INIT(kInvalidIndex);
   uint32_t scattering_image_index ETX_INIT(kInvalidIndex);
   float opacity ETX_INIT(1.0f);
+  uint32_t alpha_mask_image_index ETX_INIT(kInvalidIndex);
+  uint32_t alpha_mask_channel ETX_INIT(3u);
 };
 
 ETX_SHARED_INLINE bool material_access_has_scattering(ETX_IN(MaterialAccess, access)) {

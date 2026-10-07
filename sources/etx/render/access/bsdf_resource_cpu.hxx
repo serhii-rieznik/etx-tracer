@@ -39,11 +39,6 @@ ETX_SHARED_INLINE float3 bsdf_resource_load_spectrum_integrated(ETX_IN(BSDFResou
   return etx::spectrum_access_load_integrated(spectrum_context, spectrum_index);
 }
 
-ETX_SHARED_INLINE bool bsdf_resource_image_has_alpha(ETX_IN(BSDFResourceContext, context), uint32_t image_index) {
-  etx::ImageAccessCPUContext image_access = etx::make_image_access_cpu_context(*context.scene);
-  return etx::image_access_has_alpha(image_access, image_index);
-}
-
 ETX_SHARED_INLINE bool bsdf_resource_image_try_evaluate_rgba(ETX_IN(BSDFResourceContext, context), uint32_t image_index, ETX_IN(float2, uv), ETX_OUT(float, image_pdf),
   ETX_OUT(float4, image_value)) {
   etx::ImageEvaluateCPUContext image_context = etx::make_image_evaluate_cpu_context(*context.scene);

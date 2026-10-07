@@ -11,6 +11,8 @@ struct GPUMaterialABIData {
   uint32_t scattering_spectrum_index;
   uint32_t scattering_image_index;
   float opacity;
+  uint32_t alpha_mask_image_index;
+  uint32_t alpha_mask_channel;
 };
 
 struct GPUEmitterInstanceABIData {
@@ -62,7 +64,9 @@ ETX_SHARED_INLINE GPUMaterialABIData gpu_abi_load_material(ByteAddressBuffer buf
   result.ext_medium_index = gpu_abi_load_u32(buffer, base_offset + kMaterialExtMediumOffset);
   result.scattering_spectrum_index = gpu_abi_load_u32(buffer, base_offset + kMaterialScatteringSpectrumIndexOffset);
   result.scattering_image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialScatteringImageIndexOffset);
-  result.opacity = gpu_abi_load_f32(buffer, base_offset + kMaterialOpacityOffset);
+  result.opacity = gpu_abi_load_f32(buffer, base_offset + kMaterialOpacityOffset) * gpu_abi_load_f32(buffer, base_offset + kMaterialAlphaMaskValueOffset);
+  result.alpha_mask_image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialAlphaMaskImageIndexOffset);
+  result.alpha_mask_channel = gpu_abi_load_u32(buffer, base_offset + kMaterialAlphaMaskChannelOffset);
   return result;
 }
 

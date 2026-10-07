@@ -64,19 +64,6 @@ float evaluate_image_channel(uint32_t image_index, uint32_t channel, const float
   return data[channel];
 }
 
-bool image_has_alpha_channel(uint32_t image_index) {
-  if (image_index == kInvalidIndex) {
-    return false;
-  }
-
-  const auto& scene = scene_global_get();
-  if (image_index >= static_cast<uint32_t>(scene.images.count)) {
-    return false;
-  }
-
-  return (scene.images[image_index].options & Image::HasAlphaChannel) != 0u;
-}
-
 float2 sample_image_uv(uint32_t image_index, const float2& rnd) {
   if (image_index == kInvalidIndex) {
     return rnd;

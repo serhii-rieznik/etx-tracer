@@ -29,6 +29,7 @@ struct Environment {
   void clear_tmp_folder();
 
   void setup(const char* executable_path);
+  void setup(const char* executable_path, bool clear_temporary_files);
   const char* current_directory() const;
   std::string to_project_relative(const std::string& path) const;
   std::string resolve_to_absolute(const std::string& path) const;

@@ -25,7 +25,9 @@ ETX_SHARED_INLINE MaterialAccess material_access_cpu_make(ETX_IN(Material, mater
   result.ext_medium_index = material.ext_medium;
   result.scattering_spectrum_index = material.scattering.spectrum_index;
   result.scattering_image_index = material.scattering.image_index;
-  result.opacity = material.opacity;
+  result.opacity = material.opacity * material.alpha_mask.value.x;
+  result.alpha_mask_image_index = material.alpha_mask.image_index;
+  result.alpha_mask_channel = material.alpha_mask.channel;
   return result;
 }
 

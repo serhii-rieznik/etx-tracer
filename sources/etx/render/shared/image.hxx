@@ -35,6 +35,8 @@ struct Image {
     HasAlphaChannel = ::Image::HasAlphaChannel,
     UniformSamplingTable = ::Image::UniformSamplingTable,
     Committed = ::Image::Committed,
+    TextureUVTransform = ::Image::TextureUVTransform,
+    TexelCenteredUV = ::Image::TexelCenteredUV,
   };
 
   float3 fsize = {};
@@ -117,7 +119,7 @@ struct Image {
   }
 
   ETX_SHARED_INLINE Gather gather(const float2& in_uv) const {
-    const float2 uv = in_uv * float2{fsize.x, fsize.y};
+    const float2 uv = image_texture_uv(in_uv, offset, scale, fsize, options) * float2{fsize.x, fsize.y};
     float x0 = tex_coord_u(uv.x, fsize.x);
     float y0 = tex_coord_v(uv.y, fsize.y);
     float dx = x0 - floorf(x0);

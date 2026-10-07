@@ -6,7 +6,7 @@ if(NOT DEFINED SIGNING_IDENTITY OR SIGNING_IDENTITY STREQUAL "")
   message(FATAL_ERROR "SIGNING_IDENTITY must not be empty")
 endif()
 
-file(GLOB_RECURSE bundled_libraries "${APP_BUNDLE}/Contents/Frameworks/*.dylib")
+file(GLOB_RECURSE bundled_libraries "${APP_BUNDLE}/Contents/Frameworks/*.dylib" "${APP_BUNDLE}/Contents/PlugIns/*.dylib")
 foreach(library IN LISTS bundled_libraries)
   if(NOT IS_SYMLINK "${library}")
     execute_process(

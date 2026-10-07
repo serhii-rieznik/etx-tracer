@@ -33,6 +33,8 @@ struct ETX_ALIGNED Image {
     UniformSamplingTable = 1u << 6u,
 
     Committed = 1u << 7u,
+    TextureUVTransform = 1u << 8u,
+    TexelCenteredUV = 1u << 9u,
   };
 
   float3 fsize ETX_INIT({});
@@ -59,7 +61,18 @@ struct ETX_ALIGNED Image {
   uint32_t pixel_data_chunk_index ETX_INIT(kInvalidIndex);
   uint32_t x_distribution_chunk_index ETX_INIT(kInvalidIndex);
   uint32_t y_distribution_chunk_index ETX_INIT(kInvalidIndex);
+  float2 texture_uv_offset ETX_INIT({});
+  float2 texture_uv_scale ETX_INIT((float2{1.0f, 1.0f}));
 };
+
+ETX_SHARED_INLINE float2 image_texture_uv(ETX_IN(float2, uv), ETX_IN(float3, offset), ETX_IN(float3, scale), ETX_IN(float3, fsize), uint32_t options) {
+  float2 result = uv;
+  if ((options & Image::TextureUVTransform) != 0u)
+    result = result * float2(scale.x, scale.y) + float2(offset.x, offset.y);
+  if ((options & Image::TexelCenteredUV) != 0u)
+    result -= float2(0.5f / fsize.x, 0.5f / fsize.y);
+  return result;
+}
 
 struct ETX_ALIGNED ImageSample {
   float2 uv ETX_INIT({});

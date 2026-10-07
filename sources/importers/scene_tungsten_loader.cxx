@@ -1,3 +1,8 @@
+#include <etx/std.hxx>
+#include <etx/core/core.hxx>
+#include <etx/core/log.hxx>
+#include <etx/render/host/scene_representation.hxx>
+#include <fstream>
 #include <etx/render/interop/interop.hxx>
 
 #include <etx/core/environment.hxx>
@@ -6,9 +11,9 @@
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/scattering.hxx>
 #include <etx/render/shared/spectrum.hxx>
-#include <etx/render/host/scene_tungsten_loader.hxx>
-#include <etx/render/host/scene_obj_loader.hxx>
-#include <etx/render/host/scene_gltf_loader.hxx>
+#include "scene_tungsten_loader.hxx"
+#include "scene_obj_loader.hxx"
+#include "scene_gltf_loader.hxx"
 #include <etx/render/host/scene_loader_utils.hxx>
 #include <etx/render/shared/ior_database.hxx>
 namespace etx {
@@ -25,10 +30,10 @@ float3 json_to_float3(const nlohmann::json& arr, const float3& fallback) {
 std::string resolve_path(const std::string& base_dir, const std::string& path) {
   if (path.empty())
     return {};
-  std::filesystem::path p(path);
+  const auto p = std::filesystem::u8path(path);
   if (p.is_absolute())
-    return p.lexically_normal().string();
-  return (std::filesystem::path(base_dir) / p).lexically_normal().string();
+    return path_to_utf8(p.lexically_normal());
+  return path_to_utf8((std::filesystem::u8path(base_dir) / p).lexically_normal());
 }
 
 const char* get_ext(const std::string& path) {
@@ -110,6 +115,8 @@ void tungsten_set_albedo(Material& mtl, const nlohmann::json& val, SceneData& da
     if (tex_idx != kInvalidIndex) {
       mtl.scattering.image_index = tex_idx;
       mtl.reflectance.image_index = tex_idx;
+      mtl.alpha_mask.image_index = tex_idx;
+      mtl.alpha_mask.channel = 3u;
       mtl.scattering.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
       mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
       return;
@@ -254,12 +261,20 @@ bool find_tungsten_conductor(const std::string& name, TungstenConductorIOR& out)
 
 PrimitiveLoadResult handle_infinite_sphere(const nlohmann::json& prim, const char* base_dir, SceneData& data) {
   PrimitiveLoadResult r = {};
-  std::string emission = prim.value("emission", "");
-  bool sample = prim.value("sample", true);
-  if (emission.empty() == false && sample) {
-    std::string img_path = resolve_path(base_dir, emission);
-    uint32_t img_idx = data.add_image(img_path.c_str(), Image::BuildSamplingTable | Image::RepeatU, {}, {1.0f, 1.0f});
-    uint32_t sp_white = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
+  const bool sample = prim.value("sample", true);
+  if (prim.contains("emission") && sample) {
+    const auto& emission = prim["emission"];
+    uint32_t img_idx = kInvalidIndex;
+    float3 color = {1.0f, 1.0f, 1.0f};
+    if (emission.is_string()) {
+      const std::string img_path = resolve_path(base_dir, emission.get<std::string>());
+      img_idx = data.add_image(img_path.c_str(), Image::BuildSamplingTable | Image::RepeatU, {}, {1.0f, 1.0f});
+    } else {
+      color = json_to_float3(emission, color);
+      const float4 white = {1.0f, 1.0f, 1.0f, 1.0f};
+      img_idx = data.add_image(&white, {1u, 1u}, Image::BuildSamplingTable | Image::RepeatU, {}, {1.0f, 1.0f});
+    }
+    const uint32_t sp_white = data.add_spectrum(SpectralDistribution::rgb_luminance(color));
 
     auto& profile = data.emitter_profiles.emplace_back(EmitterProfile::Class::Environment);
     profile.emission.spectrum_index = sp_white;
@@ -1102,7 +1117,7 @@ void recompute_vertex_normals(SceneData& data, uint32_t vertex_start, uint32_t v
 
 bool load_wo3_mesh(const std::string& resolved, const float3& translate, const float3& scale, const float3& rotation_deg, uint32_t material_index, SceneData& data,
   bool recompute_normals) {
-  std::ifstream fin(resolved, std::ios::binary);
+  std::ifstream fin(std::filesystem::u8path(resolved), std::ios::binary);
   if (fin.good() == false) {
     log::warning("Failed to open Tungsten mesh %s", resolved.c_str());
     return false;
@@ -1197,7 +1212,7 @@ bool load_wo3_mesh(const std::string& resolved, const float3& translate, const f
     recompute_vertex_normals(data, vertex_offset, vertex_end, triangle_start, triangle_end);
   }
 
-  std::string mesh_name = std::filesystem::path(resolved).stem().string();
+  std::string mesh_name = path_to_utf8(std::filesystem::u8path(resolved).stem());
   data.add_mesh(mesh_name.c_str(), triangle_start, triangle_count, bbox_min, bbox_max);
   return true;
 }
@@ -1321,14 +1336,14 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
       emission_scale = float(prim["scale"].get<double>());
 
     bool wants_emission = has_power || has_emission;
-    if (wants_emission && bsdf_is_string && (material_index != data.defaults.missing_material)) {
+    const bool overrides_two_sided = two_sided && (data.materials[material_index].two_sided == 0u);
+    if ((wants_emission || overrides_two_sided) && bsdf_is_string && (material_index != data.defaults.missing_material)) {
       std::string clone_name = bsdf_name.empty() ? std::string{} : bsdf_name + "__emitter_" + std::to_string(data.materials.size());
       material_index = data.clone_material(data.materials[material_index], clone_name.c_str());
     }
 
-    auto& mtl = data.materials[material_index];
     if (two_sided)
-      mtl.two_sided = 1u;
+      data.materials[material_index].two_sided = 1u;
 
     float3 translate = {};
     float3 scale = {1.0f, 1.0f, 1.0f};
@@ -1354,6 +1369,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
 
     const uint32_t mesh_start = static_cast<uint32_t>(data.meshes.size());
     const uint32_t node_start = static_cast<uint32_t>(data.hierarchy.nodes.size());
+    const size_t triangle_start = data.triangles.size();
     bool prim_loaded = false;
 
     PrimitiveLoadResult builtin_result = {};
@@ -1363,10 +1379,19 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
     }
 
     PrimitiveLoadResult mesh_result = handle_mesh_primitive(prim, base_dir, type, material_index, data, database, scheduler, active_camera);
+    if ((type == "mesh") && (mesh_result.loaded == false)) {
+      log::error("Failed to decode Tungsten mesh primitive");
+      return SceneLoadFailed;
+    }
     prim_loaded = prim_loaded || mesh_result.loaded;
     load_flags |= mesh_result.flags;
 
     if (prim_loaded) {
+      if (type == "mesh") {
+        for (size_t index = triangle_start; index < data.triangles.size(); ++index)
+          data.triangles[index].material_index = material_index;
+      }
+      auto& mtl = data.materials[material_index];
       primitives_loaded = true;
       apply_transform_to_new_roots(data, node_start, tungsten_transform(translate, scale, rotation));
       const uint32_t mesh_end = static_cast<uint32_t>(data.meshes.size());
@@ -1397,7 +1422,7 @@ uint32_t load_from_tungsten_file(const char* file_name, SceneData& data, const I
   if ((file_name == nullptr) || (file_name[0] == 0))
     return SceneLoadFailed;
 
-  std::ifstream in(file_name, std::ios::binary);
+  std::ifstream in(std::filesystem::u8path(file_name), std::ios::binary);
   if (in.is_open() == false) {
     log::error("Failed to open Tungsten scene: %s", file_name);
     return SceneLoadFailed;

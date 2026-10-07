@@ -8,6 +8,7 @@
 namespace etx {
 
 struct ImagePoolImpl {
+  std::atomic<bool> decode_failed = false;
   ImagePoolImpl(std::vector<Image>& external_images, BufferPool& external_buffer_pool)
     : images(external_images)
     , buffer_pool(external_buffer_pool) {
@@ -509,6 +510,7 @@ struct ImagePoolImpl {
     mapping.clear();
     free_indices.clear();
     counter = 0;
+    decode_failed.store(false);
   }
 
   void load_image(Image& img, const char* file_name) {
@@ -529,6 +531,7 @@ struct ImagePoolImpl {
       img.format = load_data(file_name, source_data, image_dimensions);
       img.isize = uint3{image_dimensions.x, image_dimensions.y, 1u};
       if ((img.format == Image::Format::Undefined) || (img.isize.x * img.isize.y == 0)) {
+        decode_failed.store(true);
         log::error("Failed to load image from file: %s", file_name);
       }
     }
@@ -758,6 +761,12 @@ void ImagePool::swap_contents(ImagePool& other) {
   swap(_private->mapping, other._private->mapping);
   swap(_private->free_indices, other._private->free_indices);
   swap(_private->counter, other._private->counter);
+  const bool previous_failure = _private->decode_failed.exchange(other._private->decode_failed.load());
+  other._private->decode_failed.store(previous_failure);
+}
+
+uint32_t ImagePool::add_copy(const Image& image, const std::string& path) {
+  return _private->add_copy(image, path, path + "#copy-" + std::to_string(++_private->counter));
 }
 
 uint32_t ImagePool::add_copy(const Image& img) {
@@ -828,6 +837,10 @@ const uint64_t ImagePool::array_size() const {
 void ImagePool::add_options(uint32_t index, uint32_t options) {
   ETX_CRITICAL(index < _private->images.size());
   _private->images[index].options |= options;
+}
+
+bool ImagePool::loading_succeeded() const {
+  return _private->decode_failed.load() == false;
 }
 
 void ImagePool::load_images(TaskScheduler& scheduler) {

@@ -38,7 +38,7 @@ struct SceneLimits {
 
 ETX_STATIC_CONST uint32_t kTriangleStride = 32u;
 
-ETX_STATIC_CONST uint32_t kMaterialStride = 336u;
+ETX_STATIC_CONST uint32_t kMaterialStride = 400u;
 ETX_STATIC_CONST uint32_t kMaterialReflectanceSpectrumIndexOffset = 0u;
 ETX_STATIC_CONST uint32_t kMaterialReflectanceImageIndexOffset = 4u;
 ETX_STATIC_CONST uint32_t kMaterialScatteringSpectrumIndexOffset = 16u;
@@ -94,6 +94,13 @@ ETX_STATIC_CONST uint32_t kMaterialThermalIntMediumIndexOffset = 308u;
 ETX_STATIC_CONST uint32_t kMaterialThermalConductorImageIndexOffset = 312u;
 ETX_STATIC_CONST uint32_t kMaterialSubsurfacePackingOffset = 316u;
 ETX_STATIC_CONST uint32_t kMaterialSubsurfaceAnisotropyOffset = 320u;
+ETX_STATIC_CONST uint32_t kMaterialAlphaMaskValueOffset = 336u;
+ETX_STATIC_CONST uint32_t kMaterialAlphaMaskImageIndexOffset = 352u;
+ETX_STATIC_CONST uint32_t kMaterialAlphaMaskChannelOffset = 356u;
+
+ETX_STATIC_CONST uint32_t kMaterialBumpValueOffset = 368u;
+ETX_STATIC_CONST uint32_t kMaterialBumpImageIndexOffset = 384u;
+ETX_STATIC_CONST uint32_t kMaterialBumpChannelOffset = 388u;
 
 ETX_STATIC_CONST uint32_t kEmitterStride = 32u;
 ETX_STATIC_CONST uint32_t kEmitterClassOffset = 0u;
@@ -137,7 +144,7 @@ ETX_STATIC_CONST uint32_t kImageBlobHeaderImagesOffset = 4u;
 ETX_STATIC_CONST uint32_t kImageBlobHeaderDataChunkCountOffset = 8u;
 ETX_STATIC_CONST uint32_t kImageBlobHeaderDataChunkIndicesOffset = 12u;
 
-ETX_STATIC_CONST uint32_t kImageDescStride = 112u;
+ETX_STATIC_CONST uint32_t kImageDescStride = 128u;
 ETX_STATIC_CONST uint32_t kImageDescFSizeOffset = 0u;
 ETX_STATIC_CONST uint32_t kImageDescOffsetOffset = 12u;
 ETX_STATIC_CONST uint32_t kImageDescScaleOffset = 24u;
@@ -157,6 +164,8 @@ ETX_STATIC_CONST uint32_t kImageDescPixelDataStrideOffset = 92u;
 ETX_STATIC_CONST uint32_t kImageDescPixelDataChunkIndexOffset = 96u;
 ETX_STATIC_CONST uint32_t kImageDescXDistributionChunkIndexOffset = 100u;
 ETX_STATIC_CONST uint32_t kImageDescYDistributionChunkIndexOffset = 104u;
+ETX_STATIC_CONST uint32_t kImageDescTextureUVOffsetOffset = 108u;
+ETX_STATIC_CONST uint32_t kImageDescTextureUVScaleOffset = 116u;
 
 ETX_STATIC_CONST uint32_t kDistributionEntryStride = 16u;
 

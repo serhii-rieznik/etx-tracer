@@ -1,3 +1,4 @@
+#include <etx/std.hxx>
 #include <etx/render/interop/interop.hxx>
 
 #include <etx/core/core.hxx>
@@ -5,8 +6,8 @@
 #include <etx/render/host/exr.hxx>
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/shared/spectrum.hxx>
-#include <etx/render/host/scene_gltf_loader.hxx>
-#include <etx/render/host/gltf_accessor.hxx>
+#include "scene_gltf_loader.hxx"
+#include "gltf_accessor.hxx"
 #include <etx/render/host/scene_representation.hxx>
 
 namespace etx {
@@ -16,6 +17,8 @@ static constexpr float kDefaultDielectricEta = 1.5f;
 
 struct GltfLoaderState {
   SceneData& data;
+  std::unordered_map<uint32_t, uint32_t> gltf_image_mapping;
+  std::unordered_map<int32_t, uint32_t> gltf_material_mapping;
   Camera& active_camera;
   TaskScheduler& scheduler;
   std::vector<std::vector<uint32_t>> mesh_assets;
@@ -197,12 +200,14 @@ void load_gltf_mesh(const tinygltf::Model& model, uint32_t gltf_mesh_index, uint
     bool has_tangents = primitive.attributes.count("TANGENT") > 0;
 
     if (has_positions == false)
-      continue;
+      throw std::runtime_error("glTF mesh primitive has no positions.");
+    if ((primitive.mode != -1) && (primitive.mode != TINYGLTF_MODE_TRIANGLES))
+      throw std::runtime_error("Only glTF triangle primitives are supported.");
 
     uint32_t material_index = data.defaults.missing_material;
     if ((primitive.material >= 0) && (primitive.material < static_cast<int32_t>(model.materials.size()))) {
-      auto it = data.gltf_material_mapping.find(static_cast<int32_t>(primitive.material));
-      if (it != data.gltf_material_mapping.end()) {
+      auto it = state.gltf_material_mapping.find(static_cast<int32_t>(primitive.material));
+      if (it != state.gltf_material_mapping.end()) {
         material_index = it->second;
       }
     }
@@ -211,26 +216,26 @@ void load_gltf_mesh(const tinygltf::Model& model, uint32_t gltf_mesh_index, uint
     float3 mesh_bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
     float3 mesh_bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
 
-    const tinygltf::Accessor& pos_accessor = model.accessors[primitive.attributes.find("POSITION")->second];
-    const tinygltf::BufferView& pos_buffer_view = model.bufferViews[pos_accessor.bufferView];
-    const tinygltf::Buffer& pos_buffer = model.buffers[pos_buffer_view.buffer];
+    const tinygltf::Accessor& pos_accessor = model.accessors.at(primitive.attributes.find("POSITION")->second);
+    const tinygltf::BufferView& pos_buffer_view = model.bufferViews.at(pos_accessor.bufferView);
+    const tinygltf::Buffer& pos_buffer = model.buffers.at(pos_buffer_view.buffer);
 
     const tinygltf::Accessor* nrm_accessor = nullptr;
     const tinygltf::BufferView* nrm_buffer_view = nullptr;
     const tinygltf::Buffer* nrm_buffer = nullptr;
     if (has_normals) {
-      nrm_accessor = model.accessors.data() + primitive.attributes.find("NORMAL")->second;
-      nrm_buffer_view = model.bufferViews.data() + nrm_accessor->bufferView;
-      nrm_buffer = model.buffers.data() + nrm_buffer_view->buffer;
+      nrm_accessor = &model.accessors.at(primitive.attributes.find("NORMAL")->second);
+      nrm_buffer_view = &model.bufferViews.at(nrm_accessor->bufferView);
+      nrm_buffer = &model.buffers.at(nrm_buffer_view->buffer);
     }
 
     const tinygltf::Accessor* tex_accessor = nullptr;
     const tinygltf::BufferView* tex_buffer_view = nullptr;
     const tinygltf::Buffer* tex_buffer = nullptr;
     if (has_tex_coords) {
-      tex_accessor = model.accessors.data() + primitive.attributes.find("TEXCOORD_0")->second;
-      tex_buffer_view = model.bufferViews.data() + tex_accessor->bufferView;
-      tex_buffer = model.buffers.data() + tex_buffer_view->buffer;
+      tex_accessor = &model.accessors.at(primitive.attributes.find("TEXCOORD_0")->second);
+      tex_buffer_view = &model.bufferViews.at(tex_accessor->bufferView);
+      tex_buffer = &model.buffers.at(tex_buffer_view->buffer);
     }
 
     const tinygltf::Accessor* tan_accessor = nullptr;
@@ -264,19 +269,21 @@ void load_gltf_mesh(const tinygltf::Model& model, uint32_t gltf_mesh_index, uint
       }
     }
 
-    bool has_indices = (primitive.indices >= 0) && (primitive.indices < model.accessors.size());
+    const bool has_indices = primitive.indices >= 0;
 
     const tinygltf::Accessor* idx_accessor = nullptr;
     const tinygltf::BufferView* idx_buffer_view = nullptr;
     const tinygltf::Buffer* idx_buffer = nullptr;
     if (has_indices) {
-      idx_accessor = model.accessors.data() + primitive.indices;
-      idx_buffer_view = model.bufferViews.data() + idx_accessor->bufferView;
-      idx_buffer = model.buffers.data() + idx_buffer_view->buffer;
+      idx_accessor = &model.accessors.at(primitive.indices);
+      idx_buffer_view = &model.bufferViews.at(idx_accessor->bufferView);
+      idx_buffer = &model.buffers.at(idx_buffer_view->buffer);
     }
 
-    ETX_ASSERT((has_indices == false) || ((idx_accessor->count % 3) == 0));
-    uint32_t expected_triangle_count = static_cast<uint32_t>(has_indices ? idx_accessor->count : pos_accessor.count) / 3u;
+    const size_t element_count = has_indices ? idx_accessor->count : pos_accessor.count;
+    if (((element_count % 3u) != 0u) || (element_count >= (kInvalidIndex - vertices.pos.size())))
+      throw std::runtime_error("Invalid or excessive glTF triangle element count.");
+    const uint32_t expected_triangle_count = static_cast<uint32_t>(element_count / 3u);
 
     uint32_t linear_index = 0;
     for (uint32_t tri_index = 0; tri_index < expected_triangle_count; ++tri_index) {
@@ -405,6 +412,12 @@ void load_gltf_mesh(const tinygltf::Model& model, uint32_t gltf_mesh_index, uint
 
 void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
   auto& data = state.data;
+  std::unordered_map<int32_t, uint32_t> texture_mapping;
+  for (int32_t index = 0; index < static_cast<int32_t>(model.textures.size()); ++index) {
+    const auto image = state.gltf_image_mapping.find(model.textures[index].source);
+    if (image != state.gltf_image_mapping.end())
+      texture_mapping.emplace(index, image->second);
+  }
 
   for (int32_t gltf_material_index = 0; gltf_material_index < static_cast<int32_t>(model.materials.size()); ++gltf_material_index) {
     auto& material = model.materials[gltf_material_index];
@@ -420,7 +433,7 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
     const auto& pbr = material.pbrMetallicRoughness;
 
     uint32_t material_index = data.add_material(material_name.c_str());
-    data.gltf_material_mapping[gltf_material_index] = material_index;
+    state.gltf_material_mapping[gltf_material_index] = material_index;
 
     auto& mtl = data.materials[material_index];
 
@@ -452,9 +465,9 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
     mtl.scattering.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance(rgb));
 
     if (is_unlit == false) {
-      bool has_metallic_roughness_texture = (pbr.metallicRoughnessTexture.index != -1) && (data.gltf_image_mapping.count(pbr.metallicRoughnessTexture.index) > 0);
+      bool has_metallic_roughness_texture = (pbr.metallicRoughnessTexture.index != -1) && (texture_mapping.count(pbr.metallicRoughnessTexture.index) > 0);
       if (has_metallic_roughness_texture) {
-        auto image_index = data.gltf_image_mapping.at(pbr.metallicRoughnessTexture.index);
+        auto image_index = texture_mapping.at(pbr.metallicRoughnessTexture.index);
         mtl.roughness.image_index = image_index;
         mtl.roughness.channel = 1u;
         mtl.roughness.value = {1.0f, 1.0f};
@@ -471,13 +484,15 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
       }
     }
 
-    if ((pbr.baseColorTexture.index != -1) && (data.gltf_image_mapping.count(pbr.baseColorTexture.index) > 0)) {
-      mtl.scattering.image_index = data.gltf_image_mapping.at(pbr.baseColorTexture.index);
+    if ((pbr.baseColorTexture.index != -1) && (texture_mapping.count(pbr.baseColorTexture.index) > 0)) {
+      mtl.scattering.image_index = texture_mapping.at(pbr.baseColorTexture.index);
       mtl.reflectance.image_index = mtl.scattering.image_index;
+      mtl.alpha_mask.image_index = mtl.scattering.image_index;
+      mtl.alpha_mask.channel = 3u;
     }
 
-    if ((material.normalTexture.index != -1) && (data.gltf_image_mapping.count(material.normalTexture.index) > 0)) {
-      mtl.normal_image_index = data.gltf_image_mapping.at(material.normalTexture.index);
+    if ((material.normalTexture.index != -1) && (texture_mapping.count(material.normalTexture.index) > 0)) {
+      mtl.normal_image_index = texture_mapping.at(material.normalTexture.index);
       mtl.normal_scale = 1.0f;
       data.add_image_options(mtl.normal_image_index, Image::SkipSRGBConversion);
     }
@@ -501,8 +516,8 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
 
         mtl.emission.spectrum_index = data.add_spectrum(spd);
         mtl.emission_collimation = 0.0f;
-        if ((material.emissiveTexture.index != -1) && (data.gltf_image_mapping.count(material.emissiveTexture.index) > 0)) {
-          mtl.emission.image_index = data.gltf_image_mapping.at(material.emissiveTexture.index);
+        if ((material.emissiveTexture.index != -1) && (texture_mapping.count(material.emissiveTexture.index) > 0)) {
+          mtl.emission.image_index = texture_mapping.at(material.emissiveTexture.index);
         }
       } else {
         mtl.emission.spectrum_index = kInvalidIndex;
@@ -518,8 +533,8 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
               const auto& tex_index = tex_obj.Get("index");
               if (tex_index.IsNumber()) {
                 int32_t tex_idx = tex_index.GetNumberAsInt();
-                if ((tex_idx >= 0) && (data.gltf_image_mapping.count(tex_idx) > 0)) {
-                  mtl.transmission.image_index = data.gltf_image_mapping.at(tex_idx);
+                if ((tex_idx >= 0) && (texture_mapping.count(tex_idx) > 0)) {
+                  mtl.transmission.image_index = texture_mapping.at(tex_idx);
                   mtl.transmission.channel = 0u;
                   mtl.transmission.value = {1.0f, 1.0f, 1.0f, 1.0f};
                   has_transmission_texture = true;
@@ -547,7 +562,7 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
 }  // namespace
 
 uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data, TaskScheduler& scheduler, Camera& active_camera) {
-  GltfLoaderState state{data, active_camera, scheduler};
+  GltfLoaderState state{data, {}, {}, active_camera, scheduler};
 
   tinygltf::TinyGLTF loader;
   tinygltf::Model model;
@@ -556,8 +571,8 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
 
   bool load_result = false;
 
-  auto& gltf_image_mapping = data.gltf_image_mapping;
-  auto& gltf_material_mapping = data.gltf_material_mapping;
+  auto& gltf_image_mapping = state.gltf_image_mapping;
+  auto& gltf_material_mapping = state.gltf_material_mapping;
   gltf_image_mapping.clear();
   gltf_material_mapping.clear();
   auto image_loader = [](tinygltf::Image* image, const int image_index, std::string* errors, std::string* warnings, int width, int height, const unsigned char* data_ptr,
@@ -567,20 +582,35 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
     auto self = reinterpret_cast<GltfLoaderState*>(user_pointer);
 
     if (((width == 0) || (height == 0)) && (data_ptr != nullptr)) {
-      uint32_t hash = etx_hash32(data_ptr, data_size);
+      const uint64_t hash = etx_hash64(data_ptr, data_size);
       char file_name[64] = {};
-      snprintf(file_name, sizeof(file_name), "img-%x.png", hash);
+      const char* encoded_extension = ".png";
+      if ((data_size >= 4) && (data_ptr[0] == 0x76) && (data_ptr[1] == 0x2f) && (data_ptr[2] == 0x31) && (data_ptr[3] == 0x01))
+        encoded_extension = ".exr";
+      else if ((data_size >= 4) && (memcmp(data_ptr, "DDS ", 4u) == 0))
+        encoded_extension = ".dds";
+      else if ((data_size >= 2) && (data_ptr[0] == 0xff) && (data_ptr[1] == 0xd8))
+        encoded_extension = ".jpg";
+      else if ((data_size >= 2) && (data_ptr[0] == '#') && (data_ptr[1] == '?'))
+        encoded_extension = ".hdr";
+      snprintf(file_name, sizeof(file_name), "img-%llx%s", static_cast<unsigned long long>(hash), encoded_extension);
 
       char buffer[2048] = {};
-      env().file_in_tmp(file_name, buffer, sizeof(buffer));
-      if (auto fout = fopen(buffer, "wb")) {
+      const std::string embedded_path = path_to_utf8(std::filesystem::u8path(self->data.source_asset_directory) / file_name);
+      snprintf(buffer, sizeof(buffer), "%s", embedded_path.c_str());
+      if (auto fout = fopen_utf8(buffer, "wb")) {
         if (fwrite(data_ptr, 1, data_size, fout) == data_size) {
-          self->data.gltf_image_mapping[image_index] = self->data.add_image(buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
+          self->gltf_image_mapping[image_index] = self->data.add_image(buffer, Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
         }
         fclose(fout);
       }
     }
 
+    if (self->gltf_image_mapping.count(image_index) == 0u) {
+      if (errors != nullptr)
+        *errors += "Could not preserve an embedded image.";
+      return false;
+    }
     return true;
   };
 
@@ -606,7 +636,7 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
   }
 
   constexpr auto kDataBufferSize = 2048llu;
-  static char base_dir[kDataBufferSize] = {};
+  char base_dir[kDataBufferSize] = {};
   get_base_directory(file_name, base_dir, sizeof(base_dir));
 
   for (size_t image_index = 0; image_index < model.images.size(); ++image_index) {
@@ -623,13 +653,13 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
       continue;
     }
 
-    std::filesystem::path image_path(gltf_image.uri);
+    auto image_path = std::filesystem::u8path(gltf_image.uri);
     if (image_path.is_absolute() == false) {
-      std::filesystem::path base_path(base_dir);
-      image_path = base_path / gltf_image.uri;
+      const auto base_path = std::filesystem::u8path(base_dir);
+      image_path = base_path / std::filesystem::u8path(gltf_image.uri);
     }
 
-    std::string image_path_str = image_path.lexically_normal().string();
+    std::string image_path_str = path_to_utf8(image_path.lexically_normal());
     gltf_image_mapping[static_cast<int>(image_index)] = data.add_image(image_path_str.c_str(), Image::RepeatU | Image::RepeatV, {}, {1.0f, 1.0f});
   }
 
@@ -644,7 +674,7 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
     log::info("GLTF: extension %s is required by model", ext_name.c_str());
   }
 
-  auto& gltf_image_mapping_ref = state.data.gltf_image_mapping;
+  auto& gltf_image_mapping_ref = state.gltf_image_mapping;
 
   auto parse_sh_data = [](const tinygltf::Value& value, float3 sh_coeffs[9]) -> bool {
     const auto* array = value.IsArray() ? &value : nullptr;
@@ -775,7 +805,8 @@ uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data
                     char exr_filename[512] = {};
                     char exr_name[64] = {};
                     snprintf(exr_name, sizeof(exr_name), "specular_env_%zu.exr", light_idx);
-                    env().file_in_tmp(exr_name, exr_filename, sizeof(exr_filename));
+                    const std::string generated_path = path_to_utf8(std::filesystem::u8path(data.source_asset_directory) / exr_name);
+                    snprintf(exr_filename, sizeof(exr_filename), "%s", generated_path.c_str());
                     std::string error;
                     if (!save_exr_image(exr_filename, equirect_image.pixels.f32.a, equirect_dimensions, &error)) {
                       log::warning("Failed to save specular environment map to %s: %s", exr_filename, error.c_str());

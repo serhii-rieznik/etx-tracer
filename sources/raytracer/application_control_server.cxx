@@ -1,6 +1,6 @@
 #include "application_control_server.hxx"
 #include "application_control_html.hxx"
-#include "scene_dependencies.hxx"
+#include <etx/import/import_service.hxx>
 
 #include <etx/core/log.hxx>
 
@@ -49,12 +49,17 @@ struct ApplicationUploadFile {
   uint64_t received = 0u;
   bool required = false;
   bool inspected = false;
-  bool ignore_obj_material_library = false;
+  bool external_material_override = false;
+  std::string importer_id;
 };
 
 struct ApplicationUploadSession {
   std::string id = {};
   std::filesystem::path directory = {};
+  std::shared_ptr<ImportArtifact> owner;
+  std::string action = "open";
+  std::string importer_id;
+  std::string output_path;
   std::string entry = {};
   std::vector<ApplicationUploadFile> files = {};
   std::vector<std::string> unavailable_references = {};
@@ -68,8 +73,10 @@ struct ApplicationUploadSession {
 
 struct ApplicationUploadState {
   std::filesystem::path directory = {};
+  std::shared_ptr<ImportArtifact> owner;
   std::unordered_map<std::string, ApplicationUploadSession> sessions = {};
   uint64_t total_reserved_size = 0u;
+  uint64_t next_result_sequence = 1u;
   std::mt19937_64 random{std::random_device{}()};
   std::chrono::steady_clock::time_point next_maintenance = {};
 };
@@ -165,6 +172,8 @@ bool prepare_upload_directory(ApplicationUploadState& state) {
         return false;
       }
       state.directory = candidate;
+      state.owner = std::make_shared<ImportArtifact>();
+      state.owner->directory = candidate;
       return true;
     }
     if (error) {
@@ -175,15 +184,9 @@ bool prepare_upload_directory(ApplicationUploadState& state) {
 }
 
 void clear_uploads(ApplicationUploadState& state) {
-  if (!state.directory.empty()) {
-    std::error_code error = {};
-    std::filesystem::remove_all(state.directory, error);
-    if (error) {
-      log::warning("Failed to remove application upload directory %s: %s", state.directory.string().c_str(), error.message().c_str());
-    }
-  }
   state.directory.clear();
   state.sessions.clear();
+  state.owner.reset();
   state.total_reserved_size = 0u;
   state.next_maintenance = {};
 }
@@ -419,11 +422,6 @@ void erase_upload_session(ApplicationUploadState& state, const std::string& id) 
   if (session == state.sessions.end()) {
     return;
   }
-  std::error_code error = {};
-  std::filesystem::remove_all(session->second.directory, error);
-  if (error) {
-    log::warning("Failed to remove upload session %s: %s", id.c_str(), error.message().c_str());
-  }
   state.total_reserved_size -= std::min(state.total_reserved_size, session->second.total_size);
   state.sessions.erase(session);
 }
@@ -432,7 +430,8 @@ void collect_command_results(ApplicationUploadState& state, const ApplicationCon
   std::vector<ApplicationCommandResult>& retained_results) {
   std::vector<ApplicationCommandResult> results = {};
   result_provider(results);
-  for (const ApplicationCommandResult& result : results) {
+  for (ApplicationCommandResult& result : results) {
+    result.sequence = state.next_result_sequence++;
     for (auto session = state.sessions.begin(); session != state.sessions.end();) {
       if (!session->second.committed || (session->second.load_command_id != result.command_id)) {
         ++session;
@@ -470,9 +469,9 @@ void maintain_upload_sessions(ApplicationUploadState& state, const ApplicationCo
   }
   state.next_maintenance = now + std::chrono::seconds(1);
   const ApplicationStateSnapshot snapshot = state_provider();
-  const std::filesystem::path scene_file = std::filesystem::path(snapshot.scene_file).lexically_normal();
+  const std::filesystem::path scene_file = std::filesystem::u8path(snapshot.scene_file).lexically_normal();
   for (auto session = state.sessions.begin(); session != state.sessions.end();) {
-    const std::filesystem::path entry = (session->second.directory / std::filesystem::path(session->second.entry)).lexically_normal();
+    const std::filesystem::path entry = (session->second.directory / std::filesystem::u8path(session->second.entry)).lexically_normal();
     std::error_code equivalent_error = {};
     const bool same_file = (scene_file == entry) || std::filesystem::equivalent(scene_file, entry, equivalent_error);
     const bool active = snapshot.scene_loaded && same_file;
@@ -523,7 +522,7 @@ UploadFileRequirement require_upload_file(ApplicationUploadState& state, Applica
     return UploadFileRequirement::LimitExceeded;
   }
   std::error_code filesystem_error = {};
-  const std::filesystem::path file_path = session.directory / std::filesystem::path(file.relative_path);
+  const std::filesystem::path file_path = session.directory / std::filesystem::u8path(file.relative_path);
   std::filesystem::create_directories(file_path.parent_path(), filesystem_error);
   if (filesystem_error) {
     error = "Failed to create a dependency directory";
@@ -600,12 +599,24 @@ void create_upload_session(NativeSocket client, ApplicationUploadState& state, c
     session.id = upload_id(state);
   } while (state.sessions.contains(session.id));
   session.directory = state.directory / session.id;
+  if ((json.contains("action") && (json["action"].is_string() == false)) || (json.contains("output_path") && (json["output_path"].is_string() == false)) ||
+      (json.contains("importer_id") && (json["importer_id"].is_string() == false))) {
+    send_json_error(client, 400, "Bad Request", "Upload action, output path, and importer ID must be strings");
+    return;
+  }
+  session.action = json.value("action", "open");
+  session.importer_id = json.value("importer_id", "");
+  session.output_path = json.value("output_path", "");
+  if ((session.action != "open") && (session.action != "import") && (session.action != "import_into_scene") && (session.action != "add_native") && (session.action != "convert")) {
+    send_json_error(client, 400, "Bad Request", "Unknown upload action");
+    return;
+  }
   std::error_code filesystem_error = {};
   if (!std::filesystem::create_directory(session.directory, filesystem_error)) {
     send_json_error(client, 500, "Internal Server Error", "Failed to create the upload directory");
     return;
   }
-  const std::filesystem::path entry_path = session.directory / std::filesystem::path(entry_file.relative_path);
+  const std::filesystem::path entry_path = session.directory / std::filesystem::u8path(entry_file.relative_path);
   std::filesystem::create_directories(entry_path.parent_path(), filesystem_error);
   std::ofstream entry_output(entry_path, std::ios::binary | std::ios::trunc);
   entry_output.close();
@@ -615,6 +626,9 @@ void create_upload_session(NativeSocket client, ApplicationUploadState& state, c
     return;
   }
 
+  session.owner = std::make_shared<ImportArtifact>();
+  session.owner->directory = session.directory;
+  session.owner->parent = state.owner;
   const std::string id = session.id;
   const uint64_t total_size = session.total_size;
   state.total_reserved_size += total_size;
@@ -658,7 +672,7 @@ void receive_upload_chunk(NativeSocket client, ApplicationUploadState& state, co
     return;
   }
 
-  const std::filesystem::path file_path = session.directory / std::filesystem::path(file.relative_path);
+  const std::filesystem::path file_path = session.directory / std::filesystem::u8path(file.relative_path);
   std::error_code filesystem_error = {};
   if (std::filesystem::file_size(file_path, filesystem_error) != file.received || filesystem_error) {
     send_json_error(client, 409, "Conflict", "The uploaded file does not match the session state");
@@ -675,26 +689,18 @@ void receive_upload_chunk(NativeSocket client, ApplicationUploadState& state, co
   send_text(client, 200, "OK", "application/json", Json({{"received", file.received}, {"size", file.size}}).dump());
 }
 
-bool dependency_descriptor(std::string_view path) {
-  const size_t dot = path.find_last_of('.');
-  if (dot == std::string_view::npos)
-    return false;
-  std::string ext = upload_path_key(path.substr(dot));
-  return (ext == ".json") || (ext == ".gltf") || (ext == ".glb") || (ext == ".obj") || (ext == ".mtl") || (ext == ".materials");
-}
-
 enum class DependencyPathResolution { Found, Missing, Unsafe };
 
 DependencyPathResolution resolve_dependency_path(const ApplicationUploadSession& session, const ApplicationUploadFile& source, const std::string& reference,
   std::string& relative_path) {
   std::string portable_reference = reference;
   std::replace(portable_reference.begin(), portable_reference.end(), '\\', '/');
-  const std::filesystem::path reference_path(portable_reference);
+  const auto reference_path = std::filesystem::u8path(portable_reference);
   if (reference_path.is_absolute() || reference_path.has_root_name()) {
     return DependencyPathResolution::Unsafe;
   }
-  const std::filesystem::path source_path(source.relative_path);
-  const std::string combined = (source_path.parent_path() / reference_path).lexically_normal().generic_string();
+  const auto source_path = std::filesystem::u8path(source.relative_path);
+  const std::string combined = path_to_utf8((source_path.parent_path() / reference_path).lexically_normal());
   if (!normalize_upload_path(combined, relative_path)) {
     return DependencyPathResolution::Unsafe;
   }
@@ -714,6 +720,11 @@ void resolve_upload_dependencies(NativeSocket client, ApplicationUploadState& st
     return;
   }
 
+  // Root importers can discover more dependencies after included files arrive.
+  for (ApplicationUploadFile& file : session.files) {
+    if (file.relative_path == session.entry)
+      file.inspected = false;
+  }
   bool inspected = true;
   while (inspected) {
     inspected = false;
@@ -721,19 +732,16 @@ void resolve_upload_dependencies(NativeSocket client, ApplicationUploadState& st
       if (!file.required || file.inspected || (file.received != file.size)) {
         continue;
       }
-      file.inspected = true;
       inspected = true;
-      if (!dependency_descriptor(file.relative_path)) {
-        continue;
-      }
-      if (file.ignore_obj_material_library && upload_path_key(file.relative_path).ends_with(".obj")) {
-        continue;
-      }
-      const SceneDependencyInspection result = inspect_scene_dependencies(session.directory / std::filesystem::path(file.relative_path), file.relative_path);
+      const bool root_import = (file.relative_path == session.entry) && (session.action != "open") && (session.action != "add_native");
+      const uint32_t flags = (file.external_material_override ? ETX_IMPORT_EXTERNAL_MATERIALS : 0u) | (file.importer_id.empty() ? 0u : ETX_IMPORT_DEPENDENCY);
+      const SceneDependencyInspection result =
+        import_service().inspect(session.directory / std::filesystem::u8path(file.relative_path), flags, root_import ? session.importer_id : file.importer_id);
       if (!result.error.empty()) {
         send_json_error(client, 422, "Unprocessable Content", file.relative_path + ": " + result.error);
         return;
       }
+      file.inspected = true;
       for (const std::string& reference : result.references) {
         std::string dependency_path = {};
         const DependencyPathResolution path_resolution = resolve_dependency_path(session, file, reference, dependency_path);
@@ -759,10 +767,11 @@ void resolve_upload_dependencies(NativeSocket client, ApplicationUploadState& st
           }
           return;
         }
+        session.files[dependency_index].importer_id = result.importer_id;
         if (std::find_if(result.geometry_with_external_materials.begin(), result.geometry_with_external_materials.end(), [&](const std::string& geometry) {
               return upload_path_key(geometry) == upload_path_key(reference);
             }) != result.geometry_with_external_materials.end()) {
-          session.files[dependency_index].ignore_obj_material_library = true;
+          session.files[dependency_index].external_material_override = true;
         }
       }
     }
@@ -788,6 +797,10 @@ void commit_upload_session(NativeSocket client, ApplicationUploadState& state, c
     send_json_error(client, 409, "Conflict", "The upload session is already committed");
     return;
   }
+  if (session.unavailable_references.empty() == false) {
+    send_json_error(client, 422, "Unprocessable Content", "The selected folder is missing required scene dependencies");
+    return;
+  }
   if (!session.dependencies_resolved) {
     send_json_error(client, 409, "Conflict", "Scene dependencies have not been resolved");
     return;
@@ -801,15 +814,22 @@ void commit_upload_session(NativeSocket client, ApplicationUploadState& state, c
       return;
     }
     std::error_code filesystem_error = {};
-    if (std::filesystem::file_size(session.directory / std::filesystem::path(file.relative_path), filesystem_error) != file.size || filesystem_error) {
+    if (std::filesystem::file_size(session.directory / std::filesystem::u8path(file.relative_path), filesystem_error) != file.size || filesystem_error) {
       send_json_error(client, 409, "Conflict", "An uploaded file failed validation");
       return;
     }
   }
 
   ApplicationCommand command = {};
-  command.type = ApplicationCommandType::LoadScene;
-  command.path = (session.directory / std::filesystem::path(session.entry)).string();
+  command.type = session.action == "import"              ? ApplicationCommandType::ImportScene
+                 : session.action == "import_into_scene" ? ApplicationCommandType::ImportIntoScene
+                 : session.action == "add_native"        ? ApplicationCommandType::AddNativeScene
+                 : session.action == "convert"           ? ApplicationCommandType::ConvertScene
+                                                         : ApplicationCommandType::LoadScene;
+  command.input_owner = session.owner;
+  command.output_path = session.output_path;
+  command.importer_id = session.importer_id;
+  command.path = path_to_utf8(session.directory / std::filesystem::u8path(session.entry));
   const uint64_t command_id = submit_command(std::move(command));
   session.committed = true;
   session.load_command_id = command_id;
@@ -821,17 +841,6 @@ void cancel_upload_session(NativeSocket client, ApplicationUploadState& state, c
   if (session == state.sessions.end()) {
     send_json_error(client, 404, "Not Found", "Upload session not found");
     return;
-  }
-  if (session->second.committed) {
-    const ApplicationStateSnapshot snapshot = state_provider();
-    const std::filesystem::path scene_file = std::filesystem::path(snapshot.scene_file).lexically_normal();
-    const std::filesystem::path upload_entry = (session->second.directory / std::filesystem::path(session->second.entry)).lexically_normal();
-    std::error_code equivalent_error = {};
-    const bool same_file = (scene_file == upload_entry) || std::filesystem::equivalent(scene_file, upload_entry, equivalent_error);
-    if (snapshot.scene_loaded && same_file) {
-      send_json_error(client, 409, "Conflict", "The renderer is still using this upload");
-      return;
-    }
   }
   erase_upload_session(state, id);
   send_text(client, 200, "OK", "application/json", R"({"deleted":true})");
@@ -903,11 +912,23 @@ Json state_json(const ApplicationStateSnapshot& state) {
   const uint32_t target_samples = runtime_valid ? state.status.total_units : 0u;
   const double elapsed_seconds = state.status.elapsed_available ? state.status.elapsed_seconds : 0.0;
   const double estimated_remaining_seconds = state.status.remaining_available ? state.status.remaining_seconds : -1.0;
+  Json importers = Json::array();
+  for (const auto& importer : state.importers) {
+    importers.push_back({{"id", importer.id}, {"name", importer.name}, {"extensions", importer.extensions}, {"module", path_to_utf8(importer.module)}, {"loaded", importer.loaded},
+      {"error", importer.error}});
+  }
   return {
+    {"importers", std::move(importers)},
+    {"importer_directory", state.importer_directory},
+    {"importer_discovery_error", state.importer_discovery_error},
     {"revision", state.revision},
     {"initialized", state.initialized},
     {"scene_loaded", state.scene_loaded},
     {"scene_file", state.scene_file},
+    {"scene_unsaved", state.scene_unsaved},
+    {"import", {{"active", state.import_active}, {"cancelable", state.import_cancelable}, {"completed", state.import_completed}, {"total", state.import_total},
+                 {"stage", state.import_stage}}},
+    {"import_formats", state.import_formats},
     {"can_denoise", state.can_denoise},
     {"gpu_renderer_available", state.gpu_renderer_available},
     {"quit_requested", state.quit_requested},
@@ -948,6 +969,18 @@ bool parse_command(const Json& json, ApplicationCommand& command, std::string& e
     if (type == "load_scene") {
       command.type = ApplicationCommandType::LoadScene;
       command.path = path();
+    } else if ((type == "import_scene") || (type == "import_into_scene") || (type == "convert_scene")) {
+      command.type = type == "import_scene"        ? ApplicationCommandType::ImportScene
+                     : type == "import_into_scene" ? ApplicationCommandType::ImportIntoScene
+                                                   : ApplicationCommandType::ConvertScene;
+      command.path = path();
+      command.output_path = json.value("output_path", "");
+      command.importer_id = json.value("importer_id", "");
+    } else if (type == "add_native_scene") {
+      command.type = ApplicationCommandType::AddNativeScene;
+      command.path = path();
+    } else if (type == "cancel_import") {
+      command.type = ApplicationCommandType::CancelImport;
     } else if (type == "save_scene") {
       command.type = ApplicationCommandType::SaveScene;
       command.path = path();
@@ -1186,10 +1219,12 @@ void ApplicationControlServer::poll() {
   } else if ((request.method == "GET") && (path == "/api/results")) {
     uint64_t after = 0u;
     query_value(request.path, "after", after);
+    uint64_t cursor = 0u;
+    const bool use_cursor = query_value(request.path, "cursor", cursor);
     Json response = Json::array();
     for (const auto& result : _retained_results) {
-      if (result.command_id > after) {
-        response.push_back({{"command_id", result.command_id}, {"success", result.success}, {"message", result.message}});
+      if (use_cursor ? (result.sequence > cursor) : (result.command_id > after)) {
+        response.push_back({{"command_id", result.command_id}, {"sequence", result.sequence}, {"success", result.success}, {"message", result.message}});
       }
     }
     send_text(client, 200, "OK", "application/json", response.dump());

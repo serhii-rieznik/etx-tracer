@@ -45,15 +45,6 @@ float3 bsdf_resource_load_spectrum_integrated(BSDFResourceContext context, uint 
   return spectrum_access_load_integrated(spectrum_context, spectrum_index);
 }
 
-bool bsdf_resource_image_has_alpha(BSDFResourceContext context, uint image_index) {
-  if (scene_gpu_has_descriptor(context.images_descriptor_index) == false) {
-    return false;
-  }
-
-  ImageAccessGPUContext image_context = {context.images_descriptor_index};
-  return image_access_has_alpha(image_context, image_index);
-}
-
 bool bsdf_resource_image_try_evaluate_rgba(BSDFResourceContext context, uint image_index, float2 uv, out float image_pdf, out float4 image_value) {
   if (scene_gpu_has_descriptor(context.images_descriptor_index) == false) {
     image_pdf = 0.0f;

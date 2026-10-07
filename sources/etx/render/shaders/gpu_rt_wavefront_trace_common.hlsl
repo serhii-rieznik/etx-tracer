@@ -417,7 +417,7 @@ bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, o
   result.surface_point = wavefront_load_surface_point_compact(result.tri, hit_bary, ray.Direction, result.instance_index);
   result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
   if (try_load_material_full(result.tri.material_index, result.material)) {
-    surface_point_apply_material_normal_map(result.surface_point, result.material, ray.Direction);
+    result.surface_point = surface_point_apply_material_maps(result.surface_point, result.material, result.tri, result.instance_index, ray.Direction);
   }
   result.hit = 1u;
 
@@ -610,7 +610,7 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
   result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction, result.instance_index);
   result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
   if (try_load_material_full(result.tri.material_index, result.material)) {
-    surface_point_apply_material_normal_map(result.surface_point, result.material, ray.Direction);
+    result.surface_point = surface_point_apply_material_maps(result.surface_point, result.material, result.tri, result.instance_index, ray.Direction);
   }
   result.hit = 1u;
   return true;

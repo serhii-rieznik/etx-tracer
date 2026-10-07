@@ -147,6 +147,10 @@ bool is_plane_alias(const std::string& name) {
   return (name == "et::plane") || (name == "etx::plane");
 }
 
+bool is_bilinear_alias(const std::string& name) {
+  return (name == "et::bilinear") || (name == "etx::bilinear");
+}
+
 bool is_disk_alias(const std::string& name) {
   return (name == "et::disk") || (name == "etx::disk");
 }
@@ -1494,11 +1498,136 @@ bool append_icosahedron_mesh(SceneData& data, const ProceduralGeometryDefinition
   return append_flat_triangular_mesh(data, definition, vertices, faces, "icosahedron");
 }
 
+bool append_bilinear_mesh(SceneData& data, const ProceduralGeometryDefinition& definition) {
+  const uint32_t material_index = resolve_material_index(data, definition);
+  if ((material_index == kInvalidIndex) || (finite_float3(definition.center) == false)) {
+    log::warning("Procedural bilinear patch `%s` has invalid center or material - skipped", definition.id.c_str());
+    return false;
+  }
+  std::vector<Vertex> vertices;
+  std::vector<uint3> triangles;
+  if (tessellate_bilinear_patch(definition.bilinear, definition.subdivisions, vertices, triangles) == false) {
+    log::warning("Procedural bilinear patch `%s` has invalid corners or subdivisions - skipped", definition.id.c_str());
+    return false;
+  }
+  if ((triangles.empty()) || (vertices.size() > (kInvalidIndex - data.vertices.pos.size())) || (triangles.size() > (kInvalidIndex - data.triangles.size()))) {
+    return false;
+  }
+  BakedMeshBuilder builder(data, material_index);
+  builder.reserve(static_cast<uint32_t>(vertices.size()), static_cast<uint32_t>(triangles.size()));
+  for (const Vertex& vertex : vertices) {
+    const uint32_t index = builder.append_vertex(definition.center + vertex.pos, vertex.nrm, vertex.tan, vertex.tex);
+    if (index == kInvalidIndex) {
+      builder.rollback();
+      return false;
+    }
+    data.vertices.btn[index] = vertex.btn;
+  }
+  for (const uint3& triangle : triangles) {
+    builder.append_triangle(builder.vertex_start + triangle.x, builder.vertex_start + triangle.y, builder.vertex_start + triangle.z);
+  }
+  return builder.finish(definition, "bilinear");
+}
+
 }  // namespace
+
+bool tessellate_bilinear_patch(const BilinearPatch& patch, uint32_t subdivisions, std::vector<Vertex>& vertices, std::vector<uint3>& triangles) {
+  if ((subdivisions == 0u) || (subdivisions > BilinearPatch::MaximumSubdivisions)) {
+    return false;
+  }
+  for (uint32_t corner = 0u; corner < 4u; ++corner) {
+    if ((finite_float3(patch.positions[corner]) == false) || (finite_float3(patch.normals[corner]) == false) || (finite_float2(patch.texcoords[corner]) == false)) {
+      return false;
+    }
+  }
+  const size_t vertex_start = vertices.size();
+  const size_t triangle_start = triangles.size();
+  const uint32_t row_size = subdivisions + 1u;
+  const uint32_t vertex_count = row_size * row_size;
+  const uint32_t triangle_count = 2u * subdivisions * subdivisions;
+  if ((vertex_count > (kInvalidIndex - vertex_start)) || (triangle_count > (kInvalidIndex - triangle_start))) {
+    return false;
+  }
+  vertices.reserve(vertex_start + vertex_count);
+  triangles.reserve(triangle_start + triangle_count);
+  const auto interpolate = [](const auto& values, float u, float v) {
+    return (1.0f - v) * ((1.0f - u) * values[0] + u * values[1]) + v * ((1.0f - u) * values[2] + u * values[3]);
+  };
+  float3 fallback_normal = {};
+  for (uint32_t corner = 0u; corner < 4u; ++corner) {
+    const float3 du = patch.positions[corner | 1u] - patch.positions[corner & 2u];
+    const float3 dv = patch.positions[corner | 2u] - patch.positions[corner & 1u];
+    const float3 normal = cross(du, dv);
+    if ((finite_float3(normal) == false) || (std::isfinite(dot(normal, normal)) == false)) {
+      return false;
+    }
+    if (is_valid_vector(normal)) {
+      fallback_normal = normalize(normal);
+      break;
+    }
+  }
+  if (is_valid_vector(fallback_normal) == false) {
+    return true;
+  }
+  for (uint32_t y = 0u; y <= subdivisions; ++y) {
+    const float v = float(y) / float(subdivisions);
+    for (uint32_t x = 0u; x <= subdivisions; ++x) {
+      const float u = float(x) / float(subdivisions);
+      const float3 du = (1.0f - v) * (patch.positions[1] - patch.positions[0]) + v * (patch.positions[3] - patch.positions[2]);
+      const float3 dv = (1.0f - u) * (patch.positions[2] - patch.positions[0]) + u * (patch.positions[3] - patch.positions[1]);
+      Vertex vertex = {};
+      vertex.pos = interpolate(patch.positions, u, v);
+      vertex.tex = interpolate(patch.texcoords, u, v);
+      vertex.nrm = interpolate(patch.normals, u, v);
+      if (is_valid_vector(vertex.nrm) == false) {
+        vertex.nrm = cross(du, dv);
+      }
+      if (std::isfinite(dot(vertex.nrm, vertex.nrm)) == false) {
+        vertices.resize(vertex_start);
+        triangles.resize(triangle_start);
+        return false;
+      }
+      vertex.nrm = is_valid_vector(vertex.nrm) ? normalize(vertex.nrm) : fallback_normal;
+      const float2 uv_du = (1.0f - v) * (patch.texcoords[1] - patch.texcoords[0]) + v * (patch.texcoords[3] - patch.texcoords[2]);
+      const float2 uv_dv = (1.0f - u) * (patch.texcoords[2] - patch.texcoords[0]) + u * (patch.texcoords[3] - patch.texcoords[1]);
+      const double determinant = double(uv_du.x) * uv_dv.y - double(uv_du.y) * uv_dv.x;
+      const float uv_scale = max(abs(uv_du.y), abs(uv_dv.y));
+      vertex.tan = du;
+      if ((determinant != 0.0) && (uv_scale > 0.0f)) {
+        vertex.tan = (uv_dv.y / uv_scale) * du - (uv_du.y / uv_scale) * dv;
+        if (determinant < 0.0)
+          vertex.tan = -vertex.tan;
+      }
+      vertex.tan -= vertex.nrm * dot(vertex.nrm, vertex.tan);
+      vertex.tan = is_valid_vector(vertex.tan) ? normalize(vertex.tan) : stable_tangent(vertex.nrm);
+      vertex.btn = cross(vertex.nrm, vertex.tan) * ((determinant < 0.0f) ? -1.0f : 1.0f);
+      if ((finite_float3(vertex.pos) == false) || (finite_float3(vertex.nrm) == false) || (finite_float3(vertex.tan) == false) || (finite_float3(vertex.btn) == false) ||
+          (finite_float2(vertex.tex) == false)) {
+        vertices.resize(vertex_start);
+        triangles.resize(triangle_start);
+        return false;
+      }
+      vertices.push_back(vertex);
+    }
+  }
+  for (uint32_t y = 0u; y < subdivisions; ++y) {
+    for (uint32_t x = 0u; x < subdivisions; ++x) {
+      const uint32_t a = static_cast<uint32_t>(vertex_start) + y * row_size + x;
+      const uint32_t b = a + 1u, c = a + row_size, d = c + 1u;
+      for (const uint3 triangle : {uint3{a, b, c}, uint3{b, d, c}}) {
+        const float3 normal = cross(vertices[triangle.y].pos - vertices[triangle.x].pos, vertices[triangle.z].pos - vertices[triangle.x].pos);
+        if (is_valid_vector(normal)) {
+          triangles.push_back(triangle);
+        }
+      }
+    }
+  }
+  return true;
+}
 
 bool is_procedural_geometry_entry(const std::string& name) {
   return is_geometry_entry(name) || is_sphere_alias(name) || is_plane_alias(name) || is_disk_alias(name) || is_box_alias(name) || is_cone_alias(name) || is_capsule_alias(name) ||
-         is_torus_alias(name) || is_tetrahedron_alias(name) || is_octahedron_alias(name) || is_dodecahedron_alias(name) || is_icosahedron_alias(name);
+         is_torus_alias(name) || is_tetrahedron_alias(name) || is_octahedron_alias(name) || is_dodecahedron_alias(name) || is_icosahedron_alias(name) || is_bilinear_alias(name);
 }
 
 bool parse_procedural_geometry_definition(const MaterialDefinition& material, ProceduralGeometryDefinition& out_definition) {
@@ -1526,6 +1655,8 @@ bool parse_procedural_geometry_definition(const MaterialDefinition& material, Pr
     out_definition.cls = ProceduralGeometryDefinition::Class::Dodecahedron;
   } else if (is_icosahedron_alias(material.name)) {
     out_definition.cls = ProceduralGeometryDefinition::Class::Icosahedron;
+  } else if (is_bilinear_alias(material.name)) {
+    out_definition.cls = ProceduralGeometryDefinition::Class::Bilinear;
   } else if (is_geometry_entry(material.name)) {
     std::string class_name;
     if (read_property(material, "class", class_name) == false) {
@@ -1555,6 +1686,8 @@ bool parse_procedural_geometry_definition(const MaterialDefinition& material, Pr
       out_definition.cls = ProceduralGeometryDefinition::Class::Dodecahedron;
     } else if (class_name == "icosahedron") {
       out_definition.cls = ProceduralGeometryDefinition::Class::Icosahedron;
+    } else if (class_name == "bilinear") {
+      out_definition.cls = ProceduralGeometryDefinition::Class::Bilinear;
     } else {
       log::warning("Unsupported procedural geometry class `%s` - skipped", class_name.c_str());
       return false;
@@ -1611,7 +1744,33 @@ bool parse_procedural_geometry_definition(const MaterialDefinition& material, Pr
 
   read_float3_property(material, "center", out_definition.center);
 
-  if (out_definition.cls == ProceduralGeometryDefinition::Class::Disk) {
+  if (out_definition.cls == ProceduralGeometryDefinition::Class::Bilinear) {
+    out_definition.subdivisions = BilinearPatch::DefaultSubdivisions;
+    const char* positions[] = {"p00", "p10", "p01", "p11"};
+    const char* normals[] = {"n00", "n10", "n01", "n11"};
+    const char* texcoords[] = {"uv00", "uv10", "uv01", "uv11"};
+    uint32_t normal_count = 0u;
+    for (uint32_t corner = 0u; corner < 4u; ++corner) {
+      if (read_float3_property(material, positions[corner], out_definition.bilinear.positions[corner]) == false) {
+        log::warning("Procedural bilinear patch requires four corners p00, p10, p01, p11 - skipped");
+        return false;
+      }
+      if (material.properties.contains(normals[corner]) && (read_float3_property(material, normals[corner], out_definition.bilinear.normals[corner]) == false)) {
+        return false;
+      }
+      normal_count += material.properties.contains(normals[corner]) ? 1u : 0u;
+      if (material.properties.contains(texcoords[corner]) && (read_float2_property(material, texcoords[corner], out_definition.bilinear.texcoords[corner]) == false)) {
+        return false;
+      }
+    }
+    if ((normal_count != 0u) && (normal_count != 4u)) {
+      log::warning("Procedural bilinear patch requires all four corner normals when normals are provided - skipped");
+      return false;
+    }
+    if (material.properties.contains("subdivisions") && (read_uint32_property(material, "subdivisions", out_definition.subdivisions) == false)) {
+      return false;
+    }
+  } else if (out_definition.cls == ProceduralGeometryDefinition::Class::Disk) {
     if (read_float_property(material, "radius", out_definition.radius) == false) {
       float diameter = 0.0f;
       if (read_float_property(material, "diameter", diameter)) {
@@ -1757,6 +1916,10 @@ uint32_t generate_procedural_geometry(SceneData& data, const std::vector<Procedu
       }
     } else if (definition.cls == ProceduralGeometryDefinition::Class::Icosahedron) {
       if (append_icosahedron_mesh(data, definition)) {
+        ++generated_count;
+      }
+    } else if (definition.cls == ProceduralGeometryDefinition::Class::Bilinear) {
+      if (append_bilinear_mesh(data, definition)) {
         ++generated_count;
       }
     }

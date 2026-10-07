@@ -114,6 +114,12 @@ static_assert(offsetof(Material, cls) == kMaterialClassOffset, "Material::cls of
 static_assert(offsetof(Material, int_medium) == kMaterialIntMediumOffset, "Material::int_medium offset changed");
 static_assert(offsetof(Material, ext_medium) == kMaterialExtMediumOffset, "Material::ext_medium offset changed");
 static_assert(offsetof(Material, opacity) == kMaterialOpacityOffset, "Material::opacity offset changed");
+static_assert((offsetof(Material, alpha_mask) + offsetof(SampledImage, value)) == kMaterialAlphaMaskValueOffset, "Material::alpha_mask.value offset changed");
+static_assert((offsetof(Material, alpha_mask) + offsetof(SampledImage, image_index)) == kMaterialAlphaMaskImageIndexOffset, "Material::alpha_mask.image_index offset changed");
+static_assert((offsetof(Material, alpha_mask) + offsetof(SampledImage, channel)) == kMaterialAlphaMaskChannelOffset, "Material::alpha_mask.channel offset changed");
+static_assert((offsetof(Material, bump) + offsetof(SampledImage, value)) == kMaterialBumpValueOffset, "Material::bump.value offset changed");
+static_assert((offsetof(Material, bump) + offsetof(SampledImage, image_index)) == kMaterialBumpImageIndexOffset, "Material::bump.image_index offset changed");
+static_assert((offsetof(Material, bump) + offsetof(SampledImage, channel)) == kMaterialBumpChannelOffset, "Material::bump.channel offset changed");
 static_assert(offsetof(Material, emission_collimation) == kMaterialEmissionCollimationOffset, "Material::emission_collimation offset changed");
 static_assert(offsetof(Material, temperature_kelvin) == kMaterialTemperatureKelvinOffset, "Material::temperature_kelvin offset changed");
 static_assert(offsetof(Material, thermal_rgb_image_index) == kMaterialThermalRGBImageIndexOffset, "Material::thermal_rgb_image_index offset changed");
@@ -174,6 +180,8 @@ static_assert(offsetof(Image, pixel_data_stride) == kImageDescPixelDataStrideOff
 static_assert(offsetof(Image, pixel_data_chunk_index) == kImageDescPixelDataChunkIndexOffset, "Image::pixel_data_chunk_index offset changed");
 static_assert(offsetof(Image, x_distribution_chunk_index) == kImageDescXDistributionChunkIndexOffset, "Image::x_distribution_chunk_index offset changed");
 static_assert(offsetof(Image, y_distribution_chunk_index) == kImageDescYDistributionChunkIndexOffset, "Image::y_distribution_chunk_index offset changed");
+static_assert(offsetof(Image, texture_uv_offset) == kImageDescTextureUVOffsetOffset, "Image::texture_uv_offset offset changed");
+static_assert(offsetof(Image, texture_uv_scale) == kImageDescTextureUVScaleOffset, "Image::texture_uv_scale offset changed");
 
 static_assert(std::is_standard_layout_v<MediumGrid>, "MediumGrid must stay standard layout for C++/HLSL interop");
 static_assert(std::is_standard_layout_v<Medium>, "Medium must stay standard layout for C++/HLSL interop");

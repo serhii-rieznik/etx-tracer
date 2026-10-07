@@ -334,6 +334,9 @@ void SceneData::clear(TaskScheduler& scheduler) {
   images.remove_all();
   mediums.remove_all();
   buffer_pool.clear();
+  owns_assets = false;
+  owned_asset_paths.clear();
+  source_asset_directory.clear();
   vertices.pos.clear();
   vertices.nrm.clear();
   vertices.tan.clear();
@@ -359,8 +362,6 @@ void SceneData::clear(TaskScheduler& scheduler) {
   material_mapping.clear();
   mesh_mapping.clear();
   material_to_emitter_profile.clear();
-  gltf_image_mapping.clear();
-  gltf_material_mapping.clear();
   cameras.clear();
   json_file_name.clear();
   geometry_file_name.clear();
@@ -397,9 +398,10 @@ void SceneData::swap_contents(SceneData& other) {
   swap(mesh_mapping, other.mesh_mapping);
   swap(spectrum_names, other.spectrum_names);
   swap(material_to_emitter_profile, other.material_to_emitter_profile);
-  swap(gltf_image_mapping, other.gltf_image_mapping);
-  swap(gltf_material_mapping, other.gltf_material_mapping);
   swap(cameras, other.cameras);
+  swap(owns_assets, other.owns_assets);
+  swap(owned_asset_paths, other.owned_asset_paths);
+  swap(source_asset_directory, other.source_asset_directory);
   swap(json_file_name, other.json_file_name);
   swap(geometry_file_name, other.geometry_file_name);
   swap(materials_file_name, other.materials_file_name);

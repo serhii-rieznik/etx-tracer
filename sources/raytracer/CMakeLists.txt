@@ -23,14 +23,14 @@ set(RAYTRACER_SHARED_SOURCES
   application_control.hxx
   application_control_server.hxx
   application_control_server.cxx
-  scene_dependencies.hxx
-  scene_dependencies.cxx
   application_runner.hxx
   application_runner.cxx
   app.hxx
   app.cxx
+  app_import.cxx
   ui.hxx
   ui.cxx
+  ui_inspector.cxx
   spectrum_editor.hxx
   spectrum_editor.cxx
   ui_spectrum.cxx
@@ -52,6 +52,7 @@ set(RAYTRACER_SHARED_SOURCES
   gpu_renderer.cxx
   shader_packager.hxx
   BuildReleaseShaderPackage.cmake
+  SyncRuntimeShaders.cmake
   raster_renderer.cxx
   raster_renderer.hxx
   cpu_renderer.hxx
@@ -105,7 +106,7 @@ if(APPLE)
   target_compile_options(raytracer_app PRIVATE "-include" "${CMAKE_SOURCE_DIR}/sources/etx/std.hxx")
   target_compile_definitions(raytracer_app PRIVATE ETX_REQUIRE_SHADER_PACKAGE=1)
   target_link_libraries(raytracer_app PRIVATE
-    imgui imguizmo sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
+    imgui imguizmo sokol etx-import etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
     "-framework Foundation"
     "-framework QuartzCore"
     "-framework CoreGraphics"
@@ -187,6 +188,14 @@ if(APPLE)
     COMMENT "Bundling ETX Tracer resources and runtime libraries"
   )
 
+  add_dependencies(raytracer_app etx-import-obj etx-import-gltf etx-import-tungsten etx-import-legacy etx-import-pbrt_v3 etx-import-pbrt_v4 etx-import-ply etx-import-stl)
+  add_custom_command(TARGET raytracer_app POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:raytracer_app>/../PlugIns/importers"
+    COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:raytracer_app>/../PlugIns/importers/etx-import-json.dylib"
+    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:etx-import-obj>" "$<TARGET_FILE:etx-import-gltf>" "$<TARGET_FILE:etx-import-tungsten>" "$<TARGET_FILE:etx-import-legacy>" "$<TARGET_FILE:etx-import-pbrt_v3>" "$<TARGET_FILE:etx-import-pbrt_v4>" "$<TARGET_FILE:etx-import-ply>" "$<TARGET_FILE:etx-import-stl>" "$<TARGET_FILE_DIR:raytracer_app>/../PlugIns/importers"
+    VERBATIM
+  )
+
   if(ETX_MACOS_CODE_SIGN_IDENTITY)
     add_custom_command(TARGET raytracer_app POST_BUILD
       COMMAND ${CMAKE_COMMAND}
@@ -212,7 +221,7 @@ if(APPLE)
 endif()
 
 target_link_libraries(raytracer
-  PRIVATE imgui imguizmo sokol etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
+  PRIVATE imgui imguizmo sokol etx-import etx-core etx-render etx-rt etx-engine etx-rhi stb_image bluenoise
 )
 
 if(WIN32)
@@ -226,6 +235,7 @@ target_include_directories(raytracer
 
 set_target_properties(raytracer PROPERTIES
   DEBUG_POSTFIX "_debug"
+  RELWITHDEBINFO_POSTFIX "_dev"
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${root_folder}/bin"
   RUNTIME_OUTPUT_DIRECTORY_RELEASE "${root_folder}/bin"
   RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${root_folder}/bin"
@@ -270,19 +280,12 @@ endif()
 # Runtime shader compilation must not depend on the process working directory.
 # Keep the complete shader include tree next to the executable.
 add_custom_target(raytracer_runtime_shaders
-  COMMAND ${CMAKE_COMMAND} -E remove_directory "${root_folder}/bin/shaders"
-  COMMAND ${CMAKE_COMMAND} -E remove_directory "${root_folder}/bin/interop"
-  COMMAND ${CMAKE_COMMAND} -E remove_directory "${root_folder}/bin/access"
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_SOURCE_DIR}/sources/etx/render/shaders"
-    "${root_folder}/bin/shaders"
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_SOURCE_DIR}/sources/etx/render/interop"
-    "${root_folder}/bin/interop"
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_SOURCE_DIR}/sources/etx/render/access"
-    "${root_folder}/bin/access"
-  COMMENT "Copying runtime shaders to bin folder"
+  COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_ROOT=${CMAKE_SOURCE_DIR}/sources/etx/render
+    -DDESTINATION_ROOT=${root_folder}/bin
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/SyncRuntimeShaders.cmake"
+  COMMENT "Updating runtime shader sources"
+  VERBATIM
 )
 add_dependencies(raytracer raytracer_runtime_shaders)
 if(TARGET bsdf_validation)
@@ -374,3 +377,5 @@ add_custom_target(raytracer_shader_package DEPENDS "${ETX_RAYTRACER_SHADER_PACKA
 if(APPLE)
   add_dependencies(raytracer_app raytracer_shader_package)
 endif()
+
+add_dependencies(raytracer etx-import-obj etx-import-gltf etx-import-tungsten etx-import-legacy etx-import-pbrt_v3 etx-import-pbrt_v4 etx-import-ply etx-import-stl)

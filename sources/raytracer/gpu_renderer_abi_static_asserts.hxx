@@ -855,6 +855,15 @@ static_assert(offsetof(Material, cls) == kMaterialClassOffset, "Material::cls of
 static_assert(offsetof(Material, int_medium) == kMaterialIntMediumOffset, "Material::int_medium offset changed; update GPU shader decode");
 static_assert(offsetof(Material, ext_medium) == kMaterialExtMediumOffset, "Material::ext_medium offset changed; update GPU shader decode");
 static_assert(offsetof(Material, opacity) == kMaterialOpacityOffset, "Material::opacity offset changed; update GPU shader decode");
+static_assert((offsetof(Material, alpha_mask) + offsetof(SampledImage, value)) == kMaterialAlphaMaskValueOffset,
+  "Material::alpha_mask.value offset changed; update GPU shader decode");
+static_assert((offsetof(Material, alpha_mask) + offsetof(SampledImage, image_index)) == kMaterialAlphaMaskImageIndexOffset,
+  "Material::alpha_mask.image_index offset changed; update GPU shader decode");
+static_assert((offsetof(Material, alpha_mask) + offsetof(SampledImage, channel)) == kMaterialAlphaMaskChannelOffset,
+  "Material::alpha_mask.channel offset changed; update GPU shader decode");
+static_assert((offsetof(Material, bump) + offsetof(SampledImage, value)) == kMaterialBumpValueOffset, "Material::bump.value offset changed");
+static_assert((offsetof(Material, bump) + offsetof(SampledImage, image_index)) == kMaterialBumpImageIndexOffset, "Material::bump.image_index offset changed");
+static_assert((offsetof(Material, bump) + offsetof(SampledImage, channel)) == kMaterialBumpChannelOffset, "Material::bump.channel offset changed");
 static_assert(offsetof(Material, emission_collimation) == kMaterialEmissionCollimationOffset, "Material::emission_collimation offset changed; update GPU shader decode");
 static_assert(offsetof(Material, energy_compensation_interface_index) == kMaterialEnergyCompensationInterfaceIndexOffset,
   "Material::energy_compensation_interface_index offset changed; update GPU shader decode");
@@ -945,6 +954,8 @@ static_assert(offsetof(GPUImageBlobHeader, data_chunk_indices_offset) == kImageB
 static_assert(std::is_standard_layout_v<::Image>, "Interop Image must stay standard layout for GPU upload ABI");
 static_assert(std::is_trivially_copyable_v<::Image>, "Interop Image must stay trivially copyable for GPU upload ABI");
 static_assert(sizeof(::Image) == kImageDescStride, "Interop Image size changed; update GPU image blob ABI");
+static_assert(offsetof(::Image, texture_uv_offset) == kImageDescTextureUVOffsetOffset, "Image::texture_uv_offset offset changed; update GPU image blob ABI");
+static_assert(offsetof(::Image, texture_uv_scale) == kImageDescTextureUVScaleOffset, "Image::texture_uv_scale offset changed; update GPU image blob ABI");
 static_assert(offsetof(::Image, fsize) == kImageDescFSizeOffset, "Image::fsize offset changed; update GPU image blob ABI");
 static_assert(offsetof(::Image, offset) == kImageDescOffsetOffset, "Image::offset offset changed; update GPU image blob ABI");
 static_assert(offsetof(::Image, scale) == kImageDescScaleOffset, "Image::scale offset changed; update GPU image blob ABI");

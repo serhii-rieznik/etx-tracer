@@ -1,6 +1,7 @@
 #pragma once
 
 #include <access/image_access_gpu.hxx>
+#include <interop/bump_mapping_shared.hxx>
 
 struct ImageEvaluateGPUContext {
   uint images_descriptor_index;
@@ -61,6 +62,7 @@ float4 image_evaluate_gpu_rgba(ImageEvaluateGPUContext context, uint image_index
   }
 
   ByteAddressBuffer payload_buffer = bindless_buffers[NonUniformResourceIndex(payload_descriptor_index)];
+  uv = uv * image_access.uv_scale.xy + image_access.uv_offset.xy;
   ImageFilterSharedAddress sample = image_filter_shared_address(uv, image_access.fsize.xy, image_access.size.xy, image_access.options);
 
   uint pixel_offset_00 = image_access.pixel_data_offset + ((sample.row_0 * image_access.size.x + sample.col_0) * image_access.pixel_data_stride);
@@ -73,6 +75,27 @@ float4 image_evaluate_gpu_rgba(ImageEvaluateGPUContext context, uint image_index
   float4 p10 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_10);
   float4 p11 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_11);
   return image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
+}
+
+bool image_evaluate_gpu_try_height_gradient(ImageEvaluateGPUContext context, uint image_index, uint channel, float2 uv, out float height, out float2 gradient) {
+  height = 0.0f;
+  gradient = float2(0.0f, 0.0f);
+  ImageAccessGPUContext access_context = {context.images_descriptor_index};
+  ImageAccessGPUDesc image;
+  uint payload_descriptor_index;
+  if (image_access_try_load_pixel_payload(access_context, image_index, image, payload_descriptor_index) == false)
+    return false;
+  ByteAddressBuffer payload = bindless_buffers[NonUniformResourceIndex(payload_descriptor_index)];
+  uv = uv * image.uv_scale.xy + image.uv_offset.xy;
+  const ImageFilterSharedAddress address = image_filter_shared_address(uv, image.fsize.xy, image.size.xy, image.options);
+  const uint row0 = image.pixel_data_offset + address.row_0 * image.size.x * image.pixel_data_stride;
+  const uint row1 = image.pixel_data_offset + address.row_1 * image.size.x * image.pixel_data_stride;
+  bump_mapping_shared_sample(image_evaluate_gpu_load_pixel_checked(payload, image, row0 + address.col_0 * image.pixel_data_stride),
+    image_evaluate_gpu_load_pixel_checked(payload, image, row0 + address.col_1 * image.pixel_data_stride),
+    image_evaluate_gpu_load_pixel_checked(payload, image, row1 + address.col_0 * image.pixel_data_stride),
+    image_evaluate_gpu_load_pixel_checked(payload, image, row1 + address.col_1 * image.pixel_data_stride), address, uv, image.fsize.xy, image.uv_scale.xy, image.options, channel,
+    height, gradient);
+  return true;
 }
 
 float image_evaluate_gpu_row_weight(ImageAccessGPUDesc image_access, float uv_y) {
@@ -99,6 +122,7 @@ bool image_evaluate_gpu_try_rgba(ImageEvaluateGPUContext context, uint image_ind
   }
 
   ByteAddressBuffer payload_buffer = bindless_buffers[NonUniformResourceIndex(payload_descriptor_index)];
+  uv = uv * image_access.uv_scale.xy + image_access.uv_offset.xy;
   ImageFilterSharedAddress sample = image_filter_shared_address(uv, image_access.fsize.xy, image_access.size.xy, image_access.options);
 
   uint pixel_offset_00 = image_access.pixel_data_offset + ((sample.row_0 * image_access.size.x + sample.col_0) * image_access.pixel_data_stride);
@@ -134,6 +158,7 @@ bool image_evaluate_gpu_try_rgba_no_pdf(ImageEvaluateGPUContext context, uint im
   }
 
   ByteAddressBuffer payload_buffer = bindless_buffers[NonUniformResourceIndex(payload_descriptor_index)];
+  uv = uv * image_access.uv_scale.xy + image_access.uv_offset.xy;
   ImageFilterSharedAddress sample = image_filter_shared_address(uv, image_access.fsize.xy, image_access.size.xy, image_access.options);
 
   uint pixel_offset_00 = image_access.pixel_data_offset + ((sample.row_0 * image_access.size.x + sample.col_0) * image_access.pixel_data_stride);
@@ -163,6 +188,7 @@ bool image_evaluate_gpu_try_rgba_layer_no_pdf(ImageEvaluateGPUContext context, u
   }
 
   ByteAddressBuffer payload_buffer = bindless_buffers[NonUniformResourceIndex(payload_descriptor_index)];
+  uv = uv * image_access.uv_scale.xy + image_access.uv_offset.xy;
   ImageFilterSharedAddress sample = image_filter_shared_address(uv, image_access.fsize.xy, image_access.size.xy, image_access.options);
   uint slice = min(layer, image_access.size.z - 1u);
   uint row_stride = image_access.size.x;
@@ -268,7 +294,7 @@ float4 image_evaluate_sample_whole_or_default(ImageEvaluateGPUContext context, u
 }
 
 float image_evaluate_sample_channel_or_default(ImageEvaluateGPUContext context, uint image_index, uint channel, float2 uv, float default_value) {
-  if ((image_index == kInvalidIndex) || (channel >= 4u)) {
+  if ((image_index == kInvalidIndex) || (channel > 4u)) {
     return default_value;
   }
 
@@ -277,6 +303,9 @@ float image_evaluate_sample_channel_or_default(ImageEvaluateGPUContext context, 
     return default_value;
   }
 
+  if (channel == 4u) {
+    return (image_value.x + image_value.y + image_value.z) / 3.0f;
+  }
   if (channel == 0u) {
     return image_value.x;
   }

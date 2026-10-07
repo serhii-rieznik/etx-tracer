@@ -359,10 +359,7 @@ bool SpectrumCurveEditor::build() {
   const bool simplify = ImGui::Button("Simplify...");
   ImGui::EndDisabled();
   ImGui::SameLine();
-  const bool normalize = ImGui::Button("Normalize peak to 1");
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Rescale the source curve to a peak of 1. Strength stays unchanged.");
-  }
+  const bool normalize = ImGui::Button("Normalize Peak");
 
   ImGui::SetNextItemWidth(wide ? ImGui::GetFontSize() * 6.0f : ImGui::GetContentRegionAvail().x * 0.55f);
   const bool select = ImGui::InputFloat("nm", &wavelength, 0.0f, 0.0f, "%.6g", ImGuiInputTextFlags_EnterReturnsTrue);
@@ -379,9 +376,6 @@ bool SpectrumCurveEditor::build() {
       }
       error.clear();
     }
-  }
-  if (ImGui::IsItemHovered()) {
-    ImGui::SetTooltip("Select an existing wavelength, or enter a new wavelength and use Add point. Drag a point to move it.");
   }
   if (wide) {
     ImGui::SameLine();
@@ -434,8 +428,7 @@ bool SpectrumCurveEditor::build() {
   if (ImGui::BeginPopupModal("Simplify spectrum", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     ImGui::Text("%zu control points", document.points.size());
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0f);
-    ImGui::InputFloat("Maximum error", &_simplify_maximum_error, 0.0f, 0.0f, "%.6g");
-    ImGui::TextUnformatted("Fraction of the curve's value range; endpoints are retained.");
+    ImGui::InputFloat("Relative Error", &_simplify_maximum_error, 0.0f, 0.0f, "%.6g");
     const bool valid_error = std::isfinite(_simplify_maximum_error) && (_simplify_maximum_error >= 0.0f);
     ImGui::BeginDisabled(valid_error == false);
     if (ImGui::Button("Simplify")) {
@@ -558,7 +551,7 @@ bool SpectrumCurveEditor::build() {
   if (hovered && (nearest >= 0)) {
     ImGui::SetTooltip("%.6g nm: %.6g", document.points[nearest].x, document.points[nearest].y);
   } else if (hovered && (insertion_wavelength > 0.0f)) {
-    ImGui::SetTooltip("Click to add a point at %.6g nm", insertion_wavelength);
+    ImGui::SetTooltip("Add Point: %.6g nm", insertion_wavelength);
   }
   if (activated) {
     if (nearest >= 0) {

@@ -14,14 +14,91 @@
 #include <filesystem>
 #include <string>
 #include <vector>
+#if (ETX_PLATFORM_WINDOWS)
+# include <windows.h>
+# include <shellapi.h>
+#endif
 
 namespace etx {
 
 extern "C" int main(int argc, char* argv[]) {
   ETX_PROFILER_MAIN_THREAD();
 
+#if (ETX_PLATFORM_WINDOWS)
+  wchar_t** wide_arguments = CommandLineToArgvW(GetCommandLineW(), &argc);
+  if (wide_arguments == nullptr) {
+    fprintf(stderr, "Cannot read the command line.\n");
+    return 1;
+  }
+  std::vector<std::string> arguments;
+  arguments.reserve(argc);
+  for (int index = 0; index < argc; ++index) {
+    const std::u8string value = std::filesystem::path(wide_arguments[index]).u8string();
+    arguments.emplace_back(reinterpret_cast<const char*>(value.data()), value.size());
+  }
+  LocalFree(wide_arguments);
+  std::vector<char*> argument_pointers;
+  argument_pointers.reserve(arguments.size() + 1u);
+  for (auto& argument : arguments)
+    argument_pointers.push_back(argument.data());
+  argument_pointers.push_back(nullptr);
+  argv = argument_pointers.data();
+#endif
+
   init_platform();
   env().setup(argv[0]);
+
+  if ((argc == 2) && (std::strcmp(argv[1], "--list-importers") == 0)) {
+    const auto& service = import_service();
+    printf("Importer directory: %s\n", path_to_utf8(service.plugin_directory()).c_str());
+    for (const auto& info : service.modules()) {
+      printf("%s: %s [%s] (%s)\n", path_to_utf8(info.module.filename()).c_str(), info.name.c_str(), info.loaded ? "Loaded" : "Unavailable", info.extensions.c_str());
+      if (info.error.empty() == false)
+        printf("  %s\n", info.error.c_str());
+    }
+    if (service.discovery_error().empty() == false) {
+      fprintf(stderr, "%s\n", service.discovery_error().c_str());
+      return 1;
+    }
+    return 0;
+  }
+  for (int index = 1; index < argc; ++index) {
+    if (std::strcmp(argv[index], "--import") != 0)
+      continue;
+    std::string destination, importer_id;
+    bool valid = (index == 1) && (argc >= 5);
+    for (int option = 3; valid && (option < argc); option += 2) {
+      if ((option + 1) >= argc) {
+        valid = false;
+        break;
+      }
+      if ((std::strcmp(argv[option], "--output") == 0) && destination.empty())
+        destination = argv[option + 1];
+      else if ((std::strcmp(argv[option], "--importer") == 0) && importer_id.empty())
+        importer_id = argv[option + 1];
+      else
+        valid = false;
+    }
+    if ((valid == false) || destination.empty()) {
+      fprintf(stderr, "Usage: raytracer --import <source-file> --output <native.etx.json> [--importer <id>]\n");
+      return 1;
+    }
+    std::string error;
+    auto artifact = import_service().convert(
+      std::filesystem::u8path(argv[2]), importer_id,
+      [](uint32_t completed, uint32_t total, const char* stage) {
+        printf("Import %u/%u: %s\n", completed, total, stage);
+        return true;
+      },
+      error);
+    std::string output;
+    if ((artifact == nullptr) || (publish_import_document(*artifact, std::filesystem::u8path(destination), output, error) == false)) {
+      fprintf(stderr, "Import failed: %s\n", error.c_str());
+      return 1;
+    }
+    printf("Native document: %s\n", output.c_str());
+    return 0;
+  }
 
 #if defined(ETX_ENABLE_SHADER_PACKAGER) && ETX_ENABLE_SHADER_PACKAGER
   for (int argument_index = 1; argument_index < argc; ++argument_index) {

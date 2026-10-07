@@ -32,6 +32,7 @@ std::string open_file(const char* filters, void* parent_window = nullptr);
 std::string save_file(const char* filters, void* parent_window = nullptr);
 std::string utf8_file_name(const std::string& path);
 std::string path_to_utf8(const std::filesystem::path& path);
+FILE* fopen_utf8(const char* path, const char* mode);
 
 uint32_t atomic_inc(int32_t* ptr);
 uint64_t atomic_inc(int64_t* ptr);

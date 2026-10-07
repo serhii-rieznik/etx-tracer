@@ -52,9 +52,9 @@ bool UI::material_spectrum_control(SceneRepresentation& scene, const char* label
   return spectrum_control(scene, label, targets, kind, false);
 }
 
-void UI::edit_spectrum_button(SceneRepresentation& scene, const char* label, SpectrumTarget::Channel channel, uint32_t spectrum_index) {
+void UI::edit_spectrum_button(SceneRepresentation& scene, const char* label, SpectrumTarget::Channel channel, uint32_t spectrum_index, float width) {
   (void)spectrum_index;
-  if (ImGui::SmallButton(label)) {
+  if (ImGui::Button(label, ImVec2(width, 0.0f))) {
     _spectrum_targets.clear();
     if (_editing_material_indices != nullptr) {
       for (uint32_t index : *_editing_material_indices) {
@@ -77,12 +77,12 @@ void UI::edit_spectrum_button(SceneRepresentation& scene, const char* label, Spe
 bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const std::vector<SpectrumTarget>& targets, SpectrumSource::Kind kind, bool expanded) {
   SceneData& data = scene.data();
   if (targets.empty()) {
-    ImGui::TextDisabled("Select a spectrum to edit.");
+    ImGui::TextDisabled("No Spectrum Selected");
     return false;
   }
   const uint32_t* slot = targets.front().spectrum_slot(data);
   if ((slot == nullptr) || (*slot != targets.front().spectrum_index) || (*slot >= data.spectrum_values.size())) {
-    ImGui::TextDisabled("This spectrum is no longer available. Select it again.");
+    ImGui::TextDisabled("Spectrum Unavailable");
     return false;
   }
   const uint32_t index = *slot;
@@ -172,11 +172,32 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
       changed = true;
     }
   };
+  const bool warning = (kind == SpectrumSource::Kind::Reflectance) && (source.output().maximum_spectral_power() > 1.0f);
+  if ((state.error.empty() == false) || warning)
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.3f, 1.0f));
+  if (expanded) {
+    ImGui::TextUnformatted(label);
+  } else {
+    property_label(label);
+  }
+  if ((state.error.empty() == false) || warning)
+    ImGui::PopStyleColor();
+  if (ImGui::IsItemHovered()) {
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted(label);
+    if (mixed)
+      ImGui::TextUnformatted("Mixed Values");
+    if (warning)
+      ImGui::TextUnformatted("Reflectance Exceeds 1");
+    if (state.error.empty() == false)
+      ImGui::TextWrapped("%s", state.error.c_str());
+    ImGui::EndTooltip();
+  }
   const float available = ImGui::GetContentRegionAvail().x;
   const float font = ImGui::GetFontSize();
   const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
   const float frame_height = ImGui::GetFrameHeight();
-  const float compact_font_size = ImGui::GetStyle().FontSizeBase * 0.75f;
+  const float compact_font_size = ImGui::GetStyle().FontSizeBase * 0.85f;
   const float compact_padding = ImGui::GetStyle().FramePadding.x * 1.25f;
   char strength_text[64];
   std::snprintf(strength_text, sizeof(strength_text), "x %.4f", source.strength);
@@ -184,25 +205,8 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
   const float strength_width = std::min(available * 0.35f, std::ceil(ImGui::CalcTextSize(strength_text).x + compact_padding * 2.0f));
   const float more_width = expanded ? 0.0f : std::ceil(ImGui::CalcTextSize("...").x + compact_padding * 2.0f);
   ImGui::PopFont();
-  const float mode_width = std::min(available * 0.20f, font * 5.0f);
+  const float mode_width = std::min(available * 0.30f, font * 5.0f);
   const float value_width = std::max(1.0f, available - mode_width - strength_width - more_width - spacing * (expanded ? 2.0f : 3.0f));
-  const bool warning = (kind == SpectrumSource::Kind::Reflectance) && (source.output().maximum_spectral_power() > 1.0f);
-  if ((state.error.empty() == false) || warning)
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.7f, 0.3f, 1.0f));
-  ImGui::TextUnformatted(label);
-  if ((state.error.empty() == false) || warning)
-    ImGui::PopStyleColor();
-  if (ImGui::IsItemHovered()) {
-    ImGui::BeginTooltip();
-    ImGui::TextUnformatted(label);
-    if (mixed)
-      ImGui::TextUnformatted("Mixed values. Edits apply to all selected materials.");
-    if (warning)
-      ImGui::TextUnformatted("Some reflectance values exceed 1.");
-    if (state.error.empty() == false)
-      ImGui::TextWrapped("%s", state.error.c_str());
-    ImGui::EndTooltip();
-  }
   ImGui::SetNextItemWidth(mode_width);
   const char* mode_name = mixed                                              ? "Mixed"
                           : source.mode == SpectrumSource::Mode::Spectrum    ? "SPD"
@@ -219,7 +223,7 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
     ImGui::EndCombo();
   }
   if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Spectrum source mode");
+    ImGui::SetTooltip("Source");
   ImGui::SameLine(0.0f, spacing);
   ImGui::SetNextItemWidth(value_width);
   if (source.mode == SpectrumSource::Mode::Color) {
@@ -231,13 +235,13 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
       }
       state.interacting |= ImGui::IsItemActive();
       if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Wavelength-independent IOR value");
+        ImGui::SetTooltip("IOR");
     } else {
       float3 display = kind == SpectrumSource::Kind::Coefficient ? source.color : linear_to_gamma(source.color);
       if (ImGui::ColorButton("##color", ImVec4(display.x, display.y, display.z, 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(value_width, ImGui::GetFrameHeight())))
         ImGui::OpenPopup("color");
       if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(kind == SpectrumSource::Kind::Coefficient ? "Edit linear RGB values" : "Edit sRGB color");
+        ImGui::SetTooltip(kind == SpectrumSource::Kind::Coefficient ? "Linear RGB" : "sRGB");
       if (ImGui::BeginPopup("color")) {
         ImGui::SetNextItemWidth(font * 10.0f);
         if (ImGui::ColorPicker3("##picker", &display.x,
@@ -265,7 +269,7 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
     if (ImGui::Button((source.title + "##source").c_str(), ImVec2(value_width, 0.0f)))
       ImGui::OpenPopup("source");
     if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("%s\n%s", source.title.c_str(), source.path.empty() ? "Choose a file or preset" : source.path.c_str());
+      ImGui::SetTooltip("%s", source.path.empty() ? source.title.c_str() : source.path.c_str());
     ImGui::SetNextWindowSizeConstraints(ImVec2(font * 20.0f, 0.0f), ImVec2(font * 32.0f, font * 18.0f));
     if (ImGui::BeginPopup("source")) {
       if (ImGui::Selectable("Load spectrum file..."))
@@ -287,7 +291,7 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
         }
       }
       if (any == false)
-        ImGui::TextDisabled(numeric ? "Use the IOR picker for paired presets." : "No matching presets.");
+        ImGui::TextDisabled(numeric ? "No Paired Presets" : "No Matching Presets");
       ImGui::EndPopup();
     }
   }
@@ -307,7 +311,7 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
   ImGui::PopStyleVar();
   ImGui::PopFont();
   if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Strength multiplier. Zero preserves the source. Double-click or Ctrl-click to type a value.");
+    ImGui::SetTooltip("Strength");
   if (expanded == false) {
     ImGui::SameLine(0.0f, spacing);
     ImGui::PushFont(nullptr, compact_font_size);
@@ -322,7 +326,7 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
     ImGui::PopStyleVar();
     ImGui::PopFont();
     if (ImGui::IsItemHovered())
-      ImGui::SetTooltip("Open spectrum editor");
+      ImGui::SetTooltip("Spectrum Editor");
   }
   if (generated_changed) {
     source.generate();
@@ -428,7 +432,7 @@ bool UI::flush_spectrum_changes(SceneRepresentation& scene, bool defer_pending) 
 
 void UI::build_spectrum_editor(SceneRepresentation& scene) {
   if (_spectrum_targets.empty()) {
-    ImGui::TextWrapped("Click ... on a spectrum control to open its editor here.");
+    ImGui::TextDisabled("No Spectrum Selected");
     return;
   }
   spectrum_control(scene, _spectrum_label.c_str(), _spectrum_targets, _spectrum_kind, true);

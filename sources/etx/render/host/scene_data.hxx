@@ -16,6 +16,7 @@
 #include <etx/render/host/temperature_optics.hxx>
 
 #include <unordered_map>
+#include <unordered_set>
 namespace etx {
 
 struct SpectrumSource {
@@ -241,9 +242,10 @@ struct SceneData {
   MaterialMapping mesh_mapping;
   std::vector<std::string> spectrum_names;
   std::unordered_map<uint32_t, uint32_t> material_to_emitter_profile;
-  std::unordered_map<uint32_t, uint32_t> gltf_image_mapping;
-  std::unordered_map<int32_t, uint32_t> gltf_material_mapping;
   std::vector<CameraInfo> cameras;
+  bool owns_assets = false;
+  std::unordered_set<std::string> owned_asset_paths;
+  std::string source_asset_directory;
   std::string json_file_name;
   std::string geometry_file_name;
   std::string materials_file_name;

@@ -87,6 +87,7 @@ struct SceneEditResult {
   SceneEditStatus status = SceneEditStatus::Success;
   uint32_t node_index = kInvalidIndex;
   uint32_t mesh_index = kInvalidIndex;
+  uint32_t material_index = kInvalidIndex;
   std::vector<uint32_t> node_remapping;
 
   bool succeeded() const {
@@ -126,6 +127,7 @@ struct SceneRepresentation {
     LoadGeometry = 0u,
     SetupCamera = 1u << 0u,
     PreferRecoveredSave = 1u << 1u,
+    DocumentOnly = 1u << 2u,
     LoadEverything = LoadGeometry | SetupCamera,
   };
 
@@ -137,6 +139,9 @@ struct SceneRepresentation {
     std::unordered_map<Integrator::Type, Options> settings;
   };
 
+  using SourceDecoder = uint32_t (*)(const char*, const char*, SceneData&, const IORDatabase&, TaskScheduler&, Camera&);
+  bool load_document(const char* filename, SourceDecoder decoder, bool decode_root, const char* source_assets, uint32_t options, IntegratorData* out_integrator);
+  bool prepare_document(uint32_t options);
   bool load_from_file(const char* filename, uint32_t options, IntegratorData* out_integrator = nullptr);
   std::string save_to_file(const char* filename, Integrator::Type selected_type = Integrator::Type::Invalid, Integrator* integrator_array[] = nullptr, size_t integrator_count = 0);
   void replace_loaded_scene(SceneRepresentation& source);
@@ -174,6 +179,7 @@ struct SceneRepresentation {
   SceneEditResult duplicate_node_subtree(uint32_t node_index, NodeDuplicateMode mode);
   SceneEditStatus validate_node_duplication(uint32_t node_index) const;
   SceneEditResult set_node_mesh_material(uint32_t node_index, uint32_t mesh_index, uint32_t material_index, bool make_unique);
+  SceneEditResult set_node_mesh_material(uint32_t node_index, uint32_t mesh_index, uint32_t source_material, uint32_t material_index, bool make_unique);
   SceneEditResult delete_node_subtree(uint32_t node_index);
   SceneEditResult reparent_node(uint32_t node_index, uint32_t parent_index);
   SceneEditResult set_node_enabled(uint32_t node_index, bool enabled);

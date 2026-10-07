@@ -1,8 +1,10 @@
 #include "platform_ui.hxx"
 
 #include "ui.hxx"
+#include <sokol_app.h>
 
 #include <etx/core/core.hxx>
+#include <etx/import/import_service.hxx>
 
 #import <AppKit/AppKit.h>
 
@@ -52,13 +54,33 @@ static void install_application_icon() {
   }
 }
 
-static NSMenuItem* add_command_item(NSMenu* menu, NSString* title, MenuCommand command, NSString* key_equivalent = @"", NSEventModifierFlags modifiers = NSEventModifierFlagCommand) {
+static NSMenuItem* add_command_item(NSMenu* menu, NSString* title, MenuCommand command) {
+  const auto& info = UI::menu_command_info(command);
+  NSString* key_equivalent = @"";
+  if ((info.key >= 32) && (info.key <= 126)) {
+    const unichar key = static_cast<unichar>(info.key);
+    key_equivalent = [[NSString stringWithCharacters:&key length:1] lowercaseString];
+  }
+  NSEventModifierFlags modifiers = 0;
+  if (info.modifiers & SAPP_MODIFIER_SUPER)
+    modifiers |= NSEventModifierFlagCommand;
+  if (info.modifiers & SAPP_MODIFIER_CTRL)
+    modifiers |= NSEventModifierFlagControl;
+  if (info.modifiers & SAPP_MODIFIER_ALT)
+    modifiers |= NSEventModifierFlagOption;
+  if (info.modifiers & SAPP_MODIFIER_SHIFT)
+    modifiers |= NSEventModifierFlagShift;
   NSMenuItem* item = [[NSMenuItem alloc] initWithTitle:title action:@selector(performCommand:) keyEquivalent:key_equivalent];
   item.target = g_platform_ui_controller;
   item.tag = kCommandTagBase + static_cast<NSInteger>(command);
-  item.keyEquivalentModifierMask = key_equivalent.length > 0 ? modifiers : 0;
+  item.keyEquivalentModifierMask = modifiers;
   [menu addItem:item];
   return item;
+}
+
+static NSMenuItem* add_command_item(NSMenu* menu, MenuCommand command) {
+  NSString* title = [ns_string(UI::menu_command_info(command).label) stringByReplacingOccurrencesOfString:@"..." withString:@"\u2026"];
+  return add_command_item(menu, title, command);
 }
 
 static NSMenu* add_submenu(NSMenu* main_menu, NSString* title) {
@@ -67,6 +89,15 @@ static NSMenu* add_submenu(NSMenu* main_menu, NSString* title) {
   root_item.submenu = submenu;
   [main_menu addItem:root_item];
   return submenu;
+}
+
+static void add_import_menu(NSMenu* menu, MenuCommand command) {
+  NSMenu* submenu = add_submenu(menu, ns_string(UI::menu_command_info(command).label));
+  for (const auto& importer : etx::import_service().importers()) {
+    const std::string label = importer.name + " (" + importer.extensions + ")\u2026";
+    NSMenuItem* item = add_command_item(submenu, ns_string(label.c_str()), command);
+    item.representedObject = ns_string(importer.id.c_str());
+  }
 }
 
 static void rebuild_recent_menu(const std::vector<std::string>& recent_files) {
@@ -80,12 +111,12 @@ static void rebuild_recent_menu(const std::vector<std::string>& recent_files) {
   }
 
   if (recent_files.empty()) {
-    NSMenuItem* empty_item = [[NSMenuItem alloc] initWithTitle:@"No Recent Scenes" action:nil keyEquivalent:@""];
+    NSMenuItem* empty_item = [[NSMenuItem alloc] initWithTitle:@"No Recent Files" action:nil keyEquivalent:@""];
     empty_item.enabled = NO;
     [g_recent_menu addItem:empty_item];
   } else {
     [g_recent_menu addItem:[NSMenuItem separatorItem]];
-    add_command_item(g_recent_menu, @"Clear Menu", MenuCommand::ClearRecentScenes);
+    add_command_item(g_recent_menu, MenuCommand::ClearRecentScenes);
   }
 }
 
@@ -158,8 +189,10 @@ static void rebuild_integrator_menu(UI& ui) {
     return NO;
   }
 
+  if ((menu_item.tag < kCommandTagBase) || (menu_item.tag >= (kCommandTagBase + static_cast<NSInteger>(MenuCommand::Count))))
+    return NO;
   const MenuCommand command = static_cast<MenuCommand>(menu_item.tag - kCommandTagBase);
-  return ((self.ui->preparation_active() == false) || (command == MenuCommand::Quit)) ? YES : NO;
+  return self.ui->menu_command_available(command) ? YES : NO;
 }
 
 @end
@@ -258,20 +291,22 @@ void PlatformUI::setup(UI& ui) {
   [application_menu addItem:hide_others_item];
   [application_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Show All" action:@selector(unhideAllApplications:) keyEquivalent:@""]];
   [application_menu addItem:[NSMenuItem separatorItem]];
-  add_command_item(application_menu, [@"Quit " stringByAppendingString:app_name], MenuCommand::Quit, @"q");
+  add_command_item(application_menu, [@"Quit " stringByAppendingString:app_name], MenuCommand::Quit);
 
   NSMenu* file_menu = add_submenu(main_menu, @"File");
-  add_command_item(file_menu, @"Open Scene…", MenuCommand::OpenScene, @"o");
-  g_recent_menu = [[NSMenu alloc] initWithTitle:@"Open Recent"];
-  NSMenuItem* recent_item = [[NSMenuItem alloc] initWithTitle:@"Open Recent" action:nil keyEquivalent:@""];
-  recent_item.submenu = g_recent_menu;
-  [file_menu addItem:recent_item];
+  add_command_item(file_menu, MenuCommand::OpenScene);
+  g_recent_menu = add_submenu(file_menu, ns_string(UI::menu_command_info(MenuCommand::OpenRecentScene).label));
   [file_menu addItem:[NSMenuItem separatorItem]];
-  add_command_item(file_menu, @"Reload Scene", MenuCommand::ReloadScene, @"r");
-  add_command_item(file_menu, @"Reload Geometry and Materials", MenuCommand::ReloadGeometry, @"g");
+  add_command_item(file_menu, MenuCommand::SaveScene);
+  add_command_item(file_menu, MenuCommand::SaveSceneAs);
   [file_menu addItem:[NSMenuItem separatorItem]];
-  add_command_item(file_menu, @"Save Scene", MenuCommand::SaveScene, @"s");
-  add_command_item(file_menu, @"Save Scene As…", MenuCommand::SaveSceneAs, @"s", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+  add_command_item(file_menu, MenuCommand::AddNativeScene);
+  add_import_menu(file_menu, MenuCommand::ImportScene);
+  add_import_menu(file_menu, MenuCommand::ImportIntoScene);
+  add_command_item(file_menu, MenuCommand::ConvertScene);
+  [file_menu addItem:[NSMenuItem separatorItem]];
+  add_command_item(file_menu, MenuCommand::ReloadScene);
+  add_command_item(file_menu, MenuCommand::ReloadGeometry);
 
   NSMenu* edit_menu = add_submenu(main_menu, @"Edit");
   [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"]];
@@ -282,36 +317,47 @@ void PlatformUI::setup(UI& ui) {
   [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"]];
   [edit_menu addItem:[[NSMenuItem alloc] initWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"]];
 
-  g_integrator_menu = add_submenu(main_menu, @"Integrator");
+  NSMenu* view_menu = add_submenu(main_menu, @"View");
+  add_command_item(view_menu, MenuCommand::ViewWholeScene);
+  NSMenu* direction_menu = add_submenu(view_menu, @"Camera Views");
+  add_command_item(direction_menu, MenuCommand::ViewPositiveX);
+  add_command_item(direction_menu, MenuCommand::ViewNegativeX);
+  add_command_item(direction_menu, MenuCommand::ViewPositiveY);
+  add_command_item(direction_menu, MenuCommand::ViewNegativeY);
+  add_command_item(direction_menu, MenuCommand::ViewPositiveZ);
+  add_command_item(direction_menu, MenuCommand::ViewNegativeZ);
+  [view_menu addItem:[NSMenuItem separatorItem]];
+  NSMenu* exposure_menu = add_submenu(view_menu, @"Exposure");
+  add_command_item(exposure_menu, MenuCommand::IncreaseExposure);
+  add_command_item(exposure_menu, MenuCommand::DecreaseExposure);
+  [view_menu addItem:[NSMenuItem separatorItem]];
+  NSMenu* panels_menu = add_submenu(view_menu, @"Panels");
+  g_scene_objects_item = add_command_item(panels_menu, MenuCommand::ToggleSceneObjects);
+  g_properties_item = add_command_item(panels_menu, MenuCommand::ToggleProperties);
+  g_diagnostics_item = add_command_item(panels_menu, MenuCommand::ToggleMemoryDiagnostics);
+  add_command_item(view_menu, MenuCommand::ResetLayout);
+
+  NSMenu* render_menu = add_submenu(main_menu, @"Render");
+  add_command_item(render_menu, MenuCommand::RunRenderer);
+  add_command_item(render_menu, MenuCommand::FinishRenderer);
+  add_command_item(render_menu, MenuCommand::StopRenderer);
+  add_command_item(render_menu, MenuCommand::RestartRenderer);
+  [render_menu addItem:[NSMenuItem separatorItem]];
+  g_integrator_menu = add_submenu(render_menu, ns_string(UI::menu_command_info(MenuCommand::SelectIntegrator).label));
 
   NSMenu* image_menu = add_submenu(main_menu, @"Image");
-  add_command_item(image_menu, @"Open Reference Image…", MenuCommand::OpenReferenceImage, @"i");
+  add_command_item(image_menu, MenuCommand::SaveImageRGB);
+  add_command_item(image_menu, MenuCommand::SaveImageLDR);
   [image_menu addItem:[NSMenuItem separatorItem]];
-  add_command_item(image_menu, @"Save Current Image (RGB)…", MenuCommand::SaveImageRGB, @"e");
-  add_command_item(image_menu, @"Save Current Image (LDR)…", MenuCommand::SaveImageLDR, @"e", NSEventModifierFlagCommand | NSEventModifierFlagShift);
-  add_command_item(image_menu, @"Use as Reference", MenuCommand::UseImageAsReference, @"r", NSEventModifierFlagCommand | NSEventModifierFlagShift);
+  NSMenu* reference_menu = add_submenu(image_menu, @"Reference Image");
+  add_command_item(reference_menu, MenuCommand::OpenReferenceImage);
+  add_command_item(reference_menu, MenuCommand::UseImageAsReference);
 
-  NSMenu* view_menu = add_submenu(main_menu, @"View");
-  add_command_item(view_menu, @"View Whole Scene", MenuCommand::ViewWholeScene, @"0");
-  NSMenu* direction_menu = [[NSMenu alloc] initWithTitle:@"View Scene"];
-  NSMenuItem* direction_item = [[NSMenuItem alloc] initWithTitle:@"View Scene" action:nil keyEquivalent:@""];
-  direction_item.submenu = direction_menu;
-  [view_menu addItem:direction_item];
-  add_command_item(direction_menu, @"From +X", MenuCommand::ViewPositiveX, @"1");
-  add_command_item(direction_menu, @"From −X", MenuCommand::ViewNegativeX, @"2");
-  add_command_item(direction_menu, @"From +Y", MenuCommand::ViewPositiveY, @"3");
-  add_command_item(direction_menu, @"From −Y", MenuCommand::ViewNegativeY, @"4");
-  add_command_item(direction_menu, @"From +Z", MenuCommand::ViewPositiveZ, @"5");
-  add_command_item(direction_menu, @"From −Z", MenuCommand::ViewNegativeZ, @"6");
-  [view_menu addItem:[NSMenuItem separatorItem]];
-  add_command_item(view_menu, @"Increase Exposure", MenuCommand::IncreaseExposure, @"+");
-  add_command_item(view_menu, @"Decrease Exposure", MenuCommand::DecreaseExposure, @"-");
-  [view_menu addItem:[NSMenuItem separatorItem]];
-  g_scene_objects_item = add_command_item(view_menu, @"Scene Explorer", MenuCommand::ToggleSceneObjects, @"1", NSEventModifierFlagCommand | NSEventModifierFlagOption);
-  g_properties_item = add_command_item(view_menu, @"Inspector", MenuCommand::ToggleProperties, @"2", NSEventModifierFlagCommand | NSEventModifierFlagOption);
-  g_diagnostics_item = add_command_item(view_menu, @"Bottom panel", MenuCommand::ToggleMemoryDiagnostics, @"3", NSEventModifierFlagCommand | NSEventModifierFlagOption);
-  [view_menu addItem:[NSMenuItem separatorItem]];
-  add_command_item(view_menu, @"Reset Workspace Layout", MenuCommand::ResetLayout, @"");
+  NSMenu* tools_menu = add_submenu(main_menu, @"Tools");
+  add_command_item(tools_menu, MenuCommand::ImportPlugins);
+  NSMenu* help_menu = add_submenu(main_menu, @"Help");
+  add_command_item(help_menu, MenuCommand::KeyboardShortcuts);
+  NSApp.helpMenu = help_menu;
 
   NSWindow* window = NSApp.keyWindow ?: NSApp.mainWindow;
   if (window != nil) {
@@ -383,7 +429,7 @@ void PlatformUI::shutdown() {
 }
 
 PlatformColorScheme PlatformUI::color_scheme() const {
-  NSAppearanceName appearance = [NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+  NSAppearanceName appearance = [NSApp.effectiveAppearance bestMatchFromAppearancesWithNames:@[ NSAppearanceNameAqua, NSAppearanceNameDarkAqua ]];
   return [appearance isEqualToString:NSAppearanceNameDarkAqua] ? PlatformColorScheme::Dark : PlatformColorScheme::Light;
 }
 

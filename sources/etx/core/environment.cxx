@@ -1,3 +1,4 @@
+#include <etx/core/core.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/core/debug.hxx>
 #if (ETX_PLATFORM_WINDOWS)
@@ -54,7 +55,7 @@ static struct {
 } _env;
 
 static void set_folder_path(char* destination, size_t destination_size, const std::filesystem::path& path) {
-  std::string value = path.generic_string();
+  std::string value = path_to_utf8(path);
   if (!value.empty() && (value.back() != '/')) {
     value.push_back('/');
   }
@@ -67,7 +68,7 @@ static void ensure_tmp_directory() {
     return;
 
   std::error_code ec;
-  std::filesystem::create_directories(_env.tmp_folder, ec);
+  std::filesystem::create_directories(std::filesystem::u8path(_env.tmp_folder), ec);
 }
 
 static void clear_directory(const char* path) {
@@ -75,8 +76,8 @@ static void clear_directory(const char* path) {
     return;
 
   std::error_code ec;
-  std::filesystem::remove_all(path, ec);
-  std::filesystem::create_directories(path, ec);
+  std::filesystem::remove_all(std::filesystem::u8path(path), ec);
+  std::filesystem::create_directories(std::filesystem::u8path(path), ec);
 }
 
 const char* Environment::data_folder() {
@@ -170,13 +171,17 @@ void Environment::clear_tmp_folder() {
 }
 
 void Environment::setup(const char* executable_path) {
+  setup(executable_path, true);
+}
+
+void Environment::setup(const char* executable_path, bool clear_temporary_files) {
   std::string platform_executable_path;
 
 #if (ETX_PLATFORM_WINDOWS)
-  char exe_path[MAX_PATH] = {};
-  DWORD len = GetModuleFileNameA(nullptr, exe_path, MAX_PATH);
+  wchar_t exe_path[MAX_PATH] = {};
+  DWORD len = GetModuleFileNameW(nullptr, exe_path, MAX_PATH);
   if (len > 0 && len < MAX_PATH) {
-    platform_executable_path.assign(exe_path, len);
+    platform_executable_path = path_to_utf8(std::filesystem::path(std::wstring(exe_path, len)));
   }
 #elif (ETX_PLATFORM_APPLE)
   uint32_t path_size = PATH_MAX;
@@ -196,9 +201,8 @@ void Environment::setup(const char* executable_path) {
   }
 #endif
 
-  std::filesystem::path resolved_executable = platform_executable_path.empty()
-    ? std::filesystem::path(executable_path ? executable_path : "")
-    : std::filesystem::path(platform_executable_path);
+  std::filesystem::path resolved_executable =
+    platform_executable_path.empty() ? std::filesystem::u8path(executable_path ? executable_path : "") : std::filesystem::u8path(platform_executable_path);
 
   std::error_code ec;
   if (resolved_executable.is_relative()) {
@@ -261,7 +265,9 @@ void Environment::setup(const char* executable_path) {
   std::filesystem::create_directories(_env.user_data_folder, ec);
   std::filesystem::create_directories(_env.config_folder, ec);
   std::filesystem::create_directories(_env.cache_folder, ec);
-  clear_tmp_folder();
+  if (clear_temporary_files) {
+    clear_tmp_folder();
+  }
 }
 
 const char* Environment::current_directory() const {
@@ -273,9 +279,9 @@ std::string Environment::to_project_relative(const std::string& path) const {
     return {};
   }
 
-  std::filesystem::path in_path(path);
+  auto in_path = std::filesystem::u8path(path);
   if (in_path.is_relative()) {
-    auto str = in_path.generic_string();
+    auto str = path_to_utf8(in_path);
     if (str[0] == '/')
       str = "." + str;
     else if (str[0] != '.') {
@@ -290,14 +296,14 @@ std::string Environment::to_project_relative(const std::string& path) const {
     canonical = std::filesystem::absolute(in_path, ec);
   }
 
-  std::filesystem::path root(current_directory());
+  const auto root = std::filesystem::u8path(current_directory());
   auto relative = canonical.lexically_relative(root);
-  std::string relative_str = relative.generic_string();
+  std::string relative_str = path_to_utf8(relative);
   if (relative.empty() || (relative_str.rfind("..", 0) == 0)) {
-    return canonical.generic_string();
+    return path_to_utf8(canonical);
   }
 
-  return "./" + relative.generic_string();
+  return "./" + path_to_utf8(relative);
 }
 
 std::string Environment::resolve_to_absolute(const std::string& path) const {
@@ -305,23 +311,23 @@ std::string Environment::resolve_to_absolute(const std::string& path) const {
     return {};
   }
 
-  std::filesystem::path in_path(path);
+  auto in_path = std::filesystem::u8path(path);
   std::error_code ec;
   if (in_path.is_absolute()) {
     auto canonical = std::filesystem::weakly_canonical(in_path, ec);
     if (!ec) {
-      return canonical.generic_string();
+      return path_to_utf8(canonical);
     }
     canonical = std::filesystem::absolute(in_path, ec);
-    return canonical.generic_string();
+    return path_to_utf8(canonical);
   }
 
-  std::filesystem::path root(current_directory());
+  const auto root = std::filesystem::u8path(current_directory());
   std::filesystem::path resolved = std::filesystem::weakly_canonical(root / in_path, ec);
   if (ec) {
     resolved = std::filesystem::absolute(root / in_path, ec);
   }
-  return resolved.generic_string();
+  return path_to_utf8(resolved);
 }
 
 uint64_t get_file_folder(const char* file_name, char buffer[], uint64_t buffer_size) {

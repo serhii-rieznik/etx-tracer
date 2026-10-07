@@ -33,6 +33,8 @@
 #include <memory>
 #include <atomic>
 #include <mutex>
+#include <thread>
+#include <etx/import/import_service.hxx>
 
 namespace etx {
 
@@ -67,7 +69,12 @@ struct RTApplication {
 
  private:
   bool load_scene_file(const std::string&, uint32_t options, bool start_rendering);
+  bool load_scene_file(const std::string&, uint32_t options, bool start_rendering, bool unsaved);
   std::string save_scene_file(const std::string&);
+  bool add_scene_file(const std::string&, std::string& error, bool owned_source);
+  bool begin_scene_import(const ApplicationCommand&, std::string& error);
+  void poll_scene_import();
+  void cancel_scene_import();
 
   void on_referenece_image_selected(std::string);
   void on_save_image_selected(std::string, SaveImageMode);
@@ -88,7 +95,7 @@ struct RTApplication {
   SceneResourceEditResult on_medium_deleted(uint32_t index);
   std::string on_medium_renamed(uint32_t index, const std::string&);
   void on_medium_changed(uint32_t index);
-  SceneEditResult on_mesh_material_changed(uint32_t node_index, uint32_t mesh_index, uint32_t material_index, bool make_unique);
+  SceneEditResult on_mesh_material_changed(uint32_t node_index, uint32_t mesh_index, uint32_t source_material, uint32_t material_index, bool make_unique);
   void on_emitter_changed(uint32_t index);
   SceneResourceEditResult on_emitter_added(uint32_t type);
   SceneResourceEditResult on_emitter_duplicated(uint32_t index);
@@ -207,6 +214,31 @@ struct RTApplication {
   std::string _pending_reference_file = {};
   std::string _pending_gpu_save_image_file = {};
   std::string _current_scene_file = {};
+  bool _document_unsaved = false;
+  uint64_t _document_identity = 0u;
+  std::vector<std::shared_ptr<ImportArtifact>> _document_imports;
+  struct SceneImportJob {
+    ApplicationCommand command;
+    uint64_t target_identity = 0u;
+    enum class State { Converting, Cancelled, Publishing };
+    std::atomic<State> state = State::Converting;
+    bool request_cancel() {
+      auto expected = State::Converting;
+      return state.compare_exchange_strong(expected, State::Cancelled) || (expected == State::Cancelled);
+    }
+    bool cancelled() const {
+      return state.load() == State::Cancelled;
+    }
+    std::atomic<bool> done = false;
+    std::mutex mutex;
+    uint32_t completed = 0u;
+    uint32_t total = 0u;
+    std::string stage;
+    std::string error;
+    std::shared_ptr<ImportArtifact> artifact;
+    std::thread worker;
+  };
+  std::unique_ptr<SceneImportJob> _import_job;
   TimeMeasure time_measure = {};
   TimeMeasure scene_commit_time = {};
 

@@ -445,8 +445,8 @@ bool prepare_thermal_materials(SceneData& data, uint32_t camera_medium_index) {
     }
     if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Boundary)) {
       if ((material.subsurface_cls != SubsurfaceMaterial::Disabled) || (material.opacity != 1.0f) || bsdf_resource_thinfilm_enabled(material.thinfilm) ||
-          (material.normal_image_index != kInvalidIndex) ||
-          (material.reflectance.image_index != kInvalidIndex) || (material.scattering.image_index != kInvalidIndex)) {
+          (material.alpha_mask.image_index != kInvalidIndex) || (material.alpha_mask.value.x != 1.0f) || (material.normal_image_index != kInvalidIndex) ||
+          (material.bump.value.x != 0.0f) || (material.reflectance.image_index != kInvalidIndex) || (material.scattering.image_index != kInvalidIndex)) {
         log::error("Thermal material %u requires a lossless dielectric interface or medium boundary", index);
         return false;
       }
@@ -480,6 +480,7 @@ bool prepare_thermal_materials(SceneData& data, uint32_t camera_medium_index) {
     }
     if (((material.cls != MaterialClass::Diffuse) && (material.cls != MaterialClass::Conductor) && (material.cls != MaterialClass::Plastic)) ||
         (material.subsurface_cls != SubsurfaceMaterial::Disabled) || (material.opacity != 1.0f) || (material.normal_image_index != kInvalidIndex) ||
+        (material.bump.value.x != 0.0f) || (material.alpha_mask.image_index != kInvalidIndex) || (material.alpha_mask.value.x != 1.0f) ||
         (material.roughness.image_index != kInvalidIndex) || (material.scattering.image_index != kInvalidIndex) || (material.reflectance.image_index != kInvalidIndex) ||
         bsdf_resource_thinfilm_enabled(material.thinfilm) || (bsdf_energy_compensated_roughness_isotropic({material.roughness.value.x, material.roughness.value.y}) == false)) {
       log::error("Material %u has no supported thermal surface model for its scattering configuration", index);

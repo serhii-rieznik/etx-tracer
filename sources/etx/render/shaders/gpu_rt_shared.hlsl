@@ -30,6 +30,7 @@
 #include <interop/medium_phase_shared.hxx>
 #include <interop/surface_point_shared.hxx>
 #include <interop/scene_math_shared.hxx>
+#include <interop/surface_derivatives_shared.hxx>
 #include <interop/directional_emission_shared.hxx>
 
 DirectionalEmissionDomain gpu_directional_emission_domain(float3 light_direction, float angular_cosine) {
@@ -699,11 +700,6 @@ SpectralResponse apply_image(SpectralQuery spect, SpectralImage img, float2 uv) 
   return apply_image(spect, img, uv, image_pdf);
 }
 
-bool image_has_alpha_channel(uint image_index) {
-  ImageAccessGPUContext access_context = {constants.scene.images};
-  return image_access_has_alpha(access_context, image_index);
-}
-
 struct AlphaTestContext {
   MaterialAccess material_access;
   float2 uv;
@@ -718,17 +714,13 @@ float alpha_test_material_opacity(AlphaTestContext context) {
   return context.material_access.opacity;
 }
 
-uint alpha_test_scattering_image_index(AlphaTestContext context) {
-  return context.material_access.scattering_image_index;
+uint alpha_test_mask_image_index(AlphaTestContext context) {
+  return context.material_access.alpha_mask_image_index;
 }
 
-bool alpha_test_image_has_alpha(AlphaTestContext context, uint image_index) {
-  return image_has_alpha_channel(image_index);
-}
-
-float alpha_test_evaluate_alpha(AlphaTestContext context, uint image_index) {
+float alpha_test_evaluate_mask(AlphaTestContext context, uint image_index) {
   ImageEvaluateGPUContext image_context = make_image_evaluate_gpu_context(constants.scene.images);
-  return image_evaluate_sample_channel_or_default(image_context, image_index, 3u, context.uv, 1.0f);
+  return image_evaluate_sample_channel_or_default(image_context, image_index, context.material_access.alpha_mask_channel, context.uv, 1.0f);
 }
 
 float alpha_test_rnd(inout AlphaTestContext context) {
@@ -832,6 +824,63 @@ SurfacePoint load_surface_point(ByteAddressBuffer position_buffer, ByteAddressBu
   result.geo_normal = world_geo_normal;
 
   return result;
+}
+
+bool try_load_surface_derivatives(TriangleData tri, float3 barycentric, uint instance_index, out SurfaceDerivatives derivatives) {
+  derivatives = (SurfaceDerivatives)0;
+  if ((constants.scene.vertex_positions == kInvalidIndex) || (constants.scene.vertex_normals == kInvalidIndex) || (constants.scene.vertex_texcoords == kInvalidIndex)) {
+    return false;
+  }
+  ByteAddressBuffer positions = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_positions)];
+  ByteAddressBuffer normals = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_normals)];
+  ByteAddressBuffer texcoords = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_texcoords)];
+  AffineTransform object_to_world = (AffineTransform)0;
+  object_to_world.rows[0] = float4(1.0f, 0.0f, 0.0f, 0.0f);
+  object_to_world.rows[1] = float4(0.0f, 1.0f, 0.0f, 0.0f);
+  object_to_world.rows[2] = float4(0.0f, 0.0f, 1.0f, 0.0f);
+  AffineTransform world_to_object = object_to_world;
+  float orientation = 1.0f;
+  if ((instance_index != kInvalidIndex) && (constants.scene.instances != kInvalidIndex)) {
+    const GPUSceneInstanceData instance = load_scene_instance(instance_index);
+    for (uint row = 0u; row < 3u; ++row) {
+      object_to_world.rows[row] = instance.object_to_world[row];
+      world_to_object.rows[row] = instance.world_to_object[row];
+    }
+    orientation = (instance.flags & 1u) != 0u ? -1.0f : 1.0f;
+  }
+  return surface_derivatives_shared_compute_triangle(load_float3(positions, tri.i.x), load_float3(positions, tri.i.y), load_float3(positions, tri.i.z),
+    load_float3(normals, tri.i.x), load_float3(normals, tri.i.y), load_float3(normals, tri.i.z), load_float2(texcoords, tri.i.x), load_float2(texcoords, tri.i.y),
+    load_float2(texcoords, tri.i.z), barycentric, object_to_world, world_to_object, orientation, derivatives);
+}
+
+bool evaluate_surface_derivatives(TraceSurfaceResult hit, out SurfaceDerivatives derivatives) {
+  derivatives = (SurfaceDerivatives)0;
+  if (hit.hit == 0u) {
+    return false;
+  }
+  return try_load_surface_derivatives(hit.tri, hit.surface_point.barycentrics, hit.instance_index, derivatives);
+}
+
+[noinline] SurfacePoint surface_point_apply_material_maps(SurfacePoint surface_point, Material material, TriangleData tri, uint instance_index, float3 incoming_direction) {
+  if ((material.normal_image_index != kInvalidIndex) && (material.normal_scale > kEpsilon)) {
+    surface_point_apply_material_normal_map(surface_point, material, incoming_direction);
+    return surface_point;
+  }
+  SampledImage bump;
+  MaterialAccessGPUContext material_context = {constants.scene.materials};
+  if ((material_access_try_load_bump(material_context, tri.material_index, bump) == false) || (bump.value.x == 0.0f))
+    return surface_point;
+  SurfaceDerivatives derivatives;
+  if (try_load_surface_derivatives(tri, surface_point.barycentrics, instance_index, derivatives) == false)
+    return surface_point;
+  float height = 1.0f;
+  float2 gradient = float2(0.0f, 0.0f);
+  if ((bump.image_index != kInvalidIndex) && (image_evaluate_gpu_try_height_gradient(make_image_evaluate_gpu_context(constants.scene.images), bump.image_index, bump.channel,
+                                                surface_point.vertex.tex, height, gradient) == false))
+    return surface_point;
+  bump_mapping_shared_apply(derivatives, height * bump.value.x, gradient * bump.value.x, surface_point.geo_normal, incoming_direction, surface_point.vertex.nrm,
+    surface_point.vertex.tan, surface_point.vertex.btn);
+  return surface_point;
 }
 
 float2 interpolate_uv_from_barycentrics(ByteAddressBuffer texcoord_buffer, TriangleData tri, float3 bc) {
@@ -1233,7 +1282,7 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
     bary, ray.Direction, result.instance_index);
   result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
   if (try_load_material_full(result.tri.material_index, result.material)) {
-    surface_point_apply_material_normal_map(result.surface_point, result.material, ray.Direction);
+    result.surface_point = surface_point_apply_material_maps(result.surface_point, result.material, result.tri, result.instance_index, ray.Direction);
   }
   result.hit = 1u;
   return true;

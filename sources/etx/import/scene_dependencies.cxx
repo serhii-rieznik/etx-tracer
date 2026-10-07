@@ -1,4 +1,4 @@
-#include "scene_dependencies.hxx"
+#include <etx/import/scene_dependencies.hxx>
 
 #include <json.hpp>
 
@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cstdint>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <unordered_set>
 
@@ -35,55 +36,6 @@ void add_reference(std::vector<std::string>& references, const Json& value) {
     const std::string path = value.get<std::string>();
     if (!path.empty() && !std::string_view(path).starts_with("data:")) {
       references.push_back(path);
-    }
-  }
-}
-
-void inspect_tungsten_material(const Json& material, std::vector<std::string>& references) {
-  if (!material.is_object()) {
-    return;
-  }
-  if (material.contains("albedo"))
-    add_reference(references, material["albedo"]);
-  if (material.contains("alpha"))
-    add_reference(references, material["alpha"]);
-  if (material.contains("substrate") && material["substrate"].is_object()) {
-    inspect_tungsten_material(material["substrate"], references);
-  }
-}
-
-void inspect_tungsten_scene(const Json& scene, std::vector<std::string>& references) {
-  if (scene.contains("bsdfs") && scene["bsdfs"].is_array()) {
-    for (const Json& material : scene["bsdfs"]) {
-      inspect_tungsten_material(material, references);
-    }
-  }
-  if (!scene.contains("primitives") || !scene["primitives"].is_array()) {
-    return;
-  }
-  for (const Json& primitive : scene["primitives"]) {
-    if (!primitive.is_object()) {
-      continue;
-    }
-    const std::string type = primitive.value("type", std::string{});
-    if (type == "mesh") {
-      if (primitive.contains("filename"))
-        add_reference(references, primitive["filename"]);
-      else if (primitive.contains("file"))
-        add_reference(references, primitive["file"]);
-    }
-    if (type == "infinite_sphere") {
-      if (primitive.value("sample", true) && primitive.contains("emission")) {
-        add_reference(references, primitive["emission"]);
-      }
-    } else {
-      if (primitive.contains("emission"))
-        add_reference(references, primitive["emission"]);
-      if (primitive.contains("power"))
-        add_reference(references, primitive["power"]);
-    }
-    if (primitive.contains("bsdf") && primitive["bsdf"].is_object()) {
-      inspect_tungsten_material(primitive["bsdf"], references);
     }
   }
 }
@@ -147,17 +99,12 @@ bool inspect_json(std::string_view contents, std::vector<std::string>& reference
     if (json.contains("asset") && json["asset"].is_object()) {
       return inspect_gltf(json, references, error);
     }
-    const bool tungsten = json.contains("bsdfs") && (json.contains("primitives") || json.contains("renderer"));
-    if (tungsten) {
-      inspect_tungsten_scene(json, references);
-    } else {
-      if (json.contains("geometry"))
-        add_reference(references, json["geometry"]);
-      if (json.contains("materials"))
-        add_reference(references, json["materials"]);
-      if (json.contains("geometry") && json["geometry"].is_string() && json.contains("materials") && json["materials"].is_string()) {
-        geometry_with_external_materials.push_back(json["geometry"].get<std::string>());
-      }
+    if (json.contains("geometry"))
+      add_reference(references, json["geometry"]);
+    if (json.contains("materials"))
+      add_reference(references, json["materials"]);
+    if (json.contains("geometry") && json["geometry"].is_string() && json.contains("materials") && json["materials"].is_string()) {
+      geometry_with_external_materials.push_back(json["geometry"].get<std::string>());
     }
   } catch (const Json::exception&) {
     error = "Scene JSON fields have invalid types";
@@ -169,7 +116,7 @@ bool inspect_json(std::string_view contents, std::vector<std::string>& reference
 std::vector<std::string> split_words(std::string value) {
   std::istringstream stream(std::move(value));
   std::vector<std::string> words = {};
-  for (std::string word = {}; stream >> word;)
+  for (std::string word = {}; stream >> std::quoted(word);)
     words.push_back(std::move(word));
   return words;
 }
@@ -179,7 +126,7 @@ void inspect_material_line(const std::string& key, const std::string& value, std
   static const std::unordered_set<std::string> first_word_paths = {"map_Pr", "map_Ml", "map_Tm"};
   if (direct_paths.contains(key)) {
     if (!value.empty())
-      references.push_back(value);
+      references.push_back(((value.size() >= 2u) && (value.front() == '"') && (value.back() == '"')) ? value.substr(1u, value.size() - 2u) : value);
     return;
   }
   const std::vector<std::string> words = split_words(value);
@@ -220,7 +167,7 @@ void inspect_materials(std::istream& stream, std::vector<std::string>& reference
 void inspect_obj(std::istream& stream, std::vector<std::string>& references) {
   for (std::string line = {}; std::getline(stream, line);) {
     const size_t first = line.find_first_not_of(" \t\r");
-    if ((first == std::string::npos) || (line.compare(first, 6u, "mtllib") != 0))
+    if ((first == std::string::npos) || (line.compare(first, 6u, "mtllib") != 0) || ((first + 6u) >= line.size()) || ((line[first + 6u] != ' ') && (line[first + 6u] != '\t')))
       continue;
     const size_t value_begin = line.find_first_not_of(" \t", first + 6u);
     if (value_begin != std::string::npos) {
@@ -228,7 +175,6 @@ void inspect_obj(std::istream& stream, std::vector<std::string>& references) {
       if (!words.empty())
         references.push_back(words.front());
     }
-    break;
   }
 }
 

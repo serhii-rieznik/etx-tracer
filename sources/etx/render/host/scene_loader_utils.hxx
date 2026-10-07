@@ -1,3 +1,4 @@
+#include <etx/core/core.hxx>
 #pragma once
 
 #include <etx/core/environment.hxx>
@@ -43,7 +44,7 @@ inline std::filesystem::path locate_spectrum_file(const char* identifier, std::i
   if ((identifier == nullptr) || (identifier[0] == 0))
     return {};
 
-  std::filesystem::path requested(identifier);
+  auto requested = std::filesystem::u8path(identifier);
   if (requested.has_extension() == false)
     requested.replace_extension(".spd");
 
@@ -54,7 +55,7 @@ inline std::filesystem::path locate_spectrum_file(const char* identifier, std::i
     return {};
   }
 
-  std::filesystem::path data_root = std::filesystem::path(env().data_folder()) / "spectrum";
+  std::filesystem::path data_root = std::filesystem::u8path(env().data_folder()) / "spectrum";
 
   std::filesystem::path combined = data_root / requested;
   if (std::filesystem::exists(combined, ec))
@@ -109,7 +110,7 @@ inline bool load_ior_from_identifier(const char* identifier, const IORDatabase& 
     return false;
 
   std::string title = {};
-  cls = SpectralDistribution::load_refractive_index(candidate.string().c_str(), eta, k, title);
+  cls = SpectralDistribution::load_refractive_index(path_to_utf8(candidate).c_str(), eta, k, title);
   return cls != SpectralDistribution::Invalid;
 }
 

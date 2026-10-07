@@ -1,4 +1,5 @@
 #include <etx/render/host/image_loaders.hxx>
+#include <etx/core/core.hxx>
 #include <etx/render/host/exr.hxx>
 #include <etx/render/shared/math.hxx>
 
@@ -245,7 +246,7 @@ float half_to_float(uint16_t half) {
 }
 
 Image::Format load_dds(const char* source, std::vector<uint8_t>& data, uint2& dimensions) {
-  FILE* file = fopen(source, "rb");
+  FILE* file = fopen_utf8(source, "rb");
   if (!file) {
     log::error("Failed to open DDS file: %s", source);
     return Image::Format::Undefined;
@@ -540,7 +541,10 @@ Image::Format load_data(const char* source, std::vector<uint8_t>& data, uint2& d
     int h = 0;
     int c = 0;
     stbi_set_flip_vertically_on_load(false);
-    auto image = stbi_loadf(source, &w, &h, &c, 0);
+    FILE* file = fopen_utf8(source, "rb");
+    auto image = file != nullptr ? stbi_loadf_from_file(file, &w, &h, &c, 0) : nullptr;
+    if (file != nullptr)
+      fclose(file);
     if (image == nullptr) {
       log::error("Failed to load HDR image: %s", source);
       return Image::Format::Undefined;
@@ -569,7 +573,10 @@ Image::Format load_data(const char* source, std::vector<uint8_t>& data, uint2& d
     int h = 0;
     int c = 0;
     stbi_set_flip_vertically_on_load(false);
-    auto image = stbi_load(source, &w, &h, &c, 4);
+    FILE* file = fopen_utf8(source, "rb");
+    auto image = file != nullptr ? stbi_load_from_file(file, &w, &h, &c, 4) : nullptr;
+    if (file != nullptr)
+      fclose(file);
     if (image == nullptr) {
       return Image::Format::Undefined;
     }
@@ -585,7 +592,10 @@ Image::Format load_data(const char* source, std::vector<uint8_t>& data, uint2& d
   int h = 0;
   int c = 0;
   stbi_set_flip_vertically_on_load(true);
-  auto image = stbi_load(source, &w, &h, &c, 0);
+  FILE* file = fopen_utf8(source, "rb");
+  auto image = file != nullptr ? stbi_load_from_file(file, &w, &h, &c, 0) : nullptr;
+  if (file != nullptr)
+    fclose(file);
   if (image == nullptr) {
     const char* image_pos = strstr(source, "##image-");
     if (image_pos == nullptr) {

@@ -31,18 +31,24 @@ uint64_t TimeMeasure::measure_exact() const {
 }
 
 bool load_binary_file(const char* filename, std::vector<uint8_t>& output) {
-  FILE* f_in = fopen(filename, "rb");
+  FILE* f_in = fopen_utf8(filename, "rb");
   if (f_in == nullptr) {
     return false;
   }
 
-  fseek(f_in, 0, SEEK_END);
-  uint64_t file_size = ftell(f_in);
+  if (fseek(f_in, 0, SEEK_END) != 0) {
+    fclose(f_in);
+    return false;
+  }
+  const long file_size = ftell(f_in);
+  if ((file_size < 0) || (fseek(f_in, 0, SEEK_SET) != 0)) {
+    fclose(f_in);
+    return false;
+  }
   output.resize(file_size);
-  fseek(f_in, 0, SEEK_SET);
 
-  uint64_t bytes_read = fread(output.data(), 1, file_size, f_in);
-  if (bytes_read != file_size) {
+  const size_t bytes_read = fread(output.data(), 1, output.size(), f_in);
+  if (bytes_read != output.size()) {
     fclose(f_in);
     return false;
   }

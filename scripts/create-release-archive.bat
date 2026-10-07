@@ -14,6 +14,11 @@ echo Creating release archive for etx-tracer...
 echo Project root: %PROJECT_ROOT%
 echo Excluding: assets_testing/, lib/, tmp/
 
+if not exist "%PROJECT_ROOT%\bin\importers\*.dll" (
+    echo Error: importer DLLs were not built
+    exit /b 1
+)
+
 REM Create temporary directory for packaging
 for /f "tokens=*" %%i in ('powershell -Command "[System.IO.Path]::GetTempPath() + [System.IO.Path]::GetRandomFileName()"') do set "TEMP_DIR=%%i"
 set "RELEASE_DIR=%TEMP_DIR%\etx-tracer-release"
@@ -36,6 +41,10 @@ for /d %%i in (*) do (
     ) else if "%%i" equ "spectrum" (
         echo   Copying: %%i
         xcopy "%%i" "%RELEASE_DIR%\%%i\" /E /I /H /Y >nul
+    ) else if "%%i" equ "importers" (
+        echo   Copying: %%i
+        mkdir "%RELEASE_DIR%\%%i" 2>nul
+        copy "%%i\*.dll" "%RELEASE_DIR%\%%i\" >nul
     )
 )
 if exist "shaders.etxpack" (

@@ -75,8 +75,9 @@ void image_access_gpu_blob_load_desc(ByteAddressBuffer buffer, uint image_desc_o
   desc.format = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescFormatOffset);
   desc.size = image_access_gpu_blob_load_u32x3(buffer, image_desc_offset + kImageDescISizeOffset);
   desc.fsize = image_access_gpu_blob_load_f32x3(buffer, image_desc_offset + kImageDescFSizeOffset);
-  desc.uv_offset = image_access_gpu_blob_load_f32x3(buffer, image_desc_offset + kImageDescOffsetOffset);
-  desc.uv_scale = image_access_gpu_blob_load_f32x3(buffer, image_desc_offset + kImageDescScaleOffset);
+
+  desc.uv_offset = float3(image_access_gpu_blob_load_f32x2(buffer, image_desc_offset + kImageDescTextureUVOffsetOffset), 0.0f);
+  desc.uv_scale = float3(image_access_gpu_blob_load_f32x2(buffer, image_desc_offset + kImageDescTextureUVScaleOffset), 1.0f);
   desc.normalization = asfloat(image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescNormalizationOffset));
   desc.options = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescOptionsOffset);
   desc.data_size = image_access_gpu_blob_load_u32(buffer, image_desc_offset + kImageDescDataSizeOffset);

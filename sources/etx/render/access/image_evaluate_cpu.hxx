@@ -60,7 +60,7 @@ ETX_SHARED_INLINE float4 image_evaluate_sample_whole_or_default(ETX_IN(ImageEval
 
 ETX_SHARED_INLINE float image_evaluate_sample_channel_or_default(ETX_IN(ImageEvaluateCPUContext, context), uint32_t image_index, uint32_t channel, ETX_IN(float2, uv),
   float default_value) {
-  if ((image_index == kInvalidIndex) || (channel >= 4u)) {
+  if ((image_index == kInvalidIndex) || (channel > 4u)) {
     return default_value;
   }
 
@@ -69,6 +69,9 @@ ETX_SHARED_INLINE float image_evaluate_sample_channel_or_default(ETX_IN(ImageEva
     return default_value;
   }
 
+  if (channel == 4u) {
+    return (image_value.x + image_value.y + image_value.z) / 3.0f;
+  }
   if (channel == 0u) {
     return image_value.x;
   }

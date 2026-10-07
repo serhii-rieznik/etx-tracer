@@ -3,8 +3,9 @@
     "tasks": [
         {
             "label": "Build Raytracer",
-            "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/build --config Debug --parallel --target raytracer",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--build", "${workspaceFolder}/build", "--config", "Debug", "--parallel", "8", "--target", "raytracer"],
             "group": {
                 "kind": "build",
                 "isDefault": false
@@ -18,12 +19,13 @@
             "problemMatcher": []
         },
         {
-            "label": "Build Raytracer (Release)",
-            "type": "shell",
-            "command": "cmake --build ${workspaceFolder}/build --config RelWithDebInfo --parallel --target raytracer",
+            "label": "Build Raytracer (Development)",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--build", "${workspaceFolder}/build", "--config", "RelWithDebInfo", "--parallel", "8", "--target", "raytracer"],
             "group": {
                 "kind": "build",
-                "isDefault": false
+                "isDefault": true
             },
             "presentation": {
                 "echo": true,
@@ -31,6 +33,20 @@
                 "focus": false,
                 "panel": "shared"
             },
+            "problemMatcher": []
+        },
+        {
+            "label": "Update Raytracer Shaders",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--build", "${workspaceFolder}/build", "--config", "RelWithDebInfo", "--target", "raytracer_runtime_shaders"],
+            "problemMatcher": []
+        },
+        {
+            "label": "Build Raytracer (Release)",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--build", "${workspaceFolder}/build", "--config", "Release", "--parallel", "8", "--target", "raytracer", "raytracer_shader_package"],
             "problemMatcher": []
         },
         {
@@ -39,7 +55,7 @@
             "command": "cmake --build ${workspaceFolder}/build --config Debug --parallel --target playground",
             "group": {
                 "kind": "build",
-                "isDefault": true
+                "isDefault": false
             },
             "presentation": {
                 "echo": true,

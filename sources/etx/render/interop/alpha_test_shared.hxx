@@ -9,13 +9,13 @@ ETX_SHARED_INLINE bool alpha_test_shared_pass(ETX_INOUT(AlphaTestContext, contex
   }
 
   float material_alpha = alpha_test_material_opacity(context);
-  float alpha_diffuse = 1.0f;
-  uint32_t scattering_image_index = alpha_test_scattering_image_index(context);
-  if ((scattering_image_index != kInvalidIndex) && alpha_test_image_has_alpha(context, scattering_image_index)) {
-    alpha_diffuse = alpha_test_evaluate_alpha(context, scattering_image_index);
+  float alpha_mask = 1.0f;
+  uint32_t mask_image_index = alpha_test_mask_image_index(context);
+  if (mask_image_index != kInvalidIndex) {
+    alpha_mask = alpha_test_evaluate_mask(context, mask_image_index);
   }
 
-  float alpha_test_value = alpha_diffuse * material_alpha;
+  float alpha_test_value = alpha_mask * material_alpha;
   if (alpha_test_value <= 0.0f) {
     return true;
   }

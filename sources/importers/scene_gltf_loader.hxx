@@ -10,14 +10,6 @@ namespace etx {
 struct IORDatabase;
 struct TaskScheduler;
 
-struct SceneGltfLoader {
-  SceneGltfLoader();
-  ~SceneGltfLoader();
-
-  uint32_t load_from_file(const char* file_name, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler);
-
- private:
-  ETX_DECLARE_PIMPL(SceneGltfLoader, 1024);
-};
+uint32_t load_from_gltf_file(const char* file_name, bool binary, SceneData& data, TaskScheduler& scheduler, Camera& active_camera);
 
 }  // namespace etx
