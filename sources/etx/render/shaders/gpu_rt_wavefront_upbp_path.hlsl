@@ -298,6 +298,7 @@ bool upbp_initialize_light_path(GPUWavefrontResources wavefront_resources, uint 
   endpoint.eta = 1.0f;
   endpoint.flags = GPUUPBPVertexFlags::Valid | GPUUPBPVertexFlags::Emitter | GPUUPBPVertexFlags::Connectible | GPUUPBPVertexFlags::DensityConnectible;
   endpoint.flags |= emitter_sample.is_delta != 0u ? GPUUPBPVertexFlags::Delta : 0u;
+  endpoint.flags |= emitter_sample.is_sample_only != 0u ? GPUUPBPVertexFlags::SampleOnlyEmitter : 0u;
   endpoint.flags |= emitter_sample.is_distant != 0u ? GPUUPBPVertexFlags::DistantEndpoint : 0u;
   endpoint.flags |= emitter_sample.triangle_index != kInvalidIndex ? GPUUPBPVertexFlags::Surface : 0u;
   endpoint.previous_vertex_index = kInvalidIndex;

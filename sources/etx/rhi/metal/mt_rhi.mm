@@ -3713,9 +3713,6 @@ RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAcceler
     descriptor = create_metal_blas_descriptor(desc.geometries, desc.geometry_count, _impl, &error_message);
     descriptor.usage = desc.allow_update ? MTLAccelerationStructureUsageRefit : MTLAccelerationStructureUsageNone;
   } else {
-    if (desc.instance_count == 0u) {
-      return {RHIResult::InvalidArgument, {}};
-    }
     descriptor = create_metal_tlas_sizing_descriptor(desc.instance_count, desc.allow_update);
   }
 
@@ -3737,7 +3734,7 @@ RHICreateBindlessResult MTDevice::create_acceleration_structure(const RHIAcceler
     return {RHIResult::OutOfMemory, {}};
   }
 
-  const uint64_t instance_descriptor_buffer_size = (desc.type == RHIAccelerationStructureType::TopLevel) ? static_cast<uint64_t>(desc.instance_count) * sizeof(MTLAccelerationStructureUserIDInstanceDescriptor) : 0u;
+  const uint64_t instance_descriptor_buffer_size = (desc.type == RHIAccelerationStructureType::TopLevel) ? std::max<uint64_t>(1u, desc.instance_count) * sizeof(MTLAccelerationStructureUserIDInstanceDescriptor) : 0u;
   id<MTLBuffer> instance_descriptor_buffer = nil;
   if (instance_descriptor_buffer_size > 0u) {
     instance_descriptor_buffer = [_impl->metal_device newBufferWithLength:static_cast<NSUInteger>(instance_descriptor_buffer_size) options:MTLResourceStorageModeShared];
@@ -3820,7 +3817,7 @@ void MTCommandBuffer::build_acceleration_structure(const RHIAccelerationStructur
     descriptor.usage = desc.allow_update ? MTLAccelerationStructureUsageRefit : MTLAccelerationStructureUsageNone;
   } else {
     auto instance_buffer_it = owner->device._impl->buffers.find(desc.instance_buffer);
-    if ((instance_buffer_it == owner->device._impl->buffers.end()) || (instance_buffer_it->second.buffer == nil) || (desc.instance_count == 0u)) {
+    if ((instance_buffer_it == owner->device._impl->buffers.end()) || (instance_buffer_it->second.buffer == nil)) {
       log::error("Metal RHI: TLAS build received an invalid instance buffer");
       return;
     }

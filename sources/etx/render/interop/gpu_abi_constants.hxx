@@ -19,6 +19,12 @@ struct EmitterProfileMeta {
   };
 };
 
+struct EmitterFlags {
+  enum : uint32_t {
+    SampleOnly = 1u << 0u,
+  };
+};
+
 struct SceneProperty {
   enum : uint32_t {
     Committed,
@@ -110,6 +116,7 @@ ETX_STATIC_CONST uint32_t kEmitterSpectrumWeightOffset = 12u;
 ETX_STATIC_CONST uint32_t kEmitterAdditionalWeightOffset = 16u;
 ETX_STATIC_CONST uint32_t kEmitterTriangleAreaOffset = 20u;
 ETX_STATIC_CONST uint32_t kEmitterInstanceIndexOffset = 24u;
+ETX_STATIC_CONST uint32_t kEmitterFlagsOffset = 28u;
 
 ETX_STATIC_CONST uint32_t kSceneInstanceStride = 112u;
 ETX_STATIC_CONST uint32_t kSceneInstanceObjectToWorldRow0Offset = 0u;

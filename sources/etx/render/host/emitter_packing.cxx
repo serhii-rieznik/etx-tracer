@@ -271,6 +271,7 @@ PackedEmitterData build_packed_emitters_impl(const SceneData& scene_data, const 
         emitter.profile = triangle.emitter_index;
         emitter.triangle_index = triangle_index;
         emitter.instance_index = instance_index;
+        emitter.flags = (resolved.flags & ResolvedMeshInstance::SampleOnlyEmitter) != 0u ? EmitterFlags::SampleOnly : 0u;
 
         if ((triangle.material_index < static_cast<uint32_t>(scene_data.materials.size())) && triangle_has_valid_positions(scene_data, triangle)) {
           const auto& material = scene_data.materials[triangle.material_index];

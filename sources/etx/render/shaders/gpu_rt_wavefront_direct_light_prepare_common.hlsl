@@ -102,13 +102,13 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
   }
 
   float sampling_pdf = wavefront_direct_light_sampling_pdf(input_value.sample_value);
-  bool sampled_light_is_delta = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Delta) != 0u;
+  bool sampled_light_has_no_hit_strategy = (input_value.sample_value.flags & (GPUWavefrontDirectLightSampleFlags::Delta | GPUWavefrontDirectLightSampleFlags::SampleOnly)) != 0u;
 #if ETX_WAVEFRONT_PATH_TRACING_ONLY
-  float direct_pdf = sampled_light_is_delta ? 0.0f : bsdf_eval.pdf;
+  float direct_pdf = sampled_light_has_no_hit_strategy ? 0.0f : bsdf_eval.pdf;
   return power_heuristic(sampling_pdf, direct_pdf);
 #else
   if (scene_path_mode_is_path_tracing()) {
-    float direct_pdf = sampled_light_is_delta ? 0.0f : bsdf_eval.pdf;
+    float direct_pdf = sampled_light_has_no_hit_strategy ? 0.0f : bsdf_eval.pdf;
     return power_heuristic(sampling_pdf, direct_pdf);
   }
 
@@ -117,7 +117,7 @@ float wavefront_direct_light_weight(WavefrontDirectLightPrepareInput input_value
   reverse_data.path_source = PathSource::Light;
   float3 previous_direction = normalize(input_value.previous_vertex.position - input_value.current_vertex.position);
   float reverse_pdf = wavefront_direct_light_stage_bsdf_pdf(wavefront_make_scene_bsdf_resource_gpu_context(), reverse_data, previous_direction, input_value.material, sampler);
-  float w_light = sampled_light_is_delta ? 0.0f : wavefront_safe_div(bsdf_eval.pdf, sampling_pdf);
+  float w_light = sampled_light_has_no_hit_strategy ? 0.0f : wavefront_safe_div(bsdf_eval.pdf, sampling_pdf);
   float camera_factor = wavefront_path_vertex_is_surface(input_value.current_vertex) ? abs(dot(input_value.sample_value.direction, input_value.current_vertex.geo_normal)) : 1.0f;
   float emitter_cosine = abs(dot(input_value.sample_value.direction, input_value.sample_value.normal));
   float density_ratio = wavefront_safe_div(input_value.sample_value.pdf_dir * emitter_cosine, input_value.sample_value.pdf_dir_out * camera_factor);
@@ -238,8 +238,8 @@ void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(Wavef
     const float camera_cosine = wavefront_path_vertex_is_surface(input_value.current_vertex) ? abs(dot(input_value.current_vertex.geo_normal, direction_to_light)) : 1.0f;
     const bool distant = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Distant) != 0u;
     const float light_cosine = distant ? 1.0f : abs(dot(input_value.sample_value.normal, -direction_to_light));
-    const bool delta = (input_value.sample_value.flags & GPUWavefrontDirectLightSampleFlags::Delta) != 0u;
-    if (upbp_bpt_nee_competitor_terms(input_value.sample_value.pdf_sample, input_value.sample_value.pdf_dir, input_value.sample_value.pdf_dir_out, delta, bsdf_eval.pdf,
+    const bool no_hit_strategy = (input_value.sample_value.flags & (GPUWavefrontDirectLightSampleFlags::Delta | GPUWavefrontDirectLightSampleFlags::SampleOnly)) != 0u;
+    if (upbp_bpt_nee_competitor_terms(input_value.sample_value.pdf_sample, input_value.sample_value.pdf_dir, input_value.sample_value.pdf_dir_out, no_hit_strategy, bsdf_eval.pdf,
           camera_cosine, light_cosine, upbp_w_light, upbp_emission_to_direct_ratio) == false) {
       return;
     }

@@ -23,6 +23,7 @@ struct GPUEmitterInstanceABIData {
   float additional_weight;
   float triangle_area;
   uint32_t instance_index;
+  uint32_t flags;
 };
 
 struct GPUEmitterProfileABIData {
@@ -150,6 +151,7 @@ ETX_SHARED_INLINE GPUEmitterInstanceABIData gpu_abi_load_emitter_instance(ByteAd
   result.additional_weight = gpu_abi_load_f32(buffer, base_offset + kEmitterAdditionalWeightOffset);
   result.triangle_area = gpu_abi_load_f32(buffer, base_offset + kEmitterTriangleAreaOffset);
   result.instance_index = gpu_abi_load_u32(buffer, base_offset + kEmitterInstanceIndexOffset);
+  result.flags = gpu_abi_load_u32(buffer, base_offset + kEmitterFlagsOffset);
   return result;
 }
 

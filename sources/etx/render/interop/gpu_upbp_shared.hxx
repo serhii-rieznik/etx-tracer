@@ -33,6 +33,7 @@ struct GPUUPBPVertexFlags {
     HasDeparture = 1u << 9u,
     InlineMedium = 1u << 10u,
     FromLight = 1u << 11u,
+    SampleOnlyEmitter = 1u << 12u,
   };
 };
 

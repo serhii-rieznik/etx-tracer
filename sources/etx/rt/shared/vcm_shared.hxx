@@ -458,7 +458,7 @@ ETX_SHARED_INLINE VCMPathState vcm_generate_emitter_state(uint32_t index, const 
   state.d_vcm = emitter_sample.is_distant ? 1.0f / emitter_sample.pdf_area : 1.0f / emitter_sample.pdf_dir;
   ETX_VALIDATE(state.d_vcm);
 
-  if (emitter_sample.is_delta == false) {
+  if ((emitter_sample.is_delta == false) && (emitter_sample.is_sample_only == false)) {
     state.d_vc_base = (emitter_sample.is_distant ? 1.0f : cos_t) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample);
     ETX_VALIDATE(state.d_vc_base);
   }
@@ -856,7 +856,7 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_light(const Scene& scene, cons
 
   float l_dot_e = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
   float w_light = 0.0f;
-  if (emitter_sample.is_delta == false) {
+  if ((emitter_sample.is_delta == false) && (emitter_sample.is_sample_only == false)) {
     if (camera_at_medium) {
       w_light = scatter.value / (emitter_sample.pdf_dir * emitter_sample.pdf_sample);
     } else {

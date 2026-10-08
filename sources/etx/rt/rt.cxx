@@ -335,7 +335,16 @@ struct RaytracingImpl {
     rtcSetSceneFlags(rt_scene, RTC_SCENE_FLAG_ROBUST);
     mesh_scenes.assign(s.meshes.count, nullptr);
     instance_geometries.assign(s.instances.count, nullptr);
+    std::vector<uint8_t> visible_meshes(s.meshes.count, 0u);
+    for (const SceneInstance& instance : s.instances) {
+      if (((instance.flags & SceneInstance::SampleOnlyEmitter) == 0u) && (instance.mesh_index < visible_meshes.size())) {
+        visible_meshes[instance.mesh_index] = 1u;
+      }
+    }
     for (uint32_t mesh_index = 0u; mesh_index < s.meshes.count; ++mesh_index) {
+      if (visible_meshes[mesh_index] == 0u) {
+        continue;
+      }
       const Mesh& mesh = s.meshes[mesh_index];
       if ((mesh.triangle_count == 0u) || ((mesh.triangle_offset + mesh.triangle_count) > s.triangles.count)) {
         continue;
@@ -356,6 +365,9 @@ struct RaytracingImpl {
 
     for (uint32_t instance_index = 0u; instance_index < s.instances.count; ++instance_index) {
       const SceneInstance& instance = s.instances[instance_index];
+      if ((instance.flags & SceneInstance::SampleOnlyEmitter) != 0u) {
+        continue;
+      }
       if ((instance.mesh_index >= mesh_scenes.size()) || (mesh_scenes[instance.mesh_index] == nullptr)) {
         continue;
       }
@@ -380,6 +392,9 @@ struct RaytracingImpl {
 
     for (uint32_t instance_index = 0u; instance_index < s.instances.count; ++instance_index) {
       RTCGeometry geometry = instance_geometries[instance_index];
+      if ((s.instances[instance_index].flags & SceneInstance::SampleOnlyEmitter) != 0u) {
+        continue;
+      }
       if (geometry == nullptr) {
         release_host_scene();
         build_host_scene(s);

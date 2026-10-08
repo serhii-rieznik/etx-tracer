@@ -263,7 +263,7 @@ bool upbp_initialize_recursive_state(GPUUPBPVertex endpoint, GPUUPBPIteration it
   }
   const float log_emission_density = log(endpoint.endpoint_pdf_area) + log(endpoint.endpoint_pdf_sample) + log(endpoint.endpoint_pdf_direction);
   state.weights.log_d_shared = ((endpoint.flags & GPUUPBPVertexFlags::DistantEndpoint) != 0u) ? -log(endpoint.endpoint_pdf_area) : -log(endpoint.endpoint_pdf_direction);
-  if (upbp_vertex_is_delta(endpoint) == false) {
+  if ((upbp_vertex_is_delta(endpoint) == false) && ((endpoint.flags & GPUUPBPVertexFlags::SampleOnlyEmitter) == 0u)) {
     const float cosine = ((endpoint.flags & GPUUPBPVertexFlags::DistantEndpoint) != 0u) ? 1.0f : abs(dot(endpoint.normal, endpoint.sampled_direction));
     state.weights.log_d_bpt_base = upbp_log_positive(cosine) - log_emission_density;
   }

@@ -98,6 +98,7 @@ struct TextureValue {
   SpectralDistribution spectrum;
   uint32_t image = kInvalidIndex;
   uint32_t projection = kInvalidIndex;
+  bool constant_float = false;
 };
 
 struct GraphicsState {
@@ -183,6 +184,7 @@ struct MaterialBinding {
 struct ObjectShape {
   uint32_t mesh;
   float4x4 transform;
+  uint32_t flags;
 };
 
 struct Loader {
@@ -298,7 +300,7 @@ struct Loader {
   TextureValue float_texture(const PbrtStatement& statement, const char* name, float fallback) {
     const auto* parameter = statement.find(name);
     if ((parameter == nullptr) || (parameter->type == "float"))
-      return {SpectralDistribution::constant(scalar(statement, name, fallback)), kInvalidIndex};
+      return {SpectralDistribution::constant(scalar(statement, name, fallback)), kInvalidIndex, kInvalidIndex, true};
     if (parameter->type != "texture")
       fail(statement, std::string("Expected a float or float texture: ") + name);
     return texture_value(statement, name, "float");
@@ -926,6 +928,9 @@ struct Loader {
       const char* multiplier = _version == PbrtVersion::V4 ? "scale" : "tex2";
       value = scalar_texture ? float_texture(statement, source, 1.0f) : spectrum(statement, source, 1.0f, false);
       const TextureValue factor = (scalar_texture || (_version == PbrtVersion::V4)) ? float_texture(statement, multiplier, 1.0f) : spectrum(statement, multiplier, 1.0f, false);
+      // PBRT preserves the constant texture type only when unwrapping an identity scale.
+      const bool constant_float = (_version == PbrtVersion::V4) && scalar_texture && value.constant_float && factor.constant_float &&
+                                  ((value.spectrum.integrated().x == 1.0f) || (factor.spectrum.integrated().x == 1.0f));
       if ((value.image != kInvalidIndex) && (factor.image != kInvalidIndex)) {
         common_projection(statement, {value, factor});
         const TextureValue image_a = {SpectralDistribution::constant(1.0f), value.image};
@@ -942,6 +947,7 @@ struct Loader {
         value.projection = factor.projection;
       }
       value.spectrum = pbrt_multiply_spectra(value.spectrum, factor.spectrum);
+      value.constant_float = constant_float;
     } else if (type == "mix") {
       const bool scalar_texture = statement.arguments[1] == "float";
       const TextureValue a = scalar_texture ? float_texture(statement, "tex1", 0.0f) : spectrum(statement, "tex1", 0.0f, false);
@@ -949,18 +955,22 @@ struct Loader {
       value = mix_texture(statement, a, b, float_texture(statement, "amount", 0.5f), scalar_texture);
     } else
       fail(statement, "Unsupported PBRT texture: " + type);
+    if (type == "constant")
+      value.constant_float = statement.arguments[1] == "float";
     _textures[texture_key(statement.arguments[0], statement.arguments[1])] = value;
   }
 
-  uint32_t mesh(const PbrtStatement& statement) {
+  uint32_t mesh(const PbrtStatement& statement, uint32_t& attachment_flags) {
     float alpha_scale = 1.0f;
     uint32_t alpha_image = kInvalidIndex, alpha_projection = kInvalidIndex;
+    bool constant_alpha = true;
     if (const auto* alpha = statement.find("alpha")) {
       if (alpha->type == "texture") {
         const auto& value = texture_value(statement, "alpha", "float");
         alpha_scale = value.spectrum.integrated().x;
         alpha_image = value.image;
         alpha_projection = value.projection;
+        constant_alpha = value.constant_float;
       } else if (alpha->type == "float")
         alpha_scale = scalar(statement, "alpha", 1.0f);
       else
@@ -968,7 +978,9 @@ struct Loader {
     }
     if (statement.find("shadowalpha") != nullptr)
       fail(statement, "PBRT shadow alpha mapping is not implemented.");
-    if ((_state.area_light.directive.empty() == false) && ((alpha_image != kInvalidIndex) || (alpha_scale != 1.0f)))
+    const bool sample_only = (_version == PbrtVersion::V4) && (_state.area_light.directive.empty() == false) && constant_alpha && (alpha_scale == 0.0f);
+    attachment_flags = sample_only ? SceneAttachment::SampleOnlyEmitter : 0u;
+    if ((_state.area_light.directive.empty() == false) && (sample_only == false) && ((alpha_image != kInvalidIndex) || (alpha_scale != 1.0f)))
       fail(statement, "PBRT alpha-masked area lights are not implemented.");
     PbrtMesh source;
     const auto& type = statement.arguments[0];
@@ -1153,7 +1165,7 @@ struct Loader {
     }
     if (std::isfinite(alpha_scale) == false)
       fail(statement, "PBRT alpha texture scale exceeds the native floating-point range.");
-    if ((alpha_image != kInvalidIndex) || (alpha_scale != 1.0f)) {
+    if ((sample_only == false) && ((alpha_image != kInvalidIndex) || (alpha_scale != 1.0f))) {
       if (_state.area_light.directive.empty())
         material = _data.clone_material(_data.materials[material], "");
       _data.materials[material].alpha_mask = {{max(0.0f, alpha_scale), 1.0f, 1.0f, 1.0f}, alpha_image, 4u};
@@ -1361,7 +1373,7 @@ struct Loader {
     const uint32_t mesh = ((determinant < 0.0) != (_world_conversion.col[0].x < 0.0f)) ? opposite_mesh(projected) : projected;
     const std::string name = "PBRT instance " + std::to_string(_data.hierarchy.nodes.size());
     const uint32_t node = _data.hierarchy.add_node(name.c_str(), kInvalidIndex, transform);
-    if (_data.hierarchy.add_attachment(node, {SceneAttachment::Type::Mesh, mesh, 0u, 0u}) == false)
+    if (_data.hierarchy.add_attachment(node, {SceneAttachment::Type::Mesh, mesh, shape.flags, 0u}) == false)
       throw std::runtime_error("Cannot create native mesh instance.");
   }
 
@@ -1568,7 +1580,8 @@ struct Loader {
     else if (directive == "Shape") {
       if (_world == false)
         fail(statement, "Shape appears before WorldBegin.");
-      const ObjectShape shape = {mesh(statement), _state.transform};
+      ObjectShape shape = {kInvalidIndex, _state.transform, 0u};
+      shape.mesh = mesh(statement, shape.flags);
       if (shape.mesh != kInvalidIndex) {
         if (_object.empty())
           attach(shape);
@@ -1598,7 +1611,7 @@ struct Loader {
       if (found == _objects.end())
         fail(statement, "Unknown object instance: " + statement.arguments[0]);
       for (const auto& definition : found->second) {
-        const ObjectShape instance = {definition.mesh, _state.transform * definition.transform};
+        const ObjectShape instance = {definition.mesh, _state.transform * definition.transform, definition.flags};
         if (_object.empty())
           attach(instance);
         else

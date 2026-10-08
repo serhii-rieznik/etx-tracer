@@ -21,6 +21,7 @@ struct WavefrontEmitterSample {
   uint medium_index;
   uint is_delta;
   uint is_distant;
+  uint is_sample_only;
 };
 
 #define WAVEFRONT_RW_BUFFER(descriptor_index) bindless_rw_buffers[NonUniformResourceIndex(descriptor_index)]
@@ -705,6 +706,7 @@ bool wavefront_sample_emitter_to_point(uint light_sampling_mode, SpectralQuery s
   sample_value.emitter_index = emitter_index;
   sample_value.triangle_index = emitter_instance.triangle_index;
   sample_value.instance_index = emitter_instance.instance_index;
+  sample_value.is_sample_only = (emitter_instance.flags & EmitterFlags::SampleOnly) != 0u ? 1u : 0u;
   sample_value.medium_index = kInvalidIndex;
   sample_value.pdf_sample = pdf_sample;
 
@@ -808,6 +810,7 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
   sample_value.emitter_index = emitter_index;
   sample_value.triangle_index = emitter_instance.triangle_index;
   sample_value.instance_index = emitter_instance.instance_index;
+  sample_value.is_sample_only = (emitter_instance.flags & EmitterFlags::SampleOnly) != 0u ? 1u : 0u;
   sample_value.medium_index = kInvalidIndex;
   sample_value.pdf_sample = pdf_sample;
 
@@ -1247,7 +1250,9 @@ void wavefront_camera_direct_light_prepare_stage(uint dispatch_index) {
     return;
   }
 
-  float mis_weight = ((scene_multiple_importance_sampling_enabled() == false) || (emitter_sample.is_delta != 0u)) ? 1.0f : power_heuristic(sampling_pdf, bsdf_eval.pdf);
+  float mis_weight = ((scene_multiple_importance_sampling_enabled() == false) || (emitter_sample.is_delta != 0u) || (emitter_sample.is_sample_only != 0u))
+                       ? 1.0f
+                       : power_heuristic(sampling_pdf, bsdf_eval.pdf);
   SpectralResponse contribution =
     spectral_response_mul(spectral_response_mul(state.throughput, bsdf_eval.bsdf), spectral_response_mul(emitter_sample.value, mis_weight / max(kEpsilon, sampling_pdf)));
   if (gpu_valid_spectral_response(contribution) == false) {

@@ -44,6 +44,7 @@ struct ETX_ALIGNED SceneInstance {
   enum : uint32_t {
     Mirrored = 1u << 0u,
     Enabled = 1u << 1u,
+    SampleOnlyEmitter = 1u << 2u,
   };
 
   AffineTransform object_to_world ETX_INIT({});

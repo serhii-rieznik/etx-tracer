@@ -24,6 +24,10 @@ struct SceneNode {
 };
 
 struct SceneAttachment {
+  enum : uint32_t {
+    SampleOnlyEmitter = SceneInstance::SampleOnlyEmitter,
+  };
+
   enum class Type : uint32_t {
     Mesh,
     Camera,
@@ -41,6 +45,7 @@ struct ResolvedMeshInstance {
   enum : uint32_t {
     Mirrored = 1u << 0u,
     Enabled = 1u << 1u,
+    SampleOnlyEmitter = SceneInstance::SampleOnlyEmitter,
   };
 
   AffineTransform object_to_world = {};

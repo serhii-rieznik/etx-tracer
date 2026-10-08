@@ -70,6 +70,7 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
   sample_value.emitter_index = emitter_index;
   sample_value.triangle_index = emitter_instance.triangle_index;
   sample_value.instance_index = emitter_instance.instance_index;
+  sample_value.is_sample_only = (emitter_instance.flags & EmitterFlags::SampleOnly) != 0u ? 1u : 0u;
   sample_value.medium_index = emitter_access_external_medium_index(make_scene_emitter_access_gpu_context(), emitter_index);
   sample_value.pdf_sample = pdf_sample;
   float2 emitter_sample_rnd = float2(rnd01(seed), rnd01(seed));
@@ -212,6 +213,7 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
   sample_value.emitter_index = emitter_index;
   sample_value.triangle_index = emitter_instance.triangle_index;
   sample_value.instance_index = emitter_instance.instance_index;
+  sample_value.is_sample_only = (emitter_instance.flags & EmitterFlags::SampleOnly) != 0u ? 1u : 0u;
   sample_value.medium_index = emitter_access_external_medium_index(make_scene_emitter_access_gpu_context(), emitter_index);
   sample_value.pdf_sample = pdf_sample;
 

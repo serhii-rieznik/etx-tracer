@@ -316,6 +316,7 @@ static_assert(offsetof(etx::Emitter, spectrum_weight) == kEmitterSpectrumWeightO
 static_assert(offsetof(etx::Emitter, additional_weight) == kEmitterAdditionalWeightOffset, "Emitter::additional_weight offset changed");
 static_assert(offsetof(etx::Emitter, triangle_area) == kEmitterTriangleAreaOffset, "Emitter::triangle_area offset changed");
 static_assert(offsetof(etx::Emitter, instance_index) == kEmitterInstanceIndexOffset, "Emitter::instance_index offset changed");
+static_assert(offsetof(etx::Emitter, flags) == kEmitterFlagsOffset, "Emitter::flags offset changed");
 static_assert(sizeof(etx::EmitterProfile) == kEmitterProfileStride, "EmitterProfile size changed; update shared ABI");
 static_assert(offsetof(etx::EmitterProfile, emission) == kEmitterProfileEmissionSpectrumIndexOffset, "EmitterProfile::emission offset changed");
 static_assert((offsetof(etx::EmitterProfile, emission) + offsetof(SpectralImage, image_index)) == kEmitterProfileEmissionImageIndexOffset,

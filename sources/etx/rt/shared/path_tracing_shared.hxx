@@ -227,7 +227,7 @@ ETX_SHARED_INLINE void handle_sampled_medium(const Scene& scene, const MediumSam
     if (emitter_sample.pdf_dir > 0) {
       auto tr = rt.trace_transmittance(payload.spect, scene, medium_sample.pos, emitter_sample.origin, {.index = payload.medium}, payload.smp);
       float phase_function = medium_phase_function(medium, payload.ray.d, emitter_sample.direction);
-      auto weight = emitter_sample.is_delta ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, phase_function);
+      auto weight = (emitter_sample.is_delta || emitter_sample.is_sample_only) ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, phase_function);
       payload.accumulated += payload.throughput * emitter_sample.value * tr * (phase_function * weight / (emitter_sample.pdf_dir * emitter_sample.pdf_sample));
       ETX_VALIDATE(payload.accumulated);
     }
@@ -263,7 +263,7 @@ ETX_SHARED_INLINE SpectralResponse evaluate_light(const Scene& scene, const Inte
   auto tr = rt.trace_transmittance(spect, scene, pos, emitter_sample.origin, {.index = shadow_medium}, smp);
   ETX_VALIDATE(tr);
 
-  bool no_weight = (mis == false) || emitter_sample.is_delta;
+  bool no_weight = (mis == false) || emitter_sample.is_delta || emitter_sample.is_sample_only;
   auto weight = no_weight ? 1.0f : power_heuristic(emitter_sample.pdf_dir * emitter_sample.pdf_sample, bsdf_eval.pdf);
   ETX_VALIDATE(weight);
 

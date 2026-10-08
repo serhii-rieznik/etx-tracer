@@ -217,7 +217,7 @@ inline bool upbp_initialize_recursive_state(const UPBPPathRecord& path, const ui
   }
   const double emission_density = static_cast<double>(endpoint.endpoint_pdf_area) * endpoint.endpoint_pdf_sample * endpoint.endpoint_pdf_direction;
   state.weights.d_shared = endpoint.distant_endpoint ? 1.0 / endpoint.endpoint_pdf_area : 1.0 / endpoint.endpoint_pdf_direction;
-  if (endpoint.delta == false) {
+  if ((endpoint.delta == false) && (endpoint.sample_only == false)) {
     const double cosine = endpoint.distant_endpoint ? 1.0 : fabs(static_cast<double>(dot(endpoint.intersection.nrm, endpoint.sampled_direction)));
     state.weights.d_bpt_base = cosine / emission_density;
   }

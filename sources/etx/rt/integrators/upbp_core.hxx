@@ -404,6 +404,7 @@ struct UPBPPathVertexRecord {
   bool connectible = false;
   bool density_connectible = true;
   bool delta = false;
+  bool sample_only = false;
   bool distant_endpoint = false;
 };
 

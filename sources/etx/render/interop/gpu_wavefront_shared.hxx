@@ -81,6 +81,7 @@ struct GPUWavefrontDirectLightSampleFlags {
     Valid = 1u << 0u,
     Delta = 1u << 1u,
     Distant = 1u << 2u,
+    SampleOnly = 1u << 3u,
   };
 };
 

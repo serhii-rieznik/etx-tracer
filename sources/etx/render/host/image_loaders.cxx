@@ -623,6 +623,16 @@ Image::Format load_data(const char* source, std::vector<uint8_t>& data, uint2& d
       break;
     }
 
+    case 2: {
+      for (int i = 0; i < w * h; ++i) {
+        ptr[4 * i + 0] = image[2 * i + 0];
+        ptr[4 * i + 1] = image[2 * i + 0];
+        ptr[4 * i + 2] = image[2 * i + 0];
+        ptr[4 * i + 3] = image[2 * i + 1];
+      }
+      break;
+    }
+
     case 1: {
       for (int i = 0; i < w * h; ++i) {
         ptr[4 * i + 0] = image[i];

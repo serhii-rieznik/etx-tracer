@@ -1061,9 +1061,9 @@ struct CPUBidirectionalImpl : public Task {
       .throughput = curr.throughput * dot(emitter_sample.direction, curr.intersection.nrm) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample),
       .eta = 1.0f,
       .d_vcm = emitter_sample.is_distant ? safe_div(1.0f, emitter_sample.pdf_area) : safe_div(1.0f, emitter_sample.pdf_dir),
-      .d_vc = emitter_sample.is_delta ? 0.0f
-                                      : safe_div(emitter_sample.is_distant ? 1.0f : dot(emitter_sample.direction, curr.intersection.nrm),
-                                          emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample),
+      .d_vc = (emitter_sample.is_delta || emitter_sample.is_sample_only) ? 0.0f
+                                                                         : safe_div(emitter_sample.is_distant ? 1.0f : dot(emitter_sample.direction, curr.intersection.nrm),
+                                                                             emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample),
       .medium_index = curr.medium.index,
       .mode = PathSource::Light,
     };
@@ -1086,7 +1086,7 @@ struct CPUBidirectionalImpl : public Task {
     if (mode == Mode::PathTracing) {
       float p_connect = sampling_pdf;
       ETX_VALIDATE(p_connect);
-      float p_direct = emitter_sample.is_delta ? 0.0f : bsdf_eval_pdf;
+      float p_direct = (emitter_sample.is_delta || emitter_sample.is_sample_only) ? 0.0f : bsdf_eval_pdf;
       ETX_VALIDATE(p_direct);
       float result = power_heuristic(p_connect, p_direct);
       ETX_VALIDATE(result);
@@ -1108,7 +1108,7 @@ struct CPUBidirectionalImpl : public Task {
     }
     ETX_VALIDATE(reverse_pdf);
 
-    const float w_light = emitter_sample.is_delta ? 0.0f : safe_div(bsdf_eval_pdf * flight_pdf_forward, sampling_pdf);
+    const float w_light = (emitter_sample.is_delta || emitter_sample.is_sample_only) ? 0.0f : safe_div(bsdf_eval_pdf * flight_pdf_forward, sampling_pdf);
     const float camera_factor = z_curr.is_surface_interaction() ? fabsf(dot(emitter_sample.direction, z_curr_geo_n)) : 1.0f;
     const float emitter_cosine = fabsf(dot(emitter_sample.direction, emitter_sample.normal));
     const float density_ratio = safe_div(emitter_sample.pdf_dir * emitter_cosine, emitter_sample.pdf_dir_out * camera_factor);

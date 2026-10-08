@@ -25,6 +25,7 @@ struct WavefrontEmitterSample {
   uint medium_index;
   uint is_delta;
   uint is_distant;
+  uint is_sample_only;
 };
 
 struct GPUWavefrontPendingContinuationFlags {
@@ -1311,7 +1312,7 @@ void wavefront_write_root_light_vertex(uint path_index, WavefrontEmitterSample e
     vertex.flags |= GPUWavefrontVertexFlags::Delta;
   }
   vertex.pdf_from_prev = emitter_sample.pdf_area * emitter_sample.pdf_sample;
-  if (emitter_sample.is_delta == 0u) {
+  if ((emitter_sample.is_delta == 0u) && (emitter_sample.is_sample_only == 0u)) {
     float cosine_term = dot(emitter_sample.direction, emitter_sample.normal);
     float emission_pdf = emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample;
     float reverse_numerator = (emitter_sample.is_distant != 0u) ? 1.0f : cosine_term;

@@ -34,30 +34,15 @@ float emitter_sample_pdf(const Emitter& em_inst, ETX_IN(float3, in_direction));
 float2 emitter_environment_pdf(ETX_IN(float3, in_direction), bool target_is_surface, uint32_t target_triangle_index, uint32_t target_instance_index);
 
 ETX_SHARED_INLINE float emitter_ris_candidate_weight(const EmitterSample& emitter_sample, const EmitterSampleQuery& query) {
-  float radiance_weight = emitter_sample.value.luminance();
-  if (radiance_weight <= 0.0f) {
+  const float radiance_weight = emitter_sample.value.luminance();
+  const float proposal_pdf = emitter_sample.pdf_sample * emitter_sample.pdf_dir;
+  if ((radiance_weight <= 0.0f) || (proposal_pdf <= 0.0f)) {
     return 0.0f;
   }
 
-  float source_alignment = 1.0f;
-  float3 to_emitter = emitter_sample.origin - query.source_position;
-  float len_sq = dot(to_emitter, to_emitter);
-
-  if (query.source_type == InteractionType::Surface) {
-    source_alignment = fabsf(dot(query.source_normal, to_emitter) / sqrtf(len_sq));
-  }
-
-  if (emitter_sample.is_distant) {
-    return radiance_weight * source_alignment;
-  }
-
-  float emitter_orientation = dot(emitter_sample.normal, -to_emitter);
-  if ((emitter_orientation <= 0.0f) || (len_sq <= kEpsilon)) {
-    return 0.0f;
-  }
-
-  float distance_weight = 1.0f / fmaxf(1.0f, len_sq);
-  return radiance_weight * distance_weight * (emitter_orientation / sqrtf(len_sq)) * source_alignment;
+  // Use incoming solid angle: an area light's directional PDF already contains its geometry Jacobian.
+  const float source_alignment = (query.source_type == InteractionType::Surface) ? fabsf(dot(query.source_normal, emitter_sample.direction)) : 1.0f;
+  return (radiance_weight * source_alignment) / proposal_pdf;
 }
 
 ETX_SHARED_INLINE bool scene_has_only_environment_emitters() {
@@ -119,10 +104,10 @@ ETX_SHARED_INLINE EmitterSample sample_emitter(Scene::LightSampling sampling_met
       sample.emitter_index = emitter_index;
       sample.triangle_index = emitter.triangle_index;
       sample.is_delta = emitter.is_delta();
+      sample.is_sample_only = emitter.is_sample_only();
       sample.is_distant = emitter.is_distant();
 
-      float candidate_weight = emitter_ris_candidate_weight(sample, query);
-      float weight = candidate_weight / pdf_sample;
+      const float weight = emitter_ris_candidate_weight(sample, query);
 
       weight_sum += weight;
       float reservoir_weight = smp.next() * weight_sum;
@@ -136,6 +121,7 @@ ETX_SHARED_INLINE EmitterSample sample_emitter(Scene::LightSampling sampling_met
       return {};
     }
 
+    // Retain the proposal PDFs for MIS; this scale preserves the average candidate estimator.
     float reservoir_scale = weight_sum / (float(candidate_count) * selected_weight);
     selected_sample.value *= reservoir_scale;
     return selected_sample;
@@ -172,6 +158,7 @@ ETX_SHARED_INLINE EmitterSample sample_emitter(Scene::LightSampling sampling_met
   sample.emitter_index = emitter_index;
   sample.triangle_index = emitter.triangle_index;
   sample.is_delta = emitter.is_delta();
+  sample.is_sample_only = emitter.is_sample_only();
   sample.is_distant = emitter.is_distant();
   return sample;
 }
@@ -197,6 +184,7 @@ ETX_SHARED_INLINE const EmitterSample sample_emission(SpectralQuery spect, Sampl
   result.emitter_index = emitter_index;
   result.triangle_index = emitter.triangle_index;
   result.is_delta = emitter.is_delta();
+  result.is_sample_only = emitter.is_sample_only();
   result.is_distant = emitter.is_distant();
   return result;
 }

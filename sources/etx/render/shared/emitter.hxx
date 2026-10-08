@@ -89,7 +89,7 @@ struct Emitter {
   float additional_weight = 0.0f;
   float triangle_area = 0.0f;
   uint32_t instance_index = kInvalidIndex;
-  float pad1 = 0.0f;
+  uint32_t flags = 0u;
 
   ETX_SHARED_INLINE bool is_distant() const {
     return is_local() == false;
@@ -101,6 +101,10 @@ struct Emitter {
 
   ETX_SHARED_INLINE bool is_delta() const {
     return (cls == EmitterProfile::Class::Directional);
+  }
+
+  ETX_SHARED_INLINE bool is_sample_only() const {
+    return (flags & EmitterFlags::SampleOnly) != 0u;
   }
 };
 
@@ -127,6 +131,7 @@ struct ETX_ALIGNED EmitterSample {
 
   bool is_delta = false;
   bool is_distant = false;
+  bool is_sample_only = false;
 };
 
 struct EmitterRadianceQuery {

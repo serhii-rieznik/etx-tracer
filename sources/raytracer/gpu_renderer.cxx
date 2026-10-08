@@ -8762,17 +8762,14 @@ bool GPURaytracingRenderer::refit_top_level_acceleration_structure(RHIContext& c
       _as_scratch_buffer.valid() ? 1u : 0u);
     return false;
   }
-  if (scene_data.hierarchy.mesh_instances.size() != _tlas_instance_count) {
-    log::warning("GPU RT: TLAS refit unavailable: instance count changed from %u to %llu", _tlas_instance_count,
-      static_cast<unsigned long long>(scene_data.hierarchy.mesh_instances.size()));
-    return false;
-  }
-
   _tlas_instance_staging.clear();
   _tlas_instance_staging.reserve(_tlas_instance_count);
   auto& device = ctx.device();
-  for (uint32_t instance_index = 0u; instance_index < _tlas_instance_count; ++instance_index) {
+  for (uint32_t instance_index = 0u; instance_index < scene_data.hierarchy.mesh_instances.size(); ++instance_index) {
     const ResolvedMeshInstance& resolved = scene_data.hierarchy.mesh_instances[instance_index];
+    if ((resolved.flags & ResolvedMeshInstance::SampleOnlyEmitter) != 0u) {
+      continue;
+    }
     if (resolved.mesh_index >= _blas.size()) {
       log::warning("GPU RT: TLAS refit unavailable: instance %u references mesh %u with %llu BLAS entries", instance_index, resolved.mesh_index,
         static_cast<unsigned long long>(_blas.size()));
@@ -8787,6 +8784,13 @@ bool GPURaytracingRenderer::refit_top_level_acceleration_structure(RHIContext& c
     instance.acceleration_structure_reference = device.get_acceleration_structure_device_address(_blas[resolved.mesh_index]);
   }
 
+  if (_tlas_instance_staging.size() != _tlas_instance_count) {
+    log::warning("GPU RT: TLAS refit unavailable: visible instance count changed");
+    return false;
+  }
+  if (_tlas_instance_count == 0u) {
+    return true;
+  }
   const uint64_t upload_size = _tlas_instance_staging.size() * sizeof(RHIAccelerationStructureInstance);
   const RHIResult upload_result = device.update_buffer(_tlas_instance_buffer, _tlas_instance_staging.data(), upload_size);
   if (upload_result != RHIResult::Success) {
@@ -8923,10 +8927,19 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   std::vector<RHIAccelerationStructureGeometry> geometries(s.meshes.size());
   std::vector<RHIAccelerationStructureBuildDesc> blas_build_descs;
   blas_build_descs.reserve(s.meshes.size());
-  new_blas.reserve(s.meshes.size());
+  new_blas.resize(s.meshes.size());
+  std::vector<uint8_t> visible_meshes(s.meshes.size(), 0u);
+  for (const ResolvedMeshInstance& resolved : s.hierarchy.mesh_instances) {
+    if (((resolved.flags & ResolvedMeshInstance::SampleOnlyEmitter) == 0u) && (resolved.mesh_index < visible_meshes.size())) {
+      visible_meshes[resolved.mesh_index] = 1u;
+    }
+  }
 
   const auto blas_create_begin = std::chrono::steady_clock::now();
   for (uint32_t mesh_index = 0u; mesh_index < s.meshes.size(); ++mesh_index) {
+    if (visible_meshes[mesh_index] == 0u) {
+      continue;
+    }
     const Mesh& mesh = s.meshes[mesh_index];
     if ((mesh.triangle_count == 0u) || ((mesh.triangle_offset + mesh.triangle_count) > s.triangles.size())) {
       log::error("GPU RT: mesh %u has an invalid triangle range", mesh_index);
@@ -8956,7 +8969,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
       cleanup_failed_build();
       return false;
     }
-    new_blas.push_back(blas_result.handle);
+    new_blas[mesh_index] = blas_result.handle;
 
     RHIAccelerationStructureBuildDesc& build_desc = blas_build_descs.emplace_back();
     build_desc.as_handle = blas_result.handle;
@@ -8977,6 +8990,9 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   rhi_instances.reserve(s.hierarchy.mesh_instances.size());
   for (uint32_t instance_index = 0u; instance_index < s.hierarchy.mesh_instances.size(); ++instance_index) {
     const ResolvedMeshInstance& resolved = s.hierarchy.mesh_instances[instance_index];
+    if ((resolved.flags & ResolvedMeshInstance::SampleOnlyEmitter) != 0u) {
+      continue;
+    }
     if (resolved.mesh_index >= new_blas.size()) {
       log::error("GPU RT: instance %u references invalid mesh %u", instance_index, resolved.mesh_index);
       cleanup_failed_build();
@@ -8998,7 +9014,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   }
 
   RHIBufferDesc inst_buf_desc = {};
-  inst_buf_desc.size = rhi_instances.size() * sizeof(RHIAccelerationStructureInstance);
+  inst_buf_desc.size = std::max<size_t>(1u, rhi_instances.size()) * sizeof(RHIAccelerationStructureInstance);
   inst_buf_desc.usage = RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::TransferDst;
   const auto tlas_instance_upload_begin = std::chrono::steady_clock::now();
   auto inst_res = device.create_buffer(inst_buf_desc);
@@ -9007,7 +9023,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     cleanup_failed_build();
     return false;
   }
-  const RHIResult inst_update_result = device.update_buffer(inst_res.handle, rhi_instances.data(), inst_buf_desc.size);
+  const RHIResult inst_update_result = rhi_instances.empty() ? RHIResult::Success : device.update_buffer(inst_res.handle, rhi_instances.data(), inst_buf_desc.size);
   if (inst_update_result != RHIResult::Success) {
     log::error("GPU RT: failed to upload TLAS instance buffer (%u)", static_cast<uint32_t>(inst_update_result));
     device.destroy_buffer(inst_res.handle);
@@ -9036,6 +9052,9 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
 
   uint64_t blas_scratch_size = 0u;
   for (RHIBindlessHandle blas : new_blas) {
+    if (blas.valid() == false) {
+      continue;
+    }
     const uint64_t required_size = device.get_acceleration_structure_build_scratch_size(blas);
     if (required_size == 0u) {
       log::error("GPU RT: failed to query BLAS scratch size");

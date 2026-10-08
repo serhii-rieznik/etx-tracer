@@ -1,30 +1,16 @@
 #include "gpu_rt_wavefront_common.hlsl"
 #include "gpu_rt_wavefront_emitter_sample.hlsl"
 
-float wavefront_direct_light_ris_candidate_weight(WavefrontEmitterSample sample_value, float3 source_position, bool source_is_surface, float3 source_normal) {
-  float radiance_weight = spectral_response_to_xyz(sample_value.value).y;
-  if (radiance_weight <= 0.0f) {
+float wavefront_direct_light_ris_candidate_weight(WavefrontEmitterSample sample_value, bool source_is_surface, float3 source_normal) {
+  const float radiance_weight = spectral_response_to_xyz(sample_value.value).y;
+  const float proposal_pdf = sample_value.pdf_sample * sample_value.pdf_dir;
+  if ((radiance_weight <= 0.0f) || (proposal_pdf <= 0.0f)) {
     return 0.0f;
   }
 
-  float3 to_emitter = sample_value.origin - source_position;
-  float len_sq = dot(to_emitter, to_emitter);
-  float source_alignment = 1.0f;
-  if (source_is_surface && (len_sq > kEpsilon)) {
-    source_alignment = abs(dot(source_normal, to_emitter) / sqrt(len_sq));
-  }
-
-  if (sample_value.is_distant != 0u) {
-    return radiance_weight * source_alignment;
-  }
-
-  float emitter_orientation = dot(sample_value.normal, -to_emitter);
-  if ((emitter_orientation <= 0.0f) || (len_sq <= kEpsilon)) {
-    return 0.0f;
-  }
-
-  float distance_weight = 1.0f / max(1.0f, len_sq);
-  return radiance_weight * distance_weight * (emitter_orientation / sqrt(len_sq)) * source_alignment;
+  // Use incoming solid angle: an area light's directional PDF already contains its geometry Jacobian.
+  const float source_alignment = source_is_surface ? abs(dot(source_normal, sample_value.direction)) : 1.0f;
+  return (radiance_weight * source_alignment) / proposal_pdf;
 }
 
 bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery spect, float3 source_position, bool source_is_surface, float3 source_normal, inout uint seed,
@@ -57,8 +43,7 @@ bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery s
       continue;
     }
 
-    float candidate_weight = wavefront_direct_light_ris_candidate_weight(candidate, source_position, source_is_surface, source_normal);
-    float weight = (pdf_sample > 0.0f) ? (candidate_weight / pdf_sample) : 0.0f;
+    const float weight = wavefront_direct_light_ris_candidate_weight(candidate, source_is_surface, source_normal);
     weight_sum += weight;
     float reservoir_rnd = rnd01(seed) * weight_sum;
     if ((weight > 0.0f) && (reservoir_rnd < weight)) {
@@ -71,6 +56,7 @@ bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery s
     return false;
   }
 
+  // Retain the proposal PDFs for MIS; this scale preserves the average candidate estimator.
   float reservoir_scale = weight_sum / (float(candidate_count) * selected_weight);
   selected_sample.value = spectral_response_mul(selected_sample.value, reservoir_scale);
   sample_value = selected_sample;
@@ -90,12 +76,12 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
   }
 
   if (scene_path_mode_is_path_tracing()) {
-    float direct_pdf = (emitter_sample.is_delta != 0u) ? 0.0f : phase_value;
+    float direct_pdf = ((emitter_sample.is_delta != 0u) || (emitter_sample.is_sample_only != 0u)) ? 0.0f : phase_value;
     return power_heuristic(sampling_pdf, direct_pdf);
   }
 
   float reverse_phase_pdf = gpu_medium_phase_function(medium_access, emitter_sample.direction, current_vertex.w_i);
-  float w_light = (emitter_sample.is_delta != 0u) ? 0.0f : wavefront_safe_div(phase_value, sampling_pdf);
+  float w_light = ((emitter_sample.is_delta != 0u) || (emitter_sample.is_sample_only != 0u)) ? 0.0f : wavefront_safe_div(phase_value, sampling_pdf);
   float emitter_cosine = abs(dot(emitter_sample.direction, emitter_sample.normal));
   float density_ratio = wavefront_safe_div(emitter_sample.pdf_dir * emitter_cosine, emitter_sample.pdf_dir_out);
   float adjacent_connection = current_vertex.forward_pdf;
@@ -216,6 +202,9 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
   if (emitter_sample.is_delta != 0u) {
     sample_value.flags |= GPUWavefrontDirectLightSampleFlags::Delta;
   }
+  if (emitter_sample.is_sample_only != 0u) {
+    sample_value.flags |= GPUWavefrontDirectLightSampleFlags::SampleOnly;
+  }
   if (emitter_sample.is_distant != 0u) {
     sample_value.flags |= GPUWavefrontDirectLightSampleFlags::Distant;
   }
@@ -244,8 +233,8 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
 #if ETX_UPBP
     if (upbp) {
       const float light_cosine = emitter_sample.is_distant != 0u ? 1.0f : abs(dot(emitter_sample.normal, -emitter_sample.direction));
-      if (upbp_bpt_nee_competitor_terms(emitter_sample.pdf_sample, emitter_sample.pdf_dir, emitter_sample.pdf_dir_out, emitter_sample.is_delta != 0u, phase_value, 1.0f,
-            light_cosine, upbp_w_light, upbp_emission_to_direct_ratio) == false) {
+      if (upbp_bpt_nee_competitor_terms(emitter_sample.pdf_sample, emitter_sample.pdf_dir, emitter_sample.pdf_dir_out,
+            (emitter_sample.is_delta != 0u) || (emitter_sample.is_sample_only != 0u), phase_value, 1.0f, light_cosine, upbp_w_light, upbp_emission_to_direct_ratio) == false) {
         return;
       }
       upbp_reverse_phase_pdf = gpu_medium_phase_function(medium_access, emitter_sample.direction, current_vertex.w_i);

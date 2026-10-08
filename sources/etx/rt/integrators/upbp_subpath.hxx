@@ -265,6 +265,7 @@ inline UPBPPathVertexRecord upbp_make_emitter_endpoint(const Scene& scene, const
   endpoint.source = PathSource::Light;
   endpoint.connectible = true;
   endpoint.delta = emitter_sample.is_delta;
+  endpoint.sample_only = emitter_sample.is_sample_only;
   endpoint.distant_endpoint = emitter_sample.is_distant;
   return endpoint;
 }

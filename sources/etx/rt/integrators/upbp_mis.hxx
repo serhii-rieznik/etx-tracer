@@ -235,6 +235,9 @@ inline bool upbp_build_joined_path_probability(const Raytracing& rt, const Scene
       reverse_direction_pdf = upbp_direction_pdf(scene, spect, to, PathSource::Camera, incoming_direction, -direction, sampler);
     }
     const UPBPJoinedPathEdge& joined_edge = path.edges[edge_index];
+    if ((edge_index == 0u) && emitter.is_sample_only()) {
+      reverse_direction_pdf = 0.0;
+    }
     const double segment_log_forward = joined_edge.reversed ? joined_edge.segment->log_transport_pdf_reverse : joined_edge.segment->log_transport_pdf_forward;
     const double segment_log_reverse = joined_edge.reversed ? joined_edge.segment->log_transport_pdf_forward : joined_edge.segment->log_transport_pdf_reverse;
     const double target_event_log_density = to.cls == UPBPVertexClass::Medium ? to.log_medium_event_density : 0.0;

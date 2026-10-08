@@ -709,6 +709,7 @@ bool SceneHierarchy::resolve_mesh_instances(const std::vector<Mesh>& meshes) {
       ResolvedMeshInstance& instance = mesh_instances.emplace_back();
       instance.node_index = node_index;
       instance.mesh_index = attachment.resource_index;
+      instance.flags = attachment.flags & SceneAttachment::SampleOnlyEmitter;
       if (transform_valid == false) {
         continue;
       }
@@ -719,7 +720,7 @@ bool SceneHierarchy::resolve_mesh_instances(const std::vector<Mesh>& meshes) {
       instance.world_to_object = world_to_object;
       instance.bbox_min = world_bounds.p_min;
       instance.bbox_max = world_bounds.p_max;
-      instance.flags = determinant < 0.0f ? ResolvedMeshInstance::Mirrored : 0u;
+      instance.flags |= determinant < 0.0f ? ResolvedMeshInstance::Mirrored : 0u;
       if (node_enabled) {
         instance.flags |= ResolvedMeshInstance::Enabled;
       }
