@@ -8,6 +8,7 @@ namespace etx {
 
 bool is_pbrt_named_spectrum(std::string_view name);
 bool load_pbrt_named_spectrum(std::string_view name, SpectralDistribution& result);
+bool load_pbrt_medium_preset(std::string_view name, SpectralDistribution& absorption, SpectralDistribution& scattering);
 float pbrt_photometric_response(const SpectralDistribution& spectrum);
 SpectralDistribution pbrt_rgb_illuminant(const float3& rgb);
 SpectralDistribution pbrt_sampled_spectrum(std::span<const float2> samples);

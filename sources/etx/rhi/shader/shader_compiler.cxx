@@ -2251,6 +2251,9 @@ std::vector<std::wstring> ShaderCompiler::Impl::build_dxc_arguments(const std::s
     arguments.emplace_back(L"-fspv-target-env=vulkan1.3");
     arguments.emplace_back(L"-fspv-extension=SPV_EXT_descriptor_indexing");
     arguments.emplace_back(L"-fspv-extension=SPV_KHR_ray_query");
+    // Inlined VCM kernels can exceed DXC's default intermediate ID budget before final compaction.
+    arguments.emplace_back(L"-fspv-max-id");
+    arguments.emplace_back(L"8388607");
     if ((spirv_opt_config_it != defines.end()) && (spirv_opt_config_it->second.empty() == false)) {
       arguments.emplace_back(L"-enable-16bit-types");
       arguments.emplace_back(L"-Oconfig=" + utf8_to_wstring(spirv_opt_config_it->second));

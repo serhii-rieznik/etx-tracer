@@ -578,12 +578,8 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     if (camera.focal_distance > 0.0f) {
       materials_stream << "focal-distance " << camera.focal_distance << "\n";
     }
-    if (camera.clip_near != 0.1f) {
-      materials_stream << "clip-near " << camera.clip_near << "\n";
-    }
-    if (camera.clip_far != 1000.0f) {
-      materials_stream << "clip-far " << camera.clip_far << "\n";
-    }
+    materials_stream << "clip-near " << camera.clip_near << "\n";
+    materials_stream << "clip-far " << camera.clip_far << "\n";
     const std::string lens_shape = texture_path(camera.lens_image, false);
     if (lens_shape.empty() == false) {
       materials_stream << "shape ";

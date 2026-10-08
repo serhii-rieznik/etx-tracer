@@ -37,6 +37,9 @@ struct Image {
     Committed = ::Image::Committed,
     TextureUVTransform = ::Image::TextureUVTransform,
     TexelCenteredUV = ::Image::TexelCenteredUV,
+    ReflectU = ::Image::ReflectU,
+    ReflectV = ::Image::ReflectV,
+    ReflectW = ::Image::ReflectW,
   };
 
   float3 fsize = {};
@@ -87,7 +90,7 @@ struct Image {
       return 0u;
     }
 
-    if ((options & RepeatU) != 0u) {
+    if (((options & RepeatU) != 0u) && ((options & ReflectU) == 0u)) {
       return (value + 1u) % isize.x;
     }
 
@@ -99,7 +102,7 @@ struct Image {
       return 0u;
     }
 
-    if ((options & RepeatV) != 0u) {
+    if (((options & RepeatV) != 0u) && ((options & ReflectV) == 0u)) {
       return (value + 1u) % isize.y;
     }
 
@@ -111,7 +114,7 @@ struct Image {
       return 0u;
     }
 
-    if ((options & RepeatW) != 0u) {
+    if (((options & RepeatW) != 0u) && ((options & ReflectW) == 0u)) {
       return (value + 1u) % isize.z;
     }
 
@@ -492,39 +495,22 @@ struct Image {
     return sample(rnd, image_pdf, location, eval);
   }
 
-  ETX_SHARED_INLINE float tex_coord_repeat(float u, float size) const {
-    float x = fmodf(u, size);
-    return x < 0.0f ? (x + size) : x;
-  }
-
-  ETX_SHARED_INLINE float tex_coord_clamp(float u, float size) const {
-    return clamp(u, 0.0f, nextafterf(size, 0.0f));
-  }
-
   ETX_SHARED_INLINE float tex_coord_u(float u, float size) const {
-    return (options & RepeatU) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
+    return image_tex_coord_u(u, size, options);
   }
 
   ETX_SHARED_INLINE float tex_coord_v(float u, float size) const {
-    return (options & RepeatV) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
+    return image_tex_coord_v(u, size, options);
   }
 
   ETX_SHARED_INLINE float tex_coord_w(float u, float size) const {
-    return (options & RepeatW) ? tex_coord_repeat(u, size) : tex_coord_clamp(u, size);
+    return image_tex_coord_w(u, size, options);
   }
 
   ETX_SHARED_INLINE float4 read(const float2& uv) const {
-    float x0 = tex_coord_u(uv.x - 0.0f, fsize.x);
-    float x1 = tex_coord_u(uv.x + 1.0f, fsize.x);
-    float y0 = tex_coord_v(uv.y - 0.0f, fsize.y);
-    float y1 = tex_coord_v(uv.y + 1.0f, fsize.y);
-    float dx = x0 - floorf(x0);
-    float dy = y0 - floorf(y0);
-    const auto& p00 = pixel(uint32_t(x0), uint32_t(y0)) * (1.0f - dx) * (1.0f - dy);
-    const auto& p01 = pixel(uint32_t(x1), uint32_t(y0)) * (dx) * (1.0f - dy);
-    const auto& p10 = pixel(uint32_t(x0), uint32_t(y1)) * (1.0f - dx) * (dy);
-    const auto& p11 = pixel(uint32_t(x1), uint32_t(y1)) * (dx) * (dy);
-    return p00 + p01 + p10 + p11;
+    const auto address = image_filter_shared_address(uv / float2{fsize.x, fsize.y}, {fsize.x, fsize.y}, {isize.x, isize.y}, options);
+    return image_filter_shared_bilinear(pixel(address.col_0, address.row_0), pixel(address.col_1, address.row_0), pixel(address.col_0, address.row_1),
+      pixel(address.col_1, address.row_1), address.dx, address.dy);
   }
 };
 

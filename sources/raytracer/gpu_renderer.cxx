@@ -1389,11 +1389,13 @@ uint32_t build_material_compile_mask(const SceneData& scene_data) {
   for (const auto& material : scene_data.materials) {
     const uint32_t boundary_class = material_boundary_class(material.cls, material.subsurface_cls);
     result |= material_compile_bit(boundary_class);
-    const float maximum_roughness = std::max(material.roughness.value.x, material.roughness.value.y);
-    if ((material.cls == MaterialClass::Conductor) && (maximum_roughness > kDeltaAlphaTreshold)) {
+    const float2 roughness = {material.roughness.value.x, material.roughness.value.y};
+    const bool textured_roughness = material.roughness.image_index != kInvalidIndex;
+    const bool connectible = textured_roughness || (std::max(roughness.x, roughness.y) > kDeltaAlphaTreshold);
+    if ((material.cls == MaterialClass::Conductor) && connectible) {
       result |= kMaterialCompileConnectibleConductor;
     }
-    if ((boundary_class == MaterialClass::Dielectric) && (maximum_roughness > kDeltaAlphaTreshold)) {
+    if ((boundary_class == MaterialClass::Dielectric) && connectible) {
       result |= kMaterialCompileConnectibleDielectric;
     }
   }

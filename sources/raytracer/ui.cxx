@@ -1294,6 +1294,9 @@ void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vecto
   });
   apply_field(before.cls, after.cls, [](Material& material, const uint32_t value) {
     material.cls = value;
+    if (value == MaterialClass::Diffuse) {
+      material.roughness.value.y = material.roughness.value.x;
+    }
   });
   apply_field(before.int_medium, after.int_medium, [](Material& material, const uint32_t value) {
     material.int_medium = value;
@@ -1849,6 +1852,35 @@ bool UI::image_picker(SceneRepresentation& scene_rep, const char* label, uint32_
     const std::string selected_file = open_file("exr,png,hdr,pfm,jpg,bmp,tga");
     if (selected_file.empty() == false) {
       image_index = scene_rep.data().add_image(selected_file.c_str(), image_options, {}, {1.0f, 1.0f});
+      changed = true;
+    }
+  }
+
+  if (image_index != kInvalidIndex) {
+    const Image image = scene_rep.data().images.get(image_index);
+    uint32_t options = image.options & ~Image::Committed;
+    bool addressing_changed = false;
+    ImGui::PushID(label);
+    const auto addressing = [&](const char* axis, uint32_t repeat, uint32_t reflect) {
+      int mode = (options & reflect) != 0u ? 2 : ((options & repeat) != 0u ? 0 : 1);
+      if (ImGui::Combo(axis, &mode, "Repeat\0Clamp\0Reflect\0")) {
+        options &= ~(repeat | reflect);
+        options |= mode == 0 ? repeat : (mode == 2 ? reflect : 0u);
+        addressing_changed = true;
+      }
+    };
+    addressing("U addressing", Image::RepeatU, Image::ReflectU);
+    addressing("V addressing", Image::RepeatV, Image::ReflectV);
+    ImGui::PopID();
+    if (addressing_changed) {
+      const std::string path = scene_rep.data().images.path(image_index);
+      if (path.empty() || path.starts_with("##")) {
+        Image copy = image;
+        copy.options = options;
+        image_index = scene_rep.data().add_image(copy);
+      } else {
+        image_index = scene_rep.data().add_image(path.c_str(), options, {image.offset.x, image.offset.y}, {image.scale.x, image.scale.y});
+      }
       changed = true;
     }
   }
@@ -7417,7 +7449,7 @@ void UI::build_camera_selection_properties(SceneRepresentation& scene_rep, Camer
 
     float clip_values[2] = {camera.clip_near, camera.clip_far};
     if (labeled_control("Clip Planes", [&]() {
-          return ImGui::DragFloat2("##clipplanes", clip_values, 0.01f, 0.0f, 5000.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+          return ImGui::DragFloat2("##clipplanes", clip_values, 0.01f, 0.0f, 0.0f, "%.3f");
         })) {
       camera.clip_near = max(0.0f, clip_values[0]);
       camera.clip_far = max(camera.clip_near + 0.001f, clip_values[1]);

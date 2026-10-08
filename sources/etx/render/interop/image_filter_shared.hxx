@@ -23,12 +23,12 @@ struct ETX_ALIGNED ImageFilterSharedAddress3D {
   float dz;
 };
 
-ETX_SHARED_INLINE uint32_t image_filter_shared_next_coord(uint32_t value, uint32_t size, uint32_t options, uint32_t repeat_option) {
+ETX_SHARED_INLINE uint32_t image_filter_shared_next_coord(uint32_t value, uint32_t size, uint32_t options, uint32_t repeat_option, uint32_t reflect_option) {
   if (size == 0u) {
     return 0u;
   }
 
-  if ((options & repeat_option) != 0u) {
+  if (((options & repeat_option) != 0u) && ((options & reflect_option) == 0u)) {
     return (value + 1u) % size;
   }
 
@@ -54,9 +54,9 @@ ETX_SHARED_INLINE ImageFilterSharedAddress image_filter_shared_address(ETX_IN(fl
 #endif
 
   result.row_0 = min(uint32_t(y0), size.y - 1u);
-  result.row_1 = image_filter_shared_next_coord(result.row_0, size.y, options, Image::RepeatV);
+  result.row_1 = image_filter_shared_next_coord(result.row_0, size.y, options, Image::RepeatV, Image::ReflectV);
   result.col_0 = min(uint32_t(x0), size.x - 1u);
-  result.col_1 = image_filter_shared_next_coord(result.col_0, size.x, options, Image::RepeatU);
+  result.col_1 = image_filter_shared_next_coord(result.col_0, size.x, options, Image::RepeatU, Image::ReflectU);
   return result;
 }
 
@@ -82,11 +82,11 @@ ETX_SHARED_INLINE ImageFilterSharedAddress3D image_filter_shared_address_3d(ETX_
 #endif
 
   result.slice_0 = min(uint32_t(z0), size.z - 1u);
-  result.slice_1 = image_filter_shared_next_coord(result.slice_0, size.z, options, Image::RepeatW);
+  result.slice_1 = image_filter_shared_next_coord(result.slice_0, size.z, options, Image::RepeatW, Image::ReflectW);
   result.row_0 = min(uint32_t(y0), size.y - 1u);
-  result.row_1 = image_filter_shared_next_coord(result.row_0, size.y, options, Image::RepeatV);
+  result.row_1 = image_filter_shared_next_coord(result.row_0, size.y, options, Image::RepeatV, Image::ReflectV);
   result.col_0 = min(uint32_t(x0), size.x - 1u);
-  result.col_1 = image_filter_shared_next_coord(result.col_0, size.x, options, Image::RepeatU);
+  result.col_1 = image_filter_shared_next_coord(result.col_0, size.x, options, Image::RepeatU, Image::ReflectU);
   return result;
 }
 

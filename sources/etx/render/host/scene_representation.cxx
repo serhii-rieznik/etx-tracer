@@ -34,8 +34,6 @@ namespace etx {
 
 namespace {
 
-constexpr float kDefaultCameraClipNear = 0.1f;
-constexpr float kDefaultCameraClipFar = 1000.0f;
 constexpr uint2 kDefaultModelCameraFilmSize = {1280u, 720u};
 
 struct NodeGeometryEditAnalysis {
@@ -886,8 +884,9 @@ bool node_mesh_shared(const SceneData& data, uint32_t node_index, uint32_t mesh_
 }
 
 void sanitize_camera_clip_planes(Camera& camera) {
-  camera.clip_near = (camera.clip_near > 0.0f) ? camera.clip_near : kDefaultCameraClipNear;
-  camera.clip_far = (camera.clip_far > camera.clip_near) ? camera.clip_far : max(camera.clip_near + 0.001f, kDefaultCameraClipFar);
+  const Camera default_camera = {};
+  camera.clip_near = (camera.clip_near > 0.0f) ? camera.clip_near : default_camera.clip_near;
+  camera.clip_far = (camera.clip_far > camera.clip_near) ? camera.clip_far : max(camera.clip_near + 0.001f, default_camera.clip_far);
 }
 
 Integrator::Type legacy_integrator_selection_to_type(const std::string& type_id) {

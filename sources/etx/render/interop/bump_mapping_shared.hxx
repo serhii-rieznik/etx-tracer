@@ -25,10 +25,8 @@ ETX_SHARED_INLINE void bump_mapping_shared_sample(ETX_IN(float4, p00), ETX_IN(fl
   const float bottom = h10 + (h11 - h10) * address.dx;
   height = top + (bottom - top) * address.dy;
   gradient = float2((h01 - h00) * (1.0f - address.dy) + (h11 - h10) * address.dy, (h10 - h00) * (1.0f - address.dx) + (h11 - h01) * address.dx) * fsize * uv_scale;
-  if (((options & Image::RepeatU) == 0u) && (uv.x < 0.0f))
-    gradient.x = 0.0f;
-  if (((options & Image::RepeatV) == 0u) && (uv.y < 0.0f))
-    gradient.y = 0.0f;
+  gradient.x *= image_tex_coord_gradient(uv.x * fsize.x, fsize.x, options, Image::RepeatU, Image::ReflectU);
+  gradient.y *= image_tex_coord_gradient(uv.y * fsize.y, fsize.y, options, Image::RepeatV, Image::ReflectV);
 }
 
 ETX_SHARED_INLINE void bump_mapping_shared_apply(ETX_IN(SurfaceDerivatives, derivatives), float height, ETX_IN(float2, gradient), ETX_IN(float3, geo_normal),

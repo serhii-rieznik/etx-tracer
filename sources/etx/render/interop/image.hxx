@@ -35,6 +35,9 @@ struct ETX_ALIGNED Image {
     Committed = 1u << 7u,
     TextureUVTransform = 1u << 8u,
     TexelCenteredUV = 1u << 9u,
+    ReflectU = 1u << 10u,
+    ReflectV = 1u << 11u,
+    ReflectW = 1u << 12u,
   };
 
   float3 fsize ETX_INIT({});
@@ -102,15 +105,39 @@ ETX_SHARED_INLINE float image_tex_coord_clamp(float u, float size) {
 #endif
 }
 
+ETX_SHARED_INLINE float image_tex_coord_reflect(float u, float size, uint32_t options) {
+  const float center = (options & Image::TexelCenteredUV) != 0u ? 0.5f : 0.0f;
+  const float x = abs(fmod(u + center, 2.0f * size));
+  return clamp(size - abs(x - size) - center, 0.0f, max(0.0f, size - 1.0f));
+}
+
+ETX_SHARED_INLINE float image_tex_coord_gradient(float u, float size, uint32_t options, uint32_t repeat_option, uint32_t reflect_option) {
+  if ((options & reflect_option) != 0u) {
+    const float center = (options & Image::TexelCenteredUV) != 0u ? 0.5f : 0.0f;
+    const float x = image_tex_coord_repeat(u + center, 2.0f * size);
+    const float folded = (x <= size ? x : 2.0f * size - x) - center;
+    if ((folded < 0.0f) || (folded >= (size - 1.0f)))
+      return 0.0f;
+    return x < size ? 1.0f : -1.0f;
+  }
+  return (((options & repeat_option) != 0u) || ((u >= 0.0f) && (u < (size - 1.0f)))) ? 1.0f : 0.0f;
+}
+
 ETX_SHARED_INLINE float image_tex_coord_u(float u, float size, uint32_t options) {
+  if ((options & Image::ReflectU) != 0u)
+    return image_tex_coord_reflect(u, size, options);
   return ((options & Image::RepeatU) != 0u) ? image_tex_coord_repeat(u, size) : image_tex_coord_clamp(u, size);
 }
 
 ETX_SHARED_INLINE float image_tex_coord_v(float u, float size, uint32_t options) {
+  if ((options & Image::ReflectV) != 0u)
+    return image_tex_coord_reflect(u, size, options);
   return ((options & Image::RepeatV) != 0u) ? image_tex_coord_repeat(u, size) : image_tex_coord_clamp(u, size);
 }
 
 ETX_SHARED_INLINE float image_tex_coord_w(float u, float size, uint32_t options) {
+  if ((options & Image::ReflectW) != 0u)
+    return image_tex_coord_reflect(u, size, options);
   return ((options & Image::RepeatW) != 0u) ? image_tex_coord_repeat(u, size) : image_tex_coord_clamp(u, size);
 }
 
