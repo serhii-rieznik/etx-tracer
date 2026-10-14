@@ -16,10 +16,10 @@ These libraries and tools you have to install by yourself:
   - copy embree binaries (embree4.dll and other required dlls) to the `bin` folder in the root directory of `etx-tracer`
 
 ### DXC (DirectX Shader Compiler)
-DXC is required at build time for compiling HLSL shaders. CMake will automatically:
+DXC is required at runtime for on-demand HLSL shader compilation. CMake will automatically:
 1. Check if DXC is already installed on your system
 2. If not found on Windows, download a DXC release from GitHub
-3. Copy DXC binaries to the developer `bin` folder for shader-package generation
+3. Copy DXC binaries to `bin` for runtime shader compilation
 
 You can also install DXC manually using:
 - WinGet: `winget install -e --id Microsoft.DirectXShaderCompiler`
@@ -39,7 +39,7 @@ Other recognized folder names include:
 - Windows: `windows`, `win`, `windows-x64`, `win-x64`
 - Linux: `linux`, `linux-x64`
 
-When DXC is found (system, `DXC_PATH`, or vendored path), the build copies required DXC binaries to `bin/` for development. Release archives exclude DXC.
+When DXC is found (system, `DXC_PATH`, or vendored path), the build copies required DXC binaries to `bin/`. Release archives include the DXC runtime and shader sources.
 
 After that generating and building a project should be as simple as creating a folder for build files and calling CMake, something like:
 ```cmake
@@ -60,40 +60,27 @@ Build the native application with:
 cmake --build build --config Release --target raytracer_app
 ```
 
-The target generates and verifies the Metal shader package before copying it into `ETX Tracer.app/Contents/Resources`.
+The target bundles shader sources in `ETX Tracer.app/Contents/Resources` and DXC in `Contents/Frameworks`. Metal libraries and pipelines compile on demand and use the runtime disk cache.
 
-## Production shader packages
+## Runtime shaders
 
-Release builds use `shaders.etxpack` instead of distributing the `shaders`, `interop`, and `access` source trees. The package contains an indexed set of backend binaries for every renderer variant reachable from the application:
-
-- Metal uses compiled `.metallib` payloads and stored binding metadata.
-- Vulkan uses SPIR-V payloads.
-- Each index and payload has an integrity hash.
-- Package publication uses a temporary file followed by an atomic replacement.
-- Release runtime compilation is disabled. A missing, corrupt, or incomplete package is a startup/rendering error.
-
-The package excludes HLSL text, include files, source paths, and DXC. Compiled GPU binaries remain inspectable like other executable code; the package is an IP-exposure reduction mechanism, not encryption.
-
-The `raytracer` Debug and RelWithDebInfo targets compile the copied runtime shader sources and ignore any existing package. Shader edits therefore take effect after rebuilding and restarting the application. Production packages are generated only by the `raytracer_shader_package` target; release builds and CI must build both targets:
+All configurations compile only requested shader entry points. Build the Windows application with:
 
 ```sh
-cmake --build build --config Release --target raytracer raytracer_shader_package
+cmake --build build --config Release --target raytracer
 ```
 
-On macOS, the package builder uses `xcrun metal` and `xcrun metallib`. Its content-addressed cache is stored under the CMake build directory and includes the installed Metal compiler version and deployment target in its key. The shared shader cache also includes a fingerprint of the loaded DXC library. Shader or compiler changes rebuild affected binaries; unchanged package rebuilds reuse them.
+The build copies the `shaders`, `interop`, and `access` trees beside the executable. It never compiles an inventory of shader variants or reads `shaders.etxpack`. Shader edits take effect after rebuilding or running the `raytracer_runtime_shaders` target and reloading shaders in the application.
 
-`scripts/create-release-archive.sh` packages the signed macOS application bundle. The Windows archive script packages the executable, runtime libraries, data, and shader package while excluding DXC and shader sources.
+The runtime caches preprocessed sources, compiled entry points, and backend pipelines separately. Source dependency timestamps and sizes validate the preprocessing cache. Compiled entry-point keys retain global declarations, resource bindings, type layouts, and all overloads of referenced function names; comments, whitespace, line directives, and unreferenced top-level function definitions do not invalidate binaries. The same analysis removes those function definitions before DXC compilation. Nested scopes remain intact. Debug-information builds retain the complete source and location-sensitive hash.
 
-For a direct diagnostic build:
+Binary cache entries are content-addressed, include the loaded DXC library fingerprint and compilation options, and validate payload integrity. Reverting source edits reuses prior entries. Shader compiler revisions must bump the cache version when code-generation options or SPIRV-Cross translation change.
 
-```sh
-bin/raytracer --build-shader-package /path/to/shaders.etxpack --shader-backend metal
-bin/raytracer.exe --build-shader-package C:\path\to\shaders.etxpack --shader-backend vulkan
-```
+Windows releases distribute shader sources and DXC. macOS bundles include sources and DXC, and use cached Metal libraries and pipeline archives. The first request for an uncached variant incurs compilation; subsequent requests reuse validated caches. CPU-only commands initialize DXC only when they request a shader.
 
-The CMake package target reads directly from `sources/etx/render`; direct diagnostic commands default to the development data folder and accept
-`--shader-source-root <directory>` when an explicit source tree is required. Package generation bypasses any existing package so every successful build compiles or
-cache-validates the current source dependencies.
+`--gpu-kernel-timings` enables GPU dispatch timestamps. `--gpu-kernel-statistics` separately requests Vulkan pipeline executable statistics when the driver supports them, recording subgroup size, registers, and memory statistics in the console. Statistics capture can increase pipeline preparation cost. Nsight Graphics provides sampled runtime occupancy and stall analysis.
+
+Headless Vulkan renders expose frame boundaries through `VK_EXT_frame_boundary` when a profiling tool supplies that extension. Nsight can then capture `--render` runs automatically. On Windows, omit Nsight's `--platform` option: Qt consumes it as a platform-plugin override and can prevent Nsight from starting.
 
 ## Built-in dependencies
 These libraries are included into the source code in `thirdparty` folder:

@@ -316,7 +316,7 @@ std::string unique_mesh_name(const SceneData& data, const std::string& requested
 
 uint32_t resolve_material_index(SceneData& data, const ProceduralGeometryDefinition& definition) {
   if (definition.material_index != kInvalidIndex) {
-    if (definition.material_index < data.materials.size()) {
+    if (definition.material_index < data.material_descriptions.size()) {
       return definition.material_index;
     }
     log::warning("Procedural geometry `%s` references invalid material-index %u", definition.id.c_str(), definition.material_index);
@@ -331,7 +331,7 @@ uint32_t resolve_material_index(SceneData& data, const ProceduralGeometryDefinit
     log::warning("Procedural geometry `%s` references unknown material `%s`", definition.id.c_str(), definition.material_name.c_str());
   }
 
-  if (data.defaults.missing_material < data.materials.size()) {
+  if (data.defaults.missing_material < data.material_descriptions.size()) {
     return data.defaults.missing_material;
   }
 

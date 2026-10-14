@@ -26,6 +26,7 @@ struct EnergyCompensationPreparationStatus {
   double elapsed_seconds = 0.0;
   double remaining_seconds = 0.0;
   bool remaining_available = false;
+  SceneDiagnostic diagnostic;
 };
 
 enum class NodeGeometryOperation : uint32_t {
@@ -108,6 +109,7 @@ struct SceneResourceEditResult {
   SceneResourceEditStatus status = SceneResourceEditStatus::Success;
   uint32_t resource_index = kInvalidIndex;
   std::vector<uint32_t> resource_remapping;
+  SceneDiagnostic diagnostic;
 
   bool succeeded() const {
     return status == SceneResourceEditStatus::Success;
@@ -144,6 +146,8 @@ struct SceneRepresentation {
   bool prepare_document(uint32_t options);
   bool load_from_file(const char* filename, uint32_t options, IntegratorData* out_integrator = nullptr);
   std::string save_to_file(const char* filename, Integrator::Type selected_type = Integrator::Type::Invalid, Integrator* integrator_array[] = nullptr, size_t integrator_count = 0);
+  std::string save_material_to_file(const char* filename, uint32_t material_index);
+  SceneResourceEditResult load_material_from_file(const char* filename);
   void replace_loaded_scene(SceneRepresentation& source);
 
   Camera& mutable_camera();
@@ -204,6 +208,7 @@ struct SceneRepresentation {
   void cancel_energy_compensation_interface_preparation();
   EnergyCompensationPreparationState poll_energy_compensation_interface_preparation();
   EnergyCompensationPreparationStatus energy_compensation_interface_preparation_status() const;
+  SceneDiagnostic material_preparation_diagnostic() const;
   void create_area_emitters_from_materials();
   bool delete_emitter(uint32_t emitter_index);
 

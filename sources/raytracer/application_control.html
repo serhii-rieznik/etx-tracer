@@ -116,11 +116,12 @@
     #message { min-height: 36px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
     #message[data-tone="success"] { color: var(--success); }
     #message[data-tone="error"] { color: var(--danger); }
-    #renderer-diagnostic { margin-top: 14px; padding: 0; border: 0; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
-    #renderer-diagnostic summary { color: inherit; }
-    #renderer-diagnostic-message { margin-top: 8px; white-space: pre-wrap; }
+    #renderer-diagnostic { position: fixed; bottom: 20px; right: 20px; z-index: 2; width: min(640px, calc(100% - 40px)); padding: 14px; border: 1px solid var(--border-strong); border-radius: var(--radius); background: var(--panel); box-shadow: 0 6px 24px rgba(0, 0, 0, .18); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+    #renderer-diagnostic-message { margin-top: 8px; white-space: pre-wrap; max-height: 35vh; overflow: auto; }
     #renderer-diagnostic[data-tone="warning"] { color: var(--warning); }
     #renderer-diagnostic[data-tone="error"] { color: var(--danger); }
+    #diagnostic-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+    #diagnostic-actions button { max-width: 100%; }
     .image-head { min-height: 36px; display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
     .image-head strong { font-size: 13px; font-weight: 650; }
     .image-head button { min-height: 32px; margin-left: auto; font-size: 12px; }
@@ -231,10 +232,16 @@
         <dt>Samples</dt><dd id="samples">—</dd>
         <dt>Elapsed</dt><dd id="elapsed">—</dd>
       </dl>
-      <details id="renderer-diagnostic" class="hidden">
-        <summary id="renderer-diagnostic-title" role="status" aria-live="polite"></summary>
+      <div id="renderer-diagnostic" class="hidden">
+        <strong id="renderer-diagnostic-title" role="status" aria-live="polite"></strong>
         <div id="renderer-diagnostic-message"></div>
-      </details>
+        <div id="renderer-diagnostic-recovery" class="hint"></div>
+        <div id="diagnostic-actions">
+          <button id="retry-diagnostic" class="hidden" type="button">Restart renderer</button>
+          <button id="copy-diagnostic" type="button">Copy diagnostic</button>
+          <button id="dismiss-diagnostic" type="button">Dismiss</button>
+        </div>
+      </div>
       <div id="message" role="status" aria-live="polite"></div>
     </aside>
     <section aria-label="Rendered image">
@@ -678,18 +685,28 @@
       const diagnosticVisible = diagnostic && diagnostic.severity !== 'none' && diagnostic.message;
       diagnosticElement.classList.toggle('hidden', !diagnosticVisible);
       if (diagnosticVisible) {
-        const title = diagnostic.recovery === 'restart_application' ? 'Application Restart Required' :
+        const title = diagnostic.title || (diagnostic.recovery === 'restart_application' ? 'Application restart required' :
           diagnostic.recovery === 'change_settings' ? 'Unsupported Settings' :
           diagnostic.severity === 'error' ? 'Render Interrupted' :
-          diagnostic.severity === 'warning' ? 'Warning' : 'Canceled';
+          diagnostic.severity === 'warning' ? 'Warning' : 'Canceled');
         const titleElement = byId('renderer-diagnostic-title');
         if (titleElement.textContent !== title) titleElement.textContent = title;
-        const text = diagnostic.message;
+        const text = [diagnostic.message, diagnostic.consequence, diagnostic.action_failure ? `Action failed: ${diagnostic.action_failure}` : ''].filter(Boolean).join('\n');
         const messageElement = byId('renderer-diagnostic-message');
         if (messageElement.textContent !== text) messageElement.textContent = text;
         diagnosticElement.dataset.tone = diagnostic.severity;
+        byId('renderer-diagnostic-recovery').textContent = diagnostic.recovery === 'edit_material' ? 'Edit the affected material in the desktop inspector.' :
+          diagnostic.recovery === 'edit_camera' ? 'Edit the active camera and its medium binding in the desktop inspector.' :
+          diagnostic.recovery === 'edit_medium' ? 'Edit the affected medium in the desktop inspector.' :
+          diagnostic.recovery === 'change_settings' ? 'Change the renderer or its settings, then retry rendering.' :
+          diagnostic.recovery === 'restart_application' ? 'Save your scene if possible, then close and reopen ETX Tracer.' : '';
+        byId('dismiss-diagnostic').classList.toggle('hidden', diagnostic.severity === 'error' || state.run_state === 'blocked');
+        const retry = byId('retry-diagnostic');
+        retry.classList.toggle('hidden', diagnostic.recovery !== 'restart' && diagnostic.recovery !== 'retry_material_preparation' && !(diagnostic.recovery === 'change_settings' && state.controls.can_restart));
+        retry.textContent = diagnostic.recovery === 'retry_material_preparation' ? 'Retry material preparation' : diagnostic.recovery === 'change_settings' ? 'Retry renderer' : 'Restart renderer';
+        retry.disabled = !serverConnected || !state.controls.can_restart || commandPending('restart');
+        if (!commandPending('restart')) byId('restart').textContent = diagnostic.recovery === 'retry_material_preparation' ? 'Retry material preparation' : 'Restart renderer';
       } else {
-        diagnosticElement.open = false;
         byId('renderer-diagnostic-title').textContent = '';
         byId('renderer-diagnostic-message').textContent = '';
       }
@@ -816,6 +833,13 @@
     byId('integrator').onchange = e => command('set_integrator', {value: Number(e.target.value)});
     for (const type of ['run', 'finish', 'stop', 'restart']) byId(type).onclick = () => command(type);
     byId('denoise').onclick = () => command('denoise');
+    byId('dismiss-diagnostic').onclick = () => command('dismiss_diagnostic');
+    byId('retry-diagnostic').onclick = () => command('restart');
+    byId('copy-diagnostic').onclick = async () => {
+      const text = [byId('renderer-diagnostic-title').textContent, byId('renderer-diagnostic-message').textContent].join('\n');
+      try { await navigator.clipboard.writeText(text); }
+      catch (error) { setMessage(`Cannot copy diagnostic: ${error.message}`, 'error'); }
+    };
     byId('refresh-image').onclick = () => refreshImage(true, currentImageKey);
     async function pollServer() {
       clearTimeout(pollTimer);

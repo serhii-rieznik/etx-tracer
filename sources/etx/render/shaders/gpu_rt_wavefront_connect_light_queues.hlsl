@@ -12,6 +12,7 @@ uint wavefront_connect_material_family(GPUWavefrontPathVertex vertex, uint mater
     case MaterialClass::Plastic:
       return 1u;
     case MaterialClass::Conductor:
+    case MaterialClass::CoatedConductor:
       return 2u;
     case MaterialClass::Dielectric:
       return 3u;

@@ -99,6 +99,12 @@ static_assert(std::is_standard_layout_v<SpectralImage>, "SpectralImage must stay
 static_assert(std::is_standard_layout_v<Material>, "Material must stay standard layout for C++/HLSL interop");
 static_assert(alignof(Material) == 16, "Material alignment must match HLSL packing");
 static_assert(sizeof(Material) == kMaterialStride, "Material size changed; update shared ABI");
+static_assert(offsetof(Material, layer_base_class) == kMaterialLayerBaseClassOffset, "Material::layer_base_class offset changed");
+static_assert(sizeof(CoherentCoating) == 32u);
+static_assert(offsetof(Material, coherent_coating) == kMaterialCoherentCoatingIorOffset);
+static_assert((offsetof(Material, coherent_coating) + offsetof(CoherentCoating, thickness_image)) == kMaterialCoherentCoatingThicknessImageOffset);
+static_assert((offsetof(Material, coherent_coating) + offsetof(CoherentCoating, min_thickness_nm)) == kMaterialCoherentCoatingMinThicknessOffset);
+static_assert((offsetof(Material, coherent_coating) + offsetof(CoherentCoating, max_thickness_nm)) == kMaterialCoherentCoatingMaxThicknessOffset);
 static_assert((offsetof(Material, thinfilm) + offsetof(Thinfilm, weight)) == kMaterialThinfilmWeightOffset, "Material::thinfilm.weight offset changed");
 static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, period_nm)) == kMaterialDiffractionGratingPeriodNmOffset,
   "Material::diffraction_grating.period_nm offset changed");

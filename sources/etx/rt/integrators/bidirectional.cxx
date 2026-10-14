@@ -34,6 +34,7 @@ struct PathVertex {
   uint32_t material = MaterialClass::Undefined;
   Class cls = Class::Invalid;
   bool connectible = true;
+  bool sampled_delta = false;
 
   PathVertex() = default;
 
@@ -673,7 +674,8 @@ struct CPUBidirectionalImpl : public Task {
       curr.medium.subsurface_packing = surface_material.subsurface_packing;
       curr.medium.subsurface_material = a_intersection.material_index;
     }
-    curr.connectible = (bsdf_sample.properties & BSDFSample::Delta) == 0;
+    curr.connectible = bsdf::is_delta(surface_material, a_intersection.tex, smp) == false;
+    curr.sampled_delta = bsdf_sample.is_delta();
 
     const float segment_distance = payload.path_distance + a_intersection.t;
     update_vertex_mis_state(emitter_sample, first_interaction, segment_distance, payload, curr);
@@ -709,7 +711,7 @@ struct CPUBidirectionalImpl : public Task {
     record_path_vertex(payload, path_data, curr, prev);
     connect(payload, smp, {rnd_em_sample.x, rnd_em_sample.y, rnd_support.y}, path_data, curr, prev);
     update_scatter_mis_state(first_interaction, rev_bsdf_pdf, bsdf_sample, curr, payload);
-    if (curr.connectible) {
+    if (curr.sampled_delta == false) {
       payload.camera_source_prefix = false;
     }
 
@@ -1026,6 +1028,7 @@ struct CPUBidirectionalImpl : public Task {
   }
 
   SpectralResponse build_emitter_path(Sampler& smp, SpectralQuery spect, PathData& path_data) const {
+    const auto& scene = rt.scene();
     path_data.emitter_path.clear();
     path_data.emitter_path_size = 0;
 
@@ -1046,6 +1049,25 @@ struct CPUBidirectionalImpl : public Task {
     curr.intersection.w_i = emitter_sample.direction;
     curr.intersection.emitter_index = emitter_sample.emitter_index;
     curr.intersection.instance_index = emitter_sample.instance_index;
+    curr.intersection.material_index = emitter_sample.material_index;
+    if (emitter_sample.triangle_index != kInvalidIndex) {
+      Vertex source_vertex = lerp_vertex(scene, scene.triangles[emitter_sample.triangle_index], emitter_sample.barycentric);
+      if (emitter_sample.instance_index < scene.instances.count) {
+        source_vertex = scene_instance_transform_vertex(scene.instances[emitter_sample.instance_index], source_vertex);
+      }
+      curr.intersection.tex = source_vertex.tex;
+      curr.intersection.tan = source_vertex.tan;
+      curr.intersection.btn = source_vertex.btn;
+      if (scene.materials[emitter_sample.material_index].cls == MaterialClass::CoatedConductor) {
+        IntersectionBase base = {};
+        base.triangle_index = emitter_sample.triangle_index;
+        base.barycentric = {emitter_sample.barycentric.y, emitter_sample.barycentric.z};
+        base.instance_index = emitter_sample.instance_index;
+        base.material_index = emitter_sample.material_index;
+        curr.intersection = make_intersection(scene, -emitter_sample.direction, base);
+        curr.intersection.w_i = emitter_sample.direction;
+      }
+    }
     curr.medium = {.index = emitter_sample.medium_index};
     curr.throughput = emitter_sample.value;
     curr.pdf.bsdf_sample_next = emitter_sample.pdf_dir;
@@ -1058,18 +1080,18 @@ struct CPUBidirectionalImpl : public Task {
     Payload payload = {
       .spect = spect,
       .result = {spect, 0.0f},
-      .throughput = curr.throughput * dot(emitter_sample.direction, curr.intersection.nrm) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample),
+      .throughput = curr.throughput * dot(emitter_sample.direction, emitter_sample.normal) / (emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample),
       .eta = 1.0f,
       .d_vcm = emitter_sample.is_distant ? safe_div(1.0f, emitter_sample.pdf_area) : safe_div(1.0f, emitter_sample.pdf_dir),
       .d_vc = (emitter_sample.is_delta || emitter_sample.is_sample_only) ? 0.0f
-                                                                         : safe_div(emitter_sample.is_distant ? 1.0f : dot(emitter_sample.direction, curr.intersection.nrm),
+                                                                         : safe_div(emitter_sample.is_distant ? 1.0f : dot(emitter_sample.direction, emitter_sample.normal),
                                                                              emitter_sample.pdf_dir * emitter_sample.pdf_area * emitter_sample.pdf_sample),
       .medium_index = curr.medium.index,
       .mode = PathSource::Light,
     };
 
     Ray ray = {
-      offset_ray(emitter_sample.origin, curr.intersection.nrm),
+      offset_ray(emitter_sample.origin, emitter_sample.normal),
       emitter_sample.direction,
       kRayEpsilon,
       kMaxFloat,
@@ -1228,13 +1250,16 @@ struct CPUBidirectionalImpl : public Task {
       .target_position = z_curr.intersection.pos,
       .uv = z_curr.intersection.tex,
       .shading_normal = z_curr.intersection.nrm,
+      .shading_tangent = z_curr.intersection.tan,
+      .shading_bitangent = z_curr.intersection.btn,
+      .material_index = z_curr.intersection.material_index,
       .directly_visible = directly_visible,
     };
 
     float pdf_dir = 0.0f;
     float pdf_area = 0.0f;
     float pdf_dir_out = 0.0f;
-    auto emitter_value = emitter_get_radiance(emitter_instance, spect, q, pdf_area, pdf_dir, pdf_dir_out);
+    auto emitter_value = emitter_get_radiance(emitter_instance, spect, q, smp, pdf_area, pdf_dir, pdf_dir_out);
 
     if (pdf_dir == 0.0f) {
       return {spect, 0.0f};
@@ -1247,7 +1272,7 @@ struct CPUBidirectionalImpl : public Task {
         float p_sample = emitter_discrete_pdf(emitter_instance);
         float p_connect = pdf_dir * p_sample;
         ETX_VALIDATE(p_connect);
-        mis_weight = z_prev.connectible ? power_heuristic(z_prev.pdf.bsdf_sample_next, p_connect) : 1.0f;
+        mis_weight = z_prev.sampled_delta ? 1.0f : power_heuristic(z_prev.pdf.bsdf_sample_next, p_connect);
         ETX_VALIDATE(mis_weight);
       } else {
         const float emitter_selection_pdf = emitter_discrete_pdf(emitter_instance);
@@ -1295,10 +1320,10 @@ struct CPUBidirectionalImpl : public Task {
       float local_pdf_area = 0.0f;
       float local_pdf_dir = 0.0f;
       float local_pdf_dir_out = 0.0f;
-      auto value = emitter_get_radiance(emitter_instance, spect, q, local_pdf_area, local_pdf_dir, local_pdf_dir_out);
+      auto value = emitter_get_radiance(emitter_instance, spect, q, smp, local_pdf_area, local_pdf_dir, local_pdf_dir_out);
 
       float this_weight = 1.0f;
-      if ((mode == Mode::PathTracing) && z_prev.connectible && (path_data.camera_path_length() > 1u)) {
+      if (enable_mis && (mode == Mode::PathTracing) && (z_prev.sampled_delta == false) && (path_data.camera_path_length() > 1u)) {
         float local_pdf_sample = emitter_discrete_pdf(emitter_instance);
         float this_p_connect = local_pdf_dir * local_pdf_sample;
         ETX_VALIDATE(this_p_connect);
@@ -1362,6 +1387,7 @@ struct CPUBidirectionalImpl : public Task {
     sampled_vertex.intersection.triangle_index = emitter_sample.triangle_index;
     sampled_vertex.intersection.emitter_index = emitter_sample.emitter_index;
     sampled_vertex.intersection.instance_index = emitter_sample.instance_index;
+    sampled_vertex.intersection.material_index = emitter_sample.material_index;
 
     float sampling_pdf = emitter_sample.pdf_dir * emitter_sample.pdf_sample;
     SpectralResponse emitter_throughput = emitter_sample.value / sampling_pdf;
@@ -1445,7 +1471,7 @@ struct CPUBidirectionalImpl : public Task {
       const bool incident_subsurface = material_has_incident_subsurface_boundary(material);
       const bool exclusion_boundary =
         material_has_diffuse_subsurface_boundary(rt.scene().materials[vertex.intersection.material_index]) && (vertex.medium.subsurface_packing > 0.0f);
-      if ((material.cls == MaterialClass::Dielectric) || coated_subsurface || incident_subsurface || exclusion_boundary) {
+      if (material_supports_surface_transmission(material) || coated_subsurface || incident_subsurface || exclusion_boundary) {
         const auto& scene = rt.scene();
         const auto& triangle = scene.triangles[vertex.intersection.triangle_index];
         const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, triangle, vertex.intersection.instance_index);

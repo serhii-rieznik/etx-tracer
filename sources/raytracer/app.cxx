@@ -346,6 +346,9 @@ void RTApplication::init(const ApplicationConfig& config) {
     ui.callbacks.restart_selected = [this]() {
       submit_command({.type = ApplicationCommandType::Restart});
     };
+    ui.callbacks.dismiss_diagnostic = [this]() {
+      submit_command({.type = ApplicationCommandType::DismissDiagnostic});
+    };
     ui.callbacks.reload_scene_selected = [this]() {
       submit_command({.type = ApplicationCommandType::ReloadScene});
     };
@@ -361,6 +364,8 @@ void RTApplication::init(const ApplicationConfig& config) {
     };
     ui.callbacks.use_image_as_reference = std::bind(&RTApplication::on_use_image_as_reference, this);
     ui.callbacks.material_added = std::bind(&RTApplication::on_material_added, this);
+    ui.callbacks.material_file_loaded = std::bind(&RTApplication::on_material_file_loaded, this, std::placeholders::_1);
+    ui.callbacks.material_file_saved = std::bind(&RTApplication::on_material_file_saved, this, std::placeholders::_1, std::placeholders::_2);
     ui.callbacks.material_duplicated = std::bind(&RTApplication::on_material_duplicated, this, std::placeholders::_1);
     ui.callbacks.material_deleted = std::bind(&RTApplication::on_material_deleted, this, std::placeholders::_1);
     ui.callbacks.material_renamed = std::bind(&RTApplication::on_material_renamed, this, std::placeholders::_1, std::placeholders::_2);
@@ -707,7 +712,7 @@ void RTApplication::frame() {
   process_application_commands();
   ui.set_view_options(_view_parameters);
   if (_gpu_renderer_initialized && (_active_renderer != &gpu_renderer)) {
-    gpu_renderer.poll_preparation(render_context.get_context());
+    gpu_renderer.poll_preparation(render_context.get_context(), scene);
   }
 
   auto thread = _active_renderer && (_active_renderer->mode() == RendererMode::CPURaytracing) ? &cpu_renderer.integrator_thread() : nullptr;
@@ -887,9 +892,11 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
 
 bool RTApplication::load_scene_file(const std::string& file_name, uint32_t options, bool start_rendering, bool unsaved) {
   ETX_PROFILER_SCOPE();
+  _file_operation_error.clear();
 
   const std::string scene_file = normalized_existing_scene_path(file_name);
   if (scene_file.empty()) {
+    _file_operation_error = "Scene file does not exist or is unavailable: " + file_name;
     log::error("Scene file does not exist: %s", file_name.c_str());
     auto e = std::remove_if(_recent_files.begin(), _recent_files.end(), [&](const std::string& entry) {
       return env().resolve_to_absolute(entry) == env().resolve_to_absolute(file_name);
@@ -907,7 +914,7 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   {
     ETX_PROFILER_NAMED_SCOPE("app_scene_load_from_file");
     if ((loaded_scene.load_from_file(scene_file.c_str(), options, &integrator_data) == false) || (loaded_scene.valid() == false)) {
-      log::error("Failed to load scene from file: %s", scene_file.c_str());
+      _file_operation_error = loaded_scene.data().diagnostic.text();
       return false;
     }
   }
@@ -930,6 +937,7 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   ui.reset_scene_state();
   _material_render_resource_preparation_active = false;
   _material_render_resource_preparation_failed = false;
+  _material_edit_diagnostic = {};
   _restart_cpu_after_material_resource_preparation = false;
   _restart_gpu_after_material_resource_preparation = false;
   _current_scene_file = scene.data().json_file_name.empty() ? scene_file : env().resolve_to_absolute(scene.data().json_file_name);
@@ -988,11 +996,29 @@ bool RTApplication::load_scene_file(const std::string& file_name, uint32_t optio
   return true;
 }
 
+bool RTApplication::flush_pending_edits_for_save() {
+  _file_operation_error.clear();
+  if (_material_render_resource_preparation_active) {
+    _file_operation_error = "Material preparation is still running. Save again after preparation completes.";
+    return false;
+  }
+  if (ui.commit_pending_edits(scene) == false) {
+    _file_operation_error =
+      scene.data().diagnostic.message.empty() ? "A spectrum edit could not be committed. Correct the highlighted spectrum before saving." : scene.data().diagnostic.text();
+    log::error("Cannot save: pending spectrum edits could not be applied");
+    return false;
+  }
+  if (_material_render_resource_preparation_active) {
+    _file_operation_error = "Material preparation is still running. Save again after preparation completes.";
+    log::error("Cannot save: material preparation is still in progress");
+    return false;
+  }
+  return true;
+}
+
 std::string RTApplication::save_scene_file(const std::string& file_name) {
   ETX_PROFILER_SCOPE();
-
-  if (ui.commit_pending_edits(scene) == false) {
-    log::error("Cannot save scene: pending spectrum edits could not be applied");
+  if (flush_pending_edits_for_save() == false) {
     return {};
   }
 
@@ -1001,6 +1027,7 @@ std::string RTApplication::save_scene_file(const std::string& file_name) {
   Integrator::Type selected_type = integrator_to_type(current);
   std::string saved_path = scene.save_to_file(file_name.c_str(), selected_type, cpu_renderer.integrator_list(), cpu_renderer.integrator_count());
   if (saved_path.empty()) {
+    _file_operation_error = scene.data().diagnostic.text();
     log::error("Failed to save scene to %s", file_name.c_str());
     return {};
   }
@@ -1238,6 +1265,7 @@ void RTApplication::on_stop_selected(bool wait_for_completion) {
 
 bool RTApplication::on_restart_selected() {
   ETX_PROFILER_SCOPE();
+  _dismissed_diagnostic_message.clear();
   if ((_active_renderer == nullptr) || (current_renderer_controls().can_restart == false)) {
     return false;
   }
@@ -1257,7 +1285,9 @@ bool RTApplication::on_restart_selected() {
   if (_view_parameters.view_layer == ViewLayer::Denoised) {
     _view_parameters.view_layer = ViewLayer::Result;
   }
-  if (_active_renderer->status().diagnostic.recovery == RendererRecovery::Restart) {
+  const RendererStatus status = _active_renderer->status();
+  if ((status.diagnostic.recovery == RendererRecovery::Restart) ||
+      ((status.diagnostic.recovery == RendererRecovery::ChangeSettings) && (status.state == RendererStatusState::Failed))) {
     return _active_renderer->recover(render_context.get_context(), scene);
   }
   _active_renderer->restart();
@@ -1266,6 +1296,7 @@ bool RTApplication::on_restart_selected() {
 
 void RTApplication::on_options_changed() {
   ETX_PROFILER_SCOPE();
+  _dismissed_diagnostic_message.clear();
   mark_scene_dirty();
   const bool cpu_renderer_active = _active_renderer == &cpu_renderer;
   if (cpu_renderer_active) {
@@ -1287,10 +1318,10 @@ SceneResourceEditResult RTApplication::on_material_added() {
 
   const SceneResourceEditResult result = scene.create_material(nullptr);
   if (result.succeeded()) {
-    mark_scene_dirty();
-    notify_scene_might_have_changed();
+    _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+    on_material_changed(result.resource_index);
   }
-  if (cpu_was_running) {
+  if (cpu_was_running && (result.succeeded() == false)) {
     cpu_renderer.restart();
   }
   return result;
@@ -1312,6 +1343,34 @@ SceneResourceEditResult RTApplication::on_material_duplicated(uint32_t index) {
   return result;
 }
 
+SceneResourceEditResult RTApplication::on_material_file_loaded(const std::string& filename) {
+  const bool cpu_was_running = cpu_renderer.is_running();
+  if (cpu_was_running) {
+    cpu_renderer.stop();
+  }
+  const SceneResourceEditResult result = scene.load_material_from_file(filename.c_str());
+  if (result.succeeded()) {
+    _restart_cpu_after_material_resource_preparation |= cpu_was_running;
+    on_material_changed(result.resource_index);
+  } else if (cpu_was_running) {
+    cpu_renderer.restart();
+  }
+  return result;
+}
+
+std::string RTApplication::on_material_file_saved(uint32_t index, const std::string& filename) {
+  if (flush_pending_edits_for_save() == false) {
+    ui.set_resource_edit_error(_file_operation_error);
+    return {};
+  }
+  const std::string saved = scene.save_material_to_file(filename.c_str(), index);
+  if (saved.empty()) {
+    _file_operation_error = scene.data().diagnostic.text();
+    ui.set_resource_edit_error(_file_operation_error);
+  }
+  return saved;
+}
+
 SceneResourceEditResult RTApplication::on_material_deleted(uint32_t index) {
   const bool cpu_was_running = cpu_renderer.is_running();
   if (cpu_was_running) {
@@ -1320,10 +1379,10 @@ SceneResourceEditResult RTApplication::on_material_deleted(uint32_t index) {
 
   const SceneResourceEditResult result = scene.delete_material(index);
   if (result.succeeded()) {
-    mark_scene_dirty();
-    notify_scene_might_have_changed();
+    _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+    on_material_changed(kInvalidIndex);
   }
-  if (cpu_was_running) {
+  if (cpu_was_running && (result.succeeded() == false)) {
     cpu_renderer.restart();
   }
   return result;
@@ -1356,20 +1415,22 @@ std::string RTApplication::on_material_renamed(uint32_t index, const std::string
 void RTApplication::on_material_changed(uint32_t index) {
   (void)index;
   mark_scene_dirty();
+  _dismissed_diagnostic_message.clear();
+  _material_edit_diagnostic = {};
   const bool cpu_was_running = cpu_renderer.is_running();
   if (cpu_was_running) {
     cpu_renderer.stop();
   }
 
-  scene.create_area_emitters_from_materials();
   _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
   if (scene.begin_energy_compensation_interface_preparation()) {
     _material_render_resource_preparation_active = true;
+    _material_render_resource_preparation_failed = false;
     return;
   }
 
   _material_render_resource_preparation_active = false;
-  if (rebuild_material_render_resources() == false) {
+  if (render_context.get_context().valid() || (rebuild_material_render_resources() == false)) {
     finish_material_render_resource_preparation(false);
     return;
   }
@@ -1660,8 +1721,14 @@ SceneEditResult RTApplication::on_primitive_added(ScenePrimitive primitive) {
     cpu_renderer.stop();
   }
 
+  const size_t material_count = scene.data().material_descriptions.size();
   const SceneEditResult result = scene.create_primitive(primitive);
   if (result.succeeded()) {
+    if (scene.data().material_descriptions.size() != material_count) {
+      _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
+      on_material_changed(result.material_index);
+      return result;
+    }
     scene.create_area_emitters_from_materials();
     handle_scene_hierarchy_changed();
   }
@@ -1676,14 +1743,14 @@ SceneEditResult RTApplication::on_node_duplicated(uint32_t node_index, NodeDupli
   if (cpu_was_running) {
     cpu_renderer.stop();
   }
-  const size_t material_count = scene.data().materials.size();
+  const size_t material_count = scene.data().material_descriptions.size();
   const size_t emitter_count = scene.data().emitter_profiles.size();
   const SceneEditResult result = scene.duplicate_node_subtree(node_index, mode);
   if (result.succeeded()) {
     if (scene.data().emitter_profiles.size() != emitter_count) {
       rebuild_all_atmosphere_emitters();
     }
-    if (scene.data().materials.size() != material_count) {
+    if (scene.data().material_descriptions.size() != material_count) {
       _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_was_running;
       on_material_changed(kInvalidIndex);
       return result;
@@ -1860,7 +1927,7 @@ void RTApplication::on_scene_settings_changed() {
     }
 
     _material_render_resource_preparation_active = false;
-    if (rebuild_material_render_resources() == false) {
+    if (render_context.get_context().valid() || (rebuild_material_render_resources() == false)) {
       finish_material_render_resource_preparation(false);
       return;
     }
@@ -2130,6 +2197,7 @@ RendererStatus RTApplication::current_renderer_status() const {
   if (gpu_renderer.runtime_failed()) {
     RendererStatus gpu_status = gpu_renderer.status();
     if (gpu_status.diagnostic.recovery == RendererRecovery::RestartApplication) {
+      gpu_status.action_failure = _command_failure_reason;
       return gpu_status;
     }
   }
@@ -2169,10 +2237,23 @@ RendererStatus RTApplication::current_renderer_status() const {
   }
   if (_material_render_resource_preparation_failed || (scene.energy_compensation_interface_preparation_status().state == EnergyCompensationPreparationState::Failed)) {
     status.state = RendererStatusState::Failed;
-    status.message = "Material render-resource preparation failed. Scattering or thermal emission data could not be prepared.";
-    status.diagnostic = {RendererDiagnosticSeverity::Error, RendererRecovery::Restart};
+    status.message = _material_edit_diagnostic.text();
+    const bool device_lost = _material_edit_diagnostic.result == RHIResult::DeviceLost;
+    status.diagnostic = {RendererDiagnosticSeverity::Error, device_lost ? RendererRecovery::RestartApplication : RendererRecovery::RetryMaterialPreparation,
+      device_lost ? "Application restart required" : "Material preparation failed",
+      device_lost ? "The graphics device was lost. Save your scene if possible, then close and reopen ETX Tracer."
+                  : "Previous material values were restored. Rendering is paused."};
     status.output_stale = (_active_renderer != nullptr) && _active_renderer->display_texture().valid();
     status.remaining_available = false;
+  }
+  if (_material_edit_diagnostic.rejected() && (status.diagnostic.severity != RendererDiagnosticSeverity::Error) && (status.state != RendererStatusState::Blocked)) {
+    status.message = _material_edit_diagnostic.text();
+    const RendererRecovery recovery = _material_edit_diagnostic.target == SceneDiagnosticTarget::Material ? RendererRecovery::EditMaterial
+                                      : _material_edit_diagnostic.target == SceneDiagnosticTarget::Camera ? RendererRecovery::EditCamera
+                                      : _material_edit_diagnostic.target == SceneDiagnosticTarget::Medium ? RendererRecovery::EditMedium
+                                                                                                          : RendererRecovery::None;
+    status.diagnostic = {RendererDiagnosticSeverity::Warning, recovery, _material_edit_diagnostic.phase == "Spectrum edit" ? "Spectrum edit rejected" : "Material edit rejected",
+      "Previous values remain active.", _material_edit_diagnostic.resource_index};
   }
   Integrator* const integrator = cpu_renderer.current_integrator();
   if ((status.mode != RendererMode::Rasterization) && (integrator != nullptr) && (integrator->type() == Integrator::Type::UPBP) &&
@@ -2183,7 +2264,7 @@ RendererStatus RTApplication::current_renderer_status() const {
                                        static_cast<uint32_t>(UPBPTechnique::BB1D);
     const bool volume_density_requested =
       (upbp_effective_technique_mask(options, (scene.data().options.strategy_flags & Scene::Strategy::MergeVertices) != 0u) & volume_techniques) != 0u;
-    const bool exclusion_subsurface = std::any_of(scene.data().materials.begin(), scene.data().materials.end(), [](const Material& material) {
+    const bool exclusion_subsurface = std::any_of(scene.data().material_descriptions.begin(), scene.data().material_descriptions.end(), [](const MaterialDescription& material) {
       return (material.subsurface_cls != SubsurfaceMaterial::Disabled) && (material.subsurface_packing > 0.0f);
     });
     if (volume_density_requested && exclusion_subsurface) {
@@ -2198,9 +2279,15 @@ RendererStatus RTApplication::current_renderer_status() const {
     if (status.diagnostic.severity == RendererDiagnosticSeverity::None) {
       status.message = "Action was not completed: " + _command_failure_reason;
       status.diagnostic.severity = RendererDiagnosticSeverity::Warning;
+      status.diagnostic.title = _failed_command_type == ApplicationCommandType::SaveScene   ? "Scene save failed"
+                                : _failed_command_type == ApplicationCommandType::LoadScene ? "Scene load failed"
+                                                                                            : "Action failed";
     } else if (status.message != _command_failure_reason) {
       status.action_failure = _command_failure_reason;
     }
+  }
+  if ((status.message == _dismissed_diagnostic_message) && (status.diagnostic.severity != RendererDiagnosticSeverity::Error) && (status.state != RendererStatusState::Blocked)) {
+    status.diagnostic = {};
   }
   return status;
 }
@@ -2213,7 +2300,7 @@ RendererControlState RTApplication::current_renderer_controls() const {
     return {};
   }
   if (_material_render_resource_preparation_failed || (scene.energy_compensation_interface_preparation_status().state == EnergyCompensationPreparationState::Failed)) {
-    return {.can_restart = true};
+    return {.can_restart = _material_edit_diagnostic.result != RHIResult::DeviceLost};
   }
   RendererControlState controls = _active_renderer->control_state();
   const RendererStatus status = current_renderer_status();
@@ -2324,9 +2411,11 @@ void RTApplication::process_application_commands() {
 
 bool RTApplication::execute_application_command(const ApplicationCommand& command, std::string& message) {
   const bool success = execute_application_command_impl(command, message);
-  if (success) {
+  if (success && (command.type == _failed_command_type)) {
     _command_failure_reason.clear();
-  } else {
+  } else if (success == false) {
+    _dismissed_diagnostic_message.clear();
+    _failed_command_type = command.type;
     _command_failure_reason = message;
   }
   return success;
@@ -2334,6 +2423,16 @@ bool RTApplication::execute_application_command(const ApplicationCommand& comman
 
 bool RTApplication::execute_application_command_impl(const ApplicationCommand& command, std::string& message) {
   switch (command.type) {
+    case ApplicationCommandType::DismissDiagnostic: {
+      const RendererStatus status = current_renderer_status();
+      if ((status.diagnostic.severity != RendererDiagnosticSeverity::Error) && (status.state != RendererStatusState::Blocked))
+        _dismissed_diagnostic_message = status.message;
+    }
+      _command_failure_reason.clear();
+      if (_material_render_resource_preparation_failed == false)
+        _material_edit_diagnostic = {};
+      message = "Diagnostic dismissed";
+      return true;
     case ApplicationCommandType::CancelImport:
       if (_import_job == nullptr) {
         message = "No import is running.";
@@ -2362,7 +2461,7 @@ bool RTApplication::execute_application_command_impl(const ApplicationCommand& c
         return false;
       }
       if (!load_scene_file(command.path, SceneRepresentation::LoadEverything, false, command.input_owner != nullptr)) {
-        message = "Scene loading failed";
+        message = _file_operation_error;
         return false;
       }
       if (command.input_owner != nullptr) {
@@ -2389,7 +2488,7 @@ bool RTApplication::execute_application_command_impl(const ApplicationCommand& c
           message = "Scene saved";
           return true;
         }
-        message = "Scene save failed";
+        message = _file_operation_error;
         return false;
       }
 
@@ -2691,8 +2790,6 @@ void RTApplication::sync_scene_integrator_data_from_current_integrator() {
 
 bool RTApplication::rebuild_material_render_resources() {
   if (scene.ensure_energy_compensation_interfaces() == false) {
-    finish_material_render_resource_preparation(false);
-    log::error("Failed to rebuild material energy-compensation interfaces");
     return false;
   }
   if (scene.energy_compensation_interface_preparation_status().state == EnergyCompensationPreparationState::Failed) {
@@ -2713,7 +2810,6 @@ void RTApplication::poll_material_render_resource_preparation() {
   }
 
   if (state == EnergyCompensationPreparationState::Failed) {
-    log::error("Failed to prepare material energy-compensation interfaces");
     finish_material_render_resource_preparation(false);
     return;
   }
@@ -2725,12 +2821,31 @@ void RTApplication::finish_material_render_resource_preparation(bool resources_r
   _material_render_resource_preparation_active = false;
   _material_render_resource_preparation_failed = resources_ready == false;
   if (resources_ready == false) {
+    _material_edit_diagnostic = scene.material_preparation_diagnostic();
+    scene.data().diagnostic = _material_edit_diagnostic;
     _restart_cpu_after_material_resource_preparation = _restart_cpu_after_material_resource_preparation || cpu_renderer.is_running();
     _restart_gpu_after_material_resource_preparation = _restart_gpu_after_material_resource_preparation || gpu_renderer.is_running();
     cpu_renderer.stop();
     gpu_renderer.stop();
+    scene.data().restore_material_authoring();
+    ui.revert_material_spectrum_edits(scene);
+    if (_material_edit_diagnostic.rejected()) {
+      _material_render_resource_preparation_failed = false;
+      scene.cancel_energy_compensation_interface_preparation();
+      if (_restart_cpu_after_material_resource_preparation && (cpu_renderer.status().diagnostic.severity != RendererDiagnosticSeverity::Error) &&
+          (cpu_renderer.status().state != RendererStatusState::Blocked)) {
+        cpu_renderer.restart();
+      }
+      if (_restart_gpu_after_material_resource_preparation && (gpu_renderer.runtime_failed() == false)) {
+        gpu_renderer.restart();
+      }
+      _restart_cpu_after_material_resource_preparation = false;
+      _restart_gpu_after_material_resource_preparation = false;
+    }
     return;
   }
+  _material_edit_diagnostic = {};
+  scene.update_medium_bounds();
   notify_scene_might_have_changed();
   if (_restart_cpu_after_material_resource_preparation) {
     if (cpu_renderer.status().diagnostic.recovery == RendererRecovery::Restart) {

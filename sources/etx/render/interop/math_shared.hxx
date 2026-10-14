@@ -93,6 +93,7 @@ struct ETX_ALIGNED IntersectionBase {
   uint32_t triangle_index ETX_INIT(kInvalidIndex);
   float t ETX_INIT(kMaxFloat);
   uint32_t instance_index ETX_INIT(kInvalidIndex);
+  uint32_t material_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED Intersection {

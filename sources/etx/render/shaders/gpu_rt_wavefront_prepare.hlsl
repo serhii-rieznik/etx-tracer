@@ -1,4 +1,5 @@
-#include "gpu_rt_wavefront_common.hlsl"
+#include "gpu_rt_wavefront_base.hlsl"
+#include <access/spectrum_access_gpu.hxx>
 
 [numthreads(64, 1, 1)] void wavefront_prepare_spectral_values_main(uint3 dtid : SV_DispatchThreadID) {
 #if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
@@ -6,7 +7,7 @@
     return;
   }
 
-  const SpectralQuery spect = spectral_query_progressive_sample(constants.sample_index, load_scene_options_random_seed());
+  const SpectralQuery spect = spectral_query_progressive_sample(constants.sample_index, scene_gpu_load_options(constants.scene.scene_options).random_seed);
   RWByteAddressBuffer spectral_values = bindless_rw_buffers[NonUniformResourceIndex(constants.scene.spectral_values)];
   if (dtid.x == 0u) {
     const float3 rgb_estimate_scale = spectral_response_to_rgb_estimate(spectral_response_make(spect, 1.0f));
@@ -49,7 +50,7 @@
     return;
   }
 
-  Camera camera = load_camera(bindless_buffers[NonUniformResourceIndex(constants.camera_buffer_index)]);
+  Camera camera = gpu_abi_load_camera(bindless_buffers[NonUniformResourceIndex(constants.camera_buffer_index)]);
   if (wavefront_render_window_contains(dtid.xy) == false) {
     return;
   }
@@ -75,7 +76,7 @@
   if (constants.camera_buffer_index == kInvalidIndex) {
     return;
   }
-  Camera camera = load_camera(bindless_buffers[NonUniformResourceIndex(constants.camera_buffer_index)]);
+  Camera camera = gpu_abi_load_camera(bindless_buffers[NonUniformResourceIndex(constants.camera_buffer_index)]);
   if (wavefront_render_window_contains(dtid.xy) == false) {
     return;
   }

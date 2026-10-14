@@ -2,6 +2,7 @@
 
 #include <etx/core/core.hxx>
 #include <etx/rhi/rhi_types.hxx>
+#include <atomic>
 namespace etx {
 
 constexpr size_t MAX_SHADER_FILE_SIZE = 16 * 1024 * 1024;
@@ -47,7 +48,6 @@ struct ShaderCompilerStatistics {
   uint64_t preprocessed_disk_cache_hits = 0;
   uint64_t shader_memory_cache_hits = 0;
   uint64_t shader_disk_cache_hits = 0;
-  uint64_t shader_package_hits = 0;
   uint64_t preprocess_invocations = 0;
   uint64_t dxc_compile_invocations = 0;
   uint64_t spirv_to_msl_translations = 0;
@@ -70,9 +70,6 @@ struct ShaderCompiler {
   // Singleton access
   static ShaderCompiler& instance();
   void shutdown();
-  void set_runtime_compilation_allowed(bool allowed);
-  void set_shader_package_lookup_allowed(bool allowed);
-  bool runtime_compilation_allowed() const;
 
   RHIResult initialize();
   bool is_initialized() const;
@@ -94,6 +91,13 @@ struct ShaderCompiler {
 
   MultiShaderCompilationResult compile(const std::string& filename, const std::vector<ShaderEntryPoint>& entry_points,
     const std::unordered_map<std::string, std::string>& defines = {}, RHIBackend backend = RHIBackend::Vulkan);
+
+  // A stopped request returns NotReady after the current DXC call finishes.
+  MultiShaderCompilationResult compile(const std::string& hlsl_source, const std::string& source_name, const std::vector<ShaderEntryPoint>& entry_points,
+    const std::unordered_map<std::string, std::string>& defines, RHIBackend backend, const std::atomic<bool>* stop_requested);
+
+  MultiShaderCompilationResult compile(const std::string& filename, const std::vector<ShaderEntryPoint>& entry_points, const std::unordered_map<std::string, std::string>& defines,
+    RHIBackend backend, const std::atomic<bool>* stop_requested);
 
   std::string read_file_content(const std::string& file_path, std::string& error_message);
 

@@ -286,7 +286,7 @@ bool upbp_initialize_light_path(GPUWavefrontResources wavefront_resources, uint 
   endpoint.outgoing_medium_index = emitter_sample.medium_index;
   endpoint.normal = emitter_sample.normal;
   endpoint.geo_normal = emitter_sample.normal;
-  endpoint.material_index = kInvalidIndex;
+  endpoint.material_index = emitter_sample.material_index;
   endpoint.texcoord = emitter_sample.image_uv;
   endpoint.triangle_index = emitter_sample.triangle_index;
   endpoint.instance_index = emitter_sample.instance_index;

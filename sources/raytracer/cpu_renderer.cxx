@@ -97,11 +97,12 @@ RendererStatus CPURaytracingRenderer::status() const {
   if (_recovery_blocked) {
     result.state = RendererStatusState::Failed;
     result.message = _runtime_failure_reason;
-    result.diagnostic = {RendererDiagnosticSeverity::Error, RendererRecovery::RestartApplication};
+    result.diagnostic = {RendererDiagnosticSeverity::Error, RendererRecovery::RestartApplication, "Application restart required",
+      "Rendering is stopped. Save your scene if possible, then close and reopen ETX Tracer."};
     return result;
   }
-  const char* scene_failure_reason = _integrator_thread.scene_failure_reason();
-  if (scene_failure_reason != nullptr) {
+  const std::string scene_failure_reason = _integrator_thread.scene_failure_reason();
+  if (scene_failure_reason.empty() == false) {
     result.state = RendererStatusState::Failed;
     result.message = scene_failure_reason;
     result.diagnostic = {RendererDiagnosticSeverity::Error, RendererRecovery::Restart};
@@ -136,11 +137,13 @@ RendererStatus CPURaytracingRenderer::status() const {
   result.total_path_count = path_progress.total_path_count;
 
   if (_runtime_failure_reason.empty() == false) {
-    const bool configuration_blocked = _runtime_failure_reason == kThermalCameraBindingFailure;
+    const bool configuration_blocked = _camera_binding_failed;
     result.state = configuration_blocked ? RendererStatusState::Blocked : RendererStatusState::Failed;
     result.message = _runtime_failure_reason;
     result.diagnostic = {configuration_blocked ? RendererDiagnosticSeverity::Warning : RendererDiagnosticSeverity::Error,
-      configuration_blocked ? RendererRecovery::ChangeSettings : (_recovery_blocked ? RendererRecovery::RestartApplication : RendererRecovery::Restart)};
+      configuration_blocked ? RendererRecovery::EditCamera : (_recovery_blocked ? RendererRecovery::RestartApplication : RendererRecovery::Restart)};
+    result.diagnostic.title = configuration_blocked ? "Camera medium binding invalid" : "CPU renderer interrupted";
+    result.diagnostic.resource_index = _failure_camera_index;
     result.completed_units = _last_uploaded_completed_iterations;
   } else if (integrator->failed()) {
     const bool configuration_blocked = integrator->can_run() == false;
@@ -185,7 +188,7 @@ RendererControlState CPURaytracingRenderer::control_state() const {
   if ((integrator != nullptr) && (status().diagnostic.recovery == RendererRecovery::Restart)) {
     return {.can_restart = true};
   }
-  if ((integrator == nullptr) || (integrator->can_run() == false) || (_runtime_failure_reason.empty() == false) || (_integrator_thread.scene_failure_reason() != nullptr)) {
+  if ((integrator == nullptr) || (integrator->can_run() == false) || (_runtime_failure_reason.empty() == false) || (_integrator_thread.scene_failure_reason().empty() == false)) {
     return {};
   }
 
@@ -255,8 +258,7 @@ bool CPURaytracingRenderer::recover(RHIContext& ctx, SceneRepresentation& scene)
   stop();
   const RHIResult wait_result = ctx.wait_idle();
   if (wait_result != RHIResult::Success) {
-    _runtime_failure_reason =
-      "CPU renderer restart could not synchronize its display resources (" + std::to_string(static_cast<uint32_t>(wait_result)) + "). Restart the application.";
+    _runtime_failure_reason = "CPU renderer restart could not synchronize its display resources (" + std::string(rhi_result_name(wait_result)) + "). Restart the application.";
     _recovery_blocked = true;
     log::error("%s", _runtime_failure_reason.c_str());
     return false;
@@ -283,8 +285,18 @@ void CPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
 void CPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
   if (thermal_medium_binding_valid(scene.data(), scene.camera().medium_index) == false) {
     stop();
-    _runtime_failure_reason = kThermalCameraBindingFailure;
-  } else if (_runtime_failure_reason == kThermalCameraBindingFailure) {
+    _camera_binding_failed = true;
+    _runtime_failure_reason = "Camera medium #" + std::to_string(scene.camera().medium_index) +
+                              " has conflicting interior temperatures or optical coefficients. Bind the camera to a distinct authored medium.";
+    _failure_camera_index = kInvalidIndex;
+    for (uint32_t index = 0u; index < scene.data().cameras.size(); ++index) {
+      if (scene.data().cameras[index].active) {
+        _failure_camera_index = index;
+        break;
+      }
+    }
+  } else if (_camera_binding_failed) {
+    _camera_binding_failed = false;
     _runtime_failure_reason.clear();
   }
   Renderer::on_camera_changed(scene);
@@ -385,7 +397,9 @@ bool CPURaytracingRenderer::update_image(RHIContext& ctx, RHICommandBuffer cmd, 
       if (create_result.handle.valid()) {
         ctx.device().destroy_buffer(create_result.handle);
       }
-      _runtime_failure_reason = "CPU renderer failed to create its output staging buffer (" + std::to_string(static_cast<uint32_t>(create_result.result)) + ")";
+      _runtime_failure_reason = "CPU renderer failed to create its output staging buffer (" + std::string(rhi_result_name(create_result.result)) + ")";
+      _camera_binding_failed = false;
+      _recovery_blocked = _recovery_blocked || (create_result.result == RHIResult::DeviceLost);
       log::error("%s", _runtime_failure_reason.c_str());
       return false;
     }
@@ -395,7 +409,9 @@ bool CPURaytracingRenderer::update_image(RHIContext& ctx, RHICommandBuffer cmd, 
 
   const RHIResult update_result = ctx.device().update_buffer(staging_buffer, data_ptr, upload_size);
   if (update_result != RHIResult::Success) {
-    _runtime_failure_reason = "CPU renderer failed to update its output staging buffer (" + std::to_string(static_cast<uint32_t>(update_result)) + ")";
+    _runtime_failure_reason = "CPU renderer failed to update its output staging buffer (" + std::string(rhi_result_name(update_result)) + ")";
+    _camera_binding_failed = false;
+    _recovery_blocked = _recovery_blocked || (update_result == RHIResult::DeviceLost);
     log::error("%s", _runtime_failure_reason.c_str());
     return false;
   }
@@ -440,14 +456,18 @@ void CPURaytracingRenderer::set_output_dimensions(RHIContext& ctx, const uint2& 
     if (create_result.handle.valid()) {
       ctx.device().destroy_texture(create_result.handle);
     }
-    _runtime_failure_reason = "CPU renderer failed to create its output texture (" + std::to_string(static_cast<uint32_t>(create_result.result)) + ")";
+    _runtime_failure_reason = "CPU renderer failed to create its output texture (" + std::string(rhi_result_name(create_result.result)) + ")";
+    _camera_binding_failed = false;
+    _recovery_blocked = _recovery_blocked || (create_result.result == RHIResult::DeviceLost);
     log::error("%s", _runtime_failure_reason.c_str());
     return;
   }
   const RHIResult replacement_wait_result = ctx.wait_idle();
   if (replacement_wait_result != RHIResult::Success) {
     ctx.device().destroy_texture(create_result.handle);
-    _runtime_failure_reason = "CPU renderer failed to synchronize before replacing its output texture (" + std::to_string(static_cast<uint32_t>(replacement_wait_result)) + ")";
+    _runtime_failure_reason = "CPU renderer failed to synchronize before replacing its output texture (" + std::string(rhi_result_name(replacement_wait_result)) + ")";
+    _camera_binding_failed = false;
+    _recovery_blocked = _recovery_blocked || (replacement_wait_result == RHIResult::DeviceLost);
     log::error("%s", _runtime_failure_reason.c_str());
     return;
   }

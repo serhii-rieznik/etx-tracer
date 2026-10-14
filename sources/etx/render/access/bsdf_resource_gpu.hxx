@@ -150,7 +150,7 @@ bool bsdf_resource_energy_compensation_interface_try_load(BSDFResourceContext co
   }
 
   ByteAddressBuffer interface_buffer = bindless_buffers[NonUniformResourceIndex(context.energy_compensation_interfaces_descriptor_index)];
-  uint base_offset = interface_index * 48u;
+  uint base_offset = interface_index * kBSDFEnergyCompensationInterfaceDataSize;
   interface_data.cls = interface_buffer.Load(base_offset + 0u);
   interface_data.cache_mode = interface_buffer.Load(base_offset + 4u);
   interface_data.spectral_wavelength_count = interface_buffer.Load(base_offset + 8u);
@@ -163,6 +163,8 @@ bool bsdf_resource_energy_compensation_interface_try_load(BSDFResourceContext co
   interface_data.probability_lut = interface_buffer.Load(base_offset + 36u);
   interface_data.spectral_shortest_wavelength = asfloat(interface_buffer.Load(base_offset + 40u));
   interface_data.spectral_longest_wavelength = asfloat(interface_buffer.Load(base_offset + 44u));
+  interface_data.coating_slice_count = interface_buffer.Load(base_offset + 48u);
+  interface_data.terminal_source_lut = interface_buffer.Load(base_offset + 52u);
   return true;
 }
 

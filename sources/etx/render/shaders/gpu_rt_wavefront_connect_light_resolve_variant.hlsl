@@ -2,10 +2,11 @@
 #include <interop/image_filter_shared.hxx>
 #include <access/bsdf_resource_gpu.hxx>
 
-#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE    1
-#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC    2
-#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR  3
-#define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC 4
+#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE          1
+#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC          2
+#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR        3
+#define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC       4
+#define ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR 6
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
 # if ETX_ENABLE_VELVET_STAGE
@@ -27,13 +28,23 @@
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
 # include <interop/bsdf_energy_compensated_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Conductor
-# define ETX_STAGE_BSDF_EVAL  bsdf_conductor_energy_compensated_evaluate
-# define ETX_STAGE_BSDF_PDF   bsdf_conductor_energy_compensated_pdf
+# define ETX_STAGE_BSDF_EVAL  wavefront_connect_light_stage_conductor_eval
+# define ETX_STAGE_BSDF_PDF   wavefront_connect_light_stage_conductor_pdf
+#elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+# include "gpu_rt_wavefront_coating_storage.hlsl"
+# define ETX_STAGE_BSDF_CLASS MaterialClass::CoatedConductor
+# define ETX_STAGE_BSDF_PDF   bsdf_coated_conductor_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
 # include <interop/bsdf_energy_compensated_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Dielectric
 # define ETX_STAGE_BSDF_EVAL  bsdf_dielectric_energy_compensated_evaluate
 # define ETX_STAGE_BSDF_PDF   bsdf_dielectric_energy_compensated_pdf
+#endif
+
+#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+# define ETX_STAGE_CONNECT_QUEUE_FAMILY 2u
+#else
+# define ETX_STAGE_CONNECT_QUEUE_FAMILY (ETX_BSDF_KIND - 1u)
 #endif
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
@@ -88,9 +99,20 @@ float wavefront_connect_light_stage_various_pdf(BSDFResourceContext context, BSD
 }
 #endif
 
+#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
+BSDFEval wavefront_connect_light_stage_conductor_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+  return bsdf_conductor_energy_compensated_evaluate(context, data, outgoing_direction, material, sampler);
+}
+float wavefront_connect_light_stage_conductor_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+  return bsdf_conductor_energy_compensated_pdf(context, data, outgoing_direction, material, sampler);
+}
+#endif
+
+#if ETX_BSDF_KIND != ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
 BSDFEval wavefront_connect_light_stage_light_bsdf_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_EVAL(context, data, outgoing_direction, material, sampler);
 }
+#endif
 
 float wavefront_connect_light_stage_light_bsdf_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_PDF(context, data, outgoing_direction, material, sampler);
@@ -117,6 +139,7 @@ WavefrontConnectLightStagePrepared wavefront_connect_light_stage_prepare_materia
   return result;
 }
 
+#if ETX_BSDF_KIND != ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
 BSDFEval wavefront_connect_light_stage_light_bsdf_eval_prepared(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material,
   WavefrontConnectLightStagePrepared prepared, inout Sampler sampler) {
 #if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR
@@ -130,6 +153,7 @@ BSDFEval wavefront_connect_light_stage_light_bsdf_eval_prepared(BSDFResourceCont
   return wavefront_connect_light_stage_light_bsdf_eval(context, data, outgoing_direction, material, sampler);
 #endif
 }
+#endif
 
 float wavefront_connect_light_stage_light_bsdf_pdf_prepared(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material,
   WavefrontConnectLightStagePrepared prepared, inout Sampler sampler) {
@@ -155,7 +179,7 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
 # if ETX_ENABLE_VELVET_STAGE
          || (material_class == MaterialClass::Velvet)
 # endif
-         ;
+    ;
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
   return material_class == MaterialClass::Conductor;
 #else
@@ -170,8 +194,8 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
 #if ETX_ENABLE_WORK_QUEUES
   uint dispatch_index = 0u;
   uint batch_index = 0u;
-  if (wavefront_connect_queue_load(wavefront_load_resources(), kGPUWavefrontConnectQueueFamilyCount + ETX_BSDF_KIND - 1u, dtid.x + dtid.y * (65535u * 64u), dispatch_index,
-        batch_index)) {
+  if (wavefront_connect_queue_load(wavefront_load_resources(), kGPUWavefrontConnectQueueFamilyCount + ETX_STAGE_CONNECT_QUEUE_FAMILY, dtid.x + dtid.y * (65535u * 64u),
+        dispatch_index, batch_index)) {
     wavefront_resolve_connect_light_prepare_task(dispatch_index, batch_index);
   }
 #else

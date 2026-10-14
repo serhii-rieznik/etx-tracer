@@ -32,7 +32,8 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
 bool wavefront_trace_path_state(bool from_camera, uint path_index, bool restricted_subsurface, RayDesc ray, SpectralQuery spect, SpectralResponse throughput,
   inout uint medium_index, inout uint seed, inout GPUWavefrontSubsurfaceState subsurface_state, out float2 flight_pdf, out TraceSurfaceResult result,
   out SpectralResponse thermal_radiance);
-bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, out TraceSurfaceResult result, out bool boundary_hit, out uint boundary_medium_index);
+bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, out TraceSurfaceResult result, out bool boundary_hit, out uint boundary_medium_index,
+  uint restricted_root, uint restricted_leaf);
 SurfacePoint wavefront_load_surface_point_compact(TriangleData tri, float2 bary, float3 ray_dir, uint instance_index);
 float3 wavefront_trace_surface_shading_position(TraceSurfaceResult surface_hit, float3 outgoing_direction);
 
@@ -84,7 +85,7 @@ void wavefront_connection_boundary_medium(TraceSurfaceResult boundary, float3 di
 
 #if ETX_UPBP
 bool wavefront_trace_closest_surface_or_boundary_with_origin_retry(RayDesc ray, inout uint seed, out TraceSurfaceResult result, out bool boundary_hit,
-  out uint boundary_medium_index);
+  out uint boundary_medium_index, uint restricted_root, uint restricted_leaf);
 
 bool wavefront_upbp_trace_connection_to_point(float3 origin, float3 target, SpectralQuery spect, uint medium_index, SpectralResponse inline_extinction,
   SpectralResponse inline_scattering, uint inline_flags, float subsurface_packing, bool source_is_medium, bool target_is_medium, inout uint intersection_seed,
@@ -126,8 +127,10 @@ bool wavefront_upbp_trace_connection_to_point(float3 origin, float3 target, Spec
     TraceSurfaceResult trace_result = (TraceSurfaceResult)0;
     bool boundary_hit = false;
     uint boundary_medium = kInvalidIndex;
-    const bool found_hit = retry_from_source ? wavefront_trace_closest_surface_or_boundary_with_origin_retry(ray, intersection_seed, trace_result, boundary_hit, boundary_medium)
-                                             : wavefront_trace_closest_surface_or_boundary(ray, intersection_seed, trace_result, boundary_hit, boundary_medium);
+    const bool found_hit =
+      retry_from_source
+        ? wavefront_trace_closest_surface_or_boundary_with_origin_retry(ray, intersection_seed, trace_result, boundary_hit, boundary_medium, kInvalidIndex, kInvalidIndex)
+        : wavefront_trace_closest_surface_or_boundary(ray, intersection_seed, trace_result, boundary_hit, boundary_medium, kInvalidIndex, kInvalidIndex);
     boundary_hit = boundary_hit || (found_hit && material_has_incident_subsurface_boundary(trace_result.material));
     const float interval_distance = found_hit ? trace_result.hit_t : ray.TMax;
     if (isfinite(interval_distance) == false) {
@@ -268,7 +271,7 @@ bool wavefront_trace_transmittance_to_point_inline_medium(float3 origin, float3 
     TraceSurfaceResult trace_result = (TraceSurfaceResult)0;
     bool boundary_hit = false;
     uint boundary_medium = kInvalidIndex;
-    bool found_hit = wavefront_trace_closest_surface_or_boundary(ray, seed, trace_result, boundary_hit, boundary_medium);
+    bool found_hit = wavefront_trace_closest_surface_or_boundary(ray, seed, trace_result, boundary_hit, boundary_medium, kInvalidIndex, kInvalidIndex);
     boundary_hit = boundary_hit || (found_hit && material_has_incident_subsurface_boundary(trace_result.material));
     float segment_distance = found_hit ? trace_result.hit_t : ray.TMax;
     SpectralResponse segment_transmittance = spectral_response_make(spect, 1.0f);
@@ -308,7 +311,8 @@ bool wavefront_trace_transmittance_to_point_inline_medium(float3 origin, float3 
   }
 }
 
-bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, out TraceSurfaceResult result, out bool boundary_hit, out uint boundary_medium_index) {
+bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, out TraceSurfaceResult result, out bool boundary_hit, out uint boundary_medium_index,
+  uint restricted_root, uint restricted_leaf) {
   result = (TraceSurfaceResult)0;
   result.triangle_index = kInvalidIndex;
   result.emitter_index = kInvalidIndex;
@@ -329,6 +333,8 @@ bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, o
   bool has_texcoords = constants.scene.vertex_texcoords != kInvalidIndex;
   uint closest_boundary_triangle = kInvalidIndex;
   uint closest_boundary_instance = kInvalidIndex;
+  uint closest_boundary_material = kInvalidIndex;
+  uint committed_material = kInvalidIndex;
   float closest_boundary_t = ray.TMax;
   float2 closest_boundary_bary = float2(0.0f, 0.0f);
 
@@ -358,6 +364,7 @@ bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, o
       candidate_uv = interpolate_uv(bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_texcoords)], tri, candidate_bary);
     }
 
+    tri.material_index = (tri.material_index == restricted_root) ? restricted_leaf : resolve_mix_material(tri.material_index, candidate_uv, seed);
     MaterialAccess material_access = ETX_ZERO(MaterialAccess);
     if (has_material_buffer) {
       MaterialAccessGPUContext material_context = {constants.scene.materials};
@@ -383,12 +390,14 @@ bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, o
       if ((closest_boundary_triangle == kInvalidIndex) || (candidate_t < closest_boundary_t)) {
         closest_boundary_triangle = candidate_triangle_index;
         closest_boundary_instance = candidate_instance_index;
+        closest_boundary_material = tri.material_index;
         closest_boundary_t = candidate_t;
         closest_boundary_bary = candidate_bary;
       }
       continue;
     }
     ray_query.CommitNonOpaqueTriangleHit();
+    committed_material = tri.material_index;
   }
 
   const bool opaque_hit = ray_query.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
@@ -414,6 +423,7 @@ bool wavefront_trace_closest_surface_or_boundary(RayDesc ray, inout uint seed, o
     hit_bary = ray_query.CommittedTriangleBarycentrics();
   }
   result.tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], result.triangle_index);
+  result.tri.material_index = use_boundary ? closest_boundary_material : committed_material;
   result.surface_point = wavefront_load_surface_point_compact(result.tri, hit_bary, ray.Direction, result.instance_index);
   result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
   if (try_load_material_full(result.tri.material_index, result.material)) {
@@ -531,6 +541,7 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
 
   float medium_segment_start_t = ray.TMin;
   uint ray_medium_index = medium_index;
+  uint committed_material = kInvalidIndex;
   while (ray_query.Proceed()) {
     if (ray_query.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) {
       continue;
@@ -563,6 +574,7 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
       candidate_uv = interpolate_uv(bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_texcoords)], tri, candidate_bary);
     }
 
+    tri.material_index = resolve_mix_material(tri.material_index, candidate_uv, seed);
     MaterialAccess material_access = ETX_ZERO(MaterialAccess);
     if (has_material_buffer) {
       MaterialAccessGPUContext material_context = {constants.scene.materials};
@@ -585,6 +597,7 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
 
     if (hit_policy.action == HitPolicyAction::CommitSurface) {
       ray_query.CommitNonOpaqueTriangleHit();
+      committed_material = tri.material_index;
     }
   }
 
@@ -607,6 +620,7 @@ bool wavefront_trace_surface_path_compact(RayDesc ray, SpectralQuery spect, inou
   result.triangle_index = scene_instance_triangle_index(ray_query.CommittedPrimitiveIndex(), result.instance_index);
   result.hit_t = ray_query.CommittedRayT();
   result.tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], result.triangle_index);
+  result.tri.material_index = committed_material;
   result.surface_point = wavefront_load_surface_point_compact(result.tri, ray_query.CommittedTriangleBarycentrics(), ray.Direction, result.instance_index);
   result.emitter_index = scene_instance_emitter_index(result.triangle_index, result.instance_index);
   if (try_load_material_full(result.tri.material_index, result.material)) {
@@ -668,9 +682,9 @@ SpectralResponse wavefront_subsurface_trace_safe_mul(SpectralQuery spect, Spectr
 }
 
 bool wavefront_trace_closest_surface_or_boundary_with_origin_retry(RayDesc ray, inout uint seed, out TraceSurfaceResult result, out bool boundary_hit,
-  out uint boundary_medium_index) {
+  out uint boundary_medium_index, uint restricted_root, uint restricted_leaf) {
   const uint initial_seed = seed;
-  if (wavefront_trace_closest_surface_or_boundary(ray, seed, result, boundary_hit, boundary_medium_index)) {
+  if (wavefront_trace_closest_surface_or_boundary(ray, seed, result, boundary_hit, boundary_medium_index, restricted_root, restricted_leaf)) {
     return true;
   }
   if (ray.TMin > 0.0f) {
@@ -682,7 +696,7 @@ bool wavefront_trace_closest_surface_or_boundary_with_origin_retry(RayDesc ray, 
   retry_ray.TMin = kRayEpsilon;
   retry_ray.TMax = ray.TMax < (kMaxFloat - kRayEpsilon) ? (ray.TMax + kRayEpsilon) : kMaxFloat;
   seed = initial_seed;
-  if (wavefront_trace_closest_surface_or_boundary(retry_ray, seed, result, boundary_hit, boundary_medium_index) == false) {
+  if (wavefront_trace_closest_surface_or_boundary(retry_ray, seed, result, boundary_hit, boundary_medium_index, restricted_root, restricted_leaf) == false) {
     return false;
   }
   result.hit_t -= kRayEpsilon;
@@ -825,37 +839,28 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, bool restrict
     TraceSurfaceResult segment_hit = (TraceSurfaceResult)0;
     bool boundary_hit = false;
     uint boundary_medium = kInvalidIndex;
+    const uint restricted_root = restricted_subsurface ? subsurface_state.boundary_material_index : kInvalidIndex;
+    const uint restricted_leaf = restricted_subsurface ? subsurface_state.material_index : kInvalidIndex;
     bool found_hit = false;
-    if (restricted_subsurface) {
+#if ETX_UPBP
+    if (record_upbp) {
+      found_hit = wavefront_trace_closest_surface_or_boundary_with_origin_retry(segment_ray, seed, segment_hit, boundary_hit, boundary_medium, restricted_root, restricted_leaf);
+    } else
+#endif
+    {
+      found_hit = wavefront_trace_closest_surface_or_boundary(segment_ray, seed, segment_hit, boundary_hit, boundary_medium, restricted_root, restricted_leaf);
+    }
+    if (restricted_subsurface && (found_hit == false)) {
 #if ETX_UPBP
       if (record_upbp) {
-        found_hit = wavefront_trace_closest_surface_or_boundary_with_origin_retry(segment_ray, seed, segment_hit, boundary_hit, boundary_medium);
-      } else
-#endif
-      {
-        found_hit = wavefront_trace_closest_surface_or_boundary(segment_ray, seed, segment_hit, boundary_hit, boundary_medium);
+        GPUUPBPVertex vertex = upbp_load_vertex(upbp_resources.vertex_buffer, upbp_path_state.last_vertex_index);
+        vertex.flags &= ~GPUUPBPVertexFlags::HasDeparture;
+        upbp_store_vertex(upbp_resources.vertex_buffer, upbp_path_state.last_vertex_index, vertex);
       }
-      if (found_hit == false) {
-#if ETX_UPBP
-        if (record_upbp) {
-          GPUUPBPVertex vertex = upbp_load_vertex(upbp_resources.vertex_buffer, upbp_path_state.last_vertex_index);
-          vertex.flags &= ~GPUUPBPVertexFlags::HasDeparture;
-          upbp_store_vertex(upbp_resources.vertex_buffer, upbp_path_state.last_vertex_index, vertex);
-        }
 #endif
-        subsurface_state.flags = 0u;
-        result.transmittance = spectral_response_zero(spect);
-        return false;
-      }
-    } else {
-#if ETX_UPBP
-      if (record_upbp) {
-        found_hit = wavefront_trace_closest_surface_or_boundary_with_origin_retry(segment_ray, seed, segment_hit, boundary_hit, boundary_medium);
-      } else
-#endif
-      {
-        found_hit = wavefront_trace_closest_surface_or_boundary(segment_ray, seed, segment_hit, boundary_hit, boundary_medium);
-      }
+      subsurface_state.flags = 0u;
+      result.transmittance = spectral_response_zero(spect);
+      return false;
     }
 
     const bool incident_boundary = found_hit && material_has_incident_subsurface_boundary(segment_hit.material);
@@ -1001,7 +1006,8 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, bool restrict
       result.hit_t = segment_hit.hit_t;
       result.medium_index = ray_medium_index;
       medium_index = ray_medium_index;
-      if (restricted_subsurface && (segment_hit.tri.material_index == subsurface_state.material_index)) {
+      if (restricted_subsurface && (load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], segment_hit.triangle_index).material_index ==
+                                     subsurface_state.boundary_material_index)) {
         subsurface_state.flags &= GPUWavefrontSubsurfaceFlags::InlineMedium;
         result.tri.material_index = subsurface_state.scatter_material_index;
         try_load_material_full(subsurface_state.scatter_material_index, result.material);
@@ -1064,6 +1070,7 @@ bool wavefront_trace_path_state(bool from_camera, uint path_index, bool restrict
       subsurface_state.flags = 0u;
       if (entering) {
         subsurface_state.material_index = segment_hit.tri.material_index;
+        subsurface_state.boundary_material_index = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], segment_hit.triangle_index).material_index;
         subsurface_state.owner_instance_index = segment_hit.instance_index;
         subsurface_state.scatter_material_index = segment_hit.tri.material_index;
         subsurface_state.medium_index = ray_medium_index;

@@ -1,7 +1,6 @@
-std::string SceneRepresentation::save_to_file(const char* filename, Integrator::Type selected_type, Integrator* integrator_array[], size_t integrator_count) {
+static std::string save_native_document(SceneRepresentationImpl* impl, const char* filename, Integrator::Type selected_type, Integrator* integrator_array[],
+  size_t integrator_count, uint32_t material_root) {
   auto save_start = std::chrono::high_resolution_clock::now();
-
-  auto impl = _private;
 
   std::string base_file = {};
   if ((filename != nullptr) && (filename[0] != 0)) {
@@ -13,7 +12,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   }
 
   if (base_file.empty()) {
-    log::error("Unable to determine base file for saving scene");
+    impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Unable to determine base file for saving scene");
     return {};
   }
 
@@ -26,13 +25,13 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     std::error_code directory_error;
     std::filesystem::create_directories(json_path.parent_path(), directory_error);
     if (directory_error) {
-      log::error("Could not create native document directory: %s", directory_error.message().c_str());
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Destination directory", "%s: %s", path_to_utf8(json_path.parent_path()).c_str(), directory_error.message().c_str());
       return {};
     }
   }
   std::array<StagedSceneFile, 3u> scene_files = staged_scene_files(paths);
   bool committed_scene_available = false;
-  if (recover_interrupted_scene_save(scene_files, committed_scene_available) == false) {
+  if (recover_interrupted_scene_save(scene_files, committed_scene_available, impl->data.diagnostic) == false) {
     return {};
   }
 
@@ -70,6 +69,18 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
 
   nlohmann::json js = nlohmann::json::object();
   js["etx_document"] = {{"format", "etx"}, {"version", 1u}, {"assets", impl->data.owns_assets ? "owned" : "linked"}};
+  if (material_root != kInvalidIndex) {
+    for (const auto& entry : serialized_material_entries) {
+      if (entry.material_index == material_root) {
+        js["etx_material"] = {{"version", 1u}, {"root", entry.authored_names.front()}};
+        break;
+      }
+    }
+    if (js.contains("etx_material") == false) {
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save an unnamed material root");
+      return {};
+    }
+  }
   js["samples"] = impl->data.options.samples;
   js["random-termination-start"] = impl->data.options.random_path_termination;
   js["max-path-length"] = impl->data.options.max_path_length;
@@ -102,12 +113,6 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   if (camera_names_json.empty() == false) {
     js["camera_names"] = std::move(camera_names_json);
   }
-  bool spectral_overrides_valid = false;
-  nlohmann::json spectral_overrides = serialize_scene_spectral_overrides(impl->data, serialized_material_entries, serialized_medium_entries, spectral_overrides_valid);
-  if (spectral_overrides_valid == false) {
-    return {};
-  }
-  js["spectral_overrides"] = std::move(spectral_overrides);
   nlohmann::json emitter_names_json = nlohmann::json::array();
   for (uint32_t emitter_index : serialized_emitter_indices(impl->data)) {
     emitter_names_json.push_back(impl->data.emitter_names[emitter_index]);
@@ -245,7 +250,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     std::error_code error;
     std::filesystem::create_directories(asset_directory, error);
     if (error) {
-      log::error("Failed to create scene asset directory: %s", path_to_utf8(asset_directory).c_str());
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Asset directory", "%s: %s", path_to_utf8(asset_directory).c_str(), error.message().c_str());
       return false;
     }
     return true;
@@ -255,8 +260,8 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     std::error_code error;
     std::filesystem::rename(staged, destination, error);
     if (error) {
-      log::error("Failed to install scene asset: %s", path_to_utf8(destination).c_str());
-      (void)remove_scene_save_file(staged, "staged scene asset");
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to install scene asset: %s", path_to_utf8(destination).c_str());
+      (void)remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic);
       return false;
     }
     return true;
@@ -265,15 +270,15 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   auto publish_staged_asset = [&](const std::filesystem::path& staged, const std::string& file_name) -> std::string {
     const std::filesystem::path destination = asset_directory / file_name;
     bool destination_exists = false;
-    if (inspect_scene_asset_path(destination, destination_exists) == false) {
-      (void)remove_scene_save_file(staged, "staged scene asset");
+    if (inspect_scene_asset_path(destination, destination_exists, impl->data.diagnostic) == false) {
+      (void)remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic);
       return {};
     }
     if (destination_exists) {
       const bool matches = binary_files_match(destination, staged);
-      (void)remove_scene_save_file(staged, "staged scene asset");
+      (void)remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic);
       if (matches == false) {
-        log::error("Existing scene asset does not match its content hash: %s", path_to_utf8(destination).c_str());
+        impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Existing scene asset does not match its content hash: %s", path_to_utf8(destination).c_str());
         return {};
       }
       return to_relative(destination, materials_path.parent_path());
@@ -307,7 +312,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     }
     if ((image.isize.x == 0u) || (image.isize.y == 0u) || (image.isize.z != 1u) || (pixel_count > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) ||
         (pixel_data_available == false)) {
-      log::error("Cannot persist managed image %u: unsupported or incomplete pixel data", image_index);
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot persist managed image %u: unsupported or incomplete pixel data", image_index);
       return {};
     }
 
@@ -321,7 +326,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       const float4 pixel = image.pixel(pixel_index);
       if ((std::isfinite(pixel.x) == false) || (std::isfinite(pixel.y) == false) || (std::isfinite(pixel.z) == false) || (std::isfinite(pixel.w) == false) || (pixel.x < 0.0f) ||
           (pixel.y < 0.0f) || (pixel.z < 0.0f) || (pixel.w < 0.0f)) {
-        log::error("Cannot persist managed image %u: EXR requires finite non-negative pixels", image_index);
+        impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot persist managed image %u: EXR requires finite non-negative pixels", image_index);
         return {};
       }
       if (converted_pixels.empty() == false) {
@@ -331,25 +336,25 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
 
     const std::filesystem::path staged = asset_directory / "image-save-staged.exr";
     bool staged_exists = false;
-    if (inspect_scene_asset_path(staged, staged_exists) == false) {
+    if (inspect_scene_asset_path(staged, staged_exists, impl->data.diagnostic) == false) {
       return {};
     }
-    if (staged_exists && (remove_scene_save_file(staged, "staged scene asset") == false)) {
+    if (staged_exists && (remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic) == false)) {
       return {};
     }
 
     std::string encode_error;
     if (save_exr_image(path_to_utf8(staged).c_str(), pixels, {image.isize.x, image.isize.y}, &encode_error) == false) {
-      log::error("Failed to encode managed scene image %u: %s", image_index, encode_error.c_str());
-      (void)remove_scene_save_file(staged, "staged scene asset");
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to encode managed scene image %u: %s", image_index, encode_error.c_str());
+      (void)remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic);
       return {};
     }
 
     uint64_t hash = 0u;
     uint64_t encoded_size = 0u;
     if (hash_binary_file(staged, hash, encoded_size) == false) {
-      log::error("Failed to hash managed scene image %u", image_index);
-      (void)remove_scene_save_file(staged, "staged scene asset");
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to hash managed scene image %u", image_index);
+      (void)remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic);
       return {};
     }
     return publish_staged_asset(staged, "image-" + content_hash_string(hash) + ".exr");
@@ -362,18 +367,18 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
 
     const std::filesystem::path staged = asset_directory / (std::string(prefix) + "save-staged");
     bool staged_exists = false;
-    if (inspect_scene_asset_path(staged, staged_exists) == false) {
+    if (inspect_scene_asset_path(staged, staged_exists, impl->data.diagnostic) == false) {
       return {};
     }
-    if (staged_exists && (remove_scene_save_file(staged, "staged scene asset") == false)) {
+    if (staged_exists && (remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic) == false)) {
       return {};
     }
 
     std::ifstream input(source, std::ios::binary);
     std::ofstream output(staged, std::ios::binary | std::ios::trunc);
     if ((input.is_open() == false) || (output.is_open() == false)) {
-      log::error("Failed to open scene dependency for persistence: %s", path_to_utf8(source).c_str());
-      (void)remove_scene_save_file(staged, "staged scene asset");
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to open scene dependency for persistence: %s", path_to_utf8(source).c_str());
+      (void)remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic);
       return {};
     }
 
@@ -400,23 +405,23 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     input.close();
     output.close();
     if ((streams_succeeded == false) || output.fail()) {
-      log::error("Failed to persist scene dependency: %s", path_to_utf8(source).c_str());
-      (void)remove_scene_save_file(staged, "staged scene asset");
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to persist scene dependency: %s", path_to_utf8(source).c_str());
+      (void)remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic);
       return {};
     }
 
     hash = etx_hash64_continue(&total_size, sizeof(total_size), hash);
     const std::filesystem::path destination = asset_directory / (std::string(prefix) + content_hash_string(hash) + extension);
     bool destination_exists = false;
-    if (inspect_scene_asset_path(destination, destination_exists) == false) {
-      (void)remove_scene_save_file(staged, "staged scene asset");
+    if (inspect_scene_asset_path(destination, destination_exists, impl->data.diagnostic) == false) {
+      (void)remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic);
       return {};
     }
     if (destination_exists) {
       const bool matches = binary_files_match(staged, destination);
-      (void)remove_scene_save_file(staged, "staged scene asset");
+      (void)remove_scene_save_file(staged, "staged scene asset", impl->data.diagnostic);
       if (matches == false) {
-        log::error("Existing scene asset does not match its content hash: %s", path_to_utf8(destination).c_str());
+        impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Existing scene asset does not match its content hash: %s", path_to_utf8(destination).c_str());
         return {};
       }
       return to_relative(destination, materials_path.parent_path());
@@ -448,7 +453,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   auto write_path_token = [&](std::ostringstream& stream, const std::string& path, const char* context) {
     for (const unsigned char character : path) {
       if (character < 0x20u) {
-        log::error("Cannot save %s path containing control characters", context);
+        impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save %s path containing control characters", context);
         return false;
       }
     }
@@ -462,7 +467,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     }
     const std::string path = texture_path(image_index, false);
     if (path.empty()) {
-      log::error("Cannot save %s texture: its source file is unavailable", label);
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save %s texture: its source file is unavailable", label);
       return false;
     }
     stream << label << " ";
@@ -524,7 +529,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       const bool persist_volume = managed_source_path(volume_source);
       const std::string saved_volume_path = persist_volume ? persist_managed_file(volume_source, "volume-", ".nvdb") : to_relative(volume_source, materials_path.parent_path());
       if (saved_volume_path.empty()) {
-        log::error("Cannot save volume dependency: %s", source_volume_path.c_str());
+        impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save volume dependency: %s", source_volume_path.c_str());
         return {};
       }
       if (persist_volume) {
@@ -540,7 +545,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       }
       materials_stream << "\n";
     } else if ((medium.cls == Medium::Heterogeneous) && (medium.grid_type_enum() == DensityGrid::Type::Texture3D)) {
-      log::error("Cannot save file-backed medium %s: its source volume path is unavailable", entry.authored_name.c_str());
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save file-backed medium %s: its source volume path is unavailable", entry.authored_name.c_str());
       return {};
     } else if ((medium.cls == Medium::Heterogeneous) && (medium.grid_type_enum() == DensityGrid::Type::NoiseFunction)) {
       materials_stream << "noise type " << static_cast<uint32_t>(medium.noise_type_enum()) << " scale " << medium.grid.noise_scale << " octaves " << medium.grid.noise_octaves
@@ -557,7 +562,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       if (camera_id.empty()) {
         return true;
       }
-      log::error("Cannot save camera %s: its viewport is invalid", camera_id.c_str());
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save camera %s: its viewport is invalid", camera_id.c_str());
       return false;
     }
     const float3 target = camera.position + camera.direction;
@@ -588,7 +593,8 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       }
       materials_stream << "\n";
     } else if (camera.lens_image != kInvalidIndex) {
-      log::error("Cannot save camera %s: its lens image source file is unavailable", camera_id.empty() ? "camera" : camera_id.c_str());
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save camera %s: its lens image source file is unavailable",
+        camera_id.empty() ? "camera" : camera_id.c_str());
       return false;
     }
     const bool camera_medium_valid = (camera.medium_index != kInvalidIndex) && (medium_names.count(camera.medium_index) > 0);
@@ -671,7 +677,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       }
       materials_stream << "\n";
     } else if (is_white_fallback_image(profile.emission.image_index) == false) {
-      log::error("Cannot save environment light: its image source file is unavailable");
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save environment light: its image source file is unavailable");
       return {};
     }
     float3 env_color = spectrum_rgb(profile.emission.spectrum_index);
@@ -730,7 +736,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       }
       materials_stream << "\n";
     } else if ((profile.emission.image_index != kInvalidIndex) && (references_atmosphere == false)) {
-      log::error("Cannot save directional light: its image source file is unavailable");
+      impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save directional light: its image source file is unavailable");
       return {};
     }
     bool dir_medium_valid = (profile.medium_index != kInvalidIndex) && (medium_names.count(profile.medium_index) > 0);
@@ -744,10 +750,52 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
     const std::string& serialized_name = entry.id;
     const std::string& display_name = entry.authored_names.front();
     const uint32_t index = entry.material_index;
-    const Material& material = impl->data.materials[index];
+    const MaterialDescription& material = impl->data.material_descriptions[index];
 
     materials_stream << "newmtl " << serialized_name << "\n";
     materials_stream << "material class " << material_class_to_string(material.cls) << "\n";
+    const MaterialLayerSettings& authored_layers = material.layers;
+    if (authored_layers.explicit_layers != 0u) {
+      materials_stream << "layers " << authored_layers.coating_enabled << " " << authored_layers.thinfilm_enabled << "\n";
+      materials_stream << "bsdf " << (authored_layers.bsdf == MaterialClass::Undefined ? "auto" : material_class_to_string(authored_layers.bsdf)) << "\n";
+    }
+    if (material.cls == MaterialClass::Mix) {
+      if ((serialized_material_names.contains(material.mix.first) == false) || (serialized_material_names.contains(material.mix.second) == false)) {
+        impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save mix material %s: its children must be authored materials", display_name.c_str());
+        return {};
+      }
+      materials_stream << "mix_first " << serialized_material_names.at(material.mix.first) << "\n";
+      materials_stream << "mix_second " << serialized_material_names.at(material.mix.second) << "\n";
+      materials_stream << "mix_amount " << material.mix.amount.value.x << "\n";
+      if (write_texture_line(materials_stream, "map_mix_amount", material.mix.amount.image_index, material.mix.amount.channel) == false)
+        return {};
+    }
+    if ((material.cls == MaterialClass::CoatedConductor) || (authored_layers.explicit_layers != 0u)) {
+      const int matched_coating_index =
+        database.find_matching_index(spectrum_by_index(material.coating.ior.eta_index), spectrum_by_index(material.coating.ior.k_index), material.coating.ior.cls);
+      if ((matched_coating_index >= 0) && (matched_coating_index < static_cast<int>(database.definitions.size()))) {
+        materials_stream << "coating_ior " << database.definitions[static_cast<size_t>(matched_coating_index)].name << "\n";
+      } else {
+        materials_stream << "coating_ior " << spectrum_scalar(material.coating.ior.eta_index, 1.5f);
+        if (material.coating.ior.cls == SpectralDistribution::Conductor) {
+          materials_stream << " " << spectrum_scalar(material.coating.ior.k_index, 0.0f);
+        }
+        materials_stream << "\n";
+      }
+      materials_stream << "coating_roughness " << std::sqrt(max(0.0f, material.coating.roughness.value.x)) << " " << std::sqrt(max(0.0f, material.coating.roughness.value.y))
+                       << "\n";
+      materials_stream << "coating_thickness " << material.coating.thickness.value.x << "\n";
+      materials_stream << "coating_thickness_nm " << material.coating.min_thickness_nm << " " << material.coating.max_thickness_nm << "\n";
+      materials_stream << "coating_anisotropy " << material.coating.anisotropy << "\n";
+      write_spectrum_line(materials_stream, "coating_absorption", material.coating.absorption.spectrum_index, false);
+      write_spectrum_line(materials_stream, "coating_scattering", material.coating.scattering.spectrum_index, false);
+      if ((write_texture_line(materials_stream, "map_coating_roughness", material.coating.roughness.image_index, material.coating.roughness.channel) == false) ||
+          (write_texture_line(materials_stream, "map_coating_thickness", material.coating.thickness.image_index, material.coating.thickness.channel) == false) ||
+          (write_texture_line(materials_stream, "map_coating_thickness_nm", material.coating.thickness_nm_image, 0u) == false) ||
+          (write_texture_line(materials_stream, "map_coating_absorption", material.coating.absorption.image_index, kInvalidIndex) == false) ||
+          (write_texture_line(materials_stream, "map_coating_scattering", material.coating.scattering.image_index, kInvalidIndex) == false))
+        return {};
+    }
     if (material.temperature_kelvin > 0.0f) {
       materials_stream << "temperature " << material.temperature_kelvin << "\n";
     }
@@ -760,7 +808,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
 
     float rough_u = material.roughness.value.x;
     float rough_v = material.roughness.value.y;
-    if ((rough_u >= kEpsilon) || (rough_v >= kEpsilon)) {
+    if ((authored_layers.explicit_layers != 0u) || (rough_u >= kEpsilon) || (rough_v >= kEpsilon)) {
       float value_u = std::sqrt(max(0.0f, rough_u));
       float value_v = std::sqrt(max(0.0f, rough_v));
       if (std::fabs(value_u - value_v) < kEpsilon) {
@@ -801,7 +849,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
           return {};
         }
       } else if (material.normal_image_index != kInvalidIndex) {
-        log::error("Cannot save material %s: its normal map source file is unavailable", display_name.c_str());
+        impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save material %s: its normal map source file is unavailable", display_name.c_str());
         return {};
       }
       materials_stream << " scale " << material.normal_scale << "\n";
@@ -874,7 +922,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
             return {};
           }
         } else {
-          log::error("Cannot save material %s: its emission texture source file is unavailable", display_name.c_str());
+          impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save material %s: its emission texture source file is unavailable", display_name.c_str());
           return {};
         }
       }
@@ -896,7 +944,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       if (material.subsurface.image_index != kInvalidIndex) {
         const std::string subsurface_path = texture_path(material.subsurface.image_index, false);
         if (subsurface_path.empty()) {
-          log::error("Cannot save material %s: its subsurface texture has no source file", display_name.c_str());
+          impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save material %s: its subsurface texture has no source file", display_name.c_str());
           return {};
         }
         materials_stream << " image ";
@@ -913,7 +961,7 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
       materials_stream << "\n";
     }
 
-    if ((material.thinfilm.thinkness_image != kInvalidIndex) || (std::fabs(material.thinfilm.min_thickness) >= kEpsilon) ||
+    if ((authored_layers.explicit_layers != 0u) || (material.thinfilm.thinkness_image != kInvalidIndex) || (std::fabs(material.thinfilm.min_thickness) >= kEpsilon) ||
         (std::fabs(material.thinfilm.max_thickness) >= kEpsilon) || (std::fabs(material.thinfilm.weight - 1.0f) >= kEpsilon)) {
       materials_stream << "thinfilm";
       std::string thinfilm_path = texture_path(material.thinfilm.thinkness_image, false);
@@ -923,11 +971,11 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
           return {};
         }
       } else if (material.thinfilm.thinkness_image != kInvalidIndex) {
-        log::error("Cannot save material %s: its thin-film texture source file is unavailable", display_name.c_str());
+        impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save material %s: its thin-film texture source file is unavailable", display_name.c_str());
         return {};
       }
       materials_stream << " range " << material.thinfilm.min_thickness << " " << material.thinfilm.max_thickness;
-      materials_stream << " weight " << clamp(material.thinfilm.weight, 0.0f, 1.0f);
+      materials_stream << " weight " << material.thinfilm.weight;
       int matched_thinfilm_index = -1;
       if (material.thinfilm.ior.cls != SpectralDistribution::Invalid) {
         matched_thinfilm_index =
@@ -955,19 +1003,42 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
 
   const std::string materials_string = materials_stream.str();
 
+  bool library_valid = false;
+  auto texture_reference = [&](uint32_t index) -> nlohmann::json {
+    if (index == kInvalidIndex) {
+      return nullptr;
+    }
+    if (index >= impl->data.images_vector.size()) {
+      library_valid = false;
+      return nullptr;
+    }
+    const std::string path = texture_path(index, false);
+    if (path.empty()) {
+      library_valid = false;
+      return nullptr;
+    }
+    const Image& image = impl->data.images_vector[index];
+    return {{"path", path}, {"options", image.options & ~Image::Committed}, {"offset", {image.offset.x, image.offset.y}}, {"scale", {image.scale.x, image.scale.y}}};
+  };
+  nlohmann::json library = serialize_scene_spectral_overrides(impl->data, serialized_material_entries, serialized_medium_entries, library_valid, texture_reference);
+  if (library_valid == false) {
+    return {};
+  }
+  js["material_library"] = std::move(library);
+
   std::string json_string;
   try {
     json_string = js.dump(2);
   } catch (const nlohmann::json::exception& error) {
-    log::error("Failed to serialize scene config: %s", error.what());
+    impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to serialize scene config: %s", error.what());
     return {};
   }
 
   const auto geometry_export_start = std::chrono::high_resolution_clock::now();
   SceneSerialization archive;
   if (archive.save_to_file(impl->data, scene_files[0].staged, serialized_material_names) == false) {
-    log::error("Failed to stage geometry for %s", path_to_utf8(geometry_path).c_str());
-    discard_staged_scene_files(scene_files);
+    impl->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to stage geometry for %s", path_to_utf8(geometry_path).c_str());
+    discard_staged_scene_files(scene_files, impl->data.diagnostic);
     return {};
   }
   const auto geometry_export_end = std::chrono::high_resolution_clock::now();
@@ -975,8 +1046,8 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   log::info("Geometry export: %lld ms", geometry_export_duration.count());
 
   const auto materials_write_start = std::chrono::high_resolution_clock::now();
-  if (write_file_contents(scene_files[1].staged, materials_string) == false) {
-    discard_staged_scene_files(scene_files);
+  if (write_file_contents(scene_files[1].staged, materials_string, impl->data.diagnostic) == false) {
+    discard_staged_scene_files(scene_files, impl->data.diagnostic);
     return {};
   }
   const auto materials_write_end = std::chrono::high_resolution_clock::now();
@@ -984,15 +1055,15 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   log::info("Materials file write: %lld ms (%zu bytes)", materials_write_duration.count(), materials_string.size());
 
   const auto json_write_start = std::chrono::high_resolution_clock::now();
-  if (write_file_contents(scene_files[2].staged, json_string) == false) {
-    discard_staged_scene_files(scene_files);
+  if (write_file_contents(scene_files[2].staged, json_string, impl->data.diagnostic) == false) {
+    discard_staged_scene_files(scene_files, impl->data.diagnostic);
     return {};
   }
   const auto json_write_end = std::chrono::high_resolution_clock::now();
   const auto json_write_duration = std::chrono::duration_cast<std::chrono::milliseconds>(json_write_end - json_write_start);
   log::info("JSON config write: %lld ms", json_write_duration.count());
 
-  if (commit_staged_scene_files(scene_files) == false) {
+  if (commit_staged_scene_files(scene_files, impl->data.diagnostic) == false) {
     return {};
   }
 
@@ -1008,4 +1079,108 @@ std::string SceneRepresentation::save_to_file(const char* filename, Integrator::
   log::info("Scene save total: %lld ms", save_duration.count());
 
   return path_to_utf8(json_path);
+}
+
+std::string SceneRepresentation::save_to_file(const char* filename, Integrator::Type selected_type, Integrator* integrator_array[], size_t integrator_count) {
+  _private->data.diagnostic = {.phase = "Save scene"};
+  return save_native_document(_private, filename, selected_type, integrator_array, integrator_count, kInvalidIndex);
+}
+
+std::string SceneRepresentation::save_material_to_file(const char* filename, uint32_t material_index) {
+  const SceneData& source = _private->data;
+  source.diagnostic = {.phase = "Save material"};
+  if (material_index >= source.material_descriptions.size()) {
+    source.diagnostic.fail(SceneDiagnosticKind::Validation, "Material", "Material index %u is outside the document's %zu materials.", material_index,
+      source.material_descriptions.size());
+    return {};
+  }
+  std::vector<uint8_t> included(source.material_descriptions.size(), 0u);
+  std::vector<uint32_t> pending = {material_index};
+  while (pending.empty() == false) {
+    const uint32_t index = pending.back();
+    pending.pop_back();
+    if (index >= included.size()) {
+      return {};
+    }
+    if (included[index] != 0u) {
+      continue;
+    }
+    included[index] = 1u;
+    const MaterialMix& mix = source.material_descriptions[index].mix;
+    if (mix.first != kInvalidIndex) {
+      pending.push_back(mix.first);
+    }
+    if (mix.second != kInvalidIndex) {
+      pending.push_back(mix.second);
+    }
+  }
+  SceneRepresentation library(_private->scheduler, _private->ior_database);
+  SceneData& target = library.data();
+  target.copy_material_preparation_from(source);
+  target.material_descriptions.clear();
+  target.materials.clear();
+  target.emitter_profiles.clear();
+  target.cameras.clear();
+  target.owns_assets = source.owns_assets;
+  target.owned_asset_paths = source.owned_asset_paths;
+  std::vector<uint32_t> remapping(included.size(), kInvalidIndex);
+  for (uint32_t index = 0u; index < included.size(); ++index) {
+    if (included[index] != 0u) {
+      remapping[index] = static_cast<uint32_t>(target.material_descriptions.size());
+      target.material_descriptions.push_back(source.material_descriptions[index]);
+    }
+  }
+  for (auto& description : target.material_descriptions) {
+    if (description.mix.first != kInvalidIndex) {
+      description.mix.first = remapping[description.mix.first];
+    }
+    if (description.mix.second != kInvalidIndex) {
+      description.mix.second = remapping[description.mix.second];
+    }
+  }
+  for (const auto& [name, index] : source.material_mapping) {
+    if ((index < included.size()) && (included[index] != 0u)) {
+      target.material_mapping.emplace(name, remapping[index]);
+    }
+  }
+  if (material_graph_valid(target) == false) {
+    source.diagnostic = target.diagnostic;
+    return {};
+  }
+  std::vector<uint8_t> used_media(target.mediums.array_size(), 0u);
+  for (const auto& description : target.material_descriptions) {
+    const uint32_t indices[] = {description.int_medium, description.ext_medium};
+    for (const uint32_t index : indices) {
+      if (index != kInvalidIndex) {
+        if (index >= used_media.size()) {
+          return {};
+        }
+        used_media[index] = 1u;
+      }
+    }
+  }
+  for (size_t index = used_media.size(); index > 0u; --index) {
+    const uint32_t removed = static_cast<uint32_t>(index - 1u);
+    if (used_media[removed] != 0u) {
+      continue;
+    }
+    std::vector<uint32_t> medium_remapping;
+    if (target.mediums.remove(removed, medium_remapping) == false) {
+      return {};
+    }
+    for (auto& description : target.material_descriptions) {
+      if ((description.int_medium != kInvalidIndex) && (description.int_medium > removed)) {
+        --description.int_medium;
+      }
+      if ((description.ext_medium != kInvalidIndex) && (description.ext_medium > removed)) {
+        --description.ext_medium;
+      }
+    }
+  }
+  target.diagnostic.phase = "Save material";
+  const std::string saved = save_native_document(library._private, filename, Integrator::Type::Invalid, nullptr, 0u, remapping[material_index]);
+  if (saved.empty()) {
+    source.diagnostic = target.diagnostic;
+  }
+  return saved;
 }

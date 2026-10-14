@@ -1,6 +1,6 @@
 #include <etx/rhi/shader/shader_compiler.hxx>
 #include <etx/rhi/shader/dxc_com_ptr.hxx>
-#include <etx/rhi/shader/shader_package.hxx>
+#include <etx/rhi/shader/shader_source.hxx>
 
 #include <etx/core/log.hxx>
 #include <etx/core/platform.hxx>
@@ -9,12 +9,14 @@
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <codecvt>
 #include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <locale>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string_view>
@@ -48,7 +50,9 @@ RHIResult initialize_dxc_interfaces_global();
 namespace {
 
 constexpr bool kEnableShaderDebugInfo = false;
-constexpr uint32_t kShaderCacheVersion = 7u;
+constexpr uint32_t kShaderCacheVersion = 8u;
+constexpr uint32_t kPreprocessedShaderCacheVersion = 9u;
+constexpr uint64_t kMissingFileDependencySize = UINT64_MAX;
 constexpr std::string_view kShaderVariantCacheMagic = "ETXSHV1";
 constexpr std::string_view kPreprocessedShaderCacheMagic = "ETXSHP1";
 std::atomic<uint64_t> dxc_library_fingerprint = 0u;
@@ -533,6 +537,14 @@ bool extract_compute_local_size(const uint8_t* spirv_data, size_t spirv_size, RH
 
 }  // namespace
 
+struct FileDependencyInfo {
+  std::string path;
+  uint64_t file_size = 0u;
+  int64_t timestamp_ticks = 0;
+};
+
+bool query_file_dependency_info(const std::string& path, FileDependencyInfo& out_info);
+
 class CustomIncludeHandler : public IDxcIncludeHandler {
  public:
   CustomIncludeHandler(DxcComPtr<IDxcUtils> dxc_utils, std::string shader_directory);
@@ -544,16 +556,16 @@ class CustomIncludeHandler : public IDxcIncludeHandler {
 
   HRESULT STDMETHODCALLTYPE LoadSource(LPCWSTR pFilename, IDxcBlob** ppIncludeSource) override;
 
-  std::vector<std::string> dependencies() const;
+  std::vector<FileDependencyInfo> dependencies() const;
 
  private:
-  void record_dependency(const std::string& full_path);
+  void record_dependency(const FileDependencyInfo& dependency);
 
   DxcComPtr<IDxcUtils> _dxc_utils;
   std::string _shader_directory;
   std::unordered_map<std::string, DxcComPtr<IDxcBlobEncoding>> _include_cache;
   std::mutex _include_cache_mutex;
-  std::vector<std::string> _dependencies;
+  std::vector<FileDependencyInfo> _dependencies;
   mutable std::mutex _dependency_mutex;
   std::atomic<ULONG> _ref_count = 1;
 
@@ -614,14 +626,50 @@ struct PreprocessedShaderKeyHash {
   }
 };
 
-struct FileDependencyInfo {
-  std::string path;
-  uint64_t file_size = 0u;
-  int64_t timestamp_ticks = 0;
+struct ShaderSourceAnalysis {
+  explicit ShaderSourceAnalysis(std::string source)
+    : text(std::move(source)) {
+  }
+
+  uint64_t entry_hash(const std::string& entry_point, std::shared_ptr<const ShaderSourceFingerprint>& caller_fingerprint) {
+    std::lock_guard lock(_mutex);
+    const auto cached = _entry_hashes.find(entry_point);
+    if (cached != _entry_hashes.end()) {
+      return cached->second;
+    }
+    if (caller_fingerprint == nullptr) {
+      caller_fingerprint = _get_fingerprint_locked();
+    }
+    const uint64_t hash = caller_fingerprint->entry_hash(entry_point);
+    _entry_hashes.emplace(entry_point, hash);
+    return hash;
+  }
+
+  std::shared_ptr<const ShaderSourceFingerprint> fingerprint() {
+    std::lock_guard lock(_mutex);
+    return _get_fingerprint_locked();
+  }
+
+  const std::string text;
+
+ private:
+  std::shared_ptr<const ShaderSourceFingerprint> _get_fingerprint_locked() {
+    auto result = _fingerprint.lock();
+    if (result == nullptr) {
+      result = std::make_shared<ShaderSourceFingerprint>(text);
+      _fingerprint = result;
+    }
+    return result;
+  }
+
+  std::mutex _mutex;
+  // Active requests share token views; cache retention keeps only text and hashes.
+  std::weak_ptr<const ShaderSourceFingerprint> _fingerprint;
+  std::unordered_map<std::string, uint64_t> _entry_hashes;
 };
 
 struct PreprocessedShaderValue {
-  std::string source;
+  std::shared_ptr<ShaderSourceAnalysis> source;
   uint64_t source_hash = 0u;
   std::vector<FileDependencyInfo> dependencies;
 };
@@ -634,6 +682,7 @@ struct ShaderVariantDiskCacheHeader {
   uint32_t format = 0u;
   uint64_t key_hash = 0u;
   uint64_t data_size = 0u;
+  uint64_t data_hash = 0u;
   uint32_t metal_metadata_valid = 0u;
   uint32_t metal_bindless_buffer_indices[kRHIMetalBindlessBindingCount] = {};
   uint32_t metal_bindless_binding_access[kRHIMetalBindlessBindingCount] = {};
@@ -645,12 +694,32 @@ struct ShaderVariantDiskCacheHeader {
 
 struct PreprocessedShaderDiskCacheHeader {
   char magic[8] = {};
-  uint32_t version = kShaderCacheVersion;
+  uint32_t version = kPreprocessedShaderCacheVersion;
   uint64_t key_hash = 0u;
   uint64_t source_hash = 0u;
   uint32_t dependency_count = 0u;
   uint64_t source_size = 0u;
 };
+
+uint64_t shader_variant_integrity_hash(const ShaderVariantDiskCacheHeader& header, const std::vector<uint8_t>& binary) {
+  uint64_t hash = etx_hash64(binary.data(), binary.size());
+  auto hash_field = [&hash](const auto& value) {
+    hash = etx_hash64_continue(&value, sizeof(value), hash);
+  };
+  hash_field(header.stage);
+  hash_field(header.backend);
+  hash_field(header.format);
+  hash_field(header.key_hash);
+  hash_field(header.data_size);
+  hash_field(header.metal_metadata_valid);
+  hash_field(header.metal_bindless_buffer_indices);
+  hash_field(header.metal_bindless_binding_access);
+  hash_field(header.metal_push_constants_buffer_index);
+  hash_field(header.local_size_x);
+  hash_field(header.local_size_y);
+  hash_field(header.local_size_z);
+  return hash;
+}
 
 uint64_t shader_variant_cache_hash(const ShaderVariantKey& key) {
   return static_cast<uint64_t>(ShaderVariantKeyHash{}(key));
@@ -752,26 +821,6 @@ std::filesystem::path shader_cache_temp_file_path(const std::filesystem::path& p
   return temp_path;
 }
 
-void prune_obsolete_shader_cache_versions() {
-  const std::filesystem::path current_root = shader_cache_root_directory();
-  const std::filesystem::path parent = current_root.parent_path();
-  std::error_code ec = {};
-  if (std::filesystem::exists(parent, ec) == false) {
-    return;
-  }
-
-  for (const auto& entry : std::filesystem::directory_iterator(parent, ec)) {
-    if (ec.value() != 0) {
-      return;
-    }
-    const std::string directory_name = entry.path().filename().string();
-    if (entry.is_directory() && (entry.path() != current_root) && (directory_name.rfind("v", 0u) == 0u)) {
-      std::filesystem::remove_all(entry.path(), ec);
-      ec.clear();
-    }
-  }
-}
-
 bool query_file_dependency_info(const std::string& path, FileDependencyInfo& out_info) {
   std::error_code ec;
   if (path.empty()) {
@@ -801,6 +850,13 @@ bool query_file_dependency_info(const std::string& path, FileDependencyInfo& out
 
 bool dependencies_are_current(const std::vector<FileDependencyInfo>& dependencies) {
   for (const auto& dependency : dependencies) {
+    if (dependency.file_size == kMissingFileDependencySize) {
+      std::error_code ec;
+      if (std::filesystem::exists(dependency.path, ec) || (ec.value() != 0)) {
+        return false;
+      }
+      continue;
+    }
     FileDependencyInfo current = {};
     if (query_file_dependency_info(dependency.path, current) == false) {
       return false;
@@ -860,6 +916,9 @@ bool load_shader_variant_from_disk(uint64_t slot_hash, uint64_t key_hash, RHISha
       return false;
     }
   }
+  if (shader_variant_integrity_hash(header, out_result.spirv_data) != header.data_hash) {
+    return false;
+  }
 
   out_result.result = RHIResult::Success;
   out_result.metal_metadata = metal_metadata;
@@ -902,6 +961,7 @@ bool store_shader_variant_to_disk(uint64_t slot_hash, uint64_t key_hash, RHIShad
   header.local_size_x = local_size_x;
   header.local_size_y = local_size_y;
   header.local_size_z = local_size_z;
+  header.data_hash = shader_variant_integrity_hash(header, binary);
 
   if (write_pod(stream, header) == false) {
     stream.close();
@@ -935,32 +995,38 @@ bool load_preprocessed_shader_from_disk(uint64_t slot_hash, uint64_t key_hash, P
     return false;
   }
 
-  if ((std::string_view(header.magic, kPreprocessedShaderCacheMagic.size()) != kPreprocessedShaderCacheMagic) || (header.version != kShaderCacheVersion) ||
+  if ((std::string_view(header.magic, kPreprocessedShaderCacheMagic.size()) != kPreprocessedShaderCacheMagic) || (header.version != kPreprocessedShaderCacheVersion) ||
       (header.key_hash != key_hash) || (header.dependency_count > 4096u) || (header.source_size > MAX_SHADER_SOURCE_SIZE)) {
     return false;
   }
 
-  out_value.dependencies.resize(header.dependency_count);
-  for (auto& dependency : out_value.dependencies) {
+  PreprocessedShaderValue value = {};
+  value.dependencies.resize(header.dependency_count);
+  for (auto& dependency : value.dependencies) {
     if (read_string(stream, dependency.path) == false || read_pod(stream, dependency.file_size) == false || read_pod(stream, dependency.timestamp_ticks) == false) {
       return false;
     }
   }
 
-  out_value.source.resize(static_cast<size_t>(header.source_size));
+  std::string source(static_cast<size_t>(header.source_size), '\0');
   if (header.source_size > 0u) {
-    stream.read(out_value.source.data(), static_cast<std::streamsize>(header.source_size));
-    if (stream.good() == false && stream.eof() == false) {
+    stream.read(source.data(), static_cast<std::streamsize>(header.source_size));
+    if (stream.gcount() != static_cast<std::streamsize>(header.source_size)) {
       return false;
     }
   }
-  out_value.source_hash = header.source_hash;
+  value.source_hash = header.source_hash;
 
-  if (dependencies_are_current(out_value.dependencies) == false) {
-    out_value = {};
+  if (etx_hash64(source.data(), source.size()) != value.source_hash) {
     return false;
   }
 
+  if (dependencies_are_current(value.dependencies) == false) {
+    return false;
+  }
+
+  value.source = std::make_shared<ShaderSourceAnalysis>(std::move(source));
+  out_value = std::move(value);
   return true;
 }
 
@@ -981,11 +1047,11 @@ bool store_preprocessed_shader_to_disk(uint64_t slot_hash, uint64_t key_hash, co
 
   PreprocessedShaderDiskCacheHeader header = {};
   std::memcpy(header.magic, kPreprocessedShaderCacheMagic.data(), kPreprocessedShaderCacheMagic.size());
-  header.version = kShaderCacheVersion;
+  header.version = kPreprocessedShaderCacheVersion;
   header.key_hash = key_hash;
   header.source_hash = value.source_hash;
   header.dependency_count = static_cast<uint32_t>(value.dependencies.size());
-  header.source_size = static_cast<uint64_t>(value.source.size());
+  header.source_size = static_cast<uint64_t>(value.source->text.size());
 
   if (write_pod(stream, header) == false) {
     stream.close();
@@ -1003,8 +1069,8 @@ bool store_preprocessed_shader_to_disk(uint64_t slot_hash, uint64_t key_hash, co
     }
   }
 
-  if (value.source.empty() == false) {
-    stream.write(value.source.data(), static_cast<std::streamsize>(value.source.size()));
+  if (value.source->text.empty() == false) {
+    stream.write(value.source->text.data(), static_cast<std::streamsize>(value.source->text.size()));
   }
 
   const bool write_succeeded = stream.good();
@@ -1018,21 +1084,90 @@ bool store_preprocessed_shader_to_disk(uint64_t slot_hash, uint64_t key_hash, co
 }
 
 struct ShaderCompiler::Impl {
+  struct InFlightCompilation {
+    std::condition_variable condition;
+    ShaderCompilationResult result = {};
+    bool completed = false;
+  };
+
+  struct InFlightPreprocessing {
+    std::condition_variable condition;
+    PreprocessedShaderValue value = {};
+    RHIResult result = RHIResult::NotReady;
+    std::string error_message;
+    bool completed = false;
+  };
+
   std::unordered_map<ShaderVariantKey, ShaderCompilationResult, ShaderVariantKeyHash> shader_cache;
+  std::unordered_map<ShaderVariantKey, std::shared_ptr<InFlightCompilation>, ShaderVariantKeyHash> in_flight_compilations;
   std::mutex cache_mutex;
   std::unordered_map<PreprocessedShaderKey, PreprocessedShaderValue, PreprocessedShaderKeyHash> preprocessed_cache;
+  std::unordered_map<PreprocessedShaderKey, std::shared_ptr<InFlightPreprocessing>, PreprocessedShaderKeyHash> in_flight_preprocessing;
   std::mutex preprocessed_cache_mutex;
   ShaderCompilerStatistics statistics = {};
   std::mutex statistics_mutex;
-  std::array<ShaderPackage, 2> packages = {};
-  std::array<bool, 2> package_load_attempted = {};
-  std::array<std::string, 2> package_load_errors = {};
-  std::mutex package_mutex;
-  std::atomic<bool> runtime_compilation_allowed = true;
-  std::atomic<bool> shader_package_lookup_allowed = true;
-
   DxcComPtr<IDxcUtils> dxc_utils;
   DxcComPtr<IDxcCompiler3> dxc_compiler;
+
+  struct CompilationOwner {
+    Impl& compiler;
+    const ShaderVariantKey& key;
+    std::shared_ptr<InFlightCompilation> compilation;
+    ShaderCompilationResult& result;
+
+    ~CompilationOwner() {
+      complete();
+    }
+
+    void complete() {
+      if (compilation == nullptr) {
+        return;
+      }
+      if ((result.result == RHIResult::Success) && result.spirv_data.empty()) {
+        // An owner leaving before producing a binary lets healthy waiters retry.
+        result.result = RHIResult::NotReady;
+      }
+      {
+        std::lock_guard lock(compiler.cache_mutex);
+        compilation->result = std::move(result);
+        compilation->completed = true;
+        compiler.in_flight_compilations.erase(key);
+      }
+      compilation->condition.notify_all();
+      compilation.reset();
+    }
+  };
+
+  struct PreprocessingOwner {
+    Impl& compiler;
+    const PreprocessedShaderKey& key;
+    std::shared_ptr<InFlightPreprocessing> preprocessing;
+    const PreprocessedShaderValue& value;
+    RHIResult result = RHIResult::NotReady;
+    std::string error_message;
+
+    ~PreprocessingOwner() {
+      complete();
+    }
+
+    void complete() {
+      if (preprocessing == nullptr) {
+        return;
+      }
+      {
+        std::lock_guard lock(compiler.preprocessed_cache_mutex);
+        if (result == RHIResult::Success) {
+          preprocessing->value = value;
+        }
+        preprocessing->result = result;
+        preprocessing->error_message = std::move(error_message);
+        preprocessing->completed = true;
+        compiler.in_flight_preprocessing.erase(key);
+      }
+      preprocessing->condition.notify_all();
+      preprocessing.reset();
+    }
+  };
 
   // Helper method
   std::vector<std::wstring> build_dxc_arguments(const std::string& entry_point, RHIShaderStage stage, const std::unordered_map<std::string, std::string>& defines,
@@ -1047,7 +1182,6 @@ struct ShaderCompiler::Impl {
     statistics.preprocessed_disk_cache_hits += delta.preprocessed_disk_cache_hits;
     statistics.shader_memory_cache_hits += delta.shader_memory_cache_hits;
     statistics.shader_disk_cache_hits += delta.shader_disk_cache_hits;
-    statistics.shader_package_hits += delta.shader_package_hits;
     statistics.preprocess_invocations += delta.preprocess_invocations;
     statistics.dxc_compile_invocations += delta.dxc_compile_invocations;
     statistics.spirv_to_msl_translations += delta.spirv_to_msl_translations;
@@ -1247,18 +1381,6 @@ void ShaderCompiler::shutdown() {
   }
 }
 
-void ShaderCompiler::set_runtime_compilation_allowed(bool allowed) {
-  _impl->runtime_compilation_allowed.store(allowed, std::memory_order_release);
-}
-
-void ShaderCompiler::set_shader_package_lookup_allowed(bool allowed) {
-  _impl->shader_package_lookup_allowed.store(allowed, std::memory_order_release);
-}
-
-bool ShaderCompiler::runtime_compilation_allowed() const {
-  return _impl->runtime_compilation_allowed.load(std::memory_order_acquire);
-}
-
 ShaderCompiler::ShaderCompiler()
   : _impl(std::make_unique<Impl>()) {
 }
@@ -1274,10 +1396,6 @@ RHIResult ShaderCompiler::initialize() {
   std::lock_guard<std::mutex> initialization_lock(global_init_mutex);
   if (is_initialized()) {
     return RHIResult::Success;
-  }
-
-  if (runtime_compilation_allowed() == false) {
-    return RHIResult::NotImplemented;
   }
 
   const RHIResult library_result = load_dxc_dll_global();
@@ -1318,7 +1436,6 @@ RHIResult ShaderCompiler::initialize() {
 
   _impl->dxc_utils = global_dxc_utils;
   _impl->dxc_compiler = global_dxc_compiler;
-  prune_obsolete_shader_cache_versions();
 
   return RHIResult::Success;
 }
@@ -1349,130 +1466,29 @@ void ShaderCompiler::log_statistics(const char* label) const {
   const ShaderCompilerStatistics stats = statistics();
   const char* stats_label = (label != nullptr && label[0] != 0) ? label : "global";
   log::info(
-    "Shader compiler stats [%s]: calls=%llu entries=%llu compiled=%llu preprocess(mem=%llu,disk=%llu,dxc=%llu) variants(package=%llu,mem=%llu,disk=%llu,dxc=%llu) msl=%llu "
+    "Shader compiler stats [%s]: calls=%llu entries=%llu compiled=%llu preprocess(mem=%llu,disk=%llu,dxc=%llu) variants(mem=%llu,disk=%llu,dxc=%llu) msl=%llu "
     "writes=%llu "
     "time_ms(total=%.2f preprocess=%.2f dxc=%.2f msl=%.2f cache_read=%.2f cache_write=%.2f)",
     stats_label, static_cast<unsigned long long>(stats.compile_calls), static_cast<unsigned long long>(stats.requested_entry_points),
     static_cast<unsigned long long>(stats.compiled_entry_points), static_cast<unsigned long long>(stats.preprocessed_memory_cache_hits),
     static_cast<unsigned long long>(stats.preprocessed_disk_cache_hits), static_cast<unsigned long long>(stats.preprocess_invocations),
-    static_cast<unsigned long long>(stats.shader_package_hits), static_cast<unsigned long long>(stats.shader_memory_cache_hits),
-    static_cast<unsigned long long>(stats.shader_disk_cache_hits), static_cast<unsigned long long>(stats.dxc_compile_invocations),
-    static_cast<unsigned long long>(stats.spirv_to_msl_translations), static_cast<unsigned long long>(stats.cache_writes), stats.total_wall_time_ms, stats.preprocess_time_ms,
-    stats.dxc_compile_time_ms, stats.spirv_to_msl_time_ms, stats.cache_read_time_ms, stats.cache_write_time_ms);
+    static_cast<unsigned long long>(stats.shader_memory_cache_hits), static_cast<unsigned long long>(stats.shader_disk_cache_hits),
+    static_cast<unsigned long long>(stats.dxc_compile_invocations), static_cast<unsigned long long>(stats.spirv_to_msl_translations),
+    static_cast<unsigned long long>(stats.cache_writes), stats.total_wall_time_ms, stats.preprocess_time_ms, stats.dxc_compile_time_ms, stats.spirv_to_msl_time_ms,
+    stats.cache_read_time_ms, stats.cache_write_time_ms);
 }
 
 // File-loading overload
 ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::string& filename, const std::vector<ShaderEntryPoint>& entry_points,
   const std::unordered_map<std::string, std::string>& defines, RHIBackend backend) {
-  MultiShaderCompilationResult packaged_result = {};
-  if (entry_points.empty()) {
-    packaged_result.result = RHIResult::InvalidArgument;
-    packaged_result.error_message = "No entry points provided";
-    return packaged_result;
+  return compile(filename, entry_points, defines, backend, nullptr);
+}
+
+ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::string& filename, const std::vector<ShaderEntryPoint>& entry_points,
+  const std::unordered_map<std::string, std::string>& defines, RHIBackend backend, const std::atomic<bool>* stop_requested) {
+  if ((stop_requested != nullptr) && stop_requested->load(std::memory_order_relaxed)) {
+    return {.result = RHIResult::NotReady, .error_message = "Shader compilation was canceled."};
   }
-
-  const auto package_begin = std::chrono::steady_clock::now();
-  bool package_loaded = false;
-  bool package_complete = false;
-  std::string package_error = {};
-  const uint32_t backend_index = static_cast<uint32_t>(backend);
-  if (_impl->shader_package_lookup_allowed.load(std::memory_order_acquire) && (backend_index < _impl->packages.size())) {
-    std::lock_guard<std::mutex> package_lock(_impl->package_mutex);
-    ShaderPackage& package = _impl->packages[backend_index];
-    if (_impl->package_load_attempted[backend_index] == false) {
-      _impl->package_load_attempted[backend_index] = true;
-      const std::filesystem::path package_path = std::filesystem::path(env().data_folder()) / "shaders.etxpack";
-      std::error_code ec = {};
-      if (std::filesystem::exists(package_path, ec) && (ec.value() == 0)) {
-        package.load(package_path, backend, _impl->package_load_errors[backend_index]);
-      }
-    }
-
-    package_loaded = package.loaded();
-    package_error = _impl->package_load_errors[backend_index];
-    if (package_loaded) {
-      const std::map<std::string, std::string> ordered_defines(defines.begin(), defines.end());
-      package_complete = true;
-      packaged_result.binaries.resize(entry_points.size());
-      std::vector<ShaderPackageBinary> package_binaries(entry_points.size());
-      for (size_t entry_index = 0u; entry_index < entry_points.size(); ++entry_index) {
-        const ShaderEntryPoint& entry_point = entry_points[entry_index];
-        const ShaderPackageRequest request = {
-          .source_name = filename,
-          .entry_point = entry_point.entry_point,
-          .stage = entry_point.stage,
-          .backend = backend,
-          .defines = ordered_defines,
-        };
-        if (package.read(request, package_binaries[entry_index], package_error) == false) {
-          package_complete = false;
-          break;
-        }
-      }
-
-      if (package_complete) {
-        size_t shared_size = 0u;
-        for (const ShaderPackageBinary& binary : package_binaries) {
-          shared_size += binary.data.size();
-        }
-        packaged_result.shared_blob.reserve(shared_size);
-        std::vector<size_t> binary_offsets(entry_points.size());
-        for (size_t entry_index = 0u; entry_index < entry_points.size(); ++entry_index) {
-          const ShaderEntryPoint& entry_point = entry_points[entry_index];
-          const ShaderPackageBinary& package_binary = package_binaries[entry_index];
-          const size_t offset = packaged_result.shared_blob.size();
-          binary_offsets[entry_index] = offset;
-          packaged_result.shared_blob.insert(packaged_result.shared_blob.end(), package_binary.data.begin(), package_binary.data.end());
-          const ShaderPackageRequest request = {
-            .source_name = filename,
-            .entry_point = entry_point.entry_point,
-            .stage = entry_point.stage,
-            .backend = backend,
-            .defines = ordered_defines,
-          };
-          RHIShaderBinary& binary = packaged_result.binaries[entry_index];
-          binary.spirv_data = nullptr;
-          binary.spirv_size = package_binary.data.size();
-          binary.stage = entry_point.stage;
-          binary.backend = backend;
-          binary.format = package_binary.format;
-          binary.entry_point = ((backend == RHIBackend::Metal) && (entry_point.entry_point == "main")) ? "main0" : entry_point.entry_point;
-          binary.local_size_x = package_binary.local_size_x;
-          binary.local_size_y = package_binary.local_size_y;
-          binary.local_size_z = package_binary.local_size_z;
-          binary.cache_key = shader_package_request_hash(request);
-          binary.content_hash = etx_hash64(package_binary.data.data(), package_binary.data.size());
-          binary.metal_metadata = package_binary.metal_metadata;
-        }
-        for (size_t entry_index = 0u; entry_index < packaged_result.binaries.size(); ++entry_index) {
-          packaged_result.binaries[entry_index].spirv_data = packaged_result.shared_blob.data() + binary_offsets[entry_index];
-        }
-      }
-    }
-  }
-
-  if (package_complete) {
-    ShaderCompilerStatistics package_statistics = {};
-    package_statistics.compile_calls = 1u;
-    package_statistics.requested_entry_points = static_cast<uint64_t>(entry_points.size());
-    package_statistics.shader_package_hits = static_cast<uint64_t>(entry_points.size());
-    package_statistics.total_wall_time_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - package_begin).count();
-    _impl->accumulate_statistics(package_statistics);
-    return packaged_result;
-  }
-
-  if (runtime_compilation_allowed() == false) {
-    packaged_result.result = RHIResult::ValidationError;
-    if (package_loaded) {
-      packaged_result.error_message = "Required shader variant is absent from the production package: " + filename;
-    } else if (package_error.empty() == false) {
-      packaged_result.error_message = "Failed to load the production shader package: " + package_error;
-    } else {
-      packaged_result.error_message = "Production shader package is missing.";
-    }
-    return packaged_result;
-  }
-
   std::string source_path = resolve_shader_file_path(filename);
   if (source_path.empty()) {
     source_path = filename;
@@ -1480,6 +1496,10 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
   std::string error;
   std::string source = read_file_content(source_path, error);
+
+  if ((stop_requested != nullptr) && stop_requested->load(std::memory_order_relaxed)) {
+    return {.result = RHIResult::NotReady, .error_message = "Shader compilation was canceled."};
+  }
 
   if (error.empty() == false) {
     std::string details = "Failed to read shader file '" + filename + "'";
@@ -1494,11 +1514,16 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     return result;
   }
 
-  return compile(source, source_path, entry_points, defines, backend);
+  return compile(source, source_path, entry_points, defines, backend, stop_requested);
 }
 
 ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::string& hlsl_source, const std::string& source_name,
   const std::vector<ShaderEntryPoint>& entry_points, const std::unordered_map<std::string, std::string>& defines, RHIBackend backend) {
+  return compile(hlsl_source, source_name, entry_points, defines, backend, nullptr);
+}
+
+ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::string& hlsl_source, const std::string& source_name,
+  const std::vector<ShaderEntryPoint>& entry_points, const std::unordered_map<std::string, std::string>& defines, RHIBackend backend, const std::atomic<bool>* stop_requested) {
   MultiShaderCompilationResult result = {};
   ShaderCompilerStatistics local_stats = {};
   local_stats.compile_calls = 1u;
@@ -1510,6 +1535,20 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     _impl->accumulate_statistics(local_stats);
     return std::move(final_result);
   };
+  const auto stopped = [&]() {
+    return (stop_requested != nullptr) && stop_requested->load(std::memory_order_relaxed);
+  };
+  auto canceled_result = [&]() {
+    result.result = RHIResult::NotReady;
+    result.error_message = "Shader compilation was canceled.";
+    result.binaries.clear();
+    result.shared_blob.clear();
+    return finalize_result(std::move(result));
+  };
+
+  if (stopped()) {
+    return canceled_result();
+  }
 
   if (hlsl_source.empty()) {
     result.result = RHIResult::InvalidArgument;
@@ -1526,12 +1565,6 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
   if (hlsl_source.size() > MAX_SHADER_SOURCE_SIZE) {
     result.result = RHIResult::InvalidArgument;
     result.error_message = "HLSL source exceeds max size: " + std::to_string(hlsl_source.size()) + " bytes (max: " + std::to_string(MAX_SHADER_SOURCE_SIZE) + " bytes)";
-    return finalize_result(std::move(result));
-  }
-
-  if (runtime_compilation_allowed() == false) {
-    result.result = RHIResult::ValidationError;
-    result.error_message = "Runtime shader compilation is disabled";
     return finalize_result(std::move(result));
   }
 
@@ -1572,6 +1605,15 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
   }
 
   std::map<std::string, std::string> ordered_defines(defines.begin(), defines.end());
+  // Preprocessing has already applied shader defines. Only compiler controls
+  // remain relevant when the expanded entry-point source is unchanged.
+  std::map<std::string, std::string> compiler_controls;
+  for (const char* name : {"ETX_DXC_OPT_LEVEL", "ETX_DXC_SPIRV_OPT_CONFIG"}) {
+    const auto control = defines.find(name);
+    if (control != defines.end()) {
+      compiler_controls.emplace(control->first, control->second);
+    }
+  }
   const uint64_t source_input_hash = etx_hash64(hlsl_source.data(), hlsl_source.size());
   const PreprocessedShaderKey preprocessed_key = {source_name, ordered_defines, source_input_hash};
   const uint64_t preprocessed_key_hash = preprocessed_shader_cache_hash(preprocessed_key);
@@ -1579,16 +1621,70 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
   PreprocessedShaderValue preprocessed_value = {};
   bool have_preprocessed_source = false;
+  std::shared_ptr<Impl::InFlightPreprocessing> owned_preprocessing;
+  RHIResult shared_preprocessing_result = RHIResult::Success;
+  std::string shared_preprocessing_error;
   {
-    std::lock_guard<std::mutex> lock(_impl->preprocessed_cache_mutex);
-    auto it = _impl->preprocessed_cache.find(preprocessed_key);
-    if ((it != _impl->preprocessed_cache.end()) && dependencies_are_current(it->second.dependencies)) {
-      preprocessed_value = it->second;
+    std::unique_lock lock(_impl->preprocessed_cache_mutex);
+    for (;;) {
+      if (stopped()) {
+        lock.unlock();
+        return canceled_result();
+      }
+      const auto cached = _impl->preprocessed_cache.find(preprocessed_key);
+      if (cached != _impl->preprocessed_cache.end()) {
+        if (dependencies_are_current(cached->second.dependencies)) {
+          preprocessed_value = cached->second;
+          have_preprocessed_source = true;
+          local_stats.preprocessed_memory_cache_hits += 1u;
+          break;
+        }
+        _impl->preprocessed_cache.erase(cached);
+      }
+      const auto pending = _impl->in_flight_preprocessing.find(preprocessed_key);
+      if (pending == _impl->in_flight_preprocessing.end()) {
+        owned_preprocessing = std::make_shared<Impl::InFlightPreprocessing>();
+        _impl->in_flight_preprocessing.emplace(preprocessed_key, owned_preprocessing);
+        break;
+      }
+      const auto preprocessing = pending->second;
+      while ((preprocessing->completed == false) && (stopped() == false)) {
+        preprocessing->condition.wait_for(lock, std::chrono::milliseconds(5));
+      }
+      if (stopped()) {
+        lock.unlock();
+        return canceled_result();
+      }
+      if (preprocessing->result == RHIResult::NotReady) {
+        continue;
+      }
+      if (preprocessing->result != RHIResult::Success) {
+        shared_preprocessing_result = preprocessing->result;
+        shared_preprocessing_error = preprocessing->error_message;
+        break;
+      }
+      if (dependencies_are_current(preprocessing->value.dependencies) == false) {
+        continue;
+      }
+      preprocessed_value = preprocessing->value;
       have_preprocessed_source = true;
       local_stats.preprocessed_memory_cache_hits += 1u;
-    } else if (it != _impl->preprocessed_cache.end()) {
-      _impl->preprocessed_cache.erase(it);
+      break;
     }
+  }
+  Impl::PreprocessingOwner preprocessing_owner{*_impl, preprocessed_key, std::move(owned_preprocessing), preprocessed_value};
+  const auto preprocessing_failure = [&](RHIResult failure, const std::string& message) {
+    preprocessing_owner.result = failure;
+    preprocessing_owner.error_message = message;
+    result.result = failure;
+    result.error_message = message;
+    return finalize_result(std::move(result));
+  };
+  if (shared_preprocessing_result != RHIResult::Success) {
+    return preprocessing_failure(shared_preprocessing_result, shared_preprocessing_error);
+  }
+  if (stopped()) {
+    return canceled_result();
   }
 
   if (have_preprocessed_source == false) {
@@ -1598,21 +1694,25 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       local_stats.cache_read_time_ms += std::chrono::duration<double, std::milli>(disk_read_end - disk_read_begin).count();
       local_stats.preprocessed_disk_cache_hits += 1u;
       have_preprocessed_source = true;
-      std::lock_guard<std::mutex> lock(_impl->preprocessed_cache_mutex);
-      retain_current_preprocessed_shader(_impl->preprocessed_cache, preprocessed_key, preprocessed_value);
+      {
+        std::lock_guard<std::mutex> lock(_impl->preprocessed_cache_mutex);
+        retain_current_preprocessed_shader(_impl->preprocessed_cache, preprocessed_key, preprocessed_value);
+      }
+      preprocessing_owner.result = RHIResult::Success;
+      preprocessing_owner.complete();
     }
   }
 
   if (have_preprocessed_source == false) {
+    if (stopped()) {
+      return canceled_result();
+    }
     const auto preprocess_begin = std::chrono::steady_clock::now();
-    local_stats.preprocess_invocations += 1u;
 
     DxcComPtr<IDxcBlobEncoding> source_blob;
     HRESULT hr = dxc_context.dxc_utils->CreateBlob(hlsl_source.data(), static_cast<uint32_t>(hlsl_source.size()), DXC_CP_UTF8, source_blob.ReleaseAndGetAddressOf());
     if (FAILED(hr)) {
-      result.result = RHIResult::ValidationError;
-      result.error_message = "Failed to create DXC source blob";
-      return finalize_result(std::move(result));
+      return preprocessing_failure(RHIResult::ValidationError, "Failed to create DXC source blob");
     }
 
     DxcBuffer dxc_buffer = {
@@ -1629,20 +1729,20 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
     DxcComPtr<IDxcResult> preprocess_result;
     preprocess_result.Reset();
+    if (stopped()) {
+      return canceled_result();
+    }
+    local_stats.preprocess_invocations += 1u;
     hr = dxc_context.dxc_compiler->Compile(&dxc_buffer, preprocess_args_ptr.data(), static_cast<uint32_t>(preprocess_args_ptr.size()), include_handler.get(),
       IID_PPV_ARGS(preprocess_result.GetAddressOf()));
     if (FAILED(hr)) {
-      result.result = RHIResult::ValidationError;
-      result.error_message = "Preprocessing compilation failed";
-      return finalize_result(std::move(result));
+      return preprocessing_failure(RHIResult::ValidationError, "Preprocessing compilation failed");
     }
 
     HRESULT preprocess_status = S_OK;
     hr = preprocess_result->GetStatus(&preprocess_status);
     if (FAILED(hr)) {
-      result.result = RHIResult::ValidationError;
-      result.error_message = "Failed to get preprocessing status";
-      return finalize_result(std::move(result));
+      return preprocessing_failure(RHIResult::ValidationError, "Failed to get preprocessing status");
     }
 
     std::string preprocess_diagnostics = {};
@@ -1659,39 +1759,30 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       log::warning("Shader preprocessing diagnostics [%s]:\n%s", source_name.empty() ? "<memory>" : source_name.c_str(), preprocess_diagnostics.c_str());
     }
 
-    if (FAILED(preprocess_status) && (preprocess_diagnostics.empty() == false)) {
-      result.result = RHIResult::ValidationError;
-      result.error_message = preprocess_diagnostics;
-      return finalize_result(std::move(result));
+    if (FAILED(preprocess_status)) {
+      return preprocessing_failure(RHIResult::ValidationError, preprocess_diagnostics.empty() ? "Shader preprocessing failed" : preprocess_diagnostics);
     }
 
     DxcComPtr<IDxcBlobUtf8> canonical_hlsl_blob;
     canonical_hlsl_blob.Reset();
     hr = preprocess_result->GetOutput(DXC_OUT_HLSL, IID_PPV_ARGS(canonical_hlsl_blob.GetAddressOf()), nullptr);
     if ((FAILED(hr)) || (canonical_hlsl_blob.Get() == nullptr) || (canonical_hlsl_blob->GetStringLength() == 0)) {
-      result.result = RHIResult::ValidationError;
-      result.error_message = "Failed to get preprocessed HLSL";
-      return finalize_result(std::move(result));
+      return preprocessing_failure(RHIResult::ValidationError, "Failed to get preprocessed HLSL");
     }
 
-    preprocessed_value.source.assign(canonical_hlsl_blob->GetStringPointer(), canonical_hlsl_blob->GetStringLength());
-    if (preprocessed_value.source.size() > MAX_SHADER_SOURCE_SIZE) {
-      result.result = RHIResult::ValidationError;
-      result.error_message =
-        "Preprocessed HLSL exceeds max size: " + std::to_string(preprocessed_value.source.size()) + " bytes (max: " + std::to_string(MAX_SHADER_SOURCE_SIZE) + " bytes)";
-      return finalize_result(std::move(result));
+    std::string preprocessed_text(canonical_hlsl_blob->GetStringPointer(), canonical_hlsl_blob->GetStringLength());
+    if (preprocessed_text.size() > MAX_SHADER_SOURCE_SIZE) {
+      return preprocessing_failure(RHIResult::ValidationError,
+        "Preprocessed HLSL exceeds max size: " + std::to_string(preprocessed_text.size()) + " bytes (max: " + std::to_string(MAX_SHADER_SOURCE_SIZE) + " bytes)");
     }
 
-    preprocessed_value.source_hash = etx_hash64(preprocessed_value.source.data(), preprocessed_value.source.size());
+    preprocessed_value.source_hash = etx_hash64(preprocessed_text.data(), preprocessed_text.size());
+    preprocessed_value.source = std::make_shared<ShaderSourceAnalysis>(std::move(preprocessed_text));
 
-    std::vector<std::string> dependency_paths = include_handler->dependencies();
+    preprocessed_value.dependencies = include_handler->dependencies();
     if (source_name.empty() == false) {
-      dependency_paths.insert(dependency_paths.begin(), source_name);
-    }
-
-    for (const auto& dependency_path : dependency_paths) {
       FileDependencyInfo dependency = {};
-      if (query_file_dependency_info(dependency_path, dependency)) {
+      if (query_file_dependency_info(source_name, dependency)) {
         bool duplicate = false;
         for (const auto& existing : preprocessed_value.dependencies) {
           if (existing.path == dependency.path) {
@@ -1721,27 +1812,35 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
         local_stats.cache_writes += 1u;
       }
     }
+    preprocessing_owner.result = RHIResult::Success;
+    preprocessing_owner.complete();
   }
 
-  const std::string& preprocessed_source = preprocessed_value.source;
+  const std::string& preprocessed_source = preprocessed_value.source->text;
 
   if (contains_include_directive(preprocessed_source)) {
     log::warning("Preprocessed shader source still contains #include directives [%s]", source_name.empty() ? "<memory>" : source_name.c_str());
   }
 
-  const uint64_t source_hash = preprocessed_value.source_hash;
+  if (stopped()) {
+    return canceled_result();
+  }
+  std::shared_ptr<const ShaderSourceFingerprint> source_fingerprint;
 
   result.binaries.resize(entry_points.size());
 
   for (uint32_t i = 0, e = entry_points.size(); i < e; ++i) {
+    if (stopped()) {
+      return canceled_result();
+    }
     const auto& ep = entry_points[i];
+    const uint64_t source_hash = kEnableShaderDebugInfo ? preprocessed_value.source_hash : preprocessed_value.source->entry_hash(ep.entry_point, source_fingerprint);
     // `main` is reserved by Metal Shading Language. SPIRV-Cross deterministically
     // cleans that SPIR-V entry point to `main0`; pipeline creation must request
     // the translated symbol rather than the original HLSL name.
     const std::string backend_entry_point = ((backend == RHIBackend::Metal) && (ep.entry_point == "main")) ? "main0" : ep.entry_point;
-    ShaderVariantKey key{source_name, ep.entry_point, ep.stage, backend, ordered_defines, source_hash};
+    ShaderVariantKey key{source_name, ep.entry_point, ep.stage, backend, compiler_controls, source_hash};
     const uint64_t key_hash = shader_variant_cache_hash(key);
-    const uint64_t slot_hash = shader_variant_cache_slot_hash(key);
     uint32_t local_size_x = 1u;
     uint32_t local_size_y = 1u;
     uint32_t local_size_z = 1u;
@@ -1749,17 +1848,68 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     // Check cache
     std::vector<uint8_t> cached_spirv;
     RHIMetalShaderMetadata cached_metal_metadata = {};
+    ShaderCompilationResult entry_result = {};
+    std::shared_ptr<Impl::InFlightCompilation> owned_compilation;
     {
-      std::lock_guard<std::mutex> lock(_impl->cache_mutex);
-      auto it = _impl->shader_cache.find(key);
-      if (it != _impl->shader_cache.end() && it->second.result == RHIResult::Success) {
-        cached_spirv = it->second.spirv_data;
-        cached_metal_metadata = it->second.metal_metadata;
-        local_size_x = it->second.local_size_x;
-        local_size_y = it->second.local_size_y;
-        local_size_z = it->second.local_size_z;
+      std::unique_lock lock(_impl->cache_mutex);
+      for (;;) {
+        if (stopped()) {
+          lock.unlock();
+          return canceled_result();
+        }
+        const auto cached = _impl->shader_cache.find(key);
+        if ((cached != _impl->shader_cache.end()) && (cached->second.result == RHIResult::Success)) {
+          local_stats.shader_memory_cache_hits += 1u;
+          cached_spirv = cached->second.spirv_data;
+          cached_metal_metadata = cached->second.metal_metadata;
+          local_size_x = cached->second.local_size_x;
+          local_size_y = cached->second.local_size_y;
+          local_size_z = cached->second.local_size_z;
+          break;
+        }
+        const auto pending = _impl->in_flight_compilations.find(key);
+        if (pending == _impl->in_flight_compilations.end()) {
+          owned_compilation = std::make_shared<Impl::InFlightCompilation>();
+          _impl->in_flight_compilations.emplace(key, owned_compilation);
+          break;
+        }
+        const auto compilation = pending->second;
+        while ((compilation->completed == false) && (stopped() == false)) {
+          compilation->condition.wait_for(lock, std::chrono::milliseconds(5));
+        }
+        if (stopped()) {
+          lock.unlock();
+          return canceled_result();
+        }
+        if (compilation->result.result == RHIResult::NotReady) {
+          continue;
+        }
+        if (compilation->result.result != RHIResult::Success) {
+          entry_result = compilation->result;
+          break;
+        }
         local_stats.shader_memory_cache_hits += 1u;
+        cached_spirv = compilation->result.spirv_data;
+        cached_metal_metadata = compilation->result.metal_metadata;
+        local_size_x = compilation->result.local_size_x;
+        local_size_y = compilation->result.local_size_y;
+        local_size_z = compilation->result.local_size_z;
+        break;
       }
+    }
+    Impl::CompilationOwner owner{*_impl, key, std::move(owned_compilation), entry_result};
+    const auto entry_failure = [&](RHIResult failure, const std::string& message) {
+      entry_result.result = failure;
+      entry_result.error_message = message;
+      result.result = failure;
+      result.error_message = message;
+      return finalize_result(std::move(result));
+    };
+    if (entry_result.result != RHIResult::Success) {
+      return entry_failure(entry_result.result, entry_result.error_message);
+    }
+    if (stopped()) {
+      return canceled_result();
     }
 
     RHIShaderBinaryFormat binary_format = (backend == RHIBackend::Metal) ? RHIShaderBinaryFormat::MetalSource : RHIShaderBinaryFormat::SpirV;
@@ -1767,7 +1917,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     if (cached_spirv.empty()) {
       const auto disk_read_begin = std::chrono::steady_clock::now();
       ShaderCompilationResult cached_result = {};
-      if (load_shader_variant_from_disk(slot_hash, key_hash, ep.stage, backend, binary_format, cached_result)) {
+      if (load_shader_variant_from_disk(key_hash, key_hash, ep.stage, backend, binary_format, cached_result)) {
         const auto disk_read_end = std::chrono::steady_clock::now();
         local_stats.cache_read_time_ms += std::chrono::duration<double, std::milli>(disk_read_end - disk_read_begin).count();
         local_stats.shader_disk_cache_hits += 1u;
@@ -1777,8 +1927,12 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
         local_size_x = cached_result.local_size_x;
         local_size_y = cached_result.local_size_y;
         local_size_z = cached_result.local_size_z;
-        std::lock_guard<std::mutex> lock(_impl->cache_mutex);
-        retain_current_shader_variant(_impl->shader_cache, key, std::move(cached_result));
+        entry_result = std::move(cached_result);
+        {
+          std::lock_guard<std::mutex> lock(_impl->cache_mutex);
+          retain_current_shader_variant(_impl->shader_cache, key, entry_result);
+        }
+        owner.complete();
       }
     }
 
@@ -1792,7 +1946,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       result.binaries[i].local_size_x = local_size_x;
       result.binaries[i].local_size_y = local_size_y;
       result.binaries[i].local_size_z = local_size_z;
-      result.binaries[i].cache_key = slot_hash;
+      result.binaries[i].cache_key = key_hash;
       result.binaries[i].content_hash = etx_hash64(cached_spirv.data(), cached_spirv.size());
       result.binaries[i].metal_metadata = cached_metal_metadata;
       result.shared_blob.insert(result.shared_blob.end(), cached_spirv.begin(), cached_spirv.end());
@@ -1801,9 +1955,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
 
     std::vector<std::wstring> arguments = _impl->build_dxc_arguments(ep.entry_point, ep.stage, defines, include_directories, false);
     if (arguments.empty()) {
-      result.result = RHIResult::InvalidArgument;
-      result.error_message = "Unsupported shader stage for DXC compilation";
-      return finalize_result(std::move(result));
+      return entry_failure(RHIResult::InvalidArgument, "Unsupported shader stage for DXC compilation");
     }
 
     std::vector<const wchar_t*> arguments_ptr;
@@ -1812,23 +1964,26 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       arguments_ptr.push_back(arg.c_str());
     }
 
+    if ((kEnableShaderDebugInfo == false) && (source_fingerprint == nullptr)) {
+      source_fingerprint = preprocessed_value.source->fingerprint();
+    }
+    const std::string entry_source = kEnableShaderDebugInfo ? preprocessed_source : source_fingerprint->entry_source(ep.entry_point);
     DxcBuffer source_buffer = {
-      .Ptr = preprocessed_source.data(),
-      .Size = preprocessed_source.size(),
+      .Ptr = entry_source.data(),
+      .Size = entry_source.size(),
       .Encoding = DXC_CP_UTF8,
     };
 
     DxcComPtr<IDxcResult> compile_result = {};
+    if (stopped()) {
+      return canceled_result();
+    }
     const auto compile_begin = std::chrono::steady_clock::now();
     HRESULT hr = dxc_context.dxc_compiler->Compile(&source_buffer, arguments_ptr.data(), (uint32_t)arguments_ptr.size(), nullptr, IID_PPV_ARGS(compile_result.GetAddressOf()));
     const auto compile_end = std::chrono::steady_clock::now();
     local_stats.dxc_compile_time_ms += std::chrono::duration<double, std::milli>(compile_end - compile_begin).count();
     local_stats.dxc_compile_invocations += 1u;
     local_stats.compiled_entry_points += 1u;
-
-    ShaderCompilationResult entry_result = {
-      .result = RHIResult::Success,
-    };
 
     if ((FAILED(hr)) || (compile_result.Get() == nullptr)) {
       entry_result.result = RHIResult::ValidationError;
@@ -1853,25 +2008,19 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     }
 
     if (entry_result.result != RHIResult::Success) {
-      result.result = entry_result.result;
-      result.error_message = entry_result.error_message;
-      return finalize_result(std::move(result));
+      return entry_failure(entry_result.result, entry_result.error_message);
     }
 
     DxcComPtr<IDxcBlob> shader_obj;
     HRESULT object_hr = compile_result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(shader_obj.GetAddressOf()), nullptr);
     if ((FAILED(object_hr)) || (shader_obj.Get() == nullptr) || (shader_obj->GetBufferPointer() == nullptr) || (shader_obj->GetBufferSize() == 0)) {
-      result.result = RHIResult::ValidationError;
-      result.error_message = entry_result.error_message.empty() ? "DXC did not produce shader object output" : entry_result.error_message;
-      return finalize_result(std::move(result));
+      return entry_failure(RHIResult::ValidationError, entry_result.error_message.empty() ? "DXC did not produce shader object output" : entry_result.error_message);
     }
 
     std::string reflection_error = {};
     if (extract_compute_local_size(static_cast<const uint8_t*>(shader_obj->GetBufferPointer()), shader_obj->GetBufferSize(), ep.stage, local_size_x, local_size_y, local_size_z,
           reflection_error) == false) {
-      result.result = RHIResult::ValidationError;
-      result.error_message = reflection_error;
-      return finalize_result(std::move(result));
+      return entry_failure(RHIResult::ValidationError, reflection_error);
     }
 
     const uint8_t* ptr = static_cast<const uint8_t*>(shader_obj->GetBufferPointer());
@@ -1892,9 +2041,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     if (backend == RHIBackend::Vulkan) {
       std::string preflight_error = {};
       if (translated_msl_has_unsafe_overlapping_bindless(spirv_binary, preflight_error)) {
-        result.result = RHIResult::ValidationError;
-        result.error_message = preflight_error;
-        return finalize_result(std::move(result));
+        return entry_failure(RHIResult::ValidationError, preflight_error);
       }
       if (preflight_error.empty() == false) {
         log::warning("Skipping Vulkan-on-macOS shader translation safety preflight for '%s': %s", ep.entry_point.c_str(), preflight_error.c_str());
@@ -1907,9 +2054,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
       std::string translation_error = {};
       const auto translate_begin = std::chrono::steady_clock::now();
       if (translate_spirv_to_msl(spirv_binary, msl_source, metal_metadata, translation_error) == false) {
-        result.result = RHIResult::ValidationError;
-        result.error_message = translation_error;
-        return finalize_result(std::move(result));
+        return entry_failure(RHIResult::ValidationError, translation_error);
       }
       const auto translate_end = std::chrono::steady_clock::now();
       local_stats.spirv_to_msl_time_ms += std::chrono::duration<double, std::milli>(translate_end - translate_begin).count();
@@ -1930,7 +2075,7 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     result.binaries[i].local_size_x = local_size_x;
     result.binaries[i].local_size_y = local_size_y;
     result.binaries[i].local_size_z = local_size_z;
-    result.binaries[i].cache_key = slot_hash;
+    result.binaries[i].cache_key = key_hash;
     result.binaries[i].content_hash = etx_hash64(ptr, size);
     result.binaries[i].metal_metadata = metal_metadata;
 
@@ -1949,14 +2094,19 @@ ShaderCompiler::MultiShaderCompilationResult ShaderCompiler::compile(const std::
     }
 
     const auto disk_write_begin = std::chrono::steady_clock::now();
-    if (dependencies_are_current(preprocessed_value.dependencies) && store_shader_variant_to_disk(slot_hash, key_hash, ep.stage, backend, binary_format, partial_res.spirv_data,
+    if (dependencies_are_current(preprocessed_value.dependencies) && store_shader_variant_to_disk(key_hash, key_hash, ep.stage, backend, binary_format, partial_res.spirv_data,
                                                                        partial_res.metal_metadata, partial_res.local_size_x, partial_res.local_size_y, partial_res.local_size_z)) {
       const auto disk_write_end = std::chrono::steady_clock::now();
       local_stats.cache_write_time_ms += std::chrono::duration<double, std::milli>(disk_write_end - disk_write_begin).count();
       local_stats.cache_writes += 1u;
     }
+    entry_result = std::move(partial_res);
+    owner.complete();
   }
 
+  if (stopped()) {
+    return canceled_result();
+  }
   // Fix up pointers
   size_t current_offset = 0;
   for (auto& binary : result.binaries) {
@@ -2038,22 +2188,7 @@ void ShaderCompiler::parse_dxc_error(const std::string& error_message, ShaderCom
 }
 
 std::string ShaderCompiler::get_error_description(RHIResult result) {
-  switch (result) {
-    case RHIResult::Success:
-      return "Success";
-    case RHIResult::InvalidArgument:
-      return "Invalid argument";
-    case RHIResult::NotImplemented:
-      return "Not implemented";
-    case RHIResult::OutOfMemory:
-      return "Out of memory";
-    case RHIResult::ValidationError:
-      return "Validation error";
-    case RHIResult::NotReady:
-      return "Not ready";
-    default:
-      return "Unknown error";
-  }
+  return rhi_result_name(result);
 }
 
 RHIResult load_dxc_dll_global() {
@@ -2360,23 +2495,18 @@ HRESULT STDMETHODCALLTYPE CustomIncludeHandler::LoadSource(LPCWSTR pFilename, ID
     return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
   }
 
-  record_dependency(full_path);
-
-  std::error_code ec;
-  auto file_size = std::filesystem::file_size(full_path, ec);
-  if (ec || file_size > MAX_SHADER_FILE_SIZE) {
-    log::error("Include file too large or invalid: %s (%zu bytes)", full_path.c_str(), static_cast<size_t>(file_size));
-    return E_FAIL;
+  std::lock_guard lock(_include_cache_mutex);
+  const auto cached = _include_cache.find(full_path);
+  if (cached != _include_cache.end()) {
+    *ppIncludeSource = cached->second.Get();
+    (*ppIncludeSource)->AddRef();
+    return S_OK;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(_include_cache_mutex);
-    auto it = _include_cache.find(full_path);
-    if (it != _include_cache.end()) {
-      *ppIncludeSource = it->second.Get();
-      (*ppIncludeSource)->AddRef();
-      return S_OK;
-    }
+  FileDependencyInfo dependency = {};
+  if ((query_file_dependency_info(full_path, dependency) == false) || (dependency.file_size > MAX_SHADER_FILE_SIZE)) {
+    log::error("Include file too large or invalid: %s (%zu bytes)", full_path.c_str(), static_cast<size_t>(dependency.file_size));
+    return E_FAIL;
   }
 
   auto file = fopen(full_path.c_str(), "rb");
@@ -2385,7 +2515,7 @@ HRESULT STDMETHODCALLTYPE CustomIncludeHandler::LoadSource(LPCWSTR pFilename, ID
     return E_FAIL;
   }
 
-  std::string content(static_cast<size_t>(file_size), '\0');
+  std::string content(static_cast<size_t>(dependency.file_size), '\0');
   if (content.empty() == false) {
     size_t read_size = fread(content.data(), 1, content.size(), file);
     if (read_size != content.size()) {
@@ -2396,8 +2526,9 @@ HRESULT STDMETHODCALLTYPE CustomIncludeHandler::LoadSource(LPCWSTR pFilename, ID
   }
   fclose(file);
 
-  if (content.size() != file_size) {
-    log::error("Include file size mismatch: %s", full_path.c_str());
+  FileDependencyInfo current = {};
+  if ((query_file_dependency_info(full_path, current) == false) || (current.file_size != dependency.file_size) || (current.timestamp_ticks != dependency.timestamp_ticks)) {
+    log::error("Include file changed while reading: %s", full_path.c_str());
     return E_FAIL;
   }
 
@@ -2409,38 +2540,43 @@ HRESULT STDMETHODCALLTYPE CustomIncludeHandler::LoadSource(LPCWSTR pFilename, ID
     return hr;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(_include_cache_mutex);
-    _include_cache[full_path] = blob;
-  }
+  record_dependency(dependency);
+  _include_cache[full_path] = blob;
 
   *ppIncludeSource = blob.Detach();
   return S_OK;
 }
 
-void CustomIncludeHandler::record_dependency(const std::string& full_path) {
+void CustomIncludeHandler::record_dependency(const FileDependencyInfo& dependency) {
   std::lock_guard<std::mutex> lock(_dependency_mutex);
-  for (const auto& dependency : _dependencies) {
-    if (dependency == full_path) {
+  for (const auto& existing : _dependencies) {
+    if ((existing.path == dependency.path) && (existing.file_size == dependency.file_size) && (existing.timestamp_ticks == dependency.timestamp_ticks)) {
       return;
     }
   }
-  _dependencies.push_back(full_path);
+  _dependencies.push_back(dependency);
 }
 
-std::vector<std::string> CustomIncludeHandler::dependencies() const {
+std::vector<FileDependencyInfo> CustomIncludeHandler::dependencies() const {
   std::lock_guard<std::mutex> lock(_dependency_mutex);
   return _dependencies;
 }
 
 std::string CustomIncludeHandler::find_include_file(const std::string& filename) {
-  auto absolute_if_exists = [](const std::filesystem::path& path) -> std::string {
+  auto absolute_if_exists = [this](const std::filesystem::path& path) -> std::string {
     std::error_code ec;
-    if (std::filesystem::exists(path, ec) == false || ec.value() != 0) {
+    const auto absolute_path = std::filesystem::absolute(path, ec).lexically_normal();
+    if (ec.value() != 0) {
       return {};
     }
-    auto absolute_path = std::filesystem::absolute(path, ec);
-    return (ec.value() == 0) ? absolute_path.string() : path.string();
+    const bool exists = std::filesystem::exists(absolute_path, ec);
+    if ((exists == false) || (ec.value() != 0)) {
+      if (ec.value() == 0) {
+        record_dependency({absolute_path.string(), kMissingFileDependencySize, 0});
+      }
+      return {};
+    }
+    return absolute_path.string();
   };
 
   auto contains_parent_reference = [](const std::filesystem::path& path) -> bool {

@@ -104,6 +104,8 @@ struct CPURaytracingRenderer : public Renderer {
   std::chrono::steady_clock::time_point _render_started_at = {};
   double _last_render_elapsed_seconds = 0.0;
   std::string _runtime_failure_reason = {};
+  bool _camera_binding_failed = false;
+  uint32_t _failure_camera_index = kInvalidIndex;
   bool _recovery_blocked = false;
   bool _render_timing_active = false;
 

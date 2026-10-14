@@ -227,16 +227,26 @@ float openpbr_modulated_specular_ior(const float specular_ior, const float specu
 
 }  // namespace
 
-bool load_openpbr_material_file(const std::filesystem::path& path, SceneData& data, Material& material) {
+bool load_openpbr_material_file(const std::filesystem::path& path, SceneData& data, MaterialDescription& material, std::string& error) {
+  error.clear();
   std::string text;
   if (read_text_file(path, text) == false) {
+    error = "Cannot read this MaterialX file.";
     log::error("Failed to open OpenPBR material file: %s", path.string().c_str());
     return false;
   }
 
   std::string block;
   if (find_openpbr_surface_block(text, block) == false) {
+    error = "This MaterialX file does not contain an OpenPBR surface.";
     log::error("OpenPBR material file does not contain an open_pbr_surface node: %s", path.string().c_str());
+    return false;
+  }
+
+  const float subsurface_weight = clamp(openpbr_input_float(block, "subsurface_weight", 0.0f), 0.0f, 1.0f);
+  if (subsurface_weight > 0.0f) {
+    error = "Subsurface scattering is not supported by the OpenPBR model. Choose a MaterialX file without subsurface scattering.";
+    log::error("%s", error.c_str());
     return false;
   }
 
@@ -255,7 +265,8 @@ bool load_openpbr_material_file(const std::filesystem::path& path, SceneData& da
   const float opacity = clamp(openpbr_input_float(block, "geometry_opacity", 1.0f), 0.0f, 1.0f);
   const bool thin_walled = openpbr_input_bool(block, "geometry_thin_walled", false);
 
-  material.cls = MaterialClass::OpenPBR;
+  configure_material_bsdf(material, MaterialClass::OpenPBR);
+  material.subsurface_cls = SubsurfaceMaterial::Disabled;
   material.scattering.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance(base_color * base_weight));
   material.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance(specular_color));
   const float2 alpha = openpbr_roughness_to_alpha(specular_roughness, specular_anisotropy);
@@ -275,11 +286,12 @@ bool load_openpbr_material_file(const std::filesystem::path& path, SceneData& da
   const float thin_film_weight = clamp(openpbr_input_float(block, "thin_film_weight", 0.0f), 0.0f, 1.0f);
   const float thin_film_thickness = openpbr_input_float(block, "thin_film_thickness", 0.5f);
   const float thin_film_ior = max(kEpsilon, openpbr_input_float(block, "thin_film_ior", 1.4f));
+  material.thinfilm.weight = thin_film_weight;
+  material.layers.thinfilm_enabled = ((thin_film_weight > 0.0f) && (thin_film_thickness > 0.0f)) ? 1u : 0u;
   if ((thin_film_weight > 0.0f) && (thin_film_thickness > 0.0f)) {
     const float thickness_nm = thin_film_thickness * 1000.0f;
     material.thinfilm.min_thickness = thickness_nm;
     material.thinfilm.max_thickness = thickness_nm;
-    material.thinfilm.weight = thin_film_weight;
     material.thinfilm.ior.cls = SpectralDistribution::Dielectric;
     material.thinfilm.ior.eta_index = data.add_spectrum(SpectralDistribution::constant(thin_film_ior));
     material.thinfilm.ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
@@ -289,14 +301,6 @@ bool load_openpbr_material_file(const std::filesystem::path& path, SceneData& da
   const float3 emission_color = openpbr_input_color3(block, "emission_color", {1.0f, 1.0f, 1.0f}, acescg);
   if (emission_luminance > 0.0f) {
     material.emission.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_luminance(emission_color * emission_luminance));
-  }
-
-  const float subsurface_weight = clamp(openpbr_input_float(block, "subsurface_weight", 0.0f), 0.0f, 1.0f);
-  if (subsurface_weight > 0.0f) {
-    const float subsurface_radius = max(0.0f, openpbr_input_float(block, "subsurface_radius", 1.0f));
-    const float3 subsurface_radius_scale = openpbr_input_color3(block, "subsurface_radius_scale", {1.0f, 0.5f, 0.25f}, false);
-    material.subsurface_cls = SubsurfaceMaterial::RandomWalk;
-    material.subsurface.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance(max(float3{}, subsurface_radius_scale * subsurface_radius)));
   }
 
   return true;

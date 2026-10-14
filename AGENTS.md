@@ -8,7 +8,7 @@
 
 ## Source map
 
-- `sources/raytracer/` owns the executable application, CPU/GPU/raster renderer adapters, native and ImGui UI, headless and batch modes, browser-control transport, and shader-package orchestration.
+- `sources/raytracer/` owns the executable application, CPU/GPU/raster renderer adapters, native and ImGui UI, headless and batch modes, browser-control transport, and on-demand shader preparation.
 - `sources/etx/render/` is the canonical shared rendering layer for scene data, materials, spectra, host/GPU accessors, GPU ABI definitions, and shader sources. Shared HLSL and validation shaders belong under `sources/etx/render/shaders/`; keep matching host/shader ABI changes synchronized.
 - `sources/etx/rhi/` contains the Metal and Vulkan backends. `sources/etx/rt/` contains Embree-backed CPU ray tracing and integrators. `sources/etx/core/` and `sources/etx/engine/` provide common runtime and application infrastructure.
 - `sources/tests/` contains maintained standalone validation executables. `bin/` contains runtime assets, sample data, executable output, caches, and generated shader packages; do not treat the whole directory as disposable build output.
@@ -17,8 +17,8 @@
 ## Build and validation workflow
 
 - Use the repository CMake workflow and an existing configured build directory when suitable. Configuration requires Embree and DXC; see `docs/BUILDING.md` for current platform setup.
-- On Windows, build `raytracer`; production Release validation must also build `raytracer_shader_package`. On macOS, build `raytracer_app`, which depends on the shader package.
-- Debug and RelWithDebInfo development builds compile the copied runtime shader sources. After shader changes, rebuild and restart the application. Release builds consume `shaders.etxpack`; missing, corrupt, or incomplete packages are errors.
+- On Windows, build `raytracer`. On macOS, build `raytracer_app`. All configurations compile requested shaders on demand; do not add shader-pack precompilation.
+- Builds distribute the runtime shader source trees and DXC. After shader changes, rebuild and restart or reload shaders in the application. Validate source-cache invalidation, requested variants, and runtime backend pipelines; executable rebuilds must not precompile shaders.
 - Run the narrowest relevant maintained validation target, then build the affected application target. Renderer, mode-switch, asynchronous preparation, presentation, and UI changes also require a representative runtime smoke test; successful compilation alone is not runtime validation.
 - Use `docs/APPLICATION_CONTROL.md` for supported desktop, offline-render, and browser-control behavior. Keep renderer and scene mutations on the application command path described there.
 

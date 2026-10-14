@@ -19,6 +19,17 @@ if not exist "%PROJECT_ROOT%\bin\importers\*.dll" (
     exit /b 1
 )
 
+for %%i in (shaders interop access) do (
+    if not exist "%PROJECT_ROOT%\bin\%%i\" (
+        echo Error: runtime shader directory %%i is missing
+        exit /b 1
+    )
+)
+if not exist "%PROJECT_ROOT%\bin\dxcompiler.dll" (
+    echo Error: dxcompiler.dll is missing
+    exit /b 1
+)
+
 REM Create temporary directory for packaging
 for /f "tokens=*" %%i in ('powershell -Command "[System.IO.Path]::GetTempPath() + [System.IO.Path]::GetRandomFileName()"') do set "TEMP_DIR=%%i"
 set "RELEASE_DIR=%TEMP_DIR%\etx-tracer-release"
@@ -29,7 +40,7 @@ REM Create release directory
 mkdir "%RELEASE_DIR%" 2>nul
 
 REM Copy only necessary directories from bin/
-echo Copying runtime data and compiled shader package...
+echo Copying runtime data and shader sources...
 pushd "%PROJECT_ROOT%\bin"
 for /d %%i in (*) do (
     if "%%i" equ "assets" (
@@ -41,20 +52,17 @@ for /d %%i in (*) do (
     ) else if "%%i" equ "spectrum" (
         echo   Copying: %%i
         xcopy "%%i" "%RELEASE_DIR%\%%i\" /E /I /H /Y >nul
+    ) else if "%%i" equ "shaders" (
+        xcopy "%%i" "%RELEASE_DIR%\%%i\" /E /I /H /Y >nul
+    ) else if "%%i" equ "interop" (
+        xcopy "%%i" "%RELEASE_DIR%\%%i\" /E /I /H /Y >nul
+    ) else if "%%i" equ "access" (
+        xcopy "%%i" "%RELEASE_DIR%\%%i\" /E /I /H /Y >nul
     ) else if "%%i" equ "importers" (
         echo   Copying: %%i
         mkdir "%RELEASE_DIR%\%%i" 2>nul
         copy "%%i\*.dll" "%RELEASE_DIR%\%%i\" >nul
     )
-)
-if exist "shaders.etxpack" (
-    echo   Copying: shaders.etxpack
-    copy "shaders.etxpack" "%RELEASE_DIR%\" >nul
-) else (
-    echo Error: shaders.etxpack was not generated
-    popd
-    rmdir /s /q "%TEMP_DIR%" 2>nul
-    exit /b 1
 )
 if not exist "raytracer.exe" (
     echo Error: raytracer.exe was not built
@@ -64,12 +72,10 @@ if not exist "raytracer.exe" (
 )
 echo   Copying: raytracer.exe
 copy "raytracer.exe" "%RELEASE_DIR%\" >nul
-REM Copy runtime libraries, excluding the build-time shader compiler.
+REM Copy runtime libraries, including the shader compiler.
 for %%i in (*.dll) do (
-    if /I not "%%i" equ "dxc.dll" if /I not "%%i" equ "dxcompiler.dll" if /I not "%%i" equ "dxil.dll" (
-        echo   Copying: %%i
-        copy "%%i" "%RELEASE_DIR%\" >nul
-    )
+    echo   Copying: %%i
+    copy "%%i" "%RELEASE_DIR%\" >nul
 )
 popd
 

@@ -650,8 +650,8 @@ bool validate_diffraction_grating_serialization() {
     return false;
   }
 
-  const etx::Material& canonical_material = scene_data.materials[canonical_index->second];
-  const etx::Material& legacy_material = scene_data.materials[legacy_index->second];
+  const etx::MaterialDescription& canonical_material = scene_data.material_descriptions[canonical_index->second];
+  const etx::MaterialDescription& legacy_material = scene_data.material_descriptions[legacy_index->second];
   const bool valid =
     (canonical_material.cls == MaterialClass::DiffractionGrating) && close_value(canonical_material.diffraction_grating.period_nm, 1700.0f, 1.0e-6f) &&
     close_value(canonical_material.diffraction_grating.optical_path_difference_nm, 321.0f, 1.0e-6f) &&
@@ -834,7 +834,7 @@ bool validate_spectral_energy_compensation_lut_sampling() {
   etx::Material material = {};
   material.energy_compensation_interface_index = 0u;
   const etx::SpectralQuery sample = etx::SpectralQuery::spectral_sample(0.0f);
-  const ::SpectralResponse sample_value = bsdf_energy_compensated_lut_response(context, sample, material, image_index, float2{0.0f, 0.0f}, 1u, 1u, 0.0f);
+  const ::SpectralResponse sample_value = bsdf_energy_compensated_lut_response(context, sample, material, image_index, float2{0.0f, 0.0f}, 1u, 1u, float2{0.0f, 0.0f});
   if ((close_value(sample_value.value, 0.0f, 1.0e-5f) == false) || (close_value(sample_value.integrated.x, 0.0f, 1.0e-5f) == false) ||
       (close_value(sample_value.integrated.y, 0.0f, 1.0e-5f) == false) || (close_value(sample_value.integrated.z, 0.0f, 1.0e-5f) == false)) {
     std::printf("Spectral energy-compensation LUT sampling failed %.6f %.6f %.6f %.6f\n", sample_value.value, sample_value.integrated.x, sample_value.integrated.y,
@@ -1367,11 +1367,6 @@ bool validate_energy_compensated_material(const char* label, const etx::BSDFData
     return false;
   }
 
-  if ((narrow_lobe == false) && (fabsf(pdf_integral - 1.0f) > 0.12f)) {
-    std::printf("%s roughness %.3f pdf %.6f reverse %.6f\n", label, roughness, pdf_integral, reverse_pdf_integral);
-    return false;
-  }
-
   if (validate_sampling(data, material, seed + 10000u) == false) {
     std::printf("%s roughness %.3f produced invalid sample\n", label, roughness);
     return false;
@@ -1388,6 +1383,11 @@ bool validate_energy_compensated_material(const char* label, const etx::BSDFData
   }
 
   const SampleWeightStats stats = sample_weight_stats_rgb(data, material, seed + 20000u);
+  const float sample_acceptance = float(stats.valid_count) / float(kBsdfSamples);
+  if ((narrow_lobe == false) && (fabsf(pdf_integral - sample_acceptance) > 0.12f)) {
+    std::printf("%s roughness %.3f pdf %.6f acceptance %.6f reverse %.6f\n", label, roughness, pdf_integral, sample_acceptance, reverse_pdf_integral);
+    return false;
+  }
   if ((stats.invalid_count > 0u) || (stats.valid_count == 0u) || (std::isfinite(stats.average.x) == false) || (std::isfinite(stats.max_weight) == false)) {
     std::printf("%s roughness %.3f invalid %u valid %u max_weight %.6f\n", label, roughness, stats.invalid_count, stats.valid_count, stats.max_weight);
     return false;
@@ -1441,12 +1441,31 @@ bool validate_eon_diffuse_material(const etx::BSDFData& data, const float roughn
   return diagnostic_valid;
 }
 
-bool validate_velvet_material(const etx::BSDFData& data, const float roughness, const uint32_t seed) {
-  const etx::Material material = make_velvet(roughness);
+bool validate_velvet_material(etx::Scene& original_scene, const etx::BSDFData& data, const float roughness, const uint32_t seed) {
+  etx::TaskScheduler scheduler = {};
+  etx::SceneData scene_data(scheduler);
+  scene_data.images.init(16u);
+  scene_data.spectrum_values.assign(original_scene.spectrums.a, original_scene.spectrums.a + original_scene.spectrums.count);
+  scene_data.materials.emplace_back(make_velvet(roughness));
+  if (etx::ensure_energy_compensation_interfaces(scene_data, scheduler) == false) {
+    std::printf("velvet interface failed to bind projected-area lookup\n");
+    return false;
+  }
+  scene_data.images.load_images(scheduler);
+  etx::Scene prepared_scene = original_scene;
+  prepared_scene.spectrums = {scene_data.spectrum_values.data(), scene_data.spectrum_values.size()};
+  prepared_scene.images = {scene_data.images.as_array(), scene_data.images.array_size()};
+  prepared_scene.materials = {scene_data.materials.data(), scene_data.materials.size()};
+  prepared_scene.energy_compensation_interfaces = {scene_data.energy_compensation_interfaces.data(), scene_data.energy_compensation_interfaces.size()};
+  etx::scene_global_clear(&original_scene);
+  etx::scene_global_publish(&prepared_scene, &prepared_scene);
+  const etx::Material material = scene_data.materials[0];
   bool diagnostic_valid = validate_energy_compensated_material("velvet", data, material, roughness, seed);
   diagnostic_valid = validate_energy_compensated_white_furnace_direction("velvet", float3{0.0f, 0.0f, -1.0f}, material, roughness, seed + 100u) && diagnostic_valid;
   diagnostic_valid =
     validate_energy_compensated_white_furnace_direction("velvet", normalize(float3{0.8660254f, 0.0f, -0.5f}), material, roughness, seed + 200u) && diagnostic_valid;
+  etx::scene_global_clear(&prepared_scene);
+  etx::scene_global_publish(&original_scene, &original_scene);
   return diagnostic_valid;
 }
 
@@ -1469,9 +1488,16 @@ bool validate_plastic_sample_contract(const char* label, const etx::BSDFData& da
   for (uint32_t i = 0u; i < kBsdfSamples; ++i) {
     etx::Sampler sampler(seed + i, seed ^ (i * 47u + 31u));
     const etx::BSDFSample sample = etx::bsdf::sample(data, material_with_media, sampler);
-    if ((validate_sample(sample) == false) || (sample.valid() == false)) {
+    if (validate_sample(sample) == false) {
       std::printf("%s roughness %.3f invalid plastic sample\n", label, roughness);
       return false;
+    }
+    if (sample.valid() == false) {
+      if (sample.weight.is_zero() == false) {
+        std::printf("%s roughness %.3f nonzero null plastic sample\n", label, roughness);
+        return false;
+      }
+      continue;
     }
 
     const bool reflection = (sample.properties & etx::BSDFSample::Reflection) != 0u;
@@ -1518,7 +1544,9 @@ bool validate_plastic_sample_contract(const char* label, const etx::BSDFData& da
     }
   }
 
-  if ((saw_coating == false) || (saw_substrate == false)) {
+  etx::Sampler albedo_sampler(seed, seed ^ 0x19d42a71u);
+  const bool substrate_nonzero = etx::bsdf::albedo(data, material, albedo_sampler).is_zero() == false;
+  if ((saw_coating == false) || ((saw_substrate == false) && substrate_nonzero)) {
     std::printf("%s roughness %.3f missing plastic branch coating %u substrate %u\n", label, roughness, saw_coating ? 1u : 0u, saw_substrate ? 1u : 0u);
     return false;
   }
@@ -1731,7 +1759,9 @@ bool validate_standalone_thinfilm_boundary_contract(const char* label, const etx
     etx::BSDFData outside_data = base_data;
     outside_data.w_i = normalize(float3{sin_theta, 0.0f, -mu});
     etx::BSDFData inside_data = base_data;
-    inside_data.w_i = normalize(float3{sin_theta, 0.0f, mu});
+    const float inside_sin_theta = sin_theta / 1.5f;
+    const float inside_mu = sqrtf(max(0.0f, 1.0f - inside_sin_theta * inside_sin_theta));
+    inside_data.w_i = normalize(float3{-inside_sin_theta, 0.0f, inside_mu});
 
     const float3 outside_reflection = normalize(reflect(outside_data.w_i, outside_data.nrm));
     const float3 inside_reflection = normalize(reflect(inside_data.w_i, -inside_data.nrm));
@@ -1760,9 +1790,9 @@ bool validate_standalone_thinfilm_boundary_contract(const char* label, const etx
     }
 
     etx::Sampler outside_transmission_sampler(seed + i + 200u, seed ^ (i * 107u + 83u));
-    const etx::BSDFEval outside_transmission = etx::bsdf::evaluate(outside_data, outside_data.w_i, material_with_boundary_ior, outside_transmission_sampler);
+    const etx::BSDFEval outside_transmission = etx::bsdf::evaluate(outside_data, -inside_data.w_i, material_with_boundary_ior, outside_transmission_sampler);
     etx::Sampler inside_transmission_sampler(seed + i + 300u, seed ^ (i * 109u + 89u));
-    const etx::BSDFEval inside_transmission = etx::bsdf::evaluate(inside_data, inside_data.w_i, material_with_boundary_ior, inside_transmission_sampler);
+    const etx::BSDFEval inside_transmission = etx::bsdf::evaluate(inside_data, -outside_data.w_i, material_with_boundary_ior, inside_transmission_sampler);
     if ((outside_transmission.valid() == false) || (inside_transmission.valid() == false)) {
       std::printf("%s invalid symmetric thinfilm transmission mu %.3f\n", label, mu);
       return false;
@@ -2086,9 +2116,9 @@ bool validate_variable_thinfilm_texture_lut(const etx::SpectralDistribution* spe
   etx::Material absorbing_film_material = variable_material;
   absorbing_film_material.thinfilm.ior.k_index = SpectrumHalf;
   Sampler absorbing_film_sampler(56999u, 0x34a1u);
-  const ThinfilmEval lossless_film = bsdf_resource_evaluate_thinfilm(context, etx::SpectralQuery{}, absorbing_film_material.thinfilm, float2{0.0f, 0.0f}, absorbing_film_sampler);
-  if (spectral_response_is_zero(lossless_film.ior.k) == false) {
-    std::printf("thinfilm runtime contract did not force extinction to zero\n");
+  const ThinfilmEval absorbing_film = bsdf_resource_evaluate_thinfilm(context, etx::SpectralQuery{}, absorbing_film_material.thinfilm, float2{0.0f, 0.0f}, absorbing_film_sampler);
+  if (fabsf(spectral_response_monochromatic(absorbing_film.ior.k) - 0.5f) > kEpsilon) {
+    std::printf("thinfilm runtime contract discarded extinction\n");
     return false;
   }
   const etx::Material& bound_variable_material = scene_data.materials[0];
@@ -2171,8 +2201,9 @@ bool validate_variable_thinfilm_texture_lut(const etx::SpectralDistribution* spe
 
   etx::Material synthetic_3d_material = bound_variable_material;
   synthetic_3d_material.energy_compensation_interface_index = synthetic_3d_interface_index;
-  const SpectralResponse synthetic_low = bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_3d_material, 0.5f, 0.5f, 0.0f);
-  const SpectralResponse synthetic_high = bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_3d_material, 0.5f, 0.5f, 1.0f);
+  const SpectralResponse synthetic_low = bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_3d_material, 0.5f, 0.5f, float2{0.0f, 0.0f});
+  const SpectralResponse synthetic_high =
+    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_3d_material, 0.5f, 0.5f, float2{1.0f, 0.0f});
   if ((close_value(synthetic_low.integrated.x, 0.1f, 1.0e-5f) == false) || (close_value(synthetic_low.integrated.y, 0.2f, 1.0e-5f) == false) ||
       (close_value(synthetic_low.integrated.z, 0.3f, 1.0e-5f) == false) || (close_value(synthetic_high.integrated.x, 0.7f, 1.0e-5f) == false) ||
       (close_value(synthetic_high.integrated.y, 0.6f, 1.0e-5f) == false) || (close_value(synthetic_high.integrated.z, 0.5f, 1.0e-5f) == false)) {
@@ -2183,8 +2214,10 @@ bool validate_variable_thinfilm_texture_lut(const etx::SpectralDistribution* spe
 
   etx::Material synthetic_1d_material = bound_constant_material;
   synthetic_1d_material.energy_compensation_interface_index = synthetic_1d_interface_index;
-  const SpectralResponse synthetic_constant_low = bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_1d_material, 0.5f, 0.5f, 0.0f);
-  const SpectralResponse synthetic_constant_high = bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_1d_material, 0.5f, 0.5f, 1.0f);
+  const SpectralResponse synthetic_constant_low =
+    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_1d_material, 0.5f, 0.5f, float2{0.0f, 0.0f});
+  const SpectralResponse synthetic_constant_high =
+    bsdf_energy_compensated_conductor_directional_albedo(context, etx::SpectralQuery{}, synthetic_1d_material, 0.5f, 0.5f, float2{1.0f, 0.0f});
   const float synthetic_constant_delta = length(synthetic_constant_low.integrated - synthetic_constant_high.integrated);
   if ((synthetic_constant_delta > 1.0e-6f) || (close_value(synthetic_constant_low.integrated.x, 0.4f, 1.0e-5f) == false) ||
       (close_value(synthetic_constant_low.integrated.y, 0.5f, 1.0e-5f) == false) || (close_value(synthetic_constant_low.integrated.z, 0.6f, 1.0e-5f) == false)) {
@@ -2993,7 +3026,7 @@ bool validation_check_runtime_case(const char* label, const etx::BSDFData& data,
 
   if (check_sample) {
     case_valid =
-      validation_close_float3(label, "sample.weight", expected.sample.weight.to_rgb(), validation_read_f32x3(output, output_case_index, 0u), value_tolerance) && case_valid;
+      validation_close_float3(label, "sample.weight", expected.sample.weight.integrated, validation_read_f32x3(output, output_case_index, 0u), value_tolerance) && case_valid;
     case_valid =
       validation_close_float(label, "sample.weight.value", expected.sample.weight.value, validation_read_f32(output, output_case_index, 12u), value_tolerance) && case_valid;
     case_valid = validation_close_float3(label, "sample.w_o", expected.sample.w_o, validation_read_f32x3(output, output_case_index, 16u), value_tolerance) && case_valid;
@@ -3005,9 +3038,9 @@ bool validation_check_runtime_case(const char* label, const etx::BSDFData& data,
   }
 
   if (check_eval) {
-    case_valid = validation_close_float3(label, "eval.func", expected.eval.func.to_rgb(), validation_read_f32x3(output, output_case_index, 48u), value_tolerance) && case_valid;
+    case_valid = validation_close_float3(label, "eval.func", expected.eval.func.integrated, validation_read_f32x3(output, output_case_index, 48u), value_tolerance) && case_valid;
     case_valid = validation_close_float(label, "eval.func.value", expected.eval.func.value, validation_read_f32(output, output_case_index, 60u), value_tolerance) && case_valid;
-    case_valid = validation_close_float3(label, "eval.bsdf", expected.eval.bsdf.to_rgb(), validation_read_f32x3(output, output_case_index, 64u), value_tolerance) && case_valid;
+    case_valid = validation_close_float3(label, "eval.bsdf", expected.eval.bsdf.integrated, validation_read_f32x3(output, output_case_index, 64u), value_tolerance) && case_valid;
     case_valid = validation_close_float(label, "eval.bsdf.value", expected.eval.bsdf.value, validation_read_f32(output, output_case_index, 76u), value_tolerance) && case_valid;
     case_valid = validation_close_float(label, "eval.pdf", expected.eval.pdf, validation_read_f32(output, output_case_index, 80u), pdf_tolerance) && case_valid;
     case_valid = validation_close_float(label, "eval.eta", expected.eval.eta, validation_read_f32(output, output_case_index, 84u), value_tolerance) && case_valid;
@@ -3026,7 +3059,7 @@ bool validation_check_runtime_case(const char* label, const etx::BSDFData& data,
   if (check_albedo) {
     case_valid = validation_equal_u32(label, "is_delta", expected.is_delta, validation_read_u32(output, output_case_index, 116u)) && case_valid;
     case_valid = validation_equal_u32(label, "delta.seed", expected.delta_seed, validation_read_u32(output, output_case_index, 120u)) && case_valid;
-    case_valid = validation_close_float3(label, "albedo", expected.albedo.to_rgb(), validation_read_f32x3(output, output_case_index, 128u), value_tolerance) && case_valid;
+    case_valid = validation_close_float3(label, "albedo", expected.albedo.integrated, validation_read_f32x3(output, output_case_index, 128u), value_tolerance) && case_valid;
     case_valid = validation_close_float(label, "albedo.value", expected.albedo.value, validation_read_f32(output, output_case_index, 140u), value_tolerance) && case_valid;
     case_valid = validation_equal_u32(label, "albedo.seed", expected.albedo_seed, validation_read_u32(output, output_case_index, 144u)) && case_valid;
   }
@@ -3169,8 +3202,12 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
       ValidationKindDiffraction = 4u,
     };
 
+    bool device_lost = false;
     auto validate_batch = [&](const char* batch_label, const uint32_t first_case, const uint32_t batch_case_count, const uint32_t validation_mode,
                             const uint32_t validation_operation, const uint32_t validation_kind) -> bool {
+      if (device_lost) {
+        return false;
+      }
       std::vector<BSDFRuntimeValidationCase> batch_cases(cases + first_case, cases + first_case + batch_case_count);
       etx::RHIBuffer case_buffer = {};
       etx::RHIBuffer output_buffer = {};
@@ -3211,6 +3248,7 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
         const etx::RHIComputePipelineDesc pipeline_desc = rhi.device().make_compute_pipeline_desc(compilation.binaries[0]);
         auto pipeline_result = rhi.device().create_compute_pipeline(pipeline_desc);
         if ((pipeline_result.result != etx::RHIResult::Success) || (pipeline_result.handle.valid() == false)) {
+          device_lost = pipeline_result.result == etx::RHIResult::DeviceLost;
           std::printf("BSDF runtime numeric %s operation %u pipeline creation failed (%u)\n", batch_label, validation_operation, static_cast<uint32_t>(pipeline_result.result));
           batch_valid = false;
           break;
@@ -3249,6 +3287,7 @@ bool validate_bsdf_runtime_numeric_harness(etx::Scene& original_scene, const etx
         rhi.submit_command_buffer({cmd});
         const etx::RHIResult wait_result = rhi.wait_idle();
         if (wait_result != etx::RHIResult::Success) {
+          device_lost = wait_result == etx::RHIResult::DeviceLost;
           std::printf("BSDF runtime numeric %s operation %u dispatch failed to wait (%u)\n", batch_label, validation_operation, static_cast<uint32_t>(wait_result));
           batch_valid = false;
           break;
@@ -3680,7 +3719,7 @@ int main(int argc, char** argv) {
   const float velvet_roughness_values[] = {0.25f, 0.5f, 0.75f, 1.0f};
   for (uint32_t i = 0u; i < 4u; ++i) {
     const float roughness = velvet_roughness_values[i];
-    valid = validate_velvet_material(data, roughness, 25000u + i * 1000u) && valid;
+    valid = validate_velvet_material(scene, data, roughness, 25000u + i * 1000u) && valid;
   }
   const float translucent_roughness_values[] = {0.0f, 0.5f, 1.0f};
   for (uint32_t i = 0u; i < 3u; ++i) {

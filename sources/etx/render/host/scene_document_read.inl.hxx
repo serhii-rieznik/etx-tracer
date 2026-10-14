@@ -1,8 +1,122 @@
-bool SceneRepresentation::load_from_file(const char* filename, uint32_t options, IntegratorData* out_integrator) {
+SceneResourceEditResult SceneRepresentation::load_material_from_file(const char* filename) {
+  _private->data.diagnostic = {.phase = "Load material"};
+  const auto failure = [&]() {
+    return SceneResourceEditResult{.status = SceneResourceEditStatus::ResourceUpdateFailed, .diagnostic = _private->data.diagnostic};
+  };
   try {
-    return load_document(filename, nullptr, false, "", options, out_integrator);
+    std::ifstream file(std::filesystem::u8path(filename), std::ios::binary);
+    if (file.is_open() == false) {
+      _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Source file", "Cannot open %s: %s", filename, std::strerror(errno));
+      return failure();
+    }
+    const nlohmann::json document = nlohmann::json::parse(file);
+    const auto& header = document.at("etx_material");
+    if ((header.at("version").is_number_unsigned() == false) || (header.at("version").get<uint64_t>() != 1u) || (header.at("root").is_string() == false)) {
+      _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Material header", "Expected etx_material.version = 1 and a string root in %s.", filename);
+      return failure();
+    }
+    const std::string name = header.at("root").get<std::string>();
+    SceneRepresentation library(_private->scheduler, _private->ior_database);
+    if (library.load_from_file(filename, SceneRepresentation::DocumentOnly, nullptr) == false) {
+      _private->data.diagnostic = library.data().diagnostic;
+      return failure();
+    }
+    SceneData& source = library.data();
+    const auto root = source.material_mapping.find(name);
+    if ((root == source.material_mapping.end()) || (source.triangles.empty() == false) || (source.meshes.empty() == false)) {
+      _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Material root", "Root '%s' must exist in a material library containing no scene geometry.", name.c_str());
+      return failure();
+    }
+    const uint32_t root_index = root->second;
+    std::vector<uint32_t> remapping(source.material_descriptions.size(), kInvalidIndex);
+    std::vector<MaterialDescription> descriptions;
+    descriptions.reserve(source.material_descriptions.size());
+    for (uint32_t index = 0u; index < source.material_descriptions.size(); ++index) {
+      if ((index == source.defaults.missing_material) || (index == source.defaults.subsurface_scatter_material) || (index == source.defaults.subsurface_exit_material)) {
+        continue;
+      }
+      remapping[index] = static_cast<uint32_t>(descriptions.size());
+      descriptions.push_back(source.material_descriptions[index]);
+    }
+    if ((root_index >= remapping.size()) || (remapping[root_index] == kInvalidIndex)) {
+      _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Material root", "Root '%s' resolves to an internal or invalid material index %u.", name.c_str(), root_index);
+      return failure();
+    }
+    for (auto& description : descriptions) {
+      uint32_t* references[] = {&description.mix.first, &description.mix.second};
+      for (uint32_t* reference : references) {
+        if (*reference != kInvalidIndex) {
+          if ((*reference >= remapping.size()) || (remapping[*reference] == kInvalidIndex)) {
+            _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Mix child", "Mix child %u does not refer to an authored library material.", *reference);
+            return failure();
+          }
+          *reference = remapping[*reference];
+        }
+      }
+    }
+    source.material_descriptions.swap(descriptions);
+    for (auto entry = source.material_mapping.begin(); entry != source.material_mapping.end();) {
+      if ((entry->second >= remapping.size()) || (remapping[entry->second] == kInvalidIndex)) {
+        entry = source.material_mapping.erase(entry);
+      } else {
+        entry->second = remapping[entry->second];
+        ++entry;
+      }
+    }
+    const uint32_t material_index = static_cast<uint32_t>(_private->data.material_descriptions.size()) + remapping[root_index];
+    source.cameras.clear();
+    source.emitter_profiles.clear();
+    source.emitter_names.clear();
+    source.hierarchy = {};
+    SceneData candidate(_private->scheduler);
+    candidate.copy_material_preparation_from(_private->data);
+    candidate.material_mapping = _private->data.material_mapping;
+    candidate.owns_assets = _private->data.owns_assets;
+    candidate.owned_asset_paths = _private->data.owned_asset_paths;
+    std::string error;
+    if ((append_scene_document(candidate, source, error) == false) || (material_graph_valid(candidate) == false)) {
+      _private->data.diagnostic = candidate.diagnostic;
+      _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Merge material library", "%s: %s", filename, error.c_str());
+      return failure();
+    }
+    _private->initialize_material_defaults(candidate);
+    candidate.project_material_descriptions();
+    if ((compile_material_layers(candidate) == false) || (prepare_temperature_optics(candidate) == false) || (material_graph_valid(candidate, candidate.materials) == false) ||
+        (subsurface_materials_valid(candidate) == false)) {
+      _private->data.diagnostic = candidate.diagnostic;
+      return failure();
+    }
+    const bool scattering_ready = ((_private->rhi != nullptr) && _private->rhi->valid())
+                                    ? etx::ensure_energy_compensation_interfaces(candidate, _private->scheduler, *_private->rhi)
+                                    : etx::ensure_energy_compensation_interfaces(candidate, _private->scheduler);
+    if ((scattering_ready == false) || (prepare_thermal_materials(candidate, _private->active_camera.medium_index) == false)) {
+      _private->data.diagnostic = candidate.diagnostic;
+      return failure();
+    }
+    prepare_mix_emitters(candidate);
+    cancel_energy_compensation_interface_preparation();
+    _private->data.material_mapping.swap(candidate.material_mapping);
+    _private->data.owned_asset_paths.swap(candidate.owned_asset_paths);
+    _private->data.publish_material_preparation(candidate);
+    _private->data.commit_material_authoring(candidate.material_descriptions);
+    _private->create_area_emitters_from_materials();
+    return {.status = SceneResourceEditStatus::Success, .resource_index = material_index};
   } catch (const std::exception& error) {
-    log::error("Invalid native document: %s", error.what());
+    _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Invalid material document %s: %s", filename, error.what());
+    return failure();
+  }
+}
+
+bool SceneRepresentation::load_from_file(const char* filename, uint32_t options, IntegratorData* out_integrator) {
+  _private->data.diagnostic = {.phase = "Load scene"};
+  try {
+    const bool loaded = load_document(filename, nullptr, false, "", options, out_integrator);
+    if ((loaded == false) && _private->data.diagnostic.message.empty()) {
+      _private->data.diagnostic = material_preparation_diagnostic();
+    }
+    return loaded;
+  } catch (const std::exception& error) {
+    _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Invalid native document: %s", error.what());
     return false;
   }
 }
@@ -25,21 +139,21 @@ bool SceneRepresentation::load_document(const char* filename, SourceDecoder deco
       std::error_code file_error;
       const bool missing_json = (_stricmp(get_file_ext(filename), ".json") == 0) && (std::filesystem::exists(input_path, file_error) == false) && (file_error.value() == 0);
       if (missing_json == false) {
-        log::error("%s", error.c_str());
+        _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "%s", error.c_str());
         return false;
       }
     }
     const SceneSavePaths interrupted_save_paths = scene_save_paths(input_path);
     std::array<StagedSceneFile, 3u> interrupted_save_files = staged_scene_files(interrupted_save_paths);
     bool committed_scene_available = false;
-    if (recover_interrupted_scene_save(interrupted_save_files, committed_scene_available) == false)
+    if (recover_interrupted_scene_save(interrupted_save_files, committed_scene_available, _private->data.diagnostic) == false)
       return false;
     if (committed_scene_available && ((options & PreferRecoveredSave) != 0u)) {
       committed_scene_file = path_to_utf8(interrupted_save_paths.json);
       filename = committed_scene_file.c_str();
     }
     if (validate_native_document(std::filesystem::u8path(filename), error) == false) {
-      log::error("%s", error.c_str());
+      _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "%s", error.c_str());
       return false;
     }
   }
@@ -115,7 +229,7 @@ bool SceneRepresentation::load_document(const char* filename, SourceDecoder deco
     const bool is_native = parsed && js.is_object() && (js.contains("geometry") || js.contains("materials") || js.contains("integrator"));
 
     if (parsed == false) {
-      log::error("Failed to parse JSON scene %s", filename);
+      _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to parse JSON scene %s", filename);
       return false;
     }
 
@@ -165,8 +279,17 @@ bool SceneRepresentation::load_document(const char* filename, SourceDecoder deco
         medium_names_json = obj;
       } else if (key == "camera_names") {
         camera_names_json = obj;
-      } else if (key == "spectral_overrides") {
+      } else if ((key == "spectral_overrides") || (key == "material_library")) {
+        if (spectral_overrides_json.is_null() == false) {
+          _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Scene provides conflicting material libraries");
+          return false;
+        }
         spectral_overrides_json = obj;
+      } else if (key == "etx_material") {
+        if ((obj.is_object() == false) || (obj.contains("version") == false) || (obj["version"] != 1u) || (obj.contains("root") == false) || (obj["root"].is_string() == false)) {
+          _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Invalid ETX material document header");
+          return false;
+        }
       } else if ((key == "emitter_names") && obj.is_array()) {
         _private->data.emitter_names.clear();
         for (const nlohmann::json& emitter_name : obj) {
@@ -334,7 +457,7 @@ bool SceneRepresentation::load_document(const char* filename, SourceDecoder deco
   const char* materials_file_name = _private->data.materials_file_name.c_str();
   if (_private->data.geometry_file_name.empty()) {
     if ((materials_file_name == nullptr) || (materials_file_name[0] == 0)) {
-      log::error("Scene %s does not provide geometry or materials", filename);
+      _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Scene %s does not provide geometry or materials", filename);
       return false;
     }
 
@@ -342,7 +465,7 @@ bool SceneRepresentation::load_document(const char* filename, SourceDecoder deco
     get_file_folder(materials_file_name, materials_base_dir, sizeof(materials_base_dir));
     SceneSerialization loader;
     if (loader.parse_materials_file(std::filesystem::u8path(materials_file_name), materials_base_dir, _private->data, _private->ior_database, _private->scheduler) == false) {
-      log::error("Failed to load materials from %s", materials_file_name);
+      _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to load materials from %s", materials_file_name);
       return false;
     }
 
@@ -353,7 +476,7 @@ bool SceneRepresentation::load_document(const char* filename, SourceDecoder deco
     if (_stricmp(ext, ".etx") == 0) {
       SceneSerialization loader;
       if (loader.load_from_file(std::filesystem::u8path(geometry_file_name), _private->data, materials_file_name, _private->ior_database, _private->scheduler) == false) {
-        log::error("Failed to load ETX file from %s", geometry_file_name);
+        _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to load ETX file from %s", geometry_file_name);
         return false;
       }
       load_result = SceneLoadSucceeded;
@@ -367,26 +490,26 @@ bool SceneRepresentation::load_document(const char* filename, SourceDecoder deco
   }
 
   if ((spectral_overrides_json.is_null() == false) && (apply_scene_spectral_overrides(spectral_overrides_json, _private->data) == false)) {
-    log::error("Failed to restore spectral scene data from %s", filename);
+    _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to restore spectral scene data from %s", filename);
     return false;
   }
   if ((medium_names_json.is_null() == false) && (restore_scene_medium_names(medium_names_json, _private->data) == false)) {
-    log::error("Failed to restore medium names from %s", filename);
+    _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to restore medium names from %s", filename);
     return false;
   }
   if ((material_names_json.is_null() == false) && (restore_scene_material_names(material_names_json, _private->data) == false)) {
-    log::error("Failed to restore material names from %s", filename);
+    _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to restore material names from %s", filename);
     return false;
   }
   if ((camera_names_json.is_null() == false) && (restore_scene_camera_names(camera_names_json, _private->data) == false)) {
-    log::error("Failed to restore camera names from %s", filename);
+    _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to restore camera names from %s", filename);
     return false;
   }
 
   if (hierarchy_json.is_null() == false) {
     _private->data.hierarchy.clear();
     if (deserialize_scene_hierarchy(hierarchy_json, _private->data) == false) {
-      log::error("Failed to deserialize scene hierarchy from %s", filename);
+      _private->data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to deserialize scene hierarchy from %s", filename);
       return false;
     }
   } else {

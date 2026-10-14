@@ -7,7 +7,6 @@
 #include "application_runner.hxx"
 #include "batch_mode.hxx"
 #include "bsdf_lut_generation.hxx"
-#include "shader_packager.hxx"
 
 #include <cstdio>
 #include <cstring>
@@ -100,64 +99,7 @@ extern "C" int main(int argc, char* argv[]) {
     return 0;
   }
 
-#if defined(ETX_ENABLE_SHADER_PACKAGER) && ETX_ENABLE_SHADER_PACKAGER
-  for (int argument_index = 1; argument_index < argc; ++argument_index) {
-    if (std::strcmp(argv[argument_index], "--build-shader-package") != 0) {
-      continue;
-    }
-    if ((argument_index + 3) >= argc) {
-      fprintf(stderr, "Usage: raytracer --build-shader-package <output-file> --shader-backend <metal|vulkan> [--shader-source-root <directory>]\n");
-      return 1;
-    }
-    const std::filesystem::path output_path = argv[argument_index + 1];
-    if (std::strcmp(argv[argument_index + 2], "--shader-backend") != 0) {
-      fprintf(stderr, "Expected --shader-backend after the shader package output path.\n");
-      return 1;
-    }
-    RHIBackend backend = RHIBackend::Vulkan;
-    if (std::strcmp(argv[argument_index + 3], "metal") == 0) {
-      backend = RHIBackend::Metal;
-    } else if (std::strcmp(argv[argument_index + 3], "vulkan") != 0) {
-      fprintf(stderr, "Unsupported shader package backend '%s'.\n", argv[argument_index + 3]);
-      return 1;
-    }
-
-    std::filesystem::path source_root = env().data_folder();
-    for (int option_index = argument_index + 4; option_index < argc; ++option_index) {
-      if (std::strcmp(argv[option_index], "--shader-source-root") != 0) {
-        fprintf(stderr, "Unsupported shader package option '%s'.\n", argv[option_index]);
-        return 1;
-      }
-      if ((option_index + 1) >= argc) {
-        fprintf(stderr, "Expected a directory after --shader-source-root.\n");
-        return 1;
-      }
-      source_root = argv[++option_index];
-    }
-
-    RaytracerShaderPackageStatistics statistics = {};
-    std::string error_message = {};
-    if (build_raytracer_shader_package(output_path, source_root, backend, statistics, error_message) == false) {
-      fprintf(stderr, "Shader package build failed: %s\n", error_message.c_str());
-      return 1;
-    }
-    printf("Shader package built from %s: variants=%u binaries=%.2f MiB package=%.2f MiB compile=%.2f ms write-and-verify=%.2f ms\n", source_root.string().c_str(),
-      statistics.variant_count, static_cast<double>(statistics.binary_size_bytes) / (1024.0 * 1024.0), static_cast<double>(statistics.package_size_bytes) / (1024.0 * 1024.0),
-      statistics.compile_time_ms, statistics.package_time_ms);
-    return 0;
-  }
-#endif
-
-#if defined(ETX_REQUIRE_SHADER_PACKAGE) && ETX_REQUIRE_SHADER_PACKAGE
-  ShaderCompiler::instance().set_runtime_compilation_allowed(false);
-  log::info("Shader mode: production package");
-#else
-  ShaderCompiler::instance().set_shader_package_lookup_allowed(false);
-  if (ShaderCompiler::instance().initialize() != RHIResult::Success) {
-    log::error("Shader compiler initialization failed");
-  }
-  log::info("Shader mode: development source compilation (package lookup disabled)");
-#endif
+  log::info("Shader mode: on-demand source compilation");
 
   ApplicationRuntimeOptions runtime_options = parse_application_runtime_options(argc, argv);
   if (runtime_options.command == ApplicationRuntimeCommand::Help) {

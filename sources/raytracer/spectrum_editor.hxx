@@ -5,7 +5,7 @@
 namespace etx {
 
 struct SpectrumTarget {
-  uint32_t* spectrum_slot(Material& material) const;
+  uint32_t* spectrum_slot(MaterialDescription& material) const;
   uint32_t* spectrum_slot(SceneData& scene) const;
 
   uint32_t material_index = kInvalidIndex;
@@ -22,7 +22,11 @@ struct SpectrumTarget {
     Subsurface,
     ThinfilmEta,
     ThinfilmK,
-    Absorption
+    Absorption,
+    CoatingEta,
+    CoatingK,
+    CoatingAbsorption,
+    CoatingScattering
   } channel = Channel::None;
   uint32_t medium_index = kInvalidIndex;
   uint32_t emitter_index = kInvalidIndex;

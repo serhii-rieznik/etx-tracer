@@ -3,6 +3,7 @@
 #include "interop.hxx"
 
 ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationConductorLutSize = 64u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationConductorTerminalLutHeight = kBSDFEnergyCompensationConductorLutSize + 1u;
 ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationDielectricLutSize = 64u;
 ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationDielectricBranchCount = 4u;
 ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationDielectricAverageWidth = 8u;

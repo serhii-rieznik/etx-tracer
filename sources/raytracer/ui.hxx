@@ -126,6 +126,10 @@ struct UI {
     _current_renderer_status = status;
   }
 
+  void set_resource_edit_error(const std::string& error) {
+    _resource_edit_error = error;
+  }
+
   void set_memory_stats(const RHIMemoryStats& rhi_stats, const RendererMemoryStats& renderer_stats) {
     _rhi_memory_stats = rhi_stats;
     _renderer_memory_stats = renderer_stats;
@@ -168,6 +172,7 @@ struct UI {
 
   bool handle_event(const sapp_event*);
   bool commit_pending_edits(SceneRepresentation& scene_rep);
+  void revert_material_spectrum_edits(SceneRepresentation& scene_rep);
   void invalidate_scene_resources() {
     _mesh_materials_dirty = true;
   }
@@ -264,6 +269,7 @@ struct UI {
     std::function<void(bool)> stop_selected;
     std::function<void()> run_selected;
     std::function<void()> restart_selected;
+    std::function<void()> dismiss_diagnostic;
     std::function<void()> reload_scene_selected;
     std::function<void()> reload_geometry_selected;
     std::function<void()> reload_shaders_selected;
@@ -271,6 +277,8 @@ struct UI {
     std::function<void()> options_changed;
     std::function<void()> use_image_as_reference;
     std::function<SceneResourceEditResult()> material_added;
+    std::function<SceneResourceEditResult(const std::string&)> material_file_loaded;
+    std::function<std::string(uint32_t, const std::string&)> material_file_saved;
     std::function<SceneResourceEditResult(uint32_t)> material_duplicated;
     std::function<SceneResourceEditResult(uint32_t)> material_deleted;
     std::function<std::string(uint32_t, const std::string&)> material_renamed;
@@ -376,17 +384,20 @@ struct UI {
   bool save_scene_file_as() const;
   void save_image(SaveImageMode mode) const;
   void load_image() const;
-  bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&);
-  bool build_material(SceneRepresentation& scene_rep, Material& material, const FrameData&, const std::vector<uint32_t>& material_indices);
+  bool build_material(SceneRepresentation& scene_rep, MaterialDescription& material, const FrameData&);
+  bool build_material(SceneRepresentation& scene_rep, MaterialDescription& material, const FrameData&, const std::vector<uint32_t>& material_indices);
   bool build_medium(SceneRepresentation& scene_rep, uint32_t medium_index, Medium& medium);
   bool material_spectrum_control(SceneRepresentation& scene_rep, const char* label, SpectrumTarget::Channel channel, SpectrumSource::Kind kind);
   bool spectrum_control(SceneRepresentation& scene_rep, const char* label, const std::vector<SpectrumTarget>& targets, SpectrumSource::Kind kind, bool expanded);
   bool flush_spectrum_changes(SceneRepresentation& scene_rep, bool defer_pending);
   bool image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options);
+  bool image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options, uint64_t changed_field);
+  bool image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options, uint64_t changed_field, bool& assigned);
   bool sampled_image_picker(SceneRepresentation& scene_rep, const char* label, SampledImage& image, uint32_t image_options);
+  bool sampled_image_picker(SceneRepresentation& scene_rep, const char* label, SampledImage& image, uint32_t image_options, uint64_t image_field, uint64_t channel_field);
   bool angle_editor(const char* label, float2& angles, float min_azimuth, float max_azimuth, float min_elevation, float max_elevation, float pole_threshold);
-  bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior, const FrameData&, bool mixed, bool dielectric_only, SpectrumTarget::Channel eta_channel,
-    SpectrumTarget::Channel k_channel);
+  bool ior_picker(SceneRepresentation& scene_rep, const char* name, RefractiveIndex& ior, const FrameData&, bool mixed, SpectralDistribution::Class required_class,
+    SpectrumTarget::Channel eta_channel, SpectrumTarget::Channel k_channel, bool edit_k);
 
   bool medium_dropdown(const char* label, uint32_t& medium);
   void update_name_buffer(SelectionKind kind, int32_t index, const char* current_name);
@@ -407,7 +418,8 @@ struct UI {
   void toggle_material_selection(int32_t index);
   void set_material_selection_range(int32_t index);
   std::vector<uint32_t> selected_material_indices(SceneRepresentation& scene_rep) const;
-  void apply_material_changes(SceneRepresentation& scene_rep, const std::vector<uint32_t>& material_indices, const Material& before, const Material& after) const;
+  void apply_material_changes(SceneRepresentation& scene_rep, const std::vector<uint32_t>& material_indices, const MaterialDescription& before, const MaterialDescription& after,
+    uint64_t changed_fields) const;
   void queue_material_change(uint32_t material_index);
   void queue_medium_change(uint32_t medium_index);
   void queue_emitter_change(uint32_t emitter_index);
@@ -445,8 +457,7 @@ struct UI {
   void finish_camera_property_interaction();
   void build_properties_window(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
 
-  bool build_material_class_selector(Material& material);
-  bool build_material_class_selector(Material& material, bool mixed);
+  bool build_material_class_selector(MaterialDescription& material, bool mixed, bool select_bsdf);
 
   void build_material_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
   void build_node_selection_properties(SceneRepresentation& scene_rep, const BuildContext& ctx, const FrameData& data);
@@ -603,6 +614,8 @@ struct UI {
   MappingRepresentation _medium_mapping;
   MappingRepresentation _mesh_mapping;
   std::vector<uint32_t> _scene_tree_open_subtree_ends;
+  std::vector<uint8_t> _scene_tree_matches;
+  char _scene_filter[128] = {};
   SelectionState _selection;
   SelectionState _name_edit_selection = {};
   char _name_edit_buffer[256] = {};
@@ -622,14 +635,16 @@ struct UI {
   bool _spectrum_tab_requested = false;
   const IORDatabase* _spectrum_database = nullptr;
   void build_spectrum_editor(SceneRepresentation& scene_rep);
-  void edit_spectrum_button(SceneRepresentation& scene_rep, const char* label, SpectrumTarget::Channel channel, uint32_t spectrum_index, float width);
+  void open_ior_spectrum(SceneRepresentation& scene_rep, const char* label, SpectrumTarget::Channel channel);
+  void rebind_material_spectrum(SceneRepresentation& scene_rep, uint32_t previous_material, uint32_t material_index);
   std::unordered_map<std::string, bool> _material_anisotropy;
   std::vector<int32_t> _selected_material_positions;
   std::vector<uint32_t> _pending_material_selection_indices;
   int32_t _material_selection_anchor = -1;
   bool _updating_material_multi_selection = false;
   const std::vector<uint32_t>* _editing_material_indices = nullptr;
-  uint32_t _material_batch_changed_fields = 0u;
+  uint64_t _material_batch_changed_fields = 0u;
+  std::string _material_load_error;
   uint64_t _material_mapping_hash = 0ull;
   uint64_t _medium_mapping_hash = 0ull;
   uint64_t _mesh_mapping_hash = 0ull;
@@ -643,7 +658,7 @@ struct UI {
   float _inspector_width = 400.0f;
   uint32_t _compact_workspace_tab = 0u;
   float _diagnostics_height = 260.0f;
-  bool _renderer_diagnostic_details = false;
+  std::string _resource_edit_error;
   uint32_t _viewport_mouse_buttons = 0u;
   bool _reset_layout_requested = false;
   bool _scene_dirty = false;

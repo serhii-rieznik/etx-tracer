@@ -6,6 +6,21 @@
 #include <access/bsdf_resource_gpu.hxx>
 #include <interop/bsdf_dispatch_shared.hxx>
 
+#if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
+bool wavefront_connect_light_coating_request(GPUWavefrontResources resources, uint dispatch_index, uint batch_index, out uint request_index) {
+  request_index = 0u;
+  if ((dispatch_index >= resources.path_capacity) || (batch_index >= constants.dispatch_item_count)) {
+    return false;
+  }
+  const uint storage_index = batch_index * resources.path_capacity + dispatch_index;
+  if (storage_index < constants.work_queue_index) {
+    return false;
+  }
+  request_index = storage_index - constants.work_queue_index;
+  return request_index < WAVEFRONT_RO_BUFFER(resources.coating_request_buffer).Load(kGPUCoatingRequestCapacityOffset);
+}
+#endif
+
 struct WavefrontConnectLightPrepareInput {
   GPUWavefrontResources resources;
   uint task_index;
@@ -109,7 +124,7 @@ bool wavefront_connect_light_stage_matches_vertex(GPUWavefrontPathVertex vertex,
 
 float wavefront_connect_light_mis_camera(GPUWavefrontPathVertex current_vertex, GPUWavefrontPathVertex previous_vertex, float current_backward_pdf, float previous_backward_pdf) {
   float result_accumulated = 0.0f;
-  float previous_connectible = ((previous_vertex.flags & GPUWavefrontVertexFlags::Connectible) != 0u) ? 1.0f : 0.0f;
+  float previous_connectible = (wavefront_path_vertex_connectible(previous_vertex) && ((previous_vertex.flags & GPUWavefrontVertexFlags::Delta) == 0u)) ? 1.0f : 0.0f;
   if (current_vertex.path_length > 1u) {
     float r1 = wavefront_safe_div(previous_backward_pdf, previous_vertex.pdf_from_prev);
     float previous_mis_connectible = ((previous_vertex.flags & GPUWavefrontVertexFlags::Mis_connectible) != 0u) ? 1.0f : 0.0f;
@@ -124,7 +139,7 @@ float wavefront_connect_light_mis_light(GPUWavefrontPathVertex current_vertex, G
   float result_accumulated = 0.0f;
   float r1 = wavefront_safe_div(previous_backward_pdf, previous_vertex.pdf_from_prev);
   float previous_mis_connectible = ((previous_vertex.flags & GPUWavefrontVertexFlags::Mis_connectible) != 0u) ? 1.0f : 0.0f;
-  float previous_connectible = ((previous_vertex.flags & GPUWavefrontVertexFlags::Connectible) != 0u) ? 1.0f : 0.0f;
+  float previous_connectible = (wavefront_path_vertex_connectible(previous_vertex) && ((previous_vertex.flags & GPUWavefrontVertexFlags::Delta) == 0u)) ? 1.0f : 0.0f;
   result_accumulated = r1 * (previous_mis_connectible + previous_vertex.pdf_history);
   float r0 = wavefront_safe_div(current_backward_pdf, current_vertex.pdf_from_prev);
   result_accumulated = r0 * (previous_connectible + result_accumulated);
@@ -468,17 +483,31 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
     return;
   }
 
+# if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
+  uint request_index = 0u;
+  if (wavefront_connect_light_coating_request(resources, dispatch_index, batch_index, request_index) == false) {
+    return;
+  }
+# endif
   const uint storage_index = batch_index * resources.path_capacity + dispatch_index;
   GPUWavefrontConnectLightCandidate candidate = wavefront_load_connect_light_candidate(resources.connect_light_task_buffer, storage_index);
+# if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR) && ETX_COATING_RESOLVE
+  if (candidate.flags != GPUWavefrontConnectLightTaskFlags::LightCoatingPending) {
+# else
   if (candidate.flags != GPUWavefrontConnectLightTaskFlags::CameraPrepared) {
+# endif
     return;
   }
   if (wavefront_connect_light_stage_matches_material(candidate.light_material_class) == false) {
     return;
   }
+# if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR) && ETX_COATING_RESOLVE
+  WAVEFRONT_RW_BUFFER(resources.connect_light_task_buffer).Store(storage_index * kGPUWavefrontConnectLightTaskStride + kGPUWavefrontConnectLightResolverFlagsOffset, 0u);
+# else
   if (wavefront_claim_connect_light_candidate(resources.connect_light_task_buffer, storage_index) == false) {
     return;
   }
+# endif
 
   WavefrontConnectLightPrepareInput input_value = (WavefrontConnectLightPrepareInput)0;
   if (wavefront_load_connect_light_prepare_input(dispatch_index, batch_index, false, kInvalidIndex, kInvalidIndex, input_value) == false) {
@@ -517,8 +546,20 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
     Sampler light_sampler = make_bsdf_sampler(light_seed);
     BSDFData light_data = bsdf_data_make(wavefront_make_connect_path_vertex(input_value.light_vertex), spect, kInvalidIndex, PathSource::Light, input_value.light_vertex.w_i);
     const BSDFResourceContext resource_context = make_scene_bsdf_resource_gpu_context();
+# if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
+#  if ETX_COATING_RESOLVE
+    light_eval = wavefront_coating_load_evaluation(resources, request_index, light_sampler);
+#  else
+    wavefront_coating_begin_evaluation(resource_context, resources, request_index, input_value.light_vertex.material_index, light_data, direction_to_camera,
+      input_value.light_material, light_sampler);
+    WAVEFRONT_RW_BUFFER(resources.connect_light_task_buffer)
+      .Store(storage_index * kGPUWavefrontConnectLightTaskStride + kGPUWavefrontConnectLightResolverFlagsOffset, uint(GPUWavefrontConnectLightTaskFlags::LightCoatingPending));
+    return;
+#  endif
+# else
     prepared = wavefront_connect_light_stage_prepare_material(resource_context, light_data, input_value.light_material, light_sampler);
     light_eval = wavefront_connect_light_stage_light_bsdf_eval_prepared(resource_context, light_data, direction_to_camera, input_value.light_material, prepared, light_sampler);
+# endif
     light_reverse_seed = light_sampler.seed;
   }
   if ((bsdf_eval_valid(light_eval) == false) ||
@@ -600,7 +641,7 @@ void wavefront_resolve_connect_light_prepare_task(uint dispatch_index, uint batc
   task.inline_medium_scattering = input_value.light_vertex.inline_medium_scattering;
   task.inline_medium_flags = input_value.light_vertex.inline_medium_flags;
   if (wavefront_path_vertex_is_surface(input_value.light_vertex) &&
-      ((input_value.light_material.cls == MaterialClass::Dielectric) || (input_value.light_material.subsurface_cls != SubsurfaceMaterial::Disabled))) {
+      (material_supports_surface_transmission(input_value.light_material) || (input_value.light_material.subsurface_cls != SubsurfaceMaterial::Disabled))) {
     const bool into_body = dot(input_value.light_vertex.geo_normal, direction_to_camera) < 0.0f;
     task.medium_index = into_body ? input_value.light_material.int_medium : input_value.light_material.ext_medium;
     task.inline_medium_flags = into_body ? task.inline_medium_flags : 0u;

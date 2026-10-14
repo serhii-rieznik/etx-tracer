@@ -3,6 +3,10 @@
 #include "interop.hxx"
 #include "spectrum.hxx"
 
+#ifndef ETX_ENABLE_COHERENT_COATING
+# define ETX_ENABLE_COHERENT_COATING 1
+#endif
+
 ETX_STATIC_CONST float3 kRGBWavelengths = float3(610.0f, 537.0f, 450.0f);
 ETX_STATIC_CONST float3 kRGBWavelengthsSpan = float3(45.0f, 47.0f, 23.5f);
 
@@ -25,11 +29,31 @@ struct ETX_ALIGNED Thinfilm {
   float weight ETX_INIT(1.0f);
 };
 
-struct ETX_ALIGNED ThinfilmEval {
+struct ETX_ALIGNED InterfaceOptics {
   RefractiveIndexSample ior ETX_INIT({});
   float3 rgb_wavelengths ETX_INIT(kRGBWavelengths);
   float thickness ETX_INIT(0.0f);
   float weight ETX_INIT(0.0f);
+  // Derived interface optics also carry a separate finite coating; authored film settings stay independent.
+  RefractiveIndexSample coating_ior ETX_INIT({});
+  float coating_thickness_nm ETX_INIT(0.0f);
+  uint32_t incident_inside ETX_INIT(0u);
+};
+
+typedef InterfaceOptics ThinfilmEval;
+
+struct ETX_ALIGNED CoherentCoating {
+  RefractiveIndex ior ETX_INIT({});
+  uint32_t thickness_image ETX_INIT(kInvalidIndex);
+  float min_thickness_nm ETX_INIT(0.0f);
+  float max_thickness_nm ETX_INIT(0.0f);
+};
+
+struct CoherentInterfaceEval {
+  ThinfilmEval thinfilm ETX_INIT({});
+  RefractiveIndexSample coating_ior ETX_INIT({});
+  float coating_thickness_nm ETX_INIT(0.0f);
+  uint32_t incident_inside ETX_INIT(0u);
 };
 
 ETX_STATIC_CONST float kDiffractionGratingMinimumPeriodNm = 1.0f;
@@ -72,10 +96,30 @@ struct MaterialClass {
     OpenPBR,
     Void,
     DiffractionGrating,
+    CoatedConductor,
+    Mix,
 
     Count,
     Undefined = kInvalidIndex,
   };
+};
+
+struct ETX_ALIGNED Coating {
+  RefractiveIndex ior ETX_INIT({});
+  SampledImage roughness ETX_INIT({});
+  SampledImage thickness ETX_INIT({{0.01f, 0.01f, 0.01f, 0.01f}, kInvalidIndex, 0u});
+  SpectralImage absorption ETX_INIT({});
+  SpectralImage scattering ETX_INIT({});
+  float anisotropy ETX_INIT(0.0f);
+  uint32_t energy_compensation_interface_index ETX_INIT(kInvalidIndex);
+  uint32_t unit_spectrum_index ETX_INIT(kInvalidIndex);
+  uint32_t thermal_spectrum_index ETX_INIT(kInvalidIndex);
+};
+
+struct ETX_ALIGNED MaterialMix {
+  SampledImage amount ETX_INIT({{0.5f, 0.5f, 0.5f, 0.5f}, kInvalidIndex, 0u});
+  uint32_t first ETX_INIT(kInvalidIndex);
+  uint32_t second ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED Material {
@@ -118,7 +162,34 @@ struct ETX_ALIGNED Material {
   SampledImage alpha_mask ETX_INIT({{1.0f, 1.0f, 1.0f, 1.0f}, kInvalidIndex, kInvalidIndex});
   SampledImage bump ETX_INIT({{0.0f, 0.0f, 0.0f, 0.0f}, kInvalidIndex, 0u});
 #endif
+  Coating coating ETX_INIT({});
+  MaterialMix mix ETX_INIT({});
+  // Zero retains legacy BSDF semantics; layered materials encode their base class plus one.
+  uint32_t layer_base_class ETX_INIT(0u);
+  CoherentCoating coherent_coating ETX_INIT({});
 };
+
+ETX_SHARED_INLINE uint32_t material_coating_base_class(ETX_IN(Material, material)) {
+  return material.layer_base_class != 0u ? material.layer_base_class - 1u : MaterialClass::Conductor;
+}
+
+ETX_SHARED_INLINE Material material_coating_substrate(ETX_IN(Material, material)) {
+  Material result = material;
+  result.cls = material_coating_base_class(material);
+  result.ext_ior = material.coating.ior;
+  result.thinfilm = ETX_ZERO(Thinfilm);
+  result.coherent_coating = ETX_ZERO(CoherentCoating);
+  if (result.cls == MaterialClass::Translucent) {
+    result.int_ior = material.coating.ior;
+  }
+  return result;
+}
+
+ETX_SHARED_INLINE bool material_supports_surface_transmission(ETX_IN(Material, material)) {
+  const uint32_t base_class = material_coating_base_class(material);
+  return (material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Translucent) ||
+         ((material.cls == MaterialClass::CoatedConductor) && ((base_class == MaterialClass::Dielectric) || (base_class == MaterialClass::Translucent)));
+}
 
 ETX_SHARED_INLINE uint32_t material_boundary_class(uint32_t material_class, uint32_t subsurface_class) {
   return ((material_class == MaterialClass::Plastic) && (subsurface_class != SubsurfaceMaterial::Disabled)) ? MaterialClass::Dielectric : material_class;

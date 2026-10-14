@@ -181,15 +181,16 @@ std::shared_ptr<const TemperatureOpticalProfile> load_temperature_optics(const c
 }
 
 bool prepare_temperature_optics(SceneData& data) {
-  std::unordered_map<uint32_t, float> temperatures;
   for (uint32_t material_index = 0u; material_index < data.materials.size(); ++material_index) {
     Material& material = data.materials[material_index];
+    const bool dielectric_interior =
+      (material.cls == MaterialClass::Dielectric) || ((material.cls == MaterialClass::CoatedConductor) && (material_coating_base_class(material) == MaterialClass::Dielectric));
     const auto eta_author = data.spectrum_sources.find(material.int_ior.eta_index);
     const auto k_author = data.spectrum_sources.find(material.int_ior.k_index);
     const bool eta_profile = (eta_author != data.spectrum_sources.end()) && (eta_author->second.temperature_profile != nullptr);
     const bool k_profile = (k_author != data.spectrum_sources.end()) && (k_author->second.temperature_profile != nullptr);
     if (eta_profile != k_profile) {
-      log::error("Material %u requires paired temperature optical profiles for internal n and extinction", material_index);
+      data.fail_material(material_index, SceneDiagnosticKind::Validation, "Temperature optics", "requires paired temperature optical profiles for internal n and extinction");
       return false;
     }
     if (eta_profile) {
@@ -199,26 +200,22 @@ bool prepare_temperature_optics(SceneData& data) {
           (eta_source.temperature_profile_enabled != k_source.temperature_profile_enabled) ||
           (eta_source.temperature_profile_hold_endpoints != k_source.temperature_profile_hold_endpoints) ||
           ((eta_source.temperature_profile != k_source.temperature_profile) && (eta_source.temperature_profile->text != k_source.temperature_profile->text))) {
-        log::error("Material %u has inconsistent internal temperature optical profiles", material_index);
+        data.fail_material(material_index, SceneDiagnosticKind::Validation, "Temperature optics", "has inconsistent internal temperature optical profiles");
         return false;
       }
     }
     for (uint32_t* slot : {&material.int_ior.eta_index, &material.int_ior.k_index}) {
-      auto found = data.spectrum_sources.find(*slot);
+      const auto found = data.spectrum_sources.find(*slot);
       if ((found == data.spectrum_sources.end()) || (found->second.temperature_profile == nullptr)) {
         continue;
       }
-      const float temperature = found->second.temperature_profile_enabled ? material.temperature_kelvin : 0.0f;
-      if (const auto previous = temperatures.find(*slot); (previous != temperatures.end()) && (previous->second != temperature)) {
-        *slot = data.copy_spectrum(*slot);
-        found = data.spectrum_sources.find(*slot);
-      }
-      temperatures[*slot] = temperature;
-      SpectrumSource& source = found->second;
+      SpectrumSource source = found->second;
+      const float temperature = source.temperature_profile_enabled ? material.temperature_kelvin : 0.0f;
       SpectralDistribution eta, k;
       if (source.temperature_profile->evaluate(temperature, source.temperature_profile_hold_endpoints, eta, k) == false) {
-        log::error("Material %u temperature %.1f K is outside optical profile range %.1f..%.1f K; explicitly enable endpoint optics to render outside it", material_index,
-          temperature, source.temperature_profile->samples.front().temperature_kelvin, source.temperature_profile->samples.back().temperature_kelvin);
+        data.fail_material(material_index, SceneDiagnosticKind::Validation, "Temperature optics",
+          "temperature %.1f K is outside optical profile range %.1f..%.1f K; explicitly enable endpoint optics to render outside it", temperature,
+          source.temperature_profile->samples.front().temperature_kelvin, source.temperature_profile->samples.back().temperature_kelvin);
         return false;
       }
       source.base = source.temperature_profile_component == 0u                            ? eta
@@ -226,11 +223,19 @@ bool prepare_temperature_optics(SceneData& data) {
                                                                                           : k;
       const SpectralDistribution prepared = source.output();
       if (prepared.empty() || (prepared.valid() == false) || (valid_value(prepared.integrated()) == false)) {
-        log::error("Material %u temperature optics exceed the supported numeric range", material_index);
+        data.fail_material(material_index, SceneDiagnosticKind::Validation, "Temperature optics", "temperature optics exceed the supported numeric range");
         return false;
       }
-      data.spectrum_values[*slot] = prepared;
+      auto& resources = data.temperature_optics_resources[material_index];
+      uint32_t& prepared_index = (slot == &material.int_ior.eta_index) ? resources.eta_index : resources.k_index;
+      if (prepared_index == kInvalidIndex) {
+        prepared_index = data.add_spectrum(prepared);
+      } else {
+        data.spectrum_values[prepared_index] = prepared;
+      }
       material.int_ior.cls = source.temperature_profile->cls;
+      data.spectrum_sources[prepared_index] = std::move(source);
+      *slot = prepared_index;
     }
     const auto extinction = data.spectrum_sources.find(material.int_ior.k_index);
     if ((extinction != data.spectrum_sources.end()) && (extinction->second.temperature_profile != nullptr)) {
@@ -240,26 +245,39 @@ bool prepare_temperature_optics(SceneData& data) {
       for (uint32_t i = 0u; i < eta.spectral_entry_count; ++i) {
         if (((profile.cls == SpectralDistribution::Dielectric) && (eta.spectral_entries[i].power <= 0.0f)) ||
             ((eta.spectral_entries[i].power == 0.0f) && (k.spectral_entries[i].power == 0.0f))) {
-          log::error("Material %u has a singular prepared refractive index", material_index);
+          data.fail_material(material_index, SceneDiagnosticKind::Validation, "IOR", "has a singular prepared refractive index");
           return false;
         }
       }
-      if ((profile.cls == SpectralDistribution::Conductor) && (material.cls != MaterialClass::Conductor)) {
-        log::error("Material %u requires a conductor BSDF for a conductor optical profile", material_index);
+      if ((profile.cls == SpectralDistribution::Conductor) && (material.cls != MaterialClass::Conductor) && (material.cls != MaterialClass::CoatedConductor)) {
+        data.fail_material(material_index, SceneDiagnosticKind::Validation, "Material parameters", "requires a conductor BSDF for a conductor optical profile");
         return false;
       }
-      if ((profile.cls == SpectralDistribution::Dielectric) && (material.cls != MaterialClass::Dielectric) &&
+      if ((profile.cls == SpectralDistribution::Dielectric) && (dielectric_interior == false) &&
           std::any_of(profile.samples.begin(), profile.samples.end(), [](const auto& sample) {
             return sample.k.is_zero() == false;
           })) {
-        log::error("Material %u requires a dielectric BSDF for an optical profile with bulk absorption", material_index);
+        data.fail_material(material_index, SceneDiagnosticKind::Validation, "Material parameters", "requires a dielectric BSDF for an optical profile with bulk absorption");
         return false;
       }
     }
-    if ((material.cls == MaterialClass::Dielectric) && (extinction != data.spectrum_sources.end()) && (extinction->second.temperature_profile != nullptr) &&
+    if (dielectric_interior && (extinction != data.spectrum_sources.end()) && (extinction->second.temperature_profile != nullptr) &&
         (extinction->second.temperature_profile->cls == SpectralDistribution::Dielectric) && (material.int_medium == kInvalidIndex)) {
-      const uint32_t zero = data.add_spectrum(SpectralDistribution::constant(0.0f));
-      material.int_medium = data.mediums.add(Medium::Homogeneous, "Optical profile medium " + std::to_string(material_index), "", zero, zero, 0.0f, true);
+      auto& resources = data.temperature_optics_resources[material_index];
+      if (resources.medium_index == kInvalidIndex) {
+        const uint32_t zero = data.add_spectrum(SpectralDistribution::constant(0.0f));
+        const std::string base_name = "Optical profile medium " + std::to_string(material_index);
+        std::string name = base_name;
+        for (uint32_t suffix = 1u; data.mediums.find(name.c_str()) != kInvalidIndex; ++suffix) {
+          name = base_name + " " + std::to_string(suffix);
+        }
+        resources.medium_index = data.mediums.add(Medium::Homogeneous, name, "", zero, zero, 0.0f, true);
+      }
+      material.int_medium = resources.medium_index;
+    }
+    if ((material.cls == MaterialClass::CoatedConductor) && (material_coating_base_class(material) == MaterialClass::Dielectric) &&
+        (material.coherent_coating.ior.cls == SpectralDistribution::Conductor)) {
+      material.coating.ior = material.int_ior;
     }
   }
   return true;

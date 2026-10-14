@@ -13,54 +13,16 @@ float wavefront_direct_light_ris_candidate_weight(WavefrontEmitterSample sample_
   return (radiance_weight * source_alignment) / proposal_pdf;
 }
 
-bool wavefront_sample_direct_light_ris(uint light_sampling_mode, SpectralQuery spect, float3 source_position, bool source_is_surface, float3 source_normal, inout uint seed,
-  out WavefrontEmitterSample sample_value) {
-  sample_value = (WavefrontEmitterSample)0;
-
-  ByteAddressBuffer scene_globals = bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)];
-  SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(scene_globals);
-  if (globals_data.emitter_instance_count == 0u) {
-    return false;
+void wavefront_direct_light_reservoir_update(inout WavefrontEmissionConsumer consumer, bool source_is_surface, float3 source_normal) {
+  const float weight = wavefront_direct_light_ris_candidate_weight(consumer.candidate, source_is_surface, source_normal);
+  consumer.weight_sum += weight;
+  uint seed = consumer.sampler_seed;
+  const float reservoir_rnd = rnd01(seed) * consumer.weight_sum;
+  consumer.sampler_seed = seed;
+  if ((weight > 0.0f) && (reservoir_rnd < weight)) {
+    consumer.selected = consumer.candidate;
+    consumer.selected_weight = weight;
   }
-
-  uint candidate_count = min(4u * globals_data.emitter_instance_count, 16u);
-  if (candidate_count == 0u) {
-    return false;
-  }
-
-  float weight_sum = 0.0f;
-  float selected_weight = 0.0f;
-  WavefrontEmitterSample selected_sample = (WavefrontEmitterSample)0;
-  for (uint i = 0u; i < candidate_count; ++i) {
-    uint emitter_index = kInvalidIndex;
-    float pdf_sample = 0.0f;
-    if (wavefront_sample_emitter_index(light_sampling_mode, seed, emitter_index, pdf_sample) == false) {
-      continue;
-    }
-
-    WavefrontEmitterSample candidate = (WavefrontEmitterSample)0;
-    if (wavefront_sample_emitter_to_point_from_index(emitter_index, pdf_sample, spect, source_position, seed, candidate) == false) {
-      continue;
-    }
-
-    const float weight = wavefront_direct_light_ris_candidate_weight(candidate, source_is_surface, source_normal);
-    weight_sum += weight;
-    float reservoir_rnd = rnd01(seed) * weight_sum;
-    if ((weight > 0.0f) && (reservoir_rnd < weight)) {
-      selected_sample = candidate;
-      selected_weight = weight;
-    }
-  }
-
-  if (selected_weight <= 0.0f) {
-    return false;
-  }
-
-  // Retain the proposal PDFs for MIS; this scale preserves the average candidate estimator.
-  float reservoir_scale = weight_sum / (float(candidate_count) * selected_weight);
-  selected_sample.value = spectral_response_mul(selected_sample.value, reservoir_scale);
-  sample_value = selected_sample;
-  return true;
 }
 
 float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWavefrontPathVertex current_vertex, WavefrontEmitterSample emitter_sample, MediumAccess medium_access,
@@ -93,95 +55,26 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
   return 1.0f;
 }
 
-[numthreads(64, 1, 1)] void wavefront_camera_direct_light_sample_main(uint3 dtid : SV_DispatchThreadID) {
-  const uint dispatch_index = dtid.x;
-  const bool enable_camera_direct_light = true;
-  if (scene_path_mode_is_light_tracing()) {
-    return;
-  }
-
-  GPUWavefrontResources resources = wavefront_load_resources();
-  if (resources.direct_light_sample_buffer == kInvalidIndex) {
-    return;
-  }
-  if (dispatch_index >= resources.path_capacity) {
-    return;
-  }
-
-  GPUWavefrontDirectLightSample empty_sample = (GPUWavefrontDirectLightSample)0;
-  wavefront_store_direct_light_sample(resources.direct_light_sample_buffer, dispatch_index, empty_sample);
-  if (resources.direct_light_task_buffer != kInvalidIndex) {
-    GPUWavefrontDirectLightTask empty_task = (GPUWavefrontDirectLightTask)0;
-    empty_task.medium_index = kInvalidIndex;
-    wavefront_store_direct_light_task(resources.direct_light_task_buffer, dispatch_index, empty_task);
-  }
-  if (resources.direct_light_result_buffer != kInvalidIndex) {
-    GPUWavefrontDirectLightResult empty_result = (GPUWavefrontDirectLightResult)0;
-    wavefront_store_direct_light_result(resources.direct_light_result_buffer, dispatch_index, empty_result);
-  }
-  if (enable_camera_direct_light == false) {
-    return;
-  }
-
-  uint queue_descriptor = wavefront_queue_current_descriptor(true);
-  uint queue_count = wavefront_queue_count(queue_descriptor);
-  if (dispatch_index >= queue_count) {
-    return;
-  }
-
-  uint path_index = wavefront_queue_load(queue_descriptor, dispatch_index);
+void wavefront_finish_direct_light_sample(GPUWavefrontResources resources, uint dispatch_index, uint path_index, uint seed, bool sampled, WavefrontEmitterSample emitter_sample) {
   GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, path_index);
-  GPUWavefrontHit hit = wavefront_load_hit(resources.camera_hit_buffer, path_index);
-  GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
-  if ((wavefront_hit_valid(hit) == false) || wavefront_hit_is_miss(hit) || (meta.camera_path_length == 0u)) {
-    return;
-  }
-
-  GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, meta.camera_path_length));
-  const bool subsurface_medium_vertex = (wavefront_path_vertex_is_subsurface(current_vertex)) && (wavefront_path_vertex_is_medium(current_vertex));
+  const GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
+  const GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, meta.camera_path_length));
   const bool subsurface_connections = wavefront_subsurface_connections_enabled(current_vertex);
-  const bool medium_direct_connection_disabled =
-    wavefront_path_vertex_is_medium(current_vertex) && (subsurface_connections == false) && (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index) == false);
-  if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_connectible(current_vertex) == false) ||
-      (subsurface_medium_vertex && (subsurface_connections == false)) || medium_direct_connection_disabled) {
-    return;
-  }
-  uint connection_length = meta.camera_path_length + 1u;
-  if ((scene_strategy_enabled(kSceneStrategyConnectToLight) == false) || (connection_length < load_scene_options_min_path_length()) ||
-      (connection_length > load_scene_options_max_path_length())) {
-    return;
-  }
-
-  uint seed = state.sampler_seed;
 #if ETX_UPBP
-  GPUUPBPResources upbp_resources = (GPUUPBPResources)0;
   GPUUPBPPathState upbp_path_state = (GPUUPBPPathState)0;
   const bool upbp = scene_path_mode_is_upbp();
   if (upbp) {
-    upbp_resources = upbp_load_resources(resources);
+    const GPUUPBPResources upbp_resources = upbp_load_resources(resources);
     upbp_path_state = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, true, path_index));
-    if (((upbp_path_state.flags & GPUUPBPPathStateFlags::Valid) == 0u) || (upbp_path_state.path_length == 0u)) {
-      return;
-    }
-    seed = upbp_deterministic_seed(upbp_path_state.global_path_index, upbp_path_state.path_length + 1u, 1u, kUPBPRandomDomainEmitterConnection);
   }
 #else
   const bool upbp = false;
 #endif
-  WavefrontEmitterSample emitter_sample = (WavefrontEmitterSample)0;
-  uint light_sampling_mode = load_scene_options_light_sampling();
-  bool source_is_surface = wavefront_path_vertex_is_surface(current_vertex);
-  float3 source_normal = wavefront_path_vertex_is_surface(current_vertex) ? current_vertex.normal : float3(0.0f, 0.0f, 0.0f);
-  bool sampled = false;
-  if ((light_sampling_mode == kSceneLightSamplingRISFromDistribution) || (light_sampling_mode == kSceneLightSamplingRISUniform)) {
-    sampled = wavefront_sample_direct_light_ris(light_sampling_mode, state.spect, current_vertex.position, source_is_surface, source_normal, seed, emitter_sample);
-  } else {
-    sampled = wavefront_sample_emitter_to_point(light_sampling_mode, state.spect, current_vertex.position, seed, emitter_sample);
-  }
   if (upbp == false) {
     state.sampler_seed = seed;
     wavefront_store_path_state(resources.camera_state_buffer, path_index, state);
   }
+  wavefront_emission_consumer_complete(resources, dispatch_index);
   if (sampled == false) {
     return;
   }
@@ -291,4 +184,154 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
     wavefront_shadow_queue_append(resources, kGPUWavefrontShadowQueueDirectLight, dispatch_index);
     return;
   }
+}
+
+void wavefront_advance_direct_light_sample(GPUWavefrontResources resources, uint dispatch_index, WavefrontEmissionConsumer consumer, bool candidate_complete) {
+  const GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, consumer.owner_index);
+  const GPUWavefrontPathVertex current_vertex =
+    wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(consumer.owner_index, meta.camera_path_length));
+  const bool source_is_surface = wavefront_path_vertex_is_surface(current_vertex);
+  const float3 source_normal = source_is_surface ? current_vertex.normal : float3(0.0f, 0.0f, 0.0f);
+  const uint light_sampling_mode = load_scene_options_light_sampling();
+  const bool ris = (light_sampling_mode == kSceneLightSamplingRISFromDistribution) || (light_sampling_mode == kSceneLightSamplingRISUniform);
+  if (candidate_complete) {
+    if (ris == false) {
+      wavefront_finish_direct_light_sample(resources, dispatch_index, consumer.owner_index, consumer.sampler_seed, true, consumer.candidate);
+      return;
+    }
+    wavefront_direct_light_reservoir_update(consumer, source_is_surface, source_normal);
+  }
+
+  [loop] while (consumer.candidate_index < consumer.candidate_count) {
+    ++consumer.candidate_index;
+    WavefrontEmissionInput emission_input = wavefront_empty_emission_input();
+    uint seed = consumer.sampler_seed;
+    WavefrontEmitterSample candidate = (WavefrontEmitterSample)0;
+    const bool proposed = wavefront_propose_emitter_to_point(light_sampling_mode, consumer.spect, current_vertex.position, seed, candidate, emission_input);
+    consumer.sampler_seed = seed;
+    consumer.candidate = candidate;
+    if (proposed == false) {
+      continue;
+    }
+    if (emission_input.material_index != kInvalidIndex) {
+      wavefront_queue_emission_input(resources, dispatch_index, emission_input, consumer.spect, consumer.sampler_seed);
+      wavefront_emission_consumer_suspend(resources, dispatch_index, consumer);
+      return;
+    }
+    if (ris == false) {
+      wavefront_finish_direct_light_sample(resources, dispatch_index, consumer.owner_index, consumer.sampler_seed, true, consumer.candidate);
+      return;
+    }
+    wavefront_direct_light_reservoir_update(consumer, source_is_surface, source_normal);
+  }
+
+  const bool sampled = consumer.selected_weight > 0.0f;
+  if (sampled) {
+    const float reservoir_scale = consumer.weight_sum / (float(consumer.candidate_count) * consumer.selected_weight);
+    consumer.selected.value = spectral_response_mul(consumer.selected.value, reservoir_scale);
+  }
+  wavefront_finish_direct_light_sample(resources, dispatch_index, consumer.owner_index, consumer.sampler_seed, sampled, consumer.selected);
+}
+
+[numthreads(64, 1, 1)] void wavefront_camera_direct_light_sample_main(uint3 dtid : SV_DispatchThreadID) {
+  const uint dispatch_index = dtid.x;
+  const bool enable_camera_direct_light = true;
+  if (scene_path_mode_is_light_tracing()) {
+    return;
+  }
+
+  GPUWavefrontResources resources = wavefront_load_resources();
+  if (resources.direct_light_sample_buffer == kInvalidIndex) {
+    return;
+  }
+  if (dispatch_index >= resources.path_capacity) {
+    return;
+  }
+
+  GPUWavefrontDirectLightSample empty_sample = (GPUWavefrontDirectLightSample)0;
+  wavefront_store_direct_light_sample(resources.direct_light_sample_buffer, dispatch_index, empty_sample);
+  if (resources.direct_light_task_buffer != kInvalidIndex) {
+    GPUWavefrontDirectLightTask empty_task = (GPUWavefrontDirectLightTask)0;
+    empty_task.medium_index = kInvalidIndex;
+    wavefront_store_direct_light_task(resources.direct_light_task_buffer, dispatch_index, empty_task);
+  }
+  if (resources.direct_light_result_buffer != kInvalidIndex) {
+    GPUWavefrontDirectLightResult empty_result = (GPUWavefrontDirectLightResult)0;
+    wavefront_store_direct_light_result(resources.direct_light_result_buffer, dispatch_index, empty_result);
+  }
+  if (enable_camera_direct_light == false) {
+    return;
+  }
+
+  uint queue_descriptor = wavefront_queue_current_descriptor(true);
+  uint queue_count = wavefront_queue_count(queue_descriptor);
+  if (dispatch_index >= queue_count) {
+    return;
+  }
+
+  uint path_index = wavefront_queue_load(queue_descriptor, dispatch_index);
+  GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, path_index);
+  GPUWavefrontHit hit = wavefront_load_hit(resources.camera_hit_buffer, path_index);
+  GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
+  if ((wavefront_hit_valid(hit) == false) || wavefront_hit_is_miss(hit) || (meta.camera_path_length == 0u)) {
+    return;
+  }
+
+  GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, meta.camera_path_length));
+  const bool subsurface_medium_vertex = (wavefront_path_vertex_is_subsurface(current_vertex)) && (wavefront_path_vertex_is_medium(current_vertex));
+  const bool subsurface_connections = wavefront_subsurface_connections_enabled(current_vertex);
+  const bool medium_direct_connection_disabled =
+    wavefront_path_vertex_is_medium(current_vertex) && (subsurface_connections == false) && (wavefront_medium_explicit_connections_enabled(current_vertex.medium_index) == false);
+  if ((wavefront_path_vertex_valid(current_vertex) == false) || (wavefront_path_vertex_connectible(current_vertex) == false) ||
+      (subsurface_medium_vertex && (subsurface_connections == false)) || medium_direct_connection_disabled) {
+    return;
+  }
+  uint connection_length = meta.camera_path_length + 1u;
+  if ((scene_strategy_enabled(kSceneStrategyConnectToLight) == false) || (connection_length < load_scene_options_min_path_length()) ||
+      (connection_length > load_scene_options_max_path_length())) {
+    return;
+  }
+
+  uint seed = state.sampler_seed;
+#if ETX_UPBP
+  GPUUPBPResources upbp_resources = (GPUUPBPResources)0;
+  GPUUPBPPathState upbp_path_state = (GPUUPBPPathState)0;
+  const bool upbp = scene_path_mode_is_upbp();
+  if (upbp) {
+    upbp_resources = upbp_load_resources(resources);
+    upbp_path_state = upbp_load_path_state(upbp_resources.path_state_buffer, upbp_path_state_index(upbp_resources, true, path_index));
+    if (((upbp_path_state.flags & GPUUPBPPathStateFlags::Valid) == 0u) || (upbp_path_state.path_length == 0u)) {
+      return;
+    }
+    seed = upbp_deterministic_seed(upbp_path_state.global_path_index, upbp_path_state.path_length + 1u, 1u, kUPBPRandomDomainEmitterConnection);
+  }
+#endif
+  WavefrontEmissionConsumer consumer = (WavefrontEmissionConsumer)0;
+  consumer.owner_index = path_index;
+  consumer.sampler_seed = seed;
+  consumer.spect = state.spect;
+  const uint light_sampling_mode = load_scene_options_light_sampling();
+  const bool ris = (light_sampling_mode == kSceneLightSamplingRISFromDistribution) || (light_sampling_mode == kSceneLightSamplingRISUniform);
+  consumer.candidate_count = 1u;
+  if (ris) {
+    const SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(WAVEFRONT_RO_BUFFER(constants.scene.scene_globals));
+    consumer.candidate_count = min(4u * globals_data.emitter_instance_count, 16u);
+  }
+  wavefront_advance_direct_light_sample(resources, dispatch_index, consumer, false);
+}
+
+  [numthreads(64, 1, 1)] void wavefront_camera_direct_light_sample_resume_main(uint3 dtid : SV_DispatchThreadID) {
+  if (dtid.x >= constants.dispatch_item_count) {
+    return;
+  }
+  const uint slot = constants.dispatch_item_offset + dtid.x;
+  const GPUWavefrontResources resources = wavefront_load_resources();
+  WavefrontEmissionConsumer consumer = (WavefrontEmissionConsumer)0;
+  if (wavefront_emission_consumer_load(resources, slot, consumer) == false) {
+    return;
+  }
+  uint seed = 0u;
+  consumer.candidate.value = wavefront_completed_sampled_emission(resources, slot, consumer.candidate, seed);
+  consumer.sampler_seed = seed;
+  wavefront_advance_direct_light_sample(resources, slot, consumer, true);
 }

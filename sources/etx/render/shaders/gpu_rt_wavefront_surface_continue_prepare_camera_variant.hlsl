@@ -2,11 +2,12 @@
 #include <interop/image_filter_shared.hxx>
 #include <access/bsdf_resource_gpu.hxx>
 
-#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE    1
-#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC    2
-#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR  3
-#define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC 4
-#define ETX_WAVEFRONT_BSDF_KIND_THINFILM   5
+#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE          1
+#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC          2
+#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR        3
+#define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC       4
+#define ETX_WAVEFRONT_BSDF_KIND_THINFILM         5
+#define ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR 6
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
 # if ETX_ENABLE_VELVET_STAGE
@@ -31,6 +32,10 @@
 # define ETX_STAGE_BSDF_CLASS  MaterialClass::Conductor
 # define ETX_STAGE_BSDF_SAMPLE wavefront_surface_continue_stage_conductor_sample
 # define ETX_STAGE_BSDF_PDF    wavefront_surface_continue_stage_conductor_pdf
+#elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+# include "gpu_rt_wavefront_coating_storage.hlsl"
+# define ETX_STAGE_BSDF_CLASS MaterialClass::CoatedConductor
+# define ETX_STAGE_BSDF_PDF   bsdf_coated_conductor_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
 # include <interop/bsdf_energy_compensated_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS  MaterialClass::Dielectric
@@ -65,7 +70,7 @@ BSDFSample wavefront_surface_continue_stage_various_sample(BSDFResourceContext c
   }
 }
 
-#if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
+# if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
 float wavefront_surface_continue_stage_various_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   switch (material.cls) {
     case MaterialClass::Translucent:
@@ -74,10 +79,10 @@ float wavefront_surface_continue_stage_various_pdf(BSDFResourceContext context, 
       return bsdf_mirror_pdf(context, data, outgoing_direction, material, sampler);
     case MaterialClass::Boundary:
       return bsdf_boundary_pdf(context, data, outgoing_direction, material, sampler);
-# if ETX_ENABLE_VELVET_STAGE
+#  if ETX_ENABLE_VELVET_STAGE
     case MaterialClass::Velvet:
       return bsdf_velvet_pdf(context, data, outgoing_direction, material, sampler);
-# endif
+#  endif
     case MaterialClass::Void:
       return bsdf_void_pdf(context, data, outgoing_direction, material, sampler);
     case MaterialClass::DiffractionGrating:
@@ -86,7 +91,7 @@ float wavefront_surface_continue_stage_various_pdf(BSDFResourceContext context, 
       return bsdf_diffuse_pdf(context, data, outgoing_direction, material, sampler);
   }
 }
-#endif
+# endif
 #endif
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
@@ -99,16 +104,16 @@ BSDFSample wavefront_surface_continue_stage_conductor_sample(BSDFResourceContext
   return bsdf_conductor_energy_compensated_sample(context, data, material, sampler);
 }
 
-#if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
+# if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
 float wavefront_surface_continue_stage_conductor_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
-# if ETX_ENABLE_OPENPBR_STAGE
+#  if ETX_ENABLE_OPENPBR_STAGE
   if (material.cls == MaterialClass::OpenPBR) {
     return bsdf_openpbr_pdf(context, data, outgoing_direction, material, sampler);
   }
-# endif
+#  endif
   return bsdf_conductor_energy_compensated_pdf(context, data, outgoing_direction, material, sampler);
 }
-#endif
+# endif
 #endif
 
 bool wavefront_surface_continue_stage_matches_material(uint material_class) {
@@ -118,21 +123,23 @@ bool wavefront_surface_continue_stage_matches_material(uint material_class) {
 # if ETX_ENABLE_VELVET_STAGE
          || (material_class == MaterialClass::Velvet)
 # endif
-         ;
+    ;
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
+  return (material_class == MaterialClass::Conductor)
 # if ETX_ENABLE_OPENPBR_STAGE
-  return (material_class == MaterialClass::Conductor) || (material_class == MaterialClass::OpenPBR);
-# else
-  return material_class == MaterialClass::Conductor;
+         || (material_class == MaterialClass::OpenPBR)
 # endif
+    ;
 #else
   return material_class == ETX_STAGE_BSDF_CLASS;
 #endif
 }
 
+#if (ETX_BSDF_KIND != ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
 BSDFSample wavefront_surface_continue_stage_bsdf_sample(BSDFResourceContext context, BSDFData data, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_SAMPLE(context, data, material, sampler);
 }
+#endif
 
 #if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
 float wavefront_surface_continue_stage_reverse_bsdf_pdf(BSDFResourceContext context, BSDFData input_data, float3 outgoing_direction, Material material, inout Sampler sampler) {

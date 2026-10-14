@@ -6,9 +6,10 @@
 
 namespace etx {
 void SceneData::copy_transport_materials(std::vector<Material>& target) const {
-  target = materials;
+  target = transport_materials();
   for (Material& material : target) {
-    if ((material.temperature_kelvin > 0.0f) && (material.cls == MaterialClass::Dielectric)) {
+    if ((material.temperature_kelvin > 0.0f) && ((material.cls == MaterialClass::Dielectric) ||
+                                                  ((material.cls == MaterialClass::CoatedConductor) && (material_coating_base_class(material) == MaterialClass::Dielectric)))) {
       material.reflectance.spectrum_index = thermal_unit_spectrum_index;
       material.scattering.spectrum_index = thermal_unit_spectrum_index;
     }
@@ -19,8 +20,117 @@ void SceneData::copy_transport_materials(std::vector<Material>& target) const {
   }
 }
 
+const std::vector<Material>& SceneData::transport_materials() const {
+  return materials;
+}
+
+void SceneData::project_material_descriptions() {
+  materials.resize(material_descriptions.size());
+  for (size_t index = 0u; index < material_descriptions.size(); ++index) {
+    Material material = project_material_description(material_descriptions[index]);
+    material.coating.unit_spectrum_index = materials[index].coating.unit_spectrum_index;
+    material.coating.thermal_spectrum_index = materials[index].coating.thermal_spectrum_index;
+    if (std::isfinite(material.roughness.value.x) && std::isfinite(material.roughness.value.y) && (material.roughness.value.x >= 0.0f) && (material.roughness.value.y >= 0.0f) &&
+        ((material.roughness.value.x > 0.0f) || (material.roughness.value.y > 0.0f))) {
+      material.roughness.value.x = max(kEpsilon, material.roughness.value.x);
+      material.roughness.value.y = max(kEpsilon, material.roughness.value.y);
+    }
+    materials[index] = material;
+  }
+}
+
+void SceneData::copy_material_preparation_from(const SceneData& source) {
+  material_descriptions = source.material_descriptions;
+  materials.resize(material_descriptions.size());
+  for (size_t index = 0u; (index < materials.size()) && (index < source.materials.size()); ++index) {
+    materials[index].coating.unit_spectrum_index = source.materials[index].coating.unit_spectrum_index;
+    materials[index].coating.thermal_spectrum_index = source.materials[index].coating.thermal_spectrum_index;
+  }
+  project_material_descriptions();
+  spectrum_values = source.spectrum_values;
+  spectrum_sources = source.spectrum_sources;
+  spectrum_names = source.spectrum_names;
+  images_vector = source.images_vector;
+  mediums_vector = source.mediums_vector;
+  emitter_profiles = source.emitter_profiles;
+  cameras = source.cameras;
+  buffer_pool = source.buffer_pool;
+  images.copy_contents(source.images);
+  mediums.copy_contents(source.mediums);
+  energy_compensation_interfaces = source.energy_compensation_interfaces;
+  energy_compensation_interface_cache = source.energy_compensation_interface_cache;
+  thermal_surface_resources = source.thermal_surface_resources;
+  thermal_medium_states = source.thermal_medium_states;
+  thermal_medium_resources = source.thermal_medium_resources;
+  temperature_optics_resources = source.temperature_optics_resources;
+  thermal_unit_spectrum_index = source.thermal_unit_spectrum_index;
+  defaults = source.defaults;
+  options = source.options;
+}
+
+MaterialLayerSettings& SceneData::author_material_layers(uint32_t material_index) {
+  MaterialDescription& material = material_descriptions[material_index];
+  MaterialLayerSettings& layers = material.layers;
+  if (layers.explicit_layers != 0u) {
+    return layers;
+  }
+  configure_material_bsdf(material, MaterialClass::Undefined);
+  return layers;
+}
+
+void SceneData::publish_material_preparation(SceneData& candidate) {
+  using std::swap;
+  candidate.images.refresh_pixel_views();
+  candidate.mediums.refresh_density_views();
+  material_descriptions = candidate.material_descriptions;
+  swap(materials, candidate.materials);
+  swap(spectrum_values, candidate.spectrum_values);
+  swap(spectrum_sources, candidate.spectrum_sources);
+  swap(spectrum_names, candidate.spectrum_names);
+  swap(images_vector, candidate.images_vector);
+  swap(mediums_vector, candidate.mediums_vector);
+  swap(buffer_pool, candidate.buffer_pool);
+  images.swap_contents(candidate.images);
+  mediums.swap_contents(candidate.mediums);
+  swap(energy_compensation_interfaces, candidate.energy_compensation_interfaces);
+  swap(energy_compensation_interface_cache, candidate.energy_compensation_interface_cache);
+  swap(thermal_surface_resources, candidate.thermal_surface_resources);
+  swap(thermal_medium_states, candidate.thermal_medium_states);
+  swap(thermal_medium_resources, candidate.thermal_medium_resources);
+  swap(temperature_optics_resources, candidate.temperature_optics_resources);
+  swap(thermal_unit_spectrum_index, candidate.thermal_unit_spectrum_index);
+}
+
 size_t SceneData::transport_medium_count() const {
   return mediums_vector.size() + thermal_medium_states.size();
+}
+
+void SceneData::commit_material_authoring(const std::vector<MaterialDescription>& descriptions) {
+  committed_material_descriptions = descriptions;
+  _material_spectrum_edits.clear();
+}
+
+void SceneData::remember_material_spectrum_edit(uint32_t index) {
+  if (_material_spectrum_edits.contains(index)) {
+    return;
+  }
+  const auto source = spectrum_sources.find(index);
+  _material_spectrum_edits.emplace(index,
+    MaterialSpectrumEdit{spectrum_values[index], source != spectrum_sources.end() ? source->second : SpectrumSource{}, source != spectrum_sources.end()});
+}
+
+void SceneData::restore_material_authoring() {
+  const size_t count = std::min(committed_material_descriptions.size(), material_descriptions.size());
+  std::copy_n(committed_material_descriptions.begin(), count, material_descriptions.begin());
+  for (const auto& [index, edit] : _material_spectrum_edits) {
+    spectrum_values[index] = edit.value;
+    if (edit.has_source) {
+      spectrum_sources[index] = edit.source;
+    } else {
+      spectrum_sources.erase(index);
+    }
+  }
+  _material_spectrum_edits.clear();
 }
 
 Medium SceneData::transport_medium(size_t index) const {
@@ -44,9 +154,9 @@ uint32_t SceneData::transport_medium_index(uint32_t index) const {
   uint32_t result = index;
   float temperature = 0.0f;
   bool found = false;
-  for (const Material& material : materials) {
-    const bool enters_medium = (material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Boundary) || (material.cls == MaterialClass::Translucent) ||
-                               (material.subsurface_cls != SubsurfaceMaterial::Disabled);
+  for (const Material& material : transport_materials()) {
+    const bool enters_medium =
+      material_supports_surface_transmission(material) || (material.cls == MaterialClass::Boundary) || (material.subsurface_cls != SubsurfaceMaterial::Disabled);
     if ((material.int_medium != index) || (enters_medium == false)) {
       continue;
     }
@@ -268,7 +378,7 @@ bool SceneData::has_exterior_medium_transport(const Camera& camera) const {
   if (camera.medium_index < mediums_vector.size()) {
     return true;
   }
-  for (const Material& material : materials) {
+  for (const Material& material : transport_materials()) {
     if (material.ext_medium < mediums_vector.size()) {
       return true;
     }
@@ -306,7 +416,8 @@ SceneHashes SceneData::compute_hashes() const {
   result.transforms_hash = compute_transforms_hash();
   result.instance_transforms_hash = compute_instance_transforms_hash();
   result.attachments_hash = hash_hierarchy_attachments(hierarchy);
-  result.materials_hash = xxh64(materials.data(), materials.size() * sizeof(Material));
+  const auto& runtime_materials = transport_materials();
+  result.materials_hash = xxh64(runtime_materials.data(), runtime_materials.size() * sizeof(Material));
   result.spectra_hash = xxh64(spectrum_values.data(), spectrum_values.size() * sizeof(SpectralDistribution));
   result.emitter_profiles_hash = xxh64(emitter_profiles.data(), emitter_profiles.size() * sizeof(EmitterProfile));
   result.energy_compensation_interfaces_hash = xxh64(energy_compensation_interfaces.data(), energy_compensation_interfaces.size() * sizeof(Scene::EnergyCompensationInterface));
@@ -344,6 +455,9 @@ void SceneData::clear(TaskScheduler& scheduler) {
   vertices.tex.clear();
   triangles.clear();
   materials.clear();
+  material_descriptions.clear();
+  committed_material_descriptions.clear();
+  _material_spectrum_edits.clear();
   meshes.clear();
   emitter_profiles.clear();
   emitter_names.clear();
@@ -356,6 +470,7 @@ void SceneData::clear(TaskScheduler& scheduler) {
   thermal_surface_resources.clear();
   thermal_medium_states.clear();
   thermal_medium_resources.clear();
+  temperature_optics_resources.clear();
   thermal_unit_spectrum_index = kInvalidIndex;
   hierarchy.clear();
   spectrum_names.clear();
@@ -377,6 +492,9 @@ void SceneData::swap_contents(SceneData& other) {
   swap(vertices.tex, other.vertices.tex);
   swap(triangles, other.triangles);
   swap(materials, other.materials);
+  swap(material_descriptions, other.material_descriptions);
+  swap(committed_material_descriptions, other.committed_material_descriptions);
+  swap(_material_spectrum_edits, other._material_spectrum_edits);
   swap(meshes, other.meshes);
   swap(emitter_profiles, other.emitter_profiles);
   swap(emitter_names, other.emitter_names);
@@ -389,6 +507,7 @@ void SceneData::swap_contents(SceneData& other) {
   swap(thermal_surface_resources, other.thermal_surface_resources);
   swap(thermal_medium_states, other.thermal_medium_states);
   swap(thermal_medium_resources, other.thermal_medium_resources);
+  swap(temperature_optics_resources, other.temperature_optics_resources);
   swap(thermal_unit_spectrum_index, other.thermal_unit_spectrum_index);
   swap(hierarchy, other.hierarchy);
   swap(buffer_pool, other.buffer_pool);
@@ -516,24 +635,24 @@ bool SceneData::has_material(const char* name) const {
 }
 
 uint32_t SceneData::add_material(const char* name) {
-  std::string id = (name != nullptr) && (name[0] != 0) ? name : ("material-" + std::to_string(materials.size()));
+  std::string id = (name != nullptr) && (name[0] != 0) ? name : ("material-" + std::to_string(material_descriptions.size()));
   auto i = material_mapping.find(id);
   if (i != material_mapping.end()) {
     uint32_t existing_index = i->second;
-    if (existing_index >= materials.size()) {
-      materials.resize(existing_index + 1);
+    if (existing_index >= material_descriptions.size()) {
+      material_descriptions.resize(existing_index + 1);
     }
     return existing_index;
   }
-  uint32_t index = static_cast<uint32_t>(materials.size());
-  materials.emplace_back();
+  uint32_t index = static_cast<uint32_t>(material_descriptions.size());
+  material_descriptions.emplace_back();
   material_mapping[id] = index;
   return index;
 }
 
-uint32_t SceneData::clone_material(const Material& src, const char* name) {
-  uint32_t index = static_cast<uint32_t>(materials.size());
-  materials.emplace_back(src);
+uint32_t SceneData::clone_material(const MaterialDescription& src, const char* name) {
+  uint32_t index = static_cast<uint32_t>(material_descriptions.size());
+  material_descriptions.emplace_back(src);
   std::string id = (name != nullptr) && (name[0] != 0) ? name : ("material-" + std::to_string(index));
   if (material_mapping.count(id) > 0) {
     id += "#" + std::to_string(index);

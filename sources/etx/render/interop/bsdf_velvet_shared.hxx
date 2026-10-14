@@ -1,115 +1,173 @@
 #pragma once
 
 #include "bsdf_various_shared.hxx"
+#include "bsdf_velvet_constants_shared.hxx"
+#include "bsdf_energy_compensation_interface_shared.hxx"
+#include "scene_math_shared.hxx"
 
-ETX_STATIC_CONST uint32_t kVelvetDirectionalAlbedoLutSize = 16u;
-ETX_STATIC_CONST float kVelvetDirectionalAlbedoLut[kVelvetDirectionalAlbedoLutSize * kVelvetDirectionalAlbedoLutSize] = {
-  0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f, 0.00000000f,
-  0.00000000f, 0.66526577f, 0.45551903f, 0.32191254f, 0.22922222f, 0.16254533f, 0.11390004f, 0.07835285f, 0.05260917f, 0.03436360f, 0.02156526f, 0.01276981f, 0.00693857f, 0.00328658f, 0.00120032f, 0.00019185f,
-  0.00000000f, 0.62559566f, 0.47108369f, 0.36609501f, 0.28777431f, 0.22660942f, 0.17769124f, 0.13810356f, 0.10605283f, 0.08054848f, 0.06004458f, 0.04345862f, 0.03007712f, 0.01940255f, 0.01106496f, 0.00476644f,
-  0.00000000f, 0.62647779f, 0.49173446f, 0.39807856f, 0.32630442f, 0.26845107f, 0.22049081f, 0.18009804f, 0.14597210f, 0.11770350f, 0.09386545f, 0.07343666f, 0.05577803f, 0.04047969f, 0.02727031f, 0.01595222f,
-  0.00000000f, 0.64177665f, 0.51577087f, 0.42732485f, 0.35865934f, 0.30241446f, 0.25490908f, 0.21405475f, 0.17877255f, 0.14898691f, 0.12329155f, 0.10065142f, 0.08042708f, 0.06222009f, 0.04578085f, 0.03093751f,
-  0.00000000f, 0.66310572f, 0.54095038f, 0.45485461f, 0.38756175f, 0.33193952f, 0.28444920f, 0.24310710f, 0.20694964f, 0.17611689f, 0.14919348f, 0.12511571f, 0.10322860f, 0.08312821f, 0.06456834f, 0.04738643f,
-  0.00000000f, 0.68661643f, 0.56579301f, 0.48054041f, 0.41367567f, 0.35811462f, 0.31036526f, 0.26848763f, 0.23158196f, 0.19993469f, 0.17211211f, 0.14702232f, 0.12399481f, 0.10261924f, 0.08265118f, 0.06393797f,
-  0.00000000f, 0.71012269f, 0.58927656f, 0.50405517f, 0.43711012f, 0.38131260f, 0.33316854f, 0.29075069f, 0.25319477f, 0.22088879f, 0.19237871f, 0.16654865f, 0.14271578f, 0.12046560f, 0.09955706f, 0.07985027f,
-  0.00000000f, 0.73219916f, 0.61065377f, 0.52506787f, 0.45780748f, 0.40165393f, 0.35308689f, 0.31017598f, 0.27207616f, 0.23924682f, 0.21021486f, 0.18384511f, 0.15944572f, 0.13660023f, 0.11507214f, 0.09473604f,
-  0.00000000f, 0.75183251f, 0.62935875f, 0.54329104f, 0.47566847f, 0.41916754f, 0.37023266f, 0.32692352f, 0.28840530f, 0.25518855f, 0.22578410f, 0.19904191f, 0.17426390f, 0.15103309f, 0.12911808f, 0.10840816f,
-  0.00000000f, 0.76826661f, 0.64495659f, 0.55849014f, 0.49059612f, 0.43385268f, 0.38467039f, 0.34109827f, 0.30230769f, 0.26884756f, 0.23921657f, 0.21225394f, 0.18725759f, 0.16381103f, 0.14168797f, 0.12079191f,
-  0.00000000f, 0.78092658f, 0.65711396f, 0.57048188f, 0.50251075f, 0.44570315f, 0.39644487f, 0.35277799f, 0.31387970f, 0.28033003f, 0.25062028f, 0.22358273f, 0.19851322f, 0.17499650f, 0.15281133f, 0.13187456f,
-  0.00000000f, 0.78937843f, 0.66558053f, 0.57912920f, 0.51135369f, 0.45471615f, 0.40559255f, 0.36202510f, 0.32319920f, 0.28972314f, 0.26008605f, 0.23311692f, 0.20811127f, 0.18465578f, 0.16253422f, 0.14167600f,
-  0.00000000f, 0.79330626f, 0.67017657f, 0.58433592f, 0.51708653f, 0.46089465f, 0.41214568f, 0.36889149f, 0.33033016f, 0.29709864f, 0.26768953f, 0.24093210f, 0.21612318f, 0.19285211f, 0.17090776f, 0.15023143f,
-  0.00000000f, 0.79249834f, 0.67078431f, 0.58604193f, 0.51968922f, 0.46424737f, 0.41613348f, 0.37342032f, 0.33532448f, 0.30251440f, 0.27349208f, 0.24709050f, 0.22260948f, 0.19964167f, 0.17798131f, 0.15758106f,
-  0.00000000f, 0.78683825f, 0.66734201f, 0.58421965f, 0.51915813f, 0.46478816f, 0.41758242f, 0.37564673f, 0.33822292f, 0.30601521f, 0.27754118f, 0.25164091f, 0.22761874f, 0.20507131f, 0.18379852f, 0.16376397f,
+struct BSDFVelvetPrepared {
+  SpectralResponse diffuse ETX_INIT({});
+  SpectralResponse sheen ETX_INIT({});
+  float roughness ETX_INIT(0.0f);
+  uint32_t image_index ETX_INIT(kInvalidIndex);
 };
 
-ETX_SHARED_INLINE float bsdf_velvet_lambda_l(float roughness, float x) {
-  const float clamped_x = max(x, 0.0f);
-  const float inverse_lerp = 1.0f - roughness;
-  const float inverse_lerp_squared = inverse_lerp * inverse_lerp;
-  const float a = inverse_lerp_squared * 25.3245f + (1.0f - inverse_lerp_squared) * 21.5473f;
-  const float b = inverse_lerp_squared * 3.32435f + (1.0f - inverse_lerp_squared) * 3.82987f;
-  const float c = inverse_lerp_squared * 0.16801f + (1.0f - inverse_lerp_squared) * 0.19823f;
-  const float d = inverse_lerp_squared * (-1.27393f) + (1.0f - inverse_lerp_squared) * (-1.97760f);
-  const float e = inverse_lerp_squared * (-4.85967f) + (1.0f - inverse_lerp_squared) * (-4.32054f);
-  return a / (1.0f + b * pow(clamped_x, c)) + d * clamped_x + e;
-}
-
-ETX_SHARED_INLINE float bsdf_velvet_lambda(float roughness, float cos_theta) {
-  if (cos_theta < 0.5f) {
-    return exp(bsdf_velvet_lambda_l(roughness, cos_theta));
+ETX_SHARED_INLINE BSDFVelvetPrepared bsdf_velvet_prepare(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material)) {
+  BSDFVelvetPrepared result = ETX_ZERO(BSDFVelvetPrepared);
+  result.diffuse = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
+  result.sheen = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
+  const float2 roughness = bsdf_resource_evaluate_roughness(context, material, data.tex);
+  result.roughness = saturate(0.5f * (roughness.x + roughness.y));
+  BSDFEnergyCompensationInterfaceData lookup = ETX_ZERO(BSDFEnergyCompensationInterfaceData);
+  if (bsdf_resource_energy_compensation_interface_try_load(context, material.energy_compensation_interface_index, lookup) && (lookup.cls == MaterialClass::Velvet)) {
+    result.image_index = lookup.directional_lut;
   }
-
-  return exp(2.0f * bsdf_velvet_lambda_l(roughness, 0.5f) - bsdf_velvet_lambda_l(roughness, 1.0f - cos_theta));
+  return result;
 }
 
-ETX_SHARED_INLINE float bsdf_velvet_distribution(float roughness, float m_dot_n) {
-  if (roughness <= kEpsilon) {
+ETX_SHARED_INLINE float bsdf_velvet_lookup(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFVelvetPrepared, prepared), float mu, bool projected_area) {
+  const float alpha = max(kEpsilon, prepared.roughness);
+  const float root_alpha = sqrt(alpha);
+  const float row = log(alpha / kEpsilon) / log(1.0f / kEpsilon);
+  const float coordinate = projected_area ? (asin(saturate(mu)) * (2.0f / kPi)) : sqrt(log(1.0f + saturate(mu) / root_alpha) / log(1.0f + 1.0f / root_alpha));
+  const float scale = float(kVelvetPhysicalLutSize - 1u) / float(kVelvetPhysicalLutSize);
+  const float4 value = bsdf_resource_image_evaluate_rgba_no_pdf_or_zero(context, prepared.image_index, float2(coordinate * scale, row * scale));
+  return projected_area ? (value.y / root_alpha) : value.x;
+}
+
+ETX_SHARED_INLINE float bsdf_velvet_sheen_function(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFVelvetPrepared, prepared), ETX_IN(float3, incoming), ETX_IN(float3, outgoing)) {
+  if ((incoming.z <= kEpsilon) || (outgoing.z <= kEpsilon) || (prepared.roughness <= kEpsilon)) {
     return 0.0f;
   }
-
-  const float inv_alpha = 1.0f / max(kEpsilon, roughness);
-  const float sin_theta = sqrt(max(0.0f, 1.0f - m_dot_n * m_dot_n));
-  return (2.0f + inv_alpha) * pow(sin_theta, inv_alpha) / kDoublePi;
+  const float3 half_vector = normalize(incoming + outgoing);
+  const float inverse_alpha = 1.0f / prepared.roughness;
+  const float half_z_squared = min(1.0f, half_vector.z * half_vector.z);
+  const float sine_squared = 1.0f - half_z_squared;
+  // Compensate cancellation in log(1 - z^2) for narrow grazing distributions.
+  const float logarithm = sine_squared == 1.0f ? -half_z_squared : log(sine_squared) * half_z_squared / (1.0f - sine_squared);
+  const float density = (2.0f + inverse_alpha) * exp(0.5f * inverse_alpha * logarithm) / kDoublePi;
+  const float area_i = bsdf_velvet_lookup(context, prepared, incoming.z, true);
+  const float area_o = bsdf_velvet_lookup(context, prepared, outgoing.z, true);
+  return density / (4.0f * (area_i * outgoing.z + area_o * incoming.z - incoming.z * outgoing.z));
 }
 
-ETX_SHARED_INLINE float bsdf_velvet_directional_albedo(float roughness, float mu) {
-  const float alpha = saturate(roughness) * float(kVelvetDirectionalAlbedoLutSize - 1u);
-  const float theta = saturate(mu) * float(kVelvetDirectionalAlbedoLutSize - 1u);
-  const uint32_t alpha_index = min(kVelvetDirectionalAlbedoLutSize - 2u, uint32_t(alpha));
-  const uint32_t theta_index = min(kVelvetDirectionalAlbedoLutSize - 2u, uint32_t(theta));
-  const float alpha_t = alpha - float(alpha_index);
-  const float theta_t = theta - float(theta_index);
-
-  const uint32_t row_0 = alpha_index * kVelvetDirectionalAlbedoLutSize;
-  const uint32_t row_1 = row_0 + kVelvetDirectionalAlbedoLutSize;
-  const float v00 = kVelvetDirectionalAlbedoLut[row_0 + theta_index];
-  const float v10 = kVelvetDirectionalAlbedoLut[row_0 + theta_index + 1u];
-  const float v01 = kVelvetDirectionalAlbedoLut[row_1 + theta_index];
-  const float v11 = kVelvetDirectionalAlbedoLut[row_1 + theta_index + 1u];
-  const float row_value_0 = v00 + (v10 - v00) * theta_t;
-  const float row_value_1 = v01 + (v11 - v01) * theta_t;
-  return row_value_0 + (row_value_1 - row_value_0) * alpha_t;
+ETX_SHARED_INLINE SpectralResponse bsdf_velvet_transmission(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(BSDFVelvetPrepared, prepared), float mu) {
+  if ((prepared.roughness <= kEpsilon) || spectral_response_is_zero(prepared.sheen)) {
+    return spectral_response_make(spect, 1.0f);
+  }
+  return spectral_response_sub(spectral_response_make(spect, 1.0f), spectral_response_mul(prepared.sheen, bsdf_velvet_lookup(context, prepared, mu, false)));
 }
 
-ETX_SHARED_INLINE float bsdf_velvet_single_scatter_bsdf_cos(ETX_IN(float3, local_w_i), ETX_IN(float3, local_w_o), float roughness) {
-  if ((local_w_i.z <= kEpsilon) || (local_w_o.z <= kEpsilon)) {
-    return 0.0f;
+ETX_SHARED_INLINE SpectralResponse bsdf_velvet_return_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(BSDFVelvetPrepared, prepared),
+  ETX_INOUT(float3, incoming), ETX_INOUT(Sampler, sampler)) {
+  if ((prepared.roughness <= kEpsilon) || spectral_response_is_zero(prepared.sheen)) {
+    return spectral_response_zero(spect);
   }
-
-  const float3 half_vector = normalize(local_w_i + local_w_o);
-  const float i_dot_m = dot(local_w_i, half_vector);
-  const float o_dot_m = dot(local_w_o, half_vector);
-  if ((i_dot_m <= kEpsilon) || (o_dot_m <= kEpsilon)) {
-    return 0.0f;
-  }
-
-  const float d = bsdf_velvet_distribution(roughness, half_vector.z);
-  const float lambda_i = bsdf_velvet_lambda(roughness, local_w_i.z);
-  const float lambda_o = bsdf_velvet_lambda(roughness, local_w_o.z);
-  const float g = 1.0f / (1.0f + lambda_i + lambda_o);
-  return 0.25f * d * g / local_w_i.z;
+  const float3 from_base = sample_cosine_distribution(bsdf_sampler_next_2d(sampler), 1.0f);
+  const SpectralResponse bottom = spectral_response_mul(bsdf_diffuse_eon_brdf(spect, prepared.diffuse, incoming, from_base, prepared.roughness), kPi);
+  const float3 next_incoming = sample_cosine_distribution(bsdf_sampler_next_2d(sampler), 0.0f);
+  const float reflection = bsdf_velvet_sheen_function(context, prepared, from_base, next_incoming) * next_incoming.z * kDoublePi;
+  incoming = next_incoming;
+  return spectral_response_mul(bottom, spectral_response_mul(prepared.sheen, reflection));
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_velvet_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
-  ETX_INOUT(Sampler, sampler));
+struct BSDFVelvetWalk {
+  enum : uint32_t { Complete, Evaluate, SourceEscape };
+  SpectralResponse value ETX_INIT({});
+  SpectralResponse absorption ETX_INIT({});
+  SpectralResponse throughput ETX_INIT({});
+  SpectralResponse transmission ETX_INIT({});
+  SpectralResponse multiple ETX_INIT({});
+  float3 direction ETX_INIT({});
+  float3 outgoing ETX_INIT({});
+  float exponent ETX_INIT(0.0f);
+  uint32_t depth ETX_INIT(0u);
+  uint32_t operation ETX_INIT(Complete);
+};
 
-ETX_SHARED_INLINE BSDFSample bsdf_velvet_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
-  const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
-  const bool has_fixed_sample = bsdf_sampler_has_fixed(sampler);
-  float2 rnd = float2(sampler.fixed_u, sampler.fixed_v);
-  if (has_fixed_sample == false) {
-    rnd = bsdf_sampler_next_2d(sampler);
+ETX_SHARED_INLINE BSDFVelvetWalk bsdf_velvet_walk_begin_function(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(BSDFVelvetPrepared, prepared),
+  ETX_IN(float3, incoming), ETX_IN(float3, outgoing)) {
+  BSDFVelvetWalk state = ETX_ZERO(BSDFVelvetWalk);
+  state.value = spectral_response_mul(prepared.sheen, bsdf_velvet_sheen_function(context, prepared, incoming, outgoing));
+  state.transmission = bsdf_velvet_transmission(context, spect, prepared, outgoing.z);
+  state.throughput = bsdf_velvet_transmission(context, spect, prepared, incoming.z);
+  state.direction = incoming;
+  state.outgoing = outgoing;
+  state.operation = BSDFVelvetWalk::Evaluate;
+  return state;
+}
+
+ETX_SHARED_INLINE bool bsdf_velvet_walk_continue(ETX_INOUT(BSDFVelvetWalk, state), ETX_INOUT(Sampler, sampler)) {
+  if (spectral_response_is_zero(state.throughput)) {
+    state.operation = BSDFVelvetWalk::Complete;
+    return false;
   }
-  const float3 local_w_o = sample_cosine_distribution(rnd, 0.0f);
-  const float3 sampled_direction = local_frame_from_local(frame, local_w_o);
-  const BSDFEval eval = bsdf_velvet_evaluate(context, data, sampled_direction, material, sampler);
+  if (state.depth++ >= 4u) {
+    const float survival = min(0.95f, spectral_response_maximum(state.throughput));
+    if ((survival <= 0.0f) || (bsdf_sampler_next(sampler) >= survival)) {
+      state.operation = BSDFVelvetWalk::Complete;
+      return false;
+    }
+    state.throughput = spectral_response_div(state.throughput, survival);
+  }
+  return true;
+}
 
-  BSDFSample result = ETX_ZERO(BSDFSample);
-  result.w_o = sampled_direction;
+ETX_SHARED_INLINE void bsdf_velvet_walk_evaluate_step(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(BSDFVelvetPrepared, prepared),
+  ETX_INOUT(BSDFVelvetWalk, state), ETX_INOUT(Sampler, sampler)) {
+  if (bsdf_velvet_walk_continue(state, sampler) == false) {
+    return;
+  }
+  const SpectralResponse bottom = bsdf_diffuse_eon_brdf(spect, prepared.diffuse, state.direction, state.outgoing, prepared.roughness);
+  state.value = spectral_response_add(state.value, spectral_response_mul(state.throughput, spectral_response_mul(state.transmission, bottom)));
+  state.throughput = spectral_response_mul(state.throughput, bsdf_velvet_return_sample(context, spect, prepared, state.direction, sampler));
+}
+
+ETX_SHARED_NOINLINE SpectralResponse bsdf_velvet_function(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(BSDFVelvetPrepared, prepared),
+  ETX_IN(float3, incoming), ETX_IN(float3, outgoing), ETX_INOUT(Sampler, sampler)) {
+  BSDFVelvetWalk state = bsdf_velvet_walk_begin_function(context, spect, prepared, incoming, outgoing);
+  while (state.operation != BSDFVelvetWalk::Complete) {
+    bsdf_velvet_walk_evaluate_step(context, spect, prepared, state, sampler);
+  }
+  return state.value;
+}
+
+ETX_SHARED_INLINE BSDFVelvetWalk bsdf_velvet_walk_begin_evaluation(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(BSDFVelvetPrepared, prepared),
+  ETX_IN(float3, incoming), ETX_IN(float3, outgoing)) {
+  BSDFVelvetWalk state = ETX_ZERO(BSDFVelvetWalk);
+  state.value = spectral_response_zero(spect);
+  state.outgoing = outgoing;
+  if ((incoming.z <= kEpsilon) || (outgoing.z <= kEpsilon)) {
+    return state;
+  }
+  if ((prepared.roughness <= kEpsilon) || spectral_response_is_zero(prepared.sheen)) {
+    state.value = bsdf_diffuse_eon_brdf(spect, prepared.diffuse, incoming, outgoing, prepared.roughness);
+    return state;
+  }
+  return bsdf_velvet_walk_begin_function(context, spect, prepared, incoming, outgoing);
+}
+
+ETX_SHARED_INLINE BSDFEval bsdf_velvet_evaluation_resolve(ETX_IN(BSDFData, data), ETX_IN(float3, incoming), ETX_IN(float3, outgoing), ETX_IN(SpectralResponse, function)) {
+  BSDFEval result = bsdf_eval_zero(data.spectrum_sample);
+  if ((incoming.z <= kEpsilon) || (outgoing.z <= kEpsilon)) {
+    return result;
+  }
+  result.func = function;
+  result.bsdf = spectral_response_mul(result.func, outgoing.z);
+  result.pdf = 1.0f / kDoublePi;
   result.properties = BSDFSample::Reflection | BSDFSample::Diffuse;
   result.medium_index = data.current_medium;
   result.eta = 1.0f;
+  return result;
+}
+
+ETX_SHARED_INLINE BSDFSample bsdf_velvet_sample_resolve(ETX_IN(SpectralQuery, spect), ETX_IN(float3, outgoing), ETX_IN(BSDFEval, eval)) {
+  BSDFSample result = bsdf_sample_zero(spect);
+  result.w_o = outgoing;
   result.pdf = eval.pdf;
+  result.properties = eval.properties;
+  result.medium_index = eval.medium_index;
+  result.eta = 1.0f;
   if (result.pdf > 0.0f) {
     result.weight = spectral_response_div(eval.bsdf, result.pdf);
   }
@@ -119,29 +177,90 @@ ETX_SHARED_INLINE BSDFSample bsdf_velvet_sample(ETX_IN(BSDFResourceContext, cont
 ETX_SHARED_INLINE BSDFEval bsdf_velvet_evaluate(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, outgoing_direction), ETX_IN(Material, material),
   ETX_INOUT(Sampler, sampler)) {
   const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
-  const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
-  const float3 local_w_o = local_frame_to_local(frame, outgoing_direction);
-  if ((local_w_i.z <= kEpsilon) || (local_w_o.z <= kEpsilon)) {
+  const float3 incoming = local_frame_to_local(frame, -data.w_i);
+  const float3 outgoing = local_frame_to_local(frame, outgoing_direction);
+  if ((incoming.z <= kEpsilon) || (outgoing.z <= kEpsilon)) {
     return bsdf_eval_zero(data.spectrum_sample);
   }
-
-  const float2 roughness = bsdf_resource_evaluate_roughness(context, material, data.tex);
-  const float alpha = saturate(0.5f * (roughness.x + roughness.y));
-  const SpectralResponse sheen = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
-  const float single_scatter_bsdf = bsdf_velvet_single_scatter_bsdf_cos(local_w_i, local_w_o, alpha);
-  const float single_scatter_albedo = bsdf_velvet_directional_albedo(alpha, local_w_i.z);
-  const SpectralResponse base_scale = spectral_response_max(spectral_response_sub(spectral_response_make(data.spectrum_sample, 1.0f), spectral_response_mul(sheen, single_scatter_albedo)), 0.0f);
-  const BSDFEval diffuse = bsdf_diffuse_layer(context, data, local_w_i, local_w_o, material, sampler);
-  const SpectralResponse diffuse_bsdf = spectral_response_mul(diffuse.bsdf, base_scale);
-  const SpectralResponse sheen_bsdf = spectral_response_mul(sheen, single_scatter_bsdf);
-
-  BSDFEval result = ETX_ZERO(BSDFEval);
-  result.bsdf = spectral_response_add(diffuse_bsdf, sheen_bsdf);
-  result.func = spectral_response_div(result.bsdf, local_w_o.z);
+  const BSDFVelvetPrepared prepared = bsdf_velvet_prepare(context, data, material);
+  BSDFEval result = bsdf_eval_zero(data.spectrum_sample);
+  if ((prepared.roughness <= kEpsilon) || spectral_response_is_zero(prepared.sheen)) {
+    result.func = bsdf_diffuse_eon_brdf(data.spectrum_sample, prepared.diffuse, incoming, outgoing, prepared.roughness);
+  } else {
+    Sampler walk_sampler = sampler;
+    bsdf_sampler_pop_fixed(walk_sampler);
+    result.func = bsdf_velvet_function(context, data.spectrum_sample, prepared, incoming, outgoing, walk_sampler);
+    sampler.seed = walk_sampler.seed;
+  }
+  result.bsdf = spectral_response_mul(result.func, outgoing.z);
   result.pdf = 1.0f / kDoublePi;
-  result.eta = 1.0f;
   result.properties = BSDFSample::Reflection | BSDFSample::Diffuse;
   result.medium_index = data.current_medium;
+  result.eta = 1.0f;
+  return result;
+}
+
+ETX_SHARED_INLINE BSDFSample bsdf_velvet_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+  const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
+  const float2 random = bsdf_sampler_has_fixed(sampler) ? float2(sampler.fixed_u, sampler.fixed_v) : bsdf_sampler_next_2d(sampler);
+  const float3 outgoing = local_frame_from_local(frame, sample_cosine_distribution(random, 0.0f));
+  const BSDFEval eval = bsdf_velvet_evaluate(context, data, outgoing, material, sampler);
+  BSDFSample result = bsdf_sample_zero(data.spectrum_sample);
+  result.w_o = outgoing;
+  result.pdf = eval.pdf;
+  result.properties = eval.properties;
+  result.medium_index = eval.medium_index;
+  result.eta = 1.0f;
+  if (result.pdf > 0.0f) {
+    result.weight = spectral_response_div(eval.bsdf, result.pdf);
+  }
+  return result;
+}
+
+struct BSDFVelvetSubstrateEscape {
+  SpectralResponse source ETX_INIT({});
+  SpectralResponse absorption ETX_INIT({});
+};
+
+ETX_SHARED_INLINE BSDFVelvetWalk bsdf_velvet_walk_begin_escape(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(BSDFVelvetPrepared, prepared),
+  ETX_IN(float3, outgoing), float emission_collimation) {
+  BSDFVelvetWalk state = ETX_ZERO(BSDFVelvetWalk);
+  state.value = spectral_response_zero(spect);
+  state.absorption = spectral_response_zero(spect);
+  state.throughput = bsdf_velvet_transmission(context, spect, prepared, outgoing.z);
+  state.direction = outgoing;
+  state.exponent = scene_math_shared_collimation_to_exponent(emission_collimation);
+  const float average = bsdf_diffuse_eon_average_albedo(prepared.roughness);
+  const SpectralResponse one = spectral_response_make(spect, 1.0f);
+  state.multiple = spectral_response_div(spectral_response_mul(spectral_response_mul(prepared.diffuse, prepared.diffuse), average),
+    spectral_response_sub(one, spectral_response_mul(prepared.diffuse, 1.0f - average)));
+  state.operation = BSDFVelvetWalk::SourceEscape;
+  return state;
+}
+
+ETX_SHARED_INLINE void bsdf_velvet_walk_escape_step(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(BSDFVelvetPrepared, prepared),
+  ETX_INOUT(BSDFVelvetWalk, state), ETX_INOUT(Sampler, sampler)) {
+  if (bsdf_velvet_walk_continue(state, sampler) == false) {
+    return;
+  }
+  state.value = spectral_response_add(state.value, spectral_response_mul(state.throughput, scene_math_shared_collimated_emission_scale(state.direction.z, state.exponent)));
+  const float single = bsdf_diffuse_eon_directional_albedo(state.direction.z, prepared.roughness);
+  const SpectralResponse one = spectral_response_make(spect, 1.0f);
+  const SpectralResponse absorptance =
+    spectral_response_sub(one, spectral_response_add(spectral_response_mul(prepared.diffuse, single), spectral_response_mul(state.multiple, 1.0f - single)));
+  state.absorption = spectral_response_add(state.absorption, spectral_response_mul(state.throughput, absorptance));
+  state.throughput = spectral_response_mul(state.throughput, bsdf_velvet_return_sample(context, spect, prepared, state.direction, sampler));
+}
+
+ETX_SHARED_NOINLINE BSDFVelvetSubstrateEscape bsdf_velvet_substrate_escape(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(BSDFVelvetPrepared, prepared),
+  ETX_IN(float3, outgoing), float emission_collimation, ETX_INOUT(Sampler, sampler)) {
+  BSDFVelvetWalk state = bsdf_velvet_walk_begin_escape(context, spect, prepared, outgoing, emission_collimation);
+  while (state.operation != BSDFVelvetWalk::Complete) {
+    bsdf_velvet_walk_escape_step(context, spect, prepared, state, sampler);
+  }
+  BSDFVelvetSubstrateEscape result = ETX_ZERO(BSDFVelvetSubstrateEscape);
+  result.source = state.value;
+  result.absorption = state.absorption;
   return result;
 }
 

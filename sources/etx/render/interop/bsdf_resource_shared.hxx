@@ -64,9 +64,17 @@ ETX_SHARED_INLINE float bsdf_resource_evaluate_sampled_image(ETX_IN(BSDFResource
   return bsdf_resource_image_sample_channel_or_default(context, image.image_index, image.channel, uv, default_value);
 }
 
-ETX_SHARED_INLINE float2 bsdf_resource_evaluate_roughness(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv)) {
+ETX_SHARED_INLINE float2 bsdf_resource_evaluate_base_roughness(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv)) {
   float scale = bsdf_resource_evaluate_sampled_image(context, material.roughness, uv, 1.0f);
   return float2(material.roughness.value.x, material.roughness.value.y) * scale;
+}
+
+ETX_SHARED_INLINE float2 bsdf_resource_evaluate_roughness(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv)) {
+  if ((material.cls == MaterialClass::Plastic) && (material.layer_base_class == (MaterialClass::Diffuse + 1u))) {
+    const float scale = bsdf_resource_evaluate_sampled_image(context, material.coating.roughness, uv, 1.0f);
+    return float2(material.coating.roughness.value.x, material.coating.roughness.value.y) * scale;
+  }
+  return bsdf_resource_evaluate_base_roughness(context, material, uv);
 }
 
 ETX_SHARED_INLINE float bsdf_resource_evaluate_metalness(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv)) {
@@ -94,21 +102,39 @@ ETX_SHARED_INLINE RefractiveIndexSample bsdf_resource_evaluate_refractive_index(
   return result;
 }
 
-ETX_SHARED_INLINE float3 bsdf_resource_evaluate_refractive_index_integrated_eta(ETX_IN(BSDFResourceContext, context), ETX_IN(RefractiveIndex, refractive_index)) {
-  if (refractive_index.eta_index == kInvalidIndex) {
-    return float3(1.0f, 1.0f, 1.0f);
-  }
-  return bsdf_resource_load_spectrum_integrated(context, refractive_index.eta_index);
-}
-
 ETX_SHARED_INLINE bool bsdf_resource_thinfilm_enabled(ETX_IN(Thinfilm, film)) {
   const float maximum_thickness = max(max(film.min_thickness, 0.0f), max(film.max_thickness, 0.0f));
-  return (clamp(film.weight, 0.0f, 1.0f) > 0.0f) && (maximum_thickness > 0.0f) && (film.ior.cls == SpectralDistribution::Dielectric);
+  return (clamp(film.weight, 0.0f, 1.0f) > 0.0f) && (maximum_thickness > 0.0f) &&
+         ((film.ior.cls == SpectralDistribution::Dielectric) || (film.ior.cls == SpectralDistribution::Conductor));
+}
+
+ETX_SHARED_INLINE float bsdf_resource_evaluate_interface_thickness(ETX_IN(BSDFResourceContext, context), float minimum, float maximum, uint32_t image_index, ETX_IN(float2, uv)) {
+  const float value = image_index == kInvalidIndex ? 1.0f : bsdf_resource_image_sample_channel_or_default(context, image_index, 0u, uv, 1.0f);
+  const float lower = max(0.0f, minimum);
+  const float upper = max(0.0f, maximum);
+  return max(0.0f, lower + (upper - lower) * saturate(value));
+}
+
+ETX_SHARED_INLINE bool bsdf_resource_interface_has_layers(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv)) {
+#if ETX_ENABLE_COHERENT_COATING
+  if ((material.coherent_coating.max_thickness_nm > 0.0f) && (bsdf_resource_evaluate_interface_thickness(context, material.coherent_coating.min_thickness_nm,
+                                                                material.coherent_coating.max_thickness_nm, material.coherent_coating.thickness_image, uv) > 0.0f)) {
+    return true;
+  }
+#endif
+  return bsdf_resource_thinfilm_enabled(material.thinfilm) &&
+         (bsdf_resource_evaluate_interface_thickness(context, material.thinfilm.min_thickness, material.thinfilm.max_thickness, material.thinfilm.thinkness_image, uv) > 0.0f);
+}
+
+ETX_SHARED_INLINE bool bsdf_resource_interface_has_layers(ETX_IN(InterfaceOptics, optics)) {
+  return (optics.coating_thickness_nm > 0.0f) || ((optics.weight > 0.0f) && (optics.thickness > 0.0f));
 }
 
 ETX_SHARED_INLINE ThinfilmEval bsdf_resource_evaluate_thinfilm(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Thinfilm, film), ETX_IN(float2, uv),
   ETX_INOUT(Sampler, sampler)) {
+#if (ETX_CPP)
   (void)sampler;
+#endif
 
   ThinfilmEval result = ETX_ZERO(ThinfilmEval);
   result.ior.cls = SpectralDistribution::Invalid;
@@ -120,29 +146,49 @@ ETX_SHARED_INLINE ThinfilmEval bsdf_resource_evaluate_thinfilm(ETX_IN(BSDFResour
     return result;
   }
 
-  float sampled_thickness = 1.0f;
-  if (film.thinkness_image != kInvalidIndex) {
-    sampled_thickness = bsdf_resource_image_sample_channel_or_default(context, film.thinkness_image, 0u, uv, 1.0f);
-  }
-
-  const float minimum_thickness = max(0.0f, film.min_thickness);
-  const float maximum_thickness = max(0.0f, film.max_thickness);
-  result.thickness = max(0.0f, minimum_thickness + (maximum_thickness - minimum_thickness) * clamp(sampled_thickness, 0.0f, 1.0f));
+  result.thickness = bsdf_resource_evaluate_interface_thickness(context, film.min_thickness, film.max_thickness, film.thinkness_image, uv);
   result.weight = clamp(film.weight, 0.0f, 1.0f);
   result.ior = bsdf_resource_evaluate_refractive_index(context, film.ior, spect);
-  result.ior.k = spectral_response_make(spect, 0.0f);
 
   return result;
 }
 
-#if (ETX_CPP)
-ETX_SHARED_INLINE bool bsdf_alpha_test_pass(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv), ETX_INOUT(Sampler, sampler)) {
-  if (material.cls == MaterialClass::Void) {
-    return true;
+ETX_SHARED_INLINE CoherentInterfaceEval bsdf_resource_evaluate_coherent_interface(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Thinfilm, thinfilm),
+  ETX_IN(CoherentCoating, coating), ETX_IN(float2, uv), ETX_INOUT(Sampler, sampler)) {
+  CoherentInterfaceEval result = ETX_ZERO(CoherentInterfaceEval);
+  result.thinfilm = bsdf_resource_evaluate_thinfilm(context, spect, thinfilm, uv, sampler);
+  if ((coating.ior.cls != SpectralDistribution::Dielectric) && (coating.ior.cls != SpectralDistribution::Conductor)) {
+    return result;
   }
+  result.coating_thickness_nm = bsdf_resource_evaluate_interface_thickness(context, coating.min_thickness_nm, coating.max_thickness_nm, coating.thickness_image, uv);
+  result.coating_ior = bsdf_resource_evaluate_refractive_index(context, coating.ior, spect);
+  return result;
+}
 
+ETX_SHARED_INLINE InterfaceOptics bsdf_resource_evaluate_interface_optics(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
+  ETX_IN(float2, uv), ETX_INOUT(Sampler, sampler)) {
+#if ETX_ENABLE_COHERENT_COATING
+  const CoherentInterfaceEval optics = bsdf_resource_evaluate_coherent_interface(context, spect, material.thinfilm, material.coherent_coating, uv, sampler);
+  InterfaceOptics result = optics.thinfilm;
+  result.coating_ior = optics.coating_ior;
+  result.coating_thickness_nm = optics.coating_thickness_nm;
+  return result;
+#else
+  return bsdf_resource_evaluate_thinfilm(context, spect, material.thinfilm, uv, sampler);
+#endif
+}
+
+#if (ETX_CPP)
+ETX_SHARED_INLINE float bsdf_resource_material_coverage(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv)) {
+  if (material.cls == MaterialClass::Void) {
+    return 0.0f;
+  }
   const float alpha_mask = bsdf_resource_evaluate_sampled_image(context, material.alpha_mask, uv, 1.0f);
-  float alpha_test_value = alpha_mask * material.alpha_mask.value.x * material.opacity;
+  return saturate(alpha_mask * material.alpha_mask.value.x * material.opacity);
+}
+
+ETX_SHARED_INLINE bool bsdf_alpha_test_pass(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(float2, uv), ETX_INOUT(Sampler, sampler)) {
+  const float alpha_test_value = bsdf_resource_material_coverage(context, material, uv);
   if (alpha_test_value <= 0.0f) {
     return true;
   }

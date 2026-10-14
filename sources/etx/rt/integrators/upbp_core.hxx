@@ -406,6 +406,10 @@ struct UPBPPathVertexRecord {
   bool delta = false;
   bool sample_only = false;
   bool distant_endpoint = false;
+
+  bool sampled_delta() const {
+    return delta || ((sample_properties & BSDFSample::Delta) != 0u);
+  }
 };
 
 struct UPBPPathRecord {

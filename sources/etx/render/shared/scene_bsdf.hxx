@@ -70,6 +70,7 @@ ETX_SHARED_INLINE bool interop_supported(const Material& mtl) {
     case MaterialClass::Diffuse:
     case MaterialClass::Translucent:
     case MaterialClass::Conductor:
+    case MaterialClass::CoatedConductor:
     case MaterialClass::Dielectric:
     case MaterialClass::Plastic:
     case MaterialClass::Thinfilm:

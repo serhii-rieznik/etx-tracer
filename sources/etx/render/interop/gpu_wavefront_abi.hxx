@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu_abi_constants.hxx"
+#include "gpu_coating_abi.hxx"
 #include "gpu_wavefront_shared.hxx"
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontQueueHeaderSize = 16u;
@@ -152,6 +153,7 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStatePackingOffset = 116u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStateFlightPdfForwardOffset = 120u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStateFlightPdfReverseOffset = 124u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStateOwnerInstanceIndexOffset = 128u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontSubsurfaceStateBoundaryMaterialIndexOffset = 132u;
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontDirectLightSampleStride = 192u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontDirectLightSampleValueOffset = 0u;
@@ -260,7 +262,7 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontConnectCameraResultUPBPLogBeamSurvivalFor
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectCameraResultUPBPLogBeamSurvivalReverseBitsOffset = 52u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectCameraResultUPBPHasExclusionTransportOffset = 56u;
 
-ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesStride = 144u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesStride = 176u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesCameraStateBufferOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesLightStateBufferOffset = 4u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesCameraHitBufferOffset = 8u;
@@ -296,6 +298,23 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesFastLightEndpointBufferOffset = 
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesVCMGridHeadsBufferOffset = 128u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesVCMGridNextBufferOffset = 132u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesUPBPResourcesBufferOffset = 136u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesCoatingRequestBufferOffset = 140u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesEmissionRequestBufferOffset = 144u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesEmissionConsumerBufferOffset = 148u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesEmissionRequestStrideOffset = 152u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesTransportWorkBufferOffset = 156u;
+ETX_STATIC_CONST uint32_t kGPUWavefrontResourcesVCMCoatingBufferOffset = 160u;
+
+ETX_STATIC_CONST uint32_t kGPUVCMCoatingLaneCount = 64u;
+ETX_STATIC_CONST uint32_t kGPUVCMCoatingHeaderSize = 16u;
+ETX_STATIC_CONST uint32_t kGPUVCMCoatingPendingOffset = 0u;
+ETX_STATIC_CONST uint32_t kGPUVCMCoatingLaneStride = 48u;
+ETX_STATIC_CONST uint32_t kGPUVCMCoatingCursorOffset = 0u;
+ETX_STATIC_CONST uint32_t kGPUVCMCoatingLightIndexOffset = 4u;
+ETX_STATIC_CONST uint32_t kGPUVCMCoatingDistanceOffset = 8u;
+ETX_STATIC_CONST uint32_t kGPUVCMCoatingFlagsOffset = 12u;
+ETX_STATIC_CONST uint32_t kGPUVCMCoatingSubtotalOffset = 16u;
+ETX_STATIC_CONST uint32_t kGPUVCMCoatingSamplerOffset = 28u;
 
 ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialQueueVarious = 0u;
 ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialQueuePlastic = 1u;
@@ -323,5 +342,14 @@ ETX_STATIC_CONST uint32_t kGPUWavefrontMaterialDispatchArgsOffset =
   kGPUWavefrontConnectDispatchArgsOffset + kGPUWavefrontConnectDispatchArgsCount * kGPUWavefrontDispatchArgsStride;
 ETX_STATIC_CONST uint32_t kGPUWavefrontShadowDispatchArgsOffset = kGPUWavefrontMaterialDispatchArgsOffset + kGPUWavefrontMaterialQueueCount * kGPUWavefrontDispatchArgsStride;
 ETX_STATIC_CONST uint32_t kGPUWavefrontConnectQueueDispatchArgsOffset = kGPUWavefrontShadowDispatchArgsOffset + kGPUWavefrontShadowQueueCount * kGPUWavefrontDispatchArgsStride;
-ETX_STATIC_CONST uint32_t kGPUWavefrontFixedDispatchArgsBufferSize = kGPUWavefrontConnectQueueDispatchArgsOffset + kGPUWavefrontConnectQueueCount * kGPUWavefrontDispatchArgsStride;
+ETX_STATIC_CONST uint32_t kGPUWavefrontTransportDispatchArgsOffset = kGPUWavefrontConnectQueueDispatchArgsOffset + kGPUWavefrontConnectQueueCount * kGPUWavefrontDispatchArgsStride;
+ETX_STATIC_CONST uint32_t kGPUWavefrontFixedDispatchArgsBufferSize = kGPUWavefrontTransportDispatchArgsOffset + kGPUWavefrontDispatchArgsStride;
 ETX_STATIC_CONST uint32_t kGPUWavefrontHeavyContinuationChunkSize = 65536u;
+
+ETX_STATIC_CONST uint32_t kGPUTransportWorkHeaderSize = 16u;
+ETX_STATIC_CONST uint32_t kGPUTransportWorkCountOffset = 0u;
+ETX_STATIC_CONST uint32_t kGPUTransportWorkIndicesOffset = 16u;
+
+struct GPUTransportWorkKind {
+  enum : uint32_t { Coating, Emission };
+};

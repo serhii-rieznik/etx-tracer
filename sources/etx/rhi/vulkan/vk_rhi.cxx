@@ -344,6 +344,7 @@ struct VKContext::Impl {
   std::vector<VkFence> swapchain_image_fences;
   std::vector<TemporaryFence> temporary_fences;
   uint32_t current_frame = 0;
+  uint64_t profiling_frame_id = 0u;
 
   const void* native_window = nullptr;
   uint32_t width = 0;
@@ -936,6 +937,16 @@ RHIResult VKContext::submit_command_buffer(const RHISubmitInfo& info) {
   submit_info.signalSemaphoreCount = static_cast<uint32_t>(signal_semaphores.size());
   submit_info.pSignalSemaphores = signal_semaphores.data();
 
+  // Tools expose this extension to delimit headless frames without Present.
+  const VkFrameBoundaryEXT frame_boundary = {
+    .sType = VK_STRUCTURE_TYPE_FRAME_BOUNDARY_EXT,
+    .flags = VK_FRAME_BOUNDARY_FRAME_END_BIT_EXT,
+    .frameID = _impl->profiling_frame_id,
+  };
+  if (frame_completion_submit && _impl->device.supports_frame_boundary()) {
+    submit_info.pNext = &frame_boundary;
+  }
+
   const VkResult submit_result = etx_vk_call(vkQueueSubmit(_impl->device.get_graphics_queue(), 1, &submit_info, submit_fence));
   if (submit_result != VK_SUCCESS) {
     log::error("Failed to submit command buffer");
@@ -943,6 +954,7 @@ RHIResult VKContext::submit_command_buffer(const RHISubmitInfo& info) {
   }
 
   if (frame_completion_submit) {
+    ++_impl->profiling_frame_id;
     _impl->frame_fence_pending[_impl->current_frame] = true;
     if (_impl->current_swapchain_image < _impl->swapchain_image_fences.size()) {
       _impl->swapchain_image_fences[_impl->current_swapchain_image] = submit_fence;
@@ -2062,11 +2074,11 @@ void VKCommandBuffer::set_pipeline(RHIPipeline pipeline) {
     return;
   }
 
-  const VKPipelineData* compute_pipeline_data = device->get_compute_pipeline_data(pipeline);
-  if (compute_pipeline_data != nullptr) {
+  const VKPipelineData compute_pipeline_data = device->get_compute_pipeline_data(pipeline);
+  if (compute_pipeline_data.pipeline != VK_NULL_HANDLE) {
     current_pipeline_layout = device->get_bindless_pipeline_layout();
     current_bind_point = VK_PIPELINE_BIND_POINT_COMPUTE;
-    vkCmdBindPipeline(command_buffer, current_bind_point, compute_pipeline_data->pipeline);
+    vkCmdBindPipeline(command_buffer, current_bind_point, compute_pipeline_data.pipeline);
     VkDescriptorSet bindless_set = context->get_bindless_manager()->get_descriptor_set();
     if (bindless_set != VK_NULL_HANDLE) {
       vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, current_pipeline_layout, 0, 1, &bindless_set, 0, nullptr);
@@ -2172,17 +2184,13 @@ void VKCommandBuffer::dispatch(const RHIDispatchDesc& desc) {
     return;
   }
 
-  const VKPipelineData* compute_pipeline_data = device->get_compute_pipeline_data(current_pipeline);
-  if (compute_pipeline_data == nullptr) {
+  const VKPipelineData compute_pipeline_data = device->get_compute_pipeline_data(current_pipeline);
+  if (compute_pipeline_data.pipeline == VK_NULL_HANDLE) {
     log::error("Failed to find compute pipeline: %llu", current_pipeline.value);
     return;
   }
 
-  VkPipeline vk_pipeline = compute_pipeline_data->pipeline;
-  if (vk_pipeline == VK_NULL_HANDLE) {
-    log::error("Invalid Vulkan pipeline or pipeline layout");
-    return;
-  }
+  VkPipeline vk_pipeline = compute_pipeline_data.pipeline;
 
   vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, vk_pipeline);
 
@@ -2211,16 +2219,16 @@ void VKCommandBuffer::dispatch_indirect(RHIBindlessHandle argument_buffer, uint6
     return;
   }
 
-  const VKPipelineData* compute_pipeline_data = device->get_compute_pipeline_data(current_pipeline);
-  if (compute_pipeline_data == nullptr) {
+  const VKPipelineData compute_pipeline_data = device->get_compute_pipeline_data(current_pipeline);
+  if (compute_pipeline_data.pipeline == VK_NULL_HANDLE) {
     log::error("Failed to find compute pipeline: %llu", current_pipeline.value);
     return;
   }
 
-  const VkPipeline vk_pipeline = compute_pipeline_data->pipeline;
+  const VkPipeline vk_pipeline = compute_pipeline_data.pipeline;
   const VkBuffer vk_argument_buffer = device->get_vk_buffer_from_bindless(argument_buffer);
-  if ((vk_pipeline == VK_NULL_HANDLE) || (vk_argument_buffer == VK_NULL_HANDLE)) {
-    log::error("Invalid Vulkan pipeline or indirect argument buffer");
+  if (vk_argument_buffer == VK_NULL_HANDLE) {
+    log::error("Invalid Vulkan indirect argument buffer");
     return;
   }
 

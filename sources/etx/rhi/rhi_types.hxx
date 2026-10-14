@@ -18,6 +18,30 @@ enum class RHIResult : uint32_t {
   NotReady,
 };
 
+inline const char* rhi_result_name(RHIResult result) {
+  switch (result) {
+    case RHIResult::Success:
+      return "Success";
+    case RHIResult::OutOfMemory:
+      return "OutOfMemory";
+    case RHIResult::InvalidHandle:
+      return "InvalidHandle";
+    case RHIResult::DeviceLost:
+      return "DeviceLost";
+    case RHIResult::UnsupportedFeature:
+      return "UnsupportedFeature";
+    case RHIResult::ValidationError:
+      return "ValidationError";
+    case RHIResult::InvalidArgument:
+      return "InvalidArgument";
+    case RHIResult::NotImplemented:
+      return "NotImplemented";
+    case RHIResult::NotReady:
+      return "NotReady";
+  }
+  return "Unrecognized RHI result";
+}
+
 struct RHIResultInfo {
   RHIResult result = RHIResult::Success;
   const char* message = nullptr;
@@ -431,7 +455,7 @@ struct RHIShaderDesc {
   uint32_t local_size_x = 1;
   uint32_t local_size_y = 1;
   uint32_t local_size_z = 1;
-  // The cache key identifies a logical shader variant across source revisions; the content hash identifies its current backend binary.
+  // The cache key identifies a compiled shader variant; the content hash identifies its backend bytes.
   uint64_t cache_key = 0u;
   uint64_t content_hash = 0u;
   RHIMetalShaderMetadata metal_metadata = {};
@@ -495,6 +519,7 @@ struct RHIGraphicsPipelineDesc {
 
 struct RHIComputePipelineDesc {
   RHIShaderDesc compute_shader = {};
+  bool capture_statistics = false;
 };
 
 enum class RHIAccelerationStructureType : uint32_t {

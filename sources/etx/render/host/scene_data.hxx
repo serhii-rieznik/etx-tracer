@@ -14,6 +14,8 @@
 #include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/scene_hierarchy.hxx>
 #include <etx/render/host/temperature_optics.hxx>
+#include <etx/render/host/material_description.hxx>
+#include <etx/render/host/scene_diagnostic.hxx>
 
 #include <unordered_map>
 #include <unordered_set>
@@ -184,6 +186,38 @@ struct SceneHashes {
 
 struct SceneData {
   using MaterialMapping = std::unordered_map<std::string, uint32_t>;
+  mutable SceneDiagnostic diagnostic;
+
+  template <class... Args>
+  bool fail_material(uint32_t index, const char* field, const char* format, Args... args) const {
+    return fail_material(index, SceneDiagnosticKind::Validation, field, format, args...);
+  }
+
+  template <class... Args>
+  bool fail_material(uint32_t index, SceneDiagnosticKind kind, const char* field, const char* format, Args... args) const {
+    if (diagnostic.message.empty()) {
+      diagnostic.target = SceneDiagnosticTarget::Material;
+      diagnostic.resource_index = index;
+      for (const auto& [name, material_index] : material_mapping) {
+        if (material_index == index) {
+          diagnostic.resource_name = name;
+          break;
+        }
+      }
+      diagnostic.resource_name += " (#" + std::to_string(index) + ")";
+    }
+    return diagnostic.fail(kind, field, format, args...);
+  }
+
+  template <class... Args>
+  bool fail_medium(uint32_t index, const char* field, const char* format, Args... args) const {
+    if (diagnostic.message.empty()) {
+      diagnostic.target = SceneDiagnosticTarget::Medium;
+      diagnostic.resource_index = index;
+      diagnostic.resource_name = "Medium #" + std::to_string(index);
+    }
+    return diagnostic.fail(SceneDiagnosticKind::Validation, field, format, args...);
+  }
 
   struct CameraInfo {
     Camera cam;
@@ -201,6 +235,8 @@ struct SceneData {
 
   std::vector<Triangle> triangles;
   std::vector<Material> materials;
+  std::vector<MaterialDescription> material_descriptions;
+  std::vector<MaterialDescription> committed_material_descriptions;
   std::vector<Mesh> meshes;
   std::vector<EmitterProfile> emitter_profiles;
   std::vector<std::string> emitter_names;
@@ -233,6 +269,12 @@ struct SceneData {
   };
   std::vector<ThermalMediumState> thermal_medium_states;
   std::unordered_map<uint32_t, ThermalMediumResources> thermal_medium_resources;
+  struct TemperatureOpticsResources {
+    uint32_t eta_index = kInvalidIndex;
+    uint32_t k_index = kInvalidIndex;
+    uint32_t medium_index = kInvalidIndex;
+  };
+  std::unordered_map<uint32_t, TemperatureOpticsResources> temperature_optics_resources;
   uint32_t thermal_unit_spectrum_index = kInvalidIndex;
   SceneHierarchy hierarchy;
 
@@ -268,6 +310,14 @@ struct SceneData {
   uint64_t compute_instance_transforms_hash() const;
   SceneHashes compute_hashes() const;
   void copy_transport_materials(std::vector<Material>& target) const;
+  const std::vector<Material>& transport_materials() const;
+  void copy_material_preparation_from(const SceneData& source);
+  void project_material_descriptions();
+  MaterialLayerSettings& author_material_layers(uint32_t material_index);
+  void publish_material_preparation(SceneData& candidate);
+  void commit_material_authoring(const std::vector<MaterialDescription>& descriptions);
+  void restore_material_authoring();
+  void remember_material_spectrum_edit(uint32_t index);
   size_t transport_medium_count() const;
   Medium transport_medium(size_t index) const;
   uint32_t transport_medium_index(uint32_t index) const;
@@ -284,7 +334,7 @@ struct SceneData {
 
   bool has_material(const char* name) const;
   uint32_t add_material(const char* name);
-  uint32_t clone_material(const Material& src, const char* name);
+  uint32_t clone_material(const MaterialDescription& src, const char* name);
 
   uint32_t add_mesh(const char* name, uint32_t triangle_offset, uint32_t triangle_count, const float3& bbox_min, const float3& bbox_max);
   uint32_t add_mesh_asset(const char* name, uint32_t triangle_offset, uint32_t triangle_count, const float3& bbox_min, const float3& bbox_max);
@@ -308,6 +358,12 @@ struct SceneData {
   void rebuild_atmosphere_emitter(uint32_t emitter_index, RHIContext& rhi, scattering::GpuContext& gpu_context);
 
  private:
+  struct MaterialSpectrumEdit {
+    SpectralDistribution value;
+    SpectrumSource source;
+    bool has_source = false;
+  };
+  std::unordered_map<uint32_t, MaterialSpectrumEdit> _material_spectrum_edits;
   std::vector<uint32_t> _camera_attachment_nodes_scratch;
   std::vector<uint32_t> _medium_attachment_nodes_scratch;
 };

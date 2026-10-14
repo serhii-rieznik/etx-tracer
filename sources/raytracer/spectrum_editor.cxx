@@ -63,10 +63,10 @@ uint32_t* SpectrumTarget::spectrum_slot(SceneData& scene) const {
       return nullptr;
     return &scene.emitter_profiles[emitter_index].emission.spectrum_index;
   }
-  return material_index < scene.materials.size() ? spectrum_slot(scene.materials[material_index]) : nullptr;
+  return material_index < scene.material_descriptions.size() ? spectrum_slot(scene.material_descriptions[material_index]) : nullptr;
 }
 
-uint32_t* SpectrumTarget::spectrum_slot(Material& material) const {
+uint32_t* SpectrumTarget::spectrum_slot(MaterialDescription& material) const {
   switch (channel) {
     case Channel::Scattering:
       return &material.scattering.spectrum_index;
@@ -88,6 +88,14 @@ uint32_t* SpectrumTarget::spectrum_slot(Material& material) const {
       return &material.thinfilm.ior.eta_index;
     case Channel::ThinfilmK:
       return &material.thinfilm.ior.k_index;
+    case Channel::CoatingEta:
+      return &material.coating.ior.eta_index;
+    case Channel::CoatingK:
+      return &material.coating.ior.k_index;
+    case Channel::CoatingAbsorption:
+      return &material.coating.absorption.spectrum_index;
+    case Channel::CoatingScattering:
+      return &material.coating.scattering.spectrum_index;
     default:
       return nullptr;
   }

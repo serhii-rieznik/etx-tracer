@@ -11,6 +11,10 @@ bool upbp_vertex_is_surface(GPUUPBPVertex vertex) {
 }
 
 bool upbp_vertex_is_delta(GPUUPBPVertex vertex) {
+  return ((vertex.flags & GPUUPBPVertexFlags::Delta) != 0u) && ((upbp_vertex_is_surface(vertex) == false) || ((vertex.flags & GPUUPBPVertexFlags::Connectible) == 0u));
+}
+
+bool upbp_vertex_sampled_delta(GPUUPBPVertex vertex) {
   return (vertex.flags & GPUUPBPVertexFlags::Delta) != 0u;
 }
 
@@ -357,12 +361,13 @@ bool upbp_prepare_recursive_departure(GPUUPBPVertex vertex, GPUUPBPIteration ite
     state.failure_vertex_index = vertex_index;
     return false;
   }
-  const bool bpt_previous = upbp_previous_bpt_connectible(state.weights) && (upbp_vertex_is_delta(vertex) == false) && ((vertex.flags & GPUUPBPVertexFlags::Connectible) != 0u);
+  const bool bpt_previous =
+    upbp_previous_bpt_connectible(state.weights) && (upbp_vertex_sampled_delta(vertex) == false) && ((vertex.flags & GPUUPBPVertexFlags::Connectible) != 0u);
   const float log_forward_pdf = log(forward_pdf);
   const float log_reverse_pdf = upbp_log_positive(reverse_pdf);
   const float log_cosine = log(cosine);
   state.log_d_bpt_a = log_cosine - log_forward_pdf;
-  if (upbp_vertex_is_delta(vertex)) {
+  if (upbp_vertex_sampled_delta(vertex)) {
     state.log_d_bpt_b =
       upbp_log_is_zero(state.weights.log_d_bpt_base) ? kUPBPLogZero : log_cosine + state.weights.log_d_bpt_base - state.weights.log_ray_sample_reverse_pdf_inverse;
     state.log_d_pde_b =
@@ -387,7 +392,7 @@ bool upbp_prepare_recursive_departure(GPUUPBPVertex vertex, GPUUPBPIteration ite
   }
   state.weights.log_d_shared = -log_forward_pdf;
   state.weights.flags = upbp_vertex_is_medium(vertex) ? GPUUPBPRecursiveWeightFlags::PreviousInMedium : 0u;
-  state.weights.flags |= upbp_vertex_is_delta(vertex) ? GPUUPBPRecursiveWeightFlags::PreviousDelta : 0u;
+  state.weights.flags |= upbp_vertex_sampled_delta(vertex) ? GPUUPBPRecursiveWeightFlags::PreviousDelta : 0u;
   state.weights.flags |= (vertex.flags & GPUUPBPVertexFlags::Connectible) == 0u ? GPUUPBPRecursiveWeightFlags::PreviousNonConnectible : 0u;
   const float direction_cosine = dot(vertex.w_i, vertex.sampled_direction);
   state.last_sin_theta = sqrt(max(0.0f, 1.0f - direction_cosine * direction_cosine));

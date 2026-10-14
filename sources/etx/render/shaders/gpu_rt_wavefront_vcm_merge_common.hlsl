@@ -48,6 +48,16 @@ bool wavefront_vcm_merge_load_input(uint dispatch_index, out GPUWavefrontResourc
     return false;
   }
   MaterialAccessGPUContext material_context = {constants.scene.materials};
+  if (material_access_can_load(material_context, camera_vertex.material_index) == false) {
+    return false;
+  }
+  ByteAddressBuffer materials = WAVEFRONT_RO_BUFFER(material_context.materials_descriptor_index);
+  const uint material_offset = camera_vertex.material_index * kMaterialStride;
+  const uint material_class = materials.Load(material_offset + kMaterialClassOffset);
+  const uint subsurface_class = materials.Load(material_offset + kMaterialSubsurfaceClassOffset);
+  if (wavefront_vcm_merge_stage_matches_material(material_boundary_class(material_class, subsurface_class)) == false) {
+    return false;
+  }
   return material_access_try_load_full(material_context, camera_vertex.material_index, material);
 }
 
@@ -90,8 +100,7 @@ bool wavefront_vcm_merge_prepare(uint dispatch_index, out WavefrontVCMMergeQuery
   uint path_index = 0u;
   GPUWavefrontPathState state = (GPUWavefrontPathState)0;
   GPUWavefrontHit hit = (GPUWavefrontHit)0;
-  if ((wavefront_vcm_merge_load_input(dispatch_index, query.resources, path_index, state, hit, query.camera_vertex, query.material) == false) ||
-      (wavefront_vcm_merge_stage_matches_material(material_boundary_class(query.material.cls, query.material.subsurface_cls)) == false)) {
+  if (wavefront_vcm_merge_load_input(dispatch_index, query.resources, path_index, state, hit, query.camera_vertex, query.material) == false) {
     return false;
   }
   query.path_length = state.path_length;
@@ -114,9 +123,9 @@ bool wavefront_vcm_merge_prepare(uint dispatch_index, out WavefrontVCMMergeQuery
   query.conductor_incident = (BSDFEnergyCompensatedConductorIncident)0;
   query.conductor_reflectance = spectral_response_zero(state.spect);
   if (query.use_prepared_conductor) {
-    query.conductor_incident =
-      bsdf_energy_compensated_conductor_prepare_incident(query.bsdf_context, state.spect, query.material, query.conductor_local_w_i.z, query.prepared_material);
     query.conductor_reflectance = bsdf_resource_apply_image(query.bsdf_context, state.spect, query.material.reflectance, query.camera_data.tex);
+    query.conductor_incident = bsdf_energy_compensated_conductor_prepare_incident(query.bsdf_context, state.spect, query.material, query.conductor_local_w_i.z,
+      query.prepared_material, query.conductor_reflectance);
   }
 # endif
 #endif
@@ -173,45 +182,22 @@ bool wavefront_vcm_merge_candidate_matches(WavefrontVCMMergeQuery query, uint li
   const float3 light_normal = wavefront_load_float3(light_vertices, light_vertex_offset + kGPUWavefrontLightPathVertexNormalOffset);
   return dot(query.camera_vertex.normal, light_normal) > kEpsilon;
 }
-float3 wavefront_vcm_merge_evaluate(WavefrontVCMMergeQuery query, uint light_index, float distance_squared, inout Sampler sampler) {
-  GPUWavefrontPathVertex light_vertex = wavefront_load_path_vertex(query.resources.light_vertex_buffer, light_index);
+bool wavefront_vcm_merge_load_candidate(WavefrontVCMMergeQuery query, uint light_index, out GPUWavefrontPathVertex light_vertex) {
+  light_vertex = wavefront_load_path_vertex(query.resources.light_vertex_buffer, light_index);
   const bool query_matches = spectral_query_compatible(spectral_response_as_query(light_vertex.throughput), query.camera_data.spectrum_sample);
   if ((wavefront_path_vertex_valid(light_vertex) == false) || (wavefront_path_vertex_is_surface(light_vertex) == false) ||
       (wavefront_path_vertex_connectible(light_vertex) == false) || (query_matches == false)) {
-    return float3(0.0f, 0.0f, 0.0f);
+    return false;
   }
-  float3 outgoing_direction = -light_vertex.w_i;
+  const float3 outgoing_direction = -light_vertex.w_i;
   if (scene_math_shared_scattering_direction_valid(query.camera_vertex.normal, query.camera_vertex.geo_normal, query.camera_vertex.w_i, outgoing_direction) == false) {
-    return float3(0.0f, 0.0f, 0.0f);
+    return false;
   }
-  BSDFEval camera_eval = (BSDFEval)0;
-#if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)) && (ETX_SPECTRAL_MODE != ETX_SPECTRAL_MODE_RUNTIME)
-  if (query.use_prepared_material) {
-# if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR
-    if (query.use_prepared_conductor) {
-      const float3 conductor_local_w_o = local_frame_to_local(query.conductor_frame, outgoing_direction);
-      camera_eval = bsdf_conductor_energy_compensated_evaluate_prepared_local(query.bsdf_context, query.camera_data, query.material, query.conductor_local_w_i, conductor_local_w_o,
-        query.prepared_material, query.conductor_reflectance, query.conductor_incident);
-    } else {
-      camera_eval = bsdf_conductor_energy_compensated_evaluate_prepared(query.bsdf_context, query.camera_data, outgoing_direction, query.material, query.prepared_material);
-    }
-# else
-    camera_eval = bsdf_dielectric_energy_compensated_evaluate_prepared(query.bsdf_context, query.camera_data, outgoing_direction, query.material, query.prepared_material);
-# endif
-  } else
-#elif ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE
-  if (query.use_prepared_diffuse) {
-    const float3 diffuse_local_w_o = local_frame_to_local(query.diffuse_frame, outgoing_direction);
-    if ((query.diffuse_local_w_i.z > kEpsilon) && (diffuse_local_w_o.z > kEpsilon)) {
-      camera_eval.func = bsdf_diffuse_eon_brdf(query.camera_data.spectrum_sample, query.diffuse_albedo, query.diffuse_local_w_i, diffuse_local_w_o, query.diffuse_roughness);
-      camera_eval.pdf = kInvPi * diffuse_local_w_o.z;
-      camera_eval.eta = 1.0f;
-    }
-  } else
-#endif
-  {
-    camera_eval = wavefront_vcm_merge_stage_bsdf_eval(query.bsdf_context, query.camera_data, outgoing_direction, query.material, sampler);
-  }
+  return true;
+}
+
+float3 wavefront_vcm_merge_resolve(WavefrontVCMMergeQuery query, GPUWavefrontPathVertex light_vertex, float3 outgoing_direction, float distance_squared, BSDFEval camera_eval,
+  inout Sampler sampler) {
   if (bsdf_eval_valid(camera_eval)) {
 #if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
     const float3 estimate = camera_eval.func.integrated * (query.camera_vertex.throughput.integrated * light_vertex.throughput.integrated);
@@ -249,8 +235,45 @@ float3 wavefront_vcm_merge_evaluate(WavefrontVCMMergeQuery query, uint light_ind
   }
   return float3(0.0f, 0.0f, 0.0f);
 }
+#if ETX_BSDF_KIND != ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
+float3 wavefront_vcm_merge_evaluate(WavefrontVCMMergeQuery query, uint light_index, float distance_squared, inout Sampler sampler) {
+  GPUWavefrontPathVertex light_vertex;
+  if (wavefront_vcm_merge_load_candidate(query, light_index, light_vertex) == false) {
+    return float3(0.0f, 0.0f, 0.0f);
+  }
+  const float3 outgoing_direction = -light_vertex.w_i;
+  BSDFEval camera_eval = (BSDFEval)0;
+# if ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)) && (ETX_SPECTRAL_MODE != ETX_SPECTRAL_MODE_RUNTIME)
+  if (query.use_prepared_material) {
+#  if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR
+    if (query.use_prepared_conductor) {
+      const float3 conductor_local_w_o = local_frame_to_local(query.conductor_frame, outgoing_direction);
+      camera_eval = bsdf_conductor_energy_compensated_evaluate_prepared_local(query.bsdf_context, query.camera_data, query.material, query.conductor_local_w_i, conductor_local_w_o,
+        query.prepared_material, query.conductor_reflectance, query.conductor_incident);
+    } else {
+      camera_eval = bsdf_conductor_energy_compensated_evaluate_prepared(query.bsdf_context, query.camera_data, outgoing_direction, query.material, query.prepared_material);
+    }
+#  else
+    camera_eval = bsdf_dielectric_energy_compensated_evaluate_prepared(query.bsdf_context, query.camera_data, outgoing_direction, query.material, query.prepared_material);
+#  endif
+  } else
+# elif ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE
+  if (query.use_prepared_diffuse) {
+    const float3 diffuse_local_w_o = local_frame_to_local(query.diffuse_frame, outgoing_direction);
+    if ((query.diffuse_local_w_i.z > kEpsilon) && (diffuse_local_w_o.z > kEpsilon)) {
+      camera_eval.func = bsdf_diffuse_eon_brdf(query.camera_data.spectrum_sample, query.diffuse_albedo, query.diffuse_local_w_i, diffuse_local_w_o, query.diffuse_roughness);
+      camera_eval.pdf = kInvPi * diffuse_local_w_o.z;
+      camera_eval.eta = 1.0f;
+    }
+  } else
+# endif
+  {
+    camera_eval = wavefront_vcm_merge_stage_bsdf_eval(query.bsdf_context, query.camera_data, outgoing_direction, query.material, sampler);
+  }
+  return wavefront_vcm_merge_resolve(query, light_vertex, outgoing_direction, distance_squared, camera_eval, sampler);
+}
 
-#if ETX_VCM_COOPERATIVE_MERGE
+# if ETX_VCM_COOPERATIVE_MERGE
 groupshared float3 vcm_merge_contributions[64];
 
 void wavefront_vcm_merge_group(uint dispatch_index, uint lane_index) {
@@ -324,4 +347,6 @@ void wavefront_vcm_merge(uint dispatch_index) {
     wavefront_film_add(query.camera_vertex.pixel_index, merged);
   }
 }
+#endif
+
 #endif

@@ -416,7 +416,8 @@ const char* batch_usage_string() {
          "  --strict-comparison\n"
          "  --gpu-compile-only\n"
          "  --gpu-compile-stage <entry-point>\n"
-         "  --gpu-kernel-timings\n"
+         "  --gpu-kernel-timings                GPU dispatch timestamps\n"
+         "  --gpu-kernel-statistics             Driver compiler statistics during pipeline creation\n"
          "  --gpu-wavefront-steps-per-frame <count>\n"
          "  --reference <reference-image>\n"
          "  --compare <render>\n"
@@ -2573,8 +2574,9 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
     return false;
   }
 
+  session.gpu_renderer.set_kernel_timing_enabled(options.gpu_kernel_timings);
   session.gpu_renderer.on_scene_changed(session.scene);
-  session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene);
+  session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene, options.gpu_kernel_statistics);
   if (session.gpu_renderer.finish_preparation(session.render_context.context(), session.scene) == false) {
     if (session.gpu_renderer.runtime_failed()) {
       log::error("GPU renderer preparation failed before batch rendering: %s", session.gpu_renderer.runtime_failure_reason().c_str());
@@ -2585,7 +2587,6 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
   }
   session.gpu_renderer.set_wavefront_steps_per_render(options.gpu_wavefront_steps_per_frame);
   session.gpu_renderer.set_batch_coarse_progress(true);
-  session.gpu_renderer.set_kernel_timing_enabled(options.gpu_kernel_timings);
   session.gpu_renderer.set_sample_limit((options.time_seconds > 0.0) ? std::numeric_limits<uint32_t>::max() : 0u);
   session.gpu_renderer.start();
 
@@ -2747,7 +2748,7 @@ bool run_gpu_shader_compile_test(const BatchRenderOptions& options, BatchRenderS
   }
 
   const auto shader_reload_begin = std::chrono::steady_clock::now();
-  session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene);
+  session.gpu_renderer.reload_shaders(session.render_context.context(), session.scene, options.gpu_kernel_statistics);
   const bool preparation_success = session.gpu_renderer.finish_preparation(session.render_context.context(), session.scene);
   const auto shader_reload_end = std::chrono::steady_clock::now();
   if ((preparation_success == false) || (session.gpu_renderer.pipelines_valid() == false)) {
@@ -3271,6 +3272,12 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
       continue;
     }
 
+    if (argument == "--gpu-kernel-statistics") {
+      batch_argument_seen = true;
+      options.gpu_kernel_statistics = true;
+      continue;
+    }
+
     if (argument == "--strict-comparison") {
       batch_argument_seen = true;
       options.strict_comparison = true;
@@ -3373,6 +3380,13 @@ BatchModeCommand parse_batch_command_line(int argc, char* argv[], BatchRenderOpt
 
   if ((options.samples > 0u) && (options.time_seconds > 0.0)) {
     message = "Use either --samples or --time\n\n";
+    message += batch_usage_string();
+    return BatchModeCommand::Error;
+  }
+
+  if (options.gpu_kernel_statistics &&
+      (generate_bsdf_luts_requested || pregenerate_bsdf_lut_cache_requested || cpu_comparison_requested || ((options.renderer != "gpu") && (full_comparison_requested == false)))) {
+    message = "--gpu-kernel-statistics requires --renderer gpu or --full-comparison\n\n";
     message += batch_usage_string();
     return BatchModeCommand::Error;
   }

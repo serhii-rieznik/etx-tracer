@@ -343,6 +343,19 @@ void MediumPool::swap_contents(MediumPool& other) {
   swap(_private->volume_paths, other._private->volume_paths);
 }
 
+void MediumPool::copy_contents(const MediumPool& other) {
+  _private->mapping = other._private->mapping;
+  _private->volume_paths = other._private->volume_paths;
+}
+
+void MediumPool::refresh_density_views() {
+  for (Medium& medium : _private->mediums) {
+    if ((medium.grid_type_enum() == DensityGrid::Type::Texture3D) && (medium.grid.density_image_index != kInvalidIndex)) {
+      medium.density_view = _private->image_pool.get(medium.grid.density_image_index).pixels.r32;
+    }
+  }
+}
+
 uint32_t MediumPool::add(Medium::Class cls, const std::string& id, const char* volume, uint32_t absorption_index, uint32_t scattering_index, float g, bool explicit_connections) {
   return _private->add(cls, id, volume, absorption_index, scattering_index, g, explicit_connections);
 }

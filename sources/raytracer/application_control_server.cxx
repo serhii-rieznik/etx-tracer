@@ -897,6 +897,14 @@ const char* recovery_name(RendererRecovery recovery) {
       return "change_settings";
     case RendererRecovery::RestartApplication:
       return "restart_application";
+    case RendererRecovery::EditMaterial:
+      return "edit_material";
+    case RendererRecovery::EditCamera:
+      return "edit_camera";
+    case RendererRecovery::EditMedium:
+      return "edit_medium";
+    case RendererRecovery::RetryMaterialPreparation:
+      return "retry_material_preparation";
     default:
       return "none";
   }
@@ -939,8 +947,9 @@ Json state_json(const ApplicationStateSnapshot& state) {
     {"integrators", std::move(integrators)},
     {"run_state", run_state_name(state.status.state)},
     {"preview_active", state.status.preview_active},
-    {"diagnostic",
-      {{"severity", diagnostic_severity_name(state.status.diagnostic.severity)}, {"recovery", recovery_name(state.status.diagnostic.recovery)}, {"message", state.status.message}}},
+    {"diagnostic", {{"severity", diagnostic_severity_name(state.status.diagnostic.severity)}, {"recovery", recovery_name(state.status.diagnostic.recovery)},
+                     {"message", state.status.message}, {"title", state.status.diagnostic.title}, {"consequence", state.status.diagnostic.consequence},
+                     {"resource_index", state.status.diagnostic.resource_index}, {"action_failure", state.status.action_failure}}},
     {"controls",
       {{"can_run", state.controls.can_run}, {"can_finish", state.controls.can_finish}, {"can_stop", state.controls.can_stop}, {"can_restart", state.controls.can_restart}}},
     {"preparation", {{"state", static_cast<uint32_t>(state.preparation.state)}, {"phase", state.preparation.phase}, {"message", state.preparation.message},
@@ -1030,6 +1039,8 @@ bool parse_command(const Json& json, ApplicationCommand& command, std::string& e
       command.type = ApplicationCommandType::ReloadShaders;
     else if (type == "cancel_preparation")
       command.type = ApplicationCommandType::CancelPreparation;
+    else if (type == "dismiss_diagnostic")
+      command.type = ApplicationCommandType::DismissDiagnostic;
     else if (type == "set_exposure") {
       command.type = ApplicationCommandType::SetExposure;
       command.float_value = json.value("value", 1.0f);

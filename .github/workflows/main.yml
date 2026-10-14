@@ -212,7 +212,7 @@ jobs:
         shell: pwsh
         run: |
           Set-Location build
-          cmake --build . --config Release --parallel 8 --target raytracer raytracer_shader_package
+          cmake --build . --config Release --parallel 8 --target raytracer
 
       - name: Build raytracer (macOS)
         if: runner.os == 'macOS'

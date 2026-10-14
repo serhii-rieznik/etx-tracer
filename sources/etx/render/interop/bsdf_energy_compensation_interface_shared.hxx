@@ -2,6 +2,8 @@
 
 #include "material.hxx"
 
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationInterfaceDataSize = 56u;
+
 struct BSDFEnergyCompensationInterfaceData {
   uint32_t cls ETX_INIT(MaterialClass::Undefined);
   uint32_t cache_mode ETX_INIT(0u);
@@ -15,4 +17,10 @@ struct BSDFEnergyCompensationInterfaceData {
   uint32_t probability_lut ETX_INIT(kInvalidIndex);
   float spectral_shortest_wavelength ETX_INIT(0.0f);
   float spectral_longest_wavelength ETX_INIT(0.0f);
+  uint32_t coating_slice_count ETX_INIT(1u);
+  uint32_t terminal_source_lut ETX_INIT(kInvalidIndex);
 };
+
+#if ETX_CPP
+static_assert(sizeof(BSDFEnergyCompensationInterfaceData) == kBSDFEnergyCompensationInterfaceDataSize);
+#endif

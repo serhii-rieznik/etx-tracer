@@ -56,7 +56,8 @@ struct Raytracing {
   void commit(const SceneData& scene_data, const Camera& camera, const UpdateFlags& changes);
 
   bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp) const;
-  bool trace_material(const Scene& scene, const Ray&, const uint32_t material_id, Intersection&, Sampler& smp) const;
+  bool trace(const Scene& scene, const Ray&, Intersection&, Sampler& smp, uint32_t root_material_id, uint32_t material_id) const;
+  bool trace_material(const Scene& scene, const Ray&, uint32_t root_material_id, uint32_t material_id, Intersection&, Sampler& smp) const;
   SpectralResponse trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const MediumInstance& medium, Sampler& smp) const;
   SpectralResponse trace_transmittance(const SpectralQuery spect, const Scene& scene, const float3& p0, const float3& p1, const MediumInstance& medium, bool source_collision,
     bool target_collision, Sampler& smp) const;

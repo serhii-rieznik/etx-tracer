@@ -115,8 +115,7 @@ ETX_SHARED_INLINE SubsurfaceFreePath subsurface_transport_sampling_free_path(ETX
   return result;
 }
 
-// Keep proposal evaluation out of the GPU trace stages' inlined control flow.
-ETX_SHARED_NOINLINE float subsurface_transport_sampling_kernel(ETX_IN(SpectralResponse, extinction), ETX_IN(SpectralResponse, scattering), float packing, bool source_collision,
+ETX_SHARED_INLINE float subsurface_transport_sampling_kernel(ETX_IN(SpectralResponse, extinction), ETX_IN(SpectralResponse, scattering), float packing, bool source_collision,
   bool target_collision, float distance) {
   const SubsurfaceFreePath flight = subsurface_transport_sampling_free_path(extinction, scattering, packing, source_collision, distance);
   if (target_collision == false) {

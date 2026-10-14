@@ -1,6 +1,16 @@
 #include "gpu_rt_wavefront_common.hlsl"
 #include "gpu_rt_wavefront_vcm_grid_shared.hlsl"
 
+GPUWavefrontResources wavefront_vcm_grid_resources() {
+  GPUWavefrontResources resources = wavefront_load_resources();
+#if ETX_UPBP
+  const GPUUPBPResources upbp = upbp_load_resources(resources);
+  resources.vcm_grid_heads_buffer = upbp.surface_grid_ranges_buffer;
+  resources.vcm_grid_next_buffer = upbp.surface_grid_indices_buffer;
+#endif
+  return resources;
+}
+
 uint wavefront_vcm_hash_cell(int3 cell) {
   return ((uint(cell.x) * 73856093u) ^ (uint(cell.y) * 19349663u) ^ (uint(cell.z) * 83492791u)) & constants.vcm_grid_mask;
 }
@@ -12,7 +22,7 @@ uint wavefront_vcm_position_to_cell(float3 position) {
 }
 
 [numthreads(256, 1, 1)] void wavefront_vcm_grid_clear_main(uint3 dtid : SV_DispatchThreadID) {
-  GPUWavefrontResources resources = wavefront_load_resources();
+  GPUWavefrontResources resources = wavefront_vcm_grid_resources();
   const uint cell = dtid.x + dtid.y * (65535u * 256u);
   if ((resources.vcm_grid_heads_buffer == kInvalidIndex) || (cell > constants.vcm_grid_mask)) {
     return;
@@ -23,6 +33,14 @@ uint wavefront_vcm_position_to_cell(float3 position) {
 
 bool wavefront_vcm_grid_vertex_cell(GPUWavefrontResources resources, uint vertex_index, out uint cell) {
   cell = 0u;
+#if ETX_UPBP
+  const GPUUPBPResources upbp = upbp_load_resources(resources);
+  if ((resources.vcm_grid_heads_buffer == kInvalidIndex) || (resources.vcm_grid_next_buffer == kInvalidIndex) || (vertex_index >= upbp.density_output_surface_point_capacity) ||
+      (constants.vcm_radius <= 0.0f)) {
+    return false;
+  }
+  cell = wavefront_vcm_position_to_cell(upbp_load_density_point(upbp.density_output_surface_point_buffer, vertex_index).position);
+#else
   if ((resources.vcm_grid_heads_buffer == kInvalidIndex) || (resources.vcm_grid_next_buffer == kInvalidIndex) || (vertex_index < resources.path_capacity) ||
       (vertex_index >= constants.vcm_light_vertex_count) || (vertex_index >= resources.light_vertex_capacity) || (constants.vcm_radius <= 0.0f)) {
     return false;
@@ -33,11 +51,12 @@ bool wavefront_vcm_grid_vertex_cell(GPUWavefrontResources resources, uint vertex
     return false;
   }
   cell = wavefront_vcm_position_to_cell(vertex.position);
+#endif
   return true;
 }
 
 [numthreads(256, 1, 1)] void wavefront_vcm_grid_build_main(uint3 dtid : SV_DispatchThreadID) {
-  const GPUWavefrontResources resources = wavefront_load_resources();
+  const GPUWavefrontResources resources = wavefront_vcm_grid_resources();
   uint cell = 0u;
   if (wavefront_vcm_grid_vertex_cell(resources, dtid.x + dtid.y * (65535u * 256u), cell)) {
     WAVEFRONT_RW_BUFFER(resources.vcm_grid_heads_buffer).InterlockedAdd(cell * sizeof(uint), 1u);
@@ -47,7 +66,7 @@ bool wavefront_vcm_grid_vertex_cell(GPUWavefrontResources resources, uint vertex
 groupshared uint vcm_grid_scan_values[64u];
 
 [numthreads(64, 1, 1)] void wavefront_vcm_grid_prefix_main(uint3 group_id : SV_GroupID, uint lane : SV_GroupIndex) {
-  const GPUWavefrontResources resources = wavefront_load_resources();
+  const GPUWavefrontResources resources = wavefront_vcm_grid_resources();
   const uint group_index = group_id.x + group_id.y * 65535u;
   const uint index = group_index * 64u + lane;
   const uint count = constants.dispatch_item_count;
@@ -74,7 +93,7 @@ groupshared uint vcm_grid_scan_values[64u];
 }
 
   [numthreads(256, 1, 1)] void wavefront_vcm_grid_scatter_main(uint3 dtid : SV_DispatchThreadID) {
-  const GPUWavefrontResources resources = wavefront_load_resources();
+  const GPUWavefrontResources resources = wavefront_vcm_grid_resources();
   const uint vertex_index = dtid.x + dtid.y * (65535u * 256u);
   uint cell = 0u;
   if (wavefront_vcm_grid_vertex_cell(resources, vertex_index, cell) == false) {

@@ -2,10 +2,11 @@
 #include <interop/image_filter_shared.hxx>
 #include <access/bsdf_resource_gpu.hxx>
 
-#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE    1
-#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC    2
-#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR  3
-#define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC 4
+#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE          1
+#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC          2
+#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR        3
+#define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC       4
+#define ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR 6
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
 # define ETX_UPBP_SURFACE_QUERY_FAMILY GPUUPBPSurfaceQueryFamily::Various
@@ -30,6 +31,11 @@
 # endif
 # define ETX_UPBP_SURFACE_EVAL upbp_surface_conductor_eval
 # define ETX_UPBP_SURFACE_PDF  upbp_surface_conductor_pdf
+#elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+# define ETX_UPBP_SURFACE_QUERY_FAMILY GPUUPBPSurfaceQueryFamily::Conductor
+# include <interop/bsdf_coated_conductor_shared.hxx>
+# define ETX_UPBP_SURFACE_EVAL bsdf_coated_conductor_evaluate
+# define ETX_UPBP_SURFACE_PDF  bsdf_coated_conductor_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
 # define ETX_UPBP_SURFACE_QUERY_FAMILY GPUUPBPSurfaceQueryFamily::Dielectric
 # include <interop/bsdf_energy_compensated_shared.hxx>
@@ -141,11 +147,13 @@ bool upbp_surface_stage_matches_material(uint material_class) {
 # endif
     ;
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
+  return (material_class == MaterialClass::Conductor)
 # if ETX_ENABLE_OPENPBR_STAGE
-  return (material_class == MaterialClass::Conductor) || (material_class == MaterialClass::OpenPBR);
-# else
-  return material_class == MaterialClass::Conductor;
+         || (material_class == MaterialClass::OpenPBR)
 # endif
+    ;
+#elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+  return material_class == MaterialClass::CoatedConductor;
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_PLASTIC)
   return material_class == MaterialClass::Plastic;
 #else
@@ -193,7 +201,8 @@ UPBPSurfacePreparedQuery upbp_surface_prepare_query(BSDFResourceContext context,
                                     bsdf_energy_compensated_material_interface_valid(result.context, material, MaterialClass::Conductor);
     if (result.use_prepared_conductor) {
       result.reflectance = bsdf_resource_apply_image(result.context, data.spectrum_sample, material.reflectance, data.tex);
-      result.incident = bsdf_energy_compensated_conductor_prepare_incident(result.context, data.spectrum_sample, material, result.local_w_i.z, result.prepared_material);
+      result.incident =
+        bsdf_energy_compensated_conductor_prepare_incident(result.context, data.spectrum_sample, material, result.local_w_i.z, result.prepared_material, result.reflectance);
     }
 # endif
   }
@@ -228,8 +237,13 @@ UPBPSurfacePreparedQuery upbp_surface_prepare_query(BSDFResourceContext context,
 #define ETX_UPBP_SURFACE_VARIANT 1
 #include "gpu_rt_wavefront_upbp_density.hlsl"
 
+#if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
+# include "gpu_rt_wavefront_upbp_coating.hlsl"
+#else
   [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 group_id : SV_GroupID, uint group_thread_index : SV_GroupIndex) {
   if (group_id.x < constants.dispatch_item_count) {
     upbp_evaluate_surface_point_merge_group(constants.dispatch_item_offset + group_id.x, group_thread_index);
   }
 }
+
+#endif

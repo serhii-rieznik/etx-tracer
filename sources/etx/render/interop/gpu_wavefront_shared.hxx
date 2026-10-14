@@ -7,8 +7,8 @@
 struct GPUWavefrontPathFlags {
   enum : uint32_t {
     Valid = 1u << 0u,
-    Connectible = 1u << 1u,
-    Delta = 1u << 2u,
+    Connectible = 1u << 1u,  // The vertex has a continuous scattering component.
+    Delta = 1u << 2u,        // The sampled continuation is a delta event.
     Specular_bounce = 1u << 3u,
     From_camera = 1u << 4u,
     From_light = 1u << 5u,
@@ -51,6 +51,7 @@ struct GPUWavefrontPointConnectionTaskFlags {
   enum : uint32_t {
     Ready = 1u << 0u,
     SourceMedium = 1u << 1u,
+    CoatingPending = 1u << 2u,
   };
 };
 
@@ -232,6 +233,7 @@ struct ETX_ALIGNED GPUWavefrontSubsurfaceState {
   float flight_pdf_forward ETX_INIT(1.0f);
   float flight_pdf_reverse ETX_INIT(1.0f);
   uint32_t owner_instance_index ETX_INIT(kInvalidIndex);
+  uint32_t boundary_material_index ETX_INIT(kInvalidIndex);
 };
 
 struct ETX_ALIGNED GPUWavefrontDirectLightSample {
@@ -399,4 +401,13 @@ struct ETX_ALIGNED GPUWavefrontResources {
   uint32_t vcm_grid_heads_buffer ETX_INIT(kInvalidIndex);
   uint32_t vcm_grid_next_buffer ETX_INIT(kInvalidIndex);
   uint32_t upbp_resources_buffer ETX_INIT(kInvalidIndex);
+  uint32_t coating_request_buffer ETX_INIT(kInvalidIndex);
+  uint32_t emission_request_buffer ETX_INIT(kInvalidIndex);
+  uint32_t emission_consumer_buffer ETX_INIT(kInvalidIndex);
+  uint32_t emission_request_stride ETX_INIT(0u);
+  uint32_t transport_work_buffer ETX_INIT(kInvalidIndex);
+  uint32_t vcm_coating_buffer ETX_INIT(kInvalidIndex);
+  uint32_t reserved_vcm_coating0 ETX_INIT(0u);
+  uint32_t reserved_vcm_coating1 ETX_INIT(0u);
+  uint32_t reserved_vcm_coating2 ETX_INIT(0u);
 };

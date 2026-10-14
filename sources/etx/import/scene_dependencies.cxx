@@ -103,6 +103,27 @@ bool inspect_json(std::string_view contents, std::vector<std::string>& reference
       add_reference(references, json["geometry"]);
     if (json.contains("materials"))
       add_reference(references, json["materials"]);
+    if (json.contains("material_library") && json["material_library"].is_object() && json["material_library"].contains("materials")) {
+      const auto visit_textures = [&](const auto& self, const Json& value) -> void {
+        if (value.is_object()) {
+          if (value.contains("path") && value["path"].is_string()) {
+            add_reference(references, value["path"]);
+          }
+          for (const auto& child : value.items()) {
+            self(self, child.value());
+          }
+        } else if (value.is_array()) {
+          for (const auto& child : value) {
+            self(self, child);
+          }
+        }
+      };
+      for (const auto& material : json["material_library"]["materials"]) {
+        if (material.is_object() && material.contains("description")) {
+          visit_textures(visit_textures, material["description"]);
+        }
+      }
+    }
     if (json.contains("geometry") && json["geometry"].is_string() && json.contains("materials") && json["materials"].is_string()) {
       geometry_with_external_materials.push_back(json["geometry"].get<std::string>());
     }
@@ -123,13 +144,17 @@ std::vector<std::string> split_words(std::string value) {
 
 void inspect_material_line(const std::string& key, const std::string& value, std::vector<std::string>& references) {
   static const std::unordered_set<std::string> direct_paths = {"shape", "volume", "image", "map_Ke", "map_Kd", "map_Ks", "map_Kt"};
-  static const std::unordered_set<std::string> first_word_paths = {"map_Pr", "map_Ml", "map_Tm"};
+  static const std::unordered_set<std::string> first_word_paths = {"map_Pr", "map_Ml", "map_Tm", "map_coating_roughness", "map_coating_thickness", "map_coating_thickness_nm",
+    "map_coating_absorption", "map_coating_scattering"};
   if (direct_paths.contains(key)) {
     if (!value.empty())
       references.push_back(((value.size() >= 2u) && (value.front() == '"') && (value.back() == '"')) ? value.substr(1u, value.size() - 2u) : value);
     return;
   }
   const std::vector<std::string> words = split_words(value);
+  const auto is_spectrum_file = [](const std::string& identifier) {
+    return (extension(identifier) == ".spd") || (identifier.find('/') != std::string::npos) || (identifier.find('\\') != std::string::npos);
+  };
   if (first_word_paths.contains(key) && !words.empty()) {
     references.push_back(words.front());
   }
@@ -139,10 +164,12 @@ void inspect_material_line(const std::string& key, const std::string& value, std
         references.push_back(words[index + 1u]);
       if ((key == "emitter") && (words[index] == "spectrum"))
         references.push_back(words[index + 1u]);
+      if ((key == "thinfilm") && (words[index] == "ior") && is_spectrum_file(words[index + 1u]))
+        references.push_back(words[index + 1u]);
     }
   }
-  if ((key == "int_ior") || (key == "ext_ior")) {
-    if (!words.empty() && ((extension(words.front()) == ".spd") || (words.front().find('/') != std::string::npos))) {
+  if ((key == "int_ior") || (key == "ext_ior") || (key == "coating_ior")) {
+    if ((words.empty() == false) && is_spectrum_file(words.front())) {
       references.push_back(words.front());
     }
   }

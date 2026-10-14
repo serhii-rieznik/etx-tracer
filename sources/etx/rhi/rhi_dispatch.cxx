@@ -359,8 +359,13 @@ RHICreatePipelineResult RHIDevice::create_compute_pipeline(const RHIComputePipel
 
 std::vector<RHICreatePipelineBatchEntry> RHIDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency,
   const RHIPipelineBatchProgressCallback& progress_callback) {
+  return create_compute_pipelines(descs, max_concurrency, progress_callback, {});
+}
+
+std::vector<RHICreatePipelineBatchEntry> RHIDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency,
+  const RHIPipelineBatchProgressCallback& progress_callback, const std::function<bool()>& should_continue) {
   return dispatch_device(_backend, _impl, [&](auto* device) {
-    return device->create_compute_pipelines(descs, max_concurrency, progress_callback);
+    return device->create_compute_pipelines(descs, max_concurrency, progress_callback, should_continue);
   });
 }
 

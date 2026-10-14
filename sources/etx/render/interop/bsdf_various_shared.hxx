@@ -112,7 +112,9 @@ ETX_SHARED_INLINE SpectralResponse bsdf_diffuse_eon_brdf(ETX_IN(SpectralQuery, s
 
 ETX_SHARED_INLINE BSDFEval bsdf_diffuse_layer(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(float3, local_w_i), ETX_IN(float3, local_w_o),
   ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+#if ETX_CPP
   (void)sampler;
+#endif
 
   if ((local_w_i.z <= kEpsilon) || (local_w_o.z <= kEpsilon)) {
     return bsdf_eval_zero(data.spectrum_sample);
@@ -248,6 +250,26 @@ ETX_SHARED_INLINE SpectralResponse bsdf_diffuse_albedo(ETX_IN(BSDFResourceContex
   return bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
 }
 
+struct BSDFTranslucentResponse {
+  SpectralResponse reflection ETX_INIT({});
+  SpectralResponse transmission ETX_INIT({});
+};
+
+ETX_SHARED_INLINE BSDFTranslucentResponse bsdf_translucent_response(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material)) {
+  BSDFTranslucentResponse result = ETX_ZERO(BSDFTranslucentResponse);
+  result.transmission = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
+  result.reflection = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
+  const SpectralResponse budget = spectral_response_max(spectral_response_add(result.reflection, result.transmission), 1.0f);
+  result.transmission = spectral_response_div(result.transmission, budget);
+  result.reflection = spectral_response_div(result.reflection, budget);
+  return result;
+}
+
+ETX_SHARED_INLINE SpectralResponse bsdf_translucent_absorptance(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material)) {
+  const BSDFTranslucentResponse response = bsdf_translucent_response(context, data, material);
+  return spectral_response_max(spectral_response_sub(spectral_response_make(data.spectrum_sample, 1.0f), spectral_response_add(response.reflection, response.transmission)), 0.0f);
+}
+
 ETX_SHARED_INLINE BSDFSample bsdf_translucent_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   const LocalFrame frame = bsdf_data_get_normal_frame(data, material);
   const float3 local_w_i = local_frame_to_local(frame, -data.w_i);
@@ -255,11 +277,9 @@ ETX_SHARED_INLINE BSDFSample bsdf_translucent_sample(ETX_IN(BSDFResourceContext,
     return bsdf_sample_zero(data.spectrum_sample);
   }
 
-  const SpectralResponse transmission = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
-  const SpectralResponse reflection = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
-
-  const float transmission_value = spectral_response_monochromatic(transmission);
-  const float reflection_value = spectral_response_monochromatic(reflection);
+  const BSDFTranslucentResponse response = bsdf_translucent_response(context, data, material);
+  const float transmission_value = spectral_response_monochromatic(response.transmission);
+  const float reflection_value = spectral_response_monochromatic(response.reflection);
   const float total = transmission_value + reflection_value;
   if (total == 0.0f) {
     return bsdf_sample_zero(data.spectrum_sample);
@@ -276,7 +296,6 @@ ETX_SHARED_INLINE BSDFSample bsdf_translucent_sample(ETX_IN(BSDFResourceContext,
   BSDFSample result = ETX_ZERO(BSDFSample);
   result.weight = spectral_response_zero(data.spectrum_sample);
   result.eta = 1.0f;
-  const float scale = (total > 1.0f) ? (1.0f / total) : 1.0f;
   const float transmission_probability = transmission_value / total;
   const float reflection_probability = reflection_value / total;
   float branch_rnd = sampler.fixed_w;
@@ -285,11 +304,10 @@ ETX_SHARED_INLINE BSDFSample bsdf_translucent_sample(ETX_IN(BSDFResourceContext,
   }
   const bool sample_transmission = (reflection_probability == 0.0f) || (branch_rnd < transmission_probability);
   const float branch_probability = sample_transmission ? transmission_probability : reflection_probability;
-  SpectralResponse branch_response = reflection;
+  SpectralResponse branch_response = response.reflection;
   if (sample_transmission) {
-    branch_response = transmission;
+    branch_response = response.transmission;
   }
-  branch_response = spectral_response_mul(branch_response, scale);
   const float roughness = bsdf_diffuse_scalar_roughness(context, material, data.tex);
   const SpectralResponse unit_response = spectral_response_make(data.spectrum_sample, 1.0f);
   const SpectralResponse unit_func = bsdf_diffuse_eon_brdf(data.spectrum_sample, unit_response, local_w_i, local_sampled_w_o, roughness);
@@ -331,23 +349,19 @@ ETX_SHARED_INLINE BSDFEval bsdf_translucent_evaluate(ETX_IN(BSDFResourceContext,
     return bsdf_eval_zero(data.spectrum_sample);
   }
 
-  const SpectralResponse transmission = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
-  const SpectralResponse reflection_value = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
-
-  const float transmission_strength = spectral_response_monochromatic(transmission);
-  const float reflection_strength = spectral_response_monochromatic(reflection_value);
+  const BSDFTranslucentResponse response = bsdf_translucent_response(context, data, material);
+  const float transmission_strength = spectral_response_monochromatic(response.transmission);
+  const float reflection_strength = spectral_response_monochromatic(response.reflection);
   const float total = transmission_strength + reflection_strength;
   if (total == 0.0f) {
     return bsdf_eval_zero(data.spectrum_sample);
   }
 
-  const float scale = (total > 1.0f) ? (1.0f / total) : 1.0f;
   const float branch_probability = reflection ? (reflection_strength / total) : (transmission_strength / total);
-  SpectralResponse branch_response = transmission;
+  SpectralResponse branch_response = response.transmission;
   if (reflection) {
-    branch_response = reflection_value;
+    branch_response = response.reflection;
   }
-  branch_response = spectral_response_mul(branch_response, scale);
   const float roughness = bsdf_diffuse_scalar_roughness(context, material, data.tex);
   const float3 lobe_w_o = reflection ? local_w_o : -local_w_o;
   const SpectralResponse unit_response = spectral_response_make(data.spectrum_sample, 1.0f);
@@ -378,8 +392,9 @@ ETX_SHARED_INLINE float bsdf_translucent_pdf(ETX_IN(BSDFResourceContext, context
     return 0.0f;
   }
 
-  const float transmission_value = spectral_response_monochromatic(bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex));
-  const float reflection_value = spectral_response_monochromatic(bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex));
+  const BSDFTranslucentResponse response = bsdf_translucent_response(context, data, material);
+  const float transmission_value = spectral_response_monochromatic(response.transmission);
+  const float reflection_value = spectral_response_monochromatic(response.reflection);
   const float total = transmission_value + reflection_value;
   const bool reflection = local_w_o.z > 0.0f;
   if (total == 0.0f) {
@@ -398,18 +413,14 @@ ETX_SHARED_INLINE bool bsdf_translucent_is_delta(ETX_IN(Material, material), ETX
 
 ETX_SHARED_INLINE SpectralResponse bsdf_translucent_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
   (void)sampler;
-  const SpectralResponse transmission = bsdf_resource_apply_image(context, data.spectrum_sample, material.scattering, data.tex);
-  const SpectralResponse reflection = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
-  const float total = spectral_response_monochromatic(transmission) + spectral_response_monochromatic(reflection);
-  if (total == 0.0f) {
-    return spectral_response_zero(data.spectrum_sample);
-  }
-  const float scale = (total > 1.0f) ? (1.0f / total) : 1.0f;
-  return spectral_response_mul(spectral_response_add(transmission, reflection), scale);
+  const BSDFTranslucentResponse response = bsdf_translucent_response(context, data, material);
+  return spectral_response_add(response.transmission, response.reflection);
 }
 
 ETX_SHARED_INLINE BSDFSample bsdf_mirror_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material), ETX_INOUT(Sampler, sampler)) {
+#if ETX_CPP
   (void)sampler;
+#endif
 
   LocalFrame frame = bsdf_data_get_normal_frame(data, material);
   BSDFSample result = ETX_ZERO(BSDFSample);

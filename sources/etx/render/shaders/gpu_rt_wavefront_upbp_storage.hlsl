@@ -182,6 +182,9 @@ GPUUPBPResources upbp_load_resources(GPUWavefrontResources wavefront_resources) 
   result.bp2d_beam_grid = upbp_load_beam_grid_resources(buffer, kGPUUPBPResourcesBP2DBeamGridOffset);
   result.bb1d_beam_grid = upbp_load_beam_grid_resources(buffer, kGPUUPBPResourcesBB1DBeamGridOffset);
   result.beam_index_mode = buffer.Load(kGPUUPBPResourcesBeamIndexModeOffset);
+  result.surface_grid_ranges_buffer = buffer.Load(kGPUUPBPResourcesSurfaceGridRangesBufferOffset);
+  result.surface_grid_indices_buffer = buffer.Load(kGPUUPBPResourcesSurfaceGridIndicesBufferOffset);
+  result.surface_grid_mask = buffer.Load(kGPUUPBPResourcesSurfaceGridMaskOffset);
   return result;
 }
 

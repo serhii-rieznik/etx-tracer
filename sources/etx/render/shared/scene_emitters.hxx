@@ -17,15 +17,16 @@ ETX_SHARED_INLINE float emitter_pdf_area_local(const Emitter& em) {
 uint32_t emitter_external_medium_index(const Emitter& em_inst);
 
 SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, SpectralQuery spect, const Vertex& vertex, const float3& emitter_normal, const float3& direction,
-  float& pdf_area, float& pdf_dir, float& pdf_dir_out);
+  uint32_t material_index, Sampler& sampler, float& pdf_area, float& pdf_dir, float& pdf_dir_out);
 
-SpectralResponse emitter_get_radiance(const Emitter& em_inst, SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir, float& pdf_dir_out);
+SpectralResponse emitter_get_radiance(const Emitter& em_inst, SpectralQuery spect, const EmitterRadianceQuery& query, Sampler& sampler, float& pdf_area, float& pdf_dir,
+  float& pdf_dir_out);
 
 SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir);
 bool emitter_distribution_has_values();
 uint32_t sample_emitter_distribution(Sampler& smp, float& pdf_sample);
 bool try_load_emitter_instance(uint32_t emitter_index, Emitter& emitter);
-EmitterSample emitter_sample_in(const Emitter& em_inst, SpectralQuery spect, const float3& from_point, const float2& smp);
+EmitterSample emitter_sample_in(const Emitter& em_inst, SpectralQuery spect, const float3& from_point, Sampler& sampler);
 EmitterSample sample_emission_from_emitter(const Emitter& em_inst, SpectralQuery spect, Sampler& smp);
 float emitter_discrete_pdf(const Emitter& emitter);
 
@@ -99,7 +100,7 @@ ETX_SHARED_INLINE EmitterSample sample_emitter(Scene::LightSampling sampling_met
         continue;
       }
 
-      EmitterSample sample = emitter_sample_in(emitter, query.spect, query.source_position, smp.next_2d());
+      EmitterSample sample = emitter_sample_in(emitter, query.spect, query.source_position, smp);
       sample.pdf_sample = pdf_sample;
       sample.emitter_index = emitter_index;
       sample.triangle_index = emitter.triangle_index;
@@ -153,7 +154,7 @@ ETX_SHARED_INLINE EmitterSample sample_emitter(Scene::LightSampling sampling_met
     return {};
   }
 
-  EmitterSample sample = emitter_sample_in(emitter, query.spect, query.source_position, smp.next_2d());
+  EmitterSample sample = emitter_sample_in(emitter, query.spect, query.source_position, smp);
   sample.pdf_sample = pdf_sample;
   sample.emitter_index = emitter_index;
   sample.triangle_index = emitter.triangle_index;

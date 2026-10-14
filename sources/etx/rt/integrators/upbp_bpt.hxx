@@ -45,7 +45,7 @@ inline bool upbp_camera_prefix_is_specular(const UPBPPathRecord& camera_path, co
     return false;
   }
   for (uint32_t vertex_index = 1u; vertex_index < endpoint_index; ++vertex_index) {
-    if (camera_path.vertices[vertex_index].delta == false) {
+    if (camera_path.vertices[vertex_index].sampled_delta() == false) {
       return false;
     }
   }
@@ -183,12 +183,15 @@ inline bool upbp_evaluate_bpt_camera_path(const Raytracing& rt, const Scene& sce
           .target_position = emitter_vertex.position,
           .uv = emitter_vertex.intersection.tex,
           .shading_normal = emitter_vertex.intersection.nrm,
+          .shading_tangent = emitter_vertex.intersection.tan,
+          .shading_bitangent = emitter_vertex.intersection.btn,
+          .material_index = emitter_vertex.intersection.material_index,
           .directly_visible = camera_vertex_count <= 2u,
         };
         float pdf_area = 0.0f;
         float pdf_dir = 0.0f;
         float pdf_dir_out = 0.0f;
-        const SpectralResponse radiance = emitter_get_radiance(emitter, spect, query, pdf_area, pdf_dir, pdf_dir_out);
+        const SpectralResponse radiance = emitter_get_radiance(emitter, spect, query, direct_sampler, pdf_area, pdf_dir, pdf_dir_out);
         const bool bpt_enabled = configuration.enabled(UPBPTechnique::BPT);
         const double recursive_weight = upbp_bpt_direct_hit_cross_technique_weight(camera_path, emitter_vertex_index, camera_weights.arrivals[emitter_vertex_index],
           emitter_discrete_pdf(emitter), pdf_area, pdf_dir_out, configuration);
@@ -297,6 +300,8 @@ inline bool upbp_evaluate_bpt_camera_path(const Raytracing& rt, const Scene& sce
         continue;
       }
       const Emitter& emitter = scene.emitter_instances[emitter_index];
+      Sampler environment_sampler =
+        upbp_evaluation_sampler(render_seed, iteration, path_index, static_cast<uint32_t>(camera_path.vertices.size()), 0u, UPBPRandomDomain::DirectHitEvaluation);
       const EmitterRadianceQuery query = {
         .direction = camera_subpath.terminal_ray.d,
         .directly_visible = camera_path.physical_length() == 0u,
@@ -304,7 +309,7 @@ inline bool upbp_evaluate_bpt_camera_path(const Raytracing& rt, const Scene& sce
       float pdf_area = 0.0f;
       float pdf_dir = 0.0f;
       float pdf_dir_out = 0.0f;
-      const SpectralResponse radiance = emitter_get_radiance(emitter, spect, query, pdf_area, pdf_dir, pdf_dir_out);
+      const SpectralResponse radiance = emitter_get_radiance(emitter, spect, query, environment_sampler, pdf_area, pdf_dir, pdf_dir_out);
       if (radiance.is_zero() || (pdf_area <= 0.0f) || (pdf_dir <= 0.0f) || (pdf_dir_out <= 0.0f)) {
         continue;
       }

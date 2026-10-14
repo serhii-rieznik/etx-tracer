@@ -86,6 +86,7 @@ ETX_SHARED_INLINE BSDFEval bsdf_eval_zero(ETX_IN(SpectralQuery, query)) {
   result.bsdf = bsdf_spectral_response_make(query, 0.0f);
   result.pdf = 0.0f;
   result.eta = 1.0f;
+  result.medium_index = kInvalidIndex;
   return result;
 }
 

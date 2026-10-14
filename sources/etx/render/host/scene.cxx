@@ -4,6 +4,8 @@
 #include <etx/render/access/emitter_access_shared.hxx>
 #include <etx/render/shared/scene.hxx>
 #include <etx/render/access/bsdf_resource_cpu.hxx>
+#include <etx/render/access/material_access_cpu.hxx>
+#include <etx/render/interop/material_mix_shared.hxx>
 #include <etx/render/interop/thermal_surface_shared.hxx>
 #include <etx/render/interop/directional_emission_shared.hxx>
 
@@ -209,8 +211,26 @@ uint32_t emitter_external_medium_index(const Emitter& em_inst) {
   return scene.emitter_profiles[em_inst.profile].medium_index;
 }
 
+Vertex coated_emitter_vertex(const Scene& scene, uint32_t triangle_index, const float3& barycentric, uint32_t instance_index, uint32_t material_index,
+  const float3& incoming_direction, const Vertex& vertex) {
+  if (thermal_surface_uses_substrate_escape(scene.materials[material_index]) == false) {
+    return vertex;
+  }
+  IntersectionBase base = {};
+  base.barycentric = {barycentric.y, barycentric.z};
+  base.triangle_index = triangle_index;
+  base.instance_index = instance_index;
+  base.material_index = material_index;
+  const Intersection intersection = make_intersection(scene, incoming_direction, base);
+  Vertex result = vertex;
+  result.nrm = intersection.nrm;
+  result.tan = intersection.tan;
+  result.btn = intersection.btn;
+  return result;
+}
+
 SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const SpectralQuery spect, const Vertex& vertex, const float3& emitter_normal, const float3& direction,
-  float& pdf_area, float& pdf_dir, float& pdf_dir_out) {
+  uint32_t material_index, Sampler& sampler, float& pdf_area, float& pdf_dir, float& pdf_dir_out) {
   const auto& scene = scene_global_get();
   ETX_ASSERT(em_inst.is_local());
   const auto& tri = scene.triangles[em_inst.triangle_index];
@@ -231,8 +251,12 @@ SpectralResponse emitter_evaluate_out_local(const Emitter& em_inst, const Spectr
   ETX_ASSERT(pdf_dir_out > 0.0f);
 
   const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
-  return SpectralResponse(
-    thermal_surface_combined_radiance(make_bsdf_resource_cpu_context(scene), spect, material, vertex.tex, dot(geo_normal, direction), abs(dot(vertex.nrm, direction))));
+  ::Sampler emission_sampler = {};
+  emission_sampler.seed = sampler.seed;
+  const SpectralResponse value(thermal_surface_combined_radiance(make_bsdf_resource_cpu_context(scene), spect, scene.materials[material_index], vertex.tex,
+    dot(geo_normal, direction), thermal_surface_local_direction(scene.materials[material_index], vertex.nrm, vertex.tan, vertex.btn, direction), emission_sampler));
+  sampler.seed = emission_sampler.seed;
+  return value * bsdf_resource_material_coverage(make_bsdf_resource_cpu_context(scene), scene.materials[material_index], vertex.tex);
 }
 
 SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, const SpectralQuery spect, const float3& in_direction, float& pdf_area, float& pdf_dir) {
@@ -272,7 +296,8 @@ SpectralResponse emitter_evaluate_out_dist(const Emitter& em_inst, const Spectra
   }
 }
 
-SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuery spect, const EmitterRadianceQuery& query, float& pdf_area, float& pdf_dir, float& pdf_dir_out) {
+SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuery spect, const EmitterRadianceQuery& query, Sampler& sampler, float& pdf_area, float& pdf_dir,
+  float& pdf_dir_out) {
   const auto& scene = scene_global_get();
   const auto& em = scene.emitter_profiles[em_inst.profile];
   pdf_dir = 0.0f;
@@ -316,7 +341,7 @@ SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuer
       const Material& material = scene.materials[tri.material_index];
       const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
 
-      const bool two_sided_thermal = (material.thermal_rgb_image_index != kInvalidIndex) && (material.two_sided != 0u);
+      const bool two_sided_thermal = thermal_surface_side_probability(material) == 0.5f;
       if ((two_sided_thermal == false) && (dot(geo_normal, query.target_position - query.source_position) >= 0.0f)) {
         return {spect, 0.0f};
       }
@@ -331,8 +356,15 @@ SpectralResponse emitter_get_radiance(const Emitter& em_inst, const SpectralQuer
           const float exponent = thermal_surface_sampling_exponent(material);
           pdf_dir = pdf_area * distance_squared / cos_t;
           pdf_dir_out = pdf_area * scene_math_shared_collimated_direction_pdf(cos_t, exponent) * thermal_surface_side_probability(material);
-          const float shading_cosine = abs(dot(query.shading_normal, dp)) / sqrtf(distance_squared);
-          return SpectralResponse(thermal_surface_combined_radiance(make_bsdf_resource_cpu_context(scene), spect, material, query.uv, signed_cosine, shading_cosine));
+          ::Sampler emission_sampler = {};
+          emission_sampler.seed = sampler.seed;
+          const uint32_t material_index = query.material_index != kInvalidIndex ? query.material_index : tri.material_index;
+          const float3 local_direction =
+            thermal_surface_local_direction(scene.materials[material_index], query.shading_normal, query.shading_tangent, query.shading_bitangent, normalize(dp));
+          const SpectralResponse value(thermal_surface_combined_radiance(make_bsdf_resource_cpu_context(scene), spect, scene.materials[material_index], query.uv, signed_cosine,
+            local_direction, emission_sampler));
+          sampler.seed = emission_sampler.seed;
+          return value;
         }
       }
 
@@ -463,7 +495,8 @@ bool try_load_emitter_instance(uint32_t emitter_index, Emitter& emitter) {
   return true;
 }
 
-EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spect, const float3& from_point, const float2& smp) {
+EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spect, const float3& from_point, Sampler& sampler) {
+  const float2 smp = sampler.next_2d();
   const auto& scene = scene_global_get();
   const auto& em = scene.emitter_profiles[em_inst.profile];
   EmitterSample result = {};
@@ -476,7 +509,8 @@ EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spec
         vertex = scene_instance_transform_vertex(scene.instances[em_inst.instance_index], vertex);
       }
       result.origin = vertex.pos;
-      result.normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
+      const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
+      result.normal = geometric_normal;
       result.direction = normalize(result.origin - from_point);
       result.instance_index = em_inst.instance_index;
       const Material& material = scene.materials[tri.material_index];
@@ -484,14 +518,21 @@ EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spec
         result.normal *= -1.0f;
       }
 
+      result.material_index = material_mix_resolve(make_material_access_cpu_context(scene), make_bsdf_resource_cpu_context(scene), tri.material_index, vertex.tex, sampler.next());
+      result.medium_index = thermal_surface_emission_medium(scene.materials[result.material_index], dot(geometric_normal, -result.direction));
+      vertex = coated_emitter_vertex(scene, em_inst.triangle_index, result.barycentric, em_inst.instance_index, result.material_index, result.direction, vertex);
       EmitterRadianceQuery q = {
         .source_position = from_point,
         .target_position = result.origin,
         .uv = vertex.tex,
         .shading_normal = vertex.nrm,
+        .shading_tangent = vertex.tan,
+        .shading_bitangent = vertex.btn,
+        .material_index = result.material_index,
       };
 
-      result.value = emitter_get_radiance(em_inst, spect, q, result.pdf_area, result.pdf_dir, result.pdf_dir_out);
+      result.value = emitter_get_radiance(em_inst, spect, q, sampler, result.pdf_area, result.pdf_dir, result.pdf_dir_out);
+      result.value *= bsdf_resource_material_coverage(make_bsdf_resource_cpu_context(scene), scene.materials[result.material_index], vertex.tex);
       break;
     }
 
@@ -540,7 +581,9 @@ EmitterSample emitter_sample_in(const Emitter& em_inst, const SpectralQuery spec
     }
   }
 
-  result.medium_index = emitter_external_medium_index(em_inst);
+  if (result.material_index == kInvalidIndex) {
+    result.medium_index = emitter_external_medium_index(em_inst);
+  }
   return result;
 }
 
@@ -562,12 +605,17 @@ EmitterSample sample_emission_from_emitter(const Emitter& em_inst, const Spectra
         vertex = scene_instance_transform_vertex(scene.instances[em_inst.instance_index], vertex);
       }
       result.origin = vertex.pos;
-      result.normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
+      const float3 geometric_normal = scene_triangle_world_geometric_normal(scene, tri, em_inst.instance_index);
+      result.normal = geometric_normal;
       if ((thermal_surface_side_probability(material) == 0.5f) && (smp.next() < 0.5f)) {
         result.normal *= -1.0f;
       }
       result.direction = sample_cosine_distribution(smp.next_2d(), result.normal, thermal_surface_sampling_exponent(material));
-      result.value = emitter_evaluate_out_local(em_inst, spect, vertex, result.normal, result.direction, result.pdf_area, result.pdf_dir, result.pdf_dir_out);
+      result.material_index = material_mix_resolve(make_material_access_cpu_context(scene), make_bsdf_resource_cpu_context(scene), tri.material_index, vertex.tex, smp.next());
+      result.medium_index = thermal_surface_emission_medium(scene.materials[result.material_index], dot(geometric_normal, result.direction));
+      vertex = coated_emitter_vertex(scene, em_inst.triangle_index, result.barycentric, em_inst.instance_index, result.material_index, -result.direction, vertex);
+      result.value =
+        emitter_evaluate_out_local(em_inst, spect, vertex, result.normal, result.direction, result.material_index, smp, result.pdf_area, result.pdf_dir, result.pdf_dir_out);
       break;
     }
 
@@ -639,7 +687,9 @@ EmitterSample sample_emission_from_emitter(const Emitter& em_inst, const Spectra
 
   result.triangle_index = em_inst.triangle_index;
   result.instance_index = em_inst.instance_index;
-  result.medium_index = emitter_external_medium_index(em_inst);
+  if (result.material_index == kInvalidIndex) {
+    result.medium_index = emitter_external_medium_index(em_inst);
+  }
   result.is_delta = em_inst.is_delta();
   result.is_distant = em_inst.is_distant();
   return result;

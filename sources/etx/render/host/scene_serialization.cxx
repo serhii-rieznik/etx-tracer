@@ -15,6 +15,7 @@
 #include <etx/render/shared/ior_database.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
 #include <etx/render/host/scene_procedural_geometry.hxx>
+#include <cstdlib>
 #include <limits>
 
 namespace etx {
@@ -46,7 +47,7 @@ struct ChunkHeader {
 };
 #pragma pack(pop)
 
-inline Material::Class material_string_to_class(const char* s) {
+inline MaterialDescription::Class material_string_to_class(const char* s) {
   if (strcmp(s, "diffuse") == 0)
     return MaterialClass::Diffuse;
   if (strcmp(s, "translucent") == 0)
@@ -71,6 +72,10 @@ inline Material::Class material_string_to_class(const char* s) {
     return MaterialClass::Void;
   else if ((strcmp(s, "diffraction_grating") == 0) || (strcmp(s, "diffraction") == 0) || (strcmp(s, "grating") == 0))
     return MaterialClass::DiffractionGrating;
+  else if (strcmp(s, "coated_conductor") == 0)
+    return MaterialClass::CoatedConductor;
+  else if (strcmp(s, "mix") == 0)
+    return MaterialClass::Mix;
   else {
     log::error("Undefined BSDF: `%s`", s);
     return MaterialClass::Diffuse;
@@ -422,7 +427,7 @@ struct SceneSerializationImpl {
       mappings.reserve(referenced_indices.size());
 
       for (uint32_t saved_idx : referenced_indices) {
-        if (saved_idx < data.materials.size()) {
+        if (saved_idx < data.material_descriptions.size()) {
           const auto serialized_name = serialized_material_names.find(saved_idx);
           if (serialized_name != serialized_material_names.end()) {
             uint32_t name_index = add_string(normalize_material_name(serialized_name->second));
@@ -518,7 +523,7 @@ struct SceneSerializationImpl {
   bool write_to_file(const SceneData& data, const std::filesystem::path& path, const SceneSerialization::MaterialNameMapping& serialized_material_names) {
     std::ofstream file(path, std::ios::out | std::ios::trunc | std::ios::binary);
     if (file.is_open() == false) {
-      log::error("Failed to open file for writing: %s", path_to_utf8(path).c_str());
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Failed to open file for writing: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -526,7 +531,7 @@ struct SceneSerializationImpl {
     BinaryGeometryFileHeader header = {kBinaryGeometryMagic, kBinaryGeometryVersion, 0};
     file.write(reinterpret_cast<const char*>(&header), sizeof(BinaryGeometryFileHeader));
     if (!file.good()) {
-      log::error("Failed to write file header");
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Failed to write file header");
       return false;
     }
 
@@ -535,7 +540,7 @@ struct SceneSerializationImpl {
 
     // Write all data chunks directly to file
     if (write_data_to_file(data, file, serialized_material_names) == false) {
-      log::error("Failed to write data chunks");
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Failed to write data chunks");
       return false;
     }
 
@@ -548,7 +553,7 @@ struct SceneSerializationImpl {
     file.close();
 
     if (file.good() == false) {
-      log::error("Failed to finalize file: %s", path_to_utf8(path).c_str());
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Failed to finalize file: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -565,7 +570,7 @@ struct SceneSerializationImpl {
 
     std::ifstream file(path, std::ios::in | std::ios::binary | std::ios::ate);
     if (file.is_open() == false) {
-      log::error("Failed to open file for reading: %s", path_to_utf8(path).c_str());
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Failed to open file for reading: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -573,7 +578,7 @@ struct SceneSerializationImpl {
     file.seekg(0);
 
     if (file_size < sizeof(BinaryGeometryFileHeader)) {
-      log::error("File too small for binary geometry header: %s", path_to_utf8(path).c_str());
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "File too small for binary geometry header: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -582,7 +587,7 @@ struct SceneSerializationImpl {
     file.close();
 
     if (file.good() == false) {
-      log::error("Failed to read file: %s", path_to_utf8(path).c_str());
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Failed to read file: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -607,7 +612,7 @@ struct SceneSerializationImpl {
     }
 
     if (parse_materials_file(std::filesystem::u8path(materials_file), base_dir, data, database, scheduler, false) == false) {
-      log::error("Failed to load materials from %s", materials_file);
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Failed to load materials from %s", materials_file);
       return false;
     }
 
@@ -625,17 +630,18 @@ struct SceneSerializationImpl {
 
     const BinaryGeometryFileHeader* header = reinterpret_cast<const BinaryGeometryFileHeader*>(_buffer.data());
     if (header->magic != kBinaryGeometryMagic) {
-      log::error("Invalid magic number in binary geometry file");
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid magic number in binary geometry file");
       return false;
     }
 
     if ((header->version != kBinaryGeometryLegacyVersion) && (header->version != kBinaryGeometryVersion)) {
-      log::error("Unsupported binary geometry version: %u (supported %u-%u)", header->version, kBinaryGeometryLegacyVersion, kBinaryGeometryVersion);
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Unsupported binary geometry version: %u (supported %u-%u)", header->version, kBinaryGeometryLegacyVersion,
+        kBinaryGeometryVersion);
       return false;
     }
 
     if (header->total_size != _buffer.size()) {
-      log::error("File size mismatch: expected %llu, got %zu", header->total_size, _buffer.size());
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "File size mismatch: expected %llu, got %zu", header->total_size, _buffer.size());
       return false;
     }
 
@@ -646,7 +652,7 @@ struct SceneSerializationImpl {
 
     while (offset < _buffer.size()) {
       if (offset + sizeof(ChunkHeader) > _buffer.size()) {
-        log::error("Unexpected end of file while reading chunk header");
+        data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Unexpected end of file while reading chunk header");
         return false;
       }
 
@@ -682,7 +688,7 @@ struct SceneSerializationImpl {
 
   bool parse_chunk(size_t& offset, SceneData& data) {
     if (offset + sizeof(ChunkHeader) > _buffer.size()) {
-      log::error("Unexpected end of file while reading chunk header");
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Unexpected end of file while reading chunk header");
       return false;
     }
 
@@ -693,7 +699,7 @@ struct SceneSerializationImpl {
     size_t data_size = header->size;
 
     if (offset + meta_size + data_size > _buffer.size()) {
-      log::error("Chunk data extends beyond file");
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Chunk data extends beyond file");
       return false;
     }
 
@@ -740,14 +746,14 @@ struct SceneSerializationImpl {
 
   bool parse_vertex_positions_chunk(SceneData& scene_data, const uint8_t* meta_data, size_t meta_size, const uint8_t* data, size_t data_size) {
     if (meta_size != sizeof(uint64_t)) {
-      log::error("Invalid metadata size for VPOS chunk");
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid metadata size for VPOS chunk");
       return false;
     }
 
     uint64_t vertex_count = *reinterpret_cast<const uint64_t*>(meta_data);
     size_t expected_size = vertex_count * sizeof(float3);
     if (data_size != expected_size) {
-      log::error("Data size mismatch for VPOS chunk: expected %zu, got %zu", expected_size, data_size);
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Data size mismatch for VPOS chunk: expected %zu, got %zu", expected_size, data_size);
       return false;
     }
 
@@ -758,14 +764,14 @@ struct SceneSerializationImpl {
 
   bool parse_vertex_normals_chunk(SceneData& scene_data, const uint8_t* meta_data, size_t meta_size, const uint8_t* data, size_t data_size) {
     if (meta_size != sizeof(uint64_t)) {
-      log::error("Invalid metadata size for VNOR chunk");
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid metadata size for VNOR chunk");
       return false;
     }
 
     uint64_t vertex_count = *reinterpret_cast<const uint64_t*>(meta_data);
     size_t expected_size = vertex_count * sizeof(float3);
     if (data_size != expected_size) {
-      log::error("Data size mismatch for VNOR chunk: expected %zu, got %zu", expected_size, data_size);
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Data size mismatch for VNOR chunk: expected %zu, got %zu", expected_size, data_size);
       return false;
     }
 
@@ -776,14 +782,14 @@ struct SceneSerializationImpl {
 
   bool parse_vertex_texcoords_chunk(SceneData& scene_data, const uint8_t* meta_data, size_t meta_size, const uint8_t* data, size_t data_size) {
     if (meta_size != sizeof(uint64_t)) {
-      log::error("Invalid metadata size for VTEX chunk");
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid metadata size for VTEX chunk");
       return false;
     }
 
     uint64_t vertex_count = *reinterpret_cast<const uint64_t*>(meta_data);
     size_t expected_size = vertex_count * sizeof(float2);
     if (data_size != expected_size) {
-      log::error("Data size mismatch for VTEX chunk: expected %zu, got %zu", expected_size, data_size);
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Data size mismatch for VTEX chunk: expected %zu, got %zu", expected_size, data_size);
       return false;
     }
 
@@ -794,14 +800,14 @@ struct SceneSerializationImpl {
 
   bool parse_vertex_tangents_chunk(SceneData& scene_data, const uint8_t* meta_data, size_t meta_size, const uint8_t* data, size_t data_size) {
     if (meta_size != sizeof(uint64_t)) {
-      log::error("Invalid metadata size for VTAN chunk");
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid metadata size for VTAN chunk");
       return false;
     }
 
     uint64_t vertex_count = *reinterpret_cast<const uint64_t*>(meta_data);
     size_t expected_size = vertex_count * sizeof(float3);
     if (data_size != expected_size) {
-      log::error("Data size mismatch for VTAN chunk: expected %zu, got %zu", expected_size, data_size);
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Data size mismatch for VTAN chunk: expected %zu, got %zu", expected_size, data_size);
       return false;
     }
 
@@ -812,14 +818,14 @@ struct SceneSerializationImpl {
 
   bool parse_vertex_bitangents_chunk(SceneData& scene_data, const uint8_t* meta_data, size_t meta_size, const uint8_t* data, size_t data_size) {
     if (meta_size != sizeof(uint64_t)) {
-      log::error("Invalid metadata size for VBTN chunk");
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid metadata size for VBTN chunk");
       return false;
     }
 
     uint64_t vertex_count = *reinterpret_cast<const uint64_t*>(meta_data);
     size_t expected_size = vertex_count * sizeof(float3);
     if (data_size != expected_size) {
-      log::error("Data size mismatch for VBTN chunk: expected %zu, got %zu", expected_size, data_size);
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Data size mismatch for VBTN chunk: expected %zu, got %zu", expected_size, data_size);
       return false;
     }
 
@@ -830,7 +836,7 @@ struct SceneSerializationImpl {
 
   bool parse_triangle_chunk(SceneData& scene_data, const uint8_t* meta_data, size_t meta_size, const uint8_t* data, size_t data_size) {
     if (meta_size != sizeof(uint64_t)) {
-      log::error("Invalid metadata size for TRIS chunk");
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid metadata size for TRIS chunk");
       return false;
     }
 
@@ -838,7 +844,7 @@ struct SceneSerializationImpl {
 
     size_t expected_size = triangle_count * sizeof(Triangle);
     if (data_size != expected_size) {
-      log::error("Data size mismatch for TRIS chunk: expected %zu, got %zu", expected_size, data_size);
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Data size mismatch for TRIS chunk: expected %zu, got %zu", expected_size, data_size);
       return false;
     }
 
@@ -851,7 +857,8 @@ struct SceneSerializationImpl {
 
       for (int j = 0; j < 3; ++j) {
         if (tri.i[j] >= vertex_count) {
-          log::error("Triangle %llu vertex %d references invalid vertex index %u (total vertices: %zu)", i, j, tri.i[j], vertex_count);
+          scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Triangle %llu vertex %d references invalid vertex index %u (total vertices: %zu)", i, j,
+            tri.i[j], vertex_count);
           return false;
         }
       }
@@ -862,7 +869,7 @@ struct SceneSerializationImpl {
 
   bool parse_mesh_chunk(SceneData& scene_data, const uint8_t* meta_data, size_t meta_size, const uint8_t* data, size_t data_size) {
     if (meta_size != sizeof(uint64_t)) {
-      log::error("Invalid metadata size for MESH chunk");
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid metadata size for MESH chunk");
       return false;
     }
 
@@ -870,7 +877,7 @@ struct SceneSerializationImpl {
 
     size_t expected_size = mesh_count * sizeof(Mesh);
     if (data_size != expected_size) {
-      log::error("Data size mismatch for MESH chunk: expected %zu, got %zu", expected_size, data_size);
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Data size mismatch for MESH chunk: expected %zu, got %zu", expected_size, data_size);
       return false;
     }
 
@@ -881,11 +888,13 @@ struct SceneSerializationImpl {
     for (uint64_t i = 0; i < mesh_count; ++i) {
       const auto& mesh = scene_data.meshes[i];
       if (mesh.triangle_offset >= triangle_count) {
-        log::error("Mesh %llu has invalid triangle offset %u (total triangles: %zu)", i, mesh.triangle_offset, triangle_count);
+        scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Mesh %llu has invalid triangle offset %u (total triangles: %zu)", i, mesh.triangle_offset,
+          triangle_count);
         return false;
       }
       if (mesh.triangle_offset + mesh.triangle_count > triangle_count) {
-        log::error("Mesh %llu triangle range [%u, %u) exceeds triangle count %zu", i, mesh.triangle_offset, mesh.triangle_offset + mesh.triangle_count, triangle_count);
+        scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Mesh %llu triangle range [%u, %u) exceeds triangle count %zu", i, mesh.triangle_offset,
+          mesh.triangle_offset + mesh.triangle_count, triangle_count);
         return false;
       }
     }
@@ -929,7 +938,7 @@ struct SceneSerializationImpl {
 
   bool parse_material_index_mapping_chunk(SceneData& scene_data, const uint8_t* meta_data, size_t meta_size, const uint8_t* data, size_t data_size) {
     if (meta_size != sizeof(uint64_t)) {
-      log::error("Invalid metadata size for MIDXMP chunk");
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid metadata size for MIDXMP chunk");
       return false;
     }
 
@@ -937,7 +946,7 @@ struct SceneSerializationImpl {
 
     size_t expected_size = mapping_count * sizeof(MaterialIndexMapping);
     if (data_size != expected_size) {
-      log::error("Data size mismatch for MIDXMP chunk: expected %zu, got %zu", expected_size, data_size);
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Data size mismatch for MIDXMP chunk: expected %zu, got %zu", expected_size, data_size);
       return false;
     }
 
@@ -949,7 +958,7 @@ struct SceneSerializationImpl {
 
   bool parse_mesh_mapping_chunk(SceneData& scene_data, const uint8_t* meta_data, size_t meta_size, const uint8_t* data, size_t data_size) {
     if (meta_size != sizeof(uint64_t)) {
-      log::error("Invalid metadata size for MSHMAP chunk");
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid metadata size for MSHMAP chunk");
       return false;
     }
 
@@ -957,7 +966,7 @@ struct SceneSerializationImpl {
 
     size_t expected_size = mapping_count * sizeof(MappingEntry);
     if (data_size != expected_size) {
-      log::error("Data size mismatch for MSHMAP chunk: expected %zu, got %zu", expected_size, data_size);
+      scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Data size mismatch for MSHMAP chunk: expected %zu, got %zu", expected_size, data_size);
       return false;
     }
 
@@ -966,12 +975,13 @@ struct SceneSerializationImpl {
       const MappingEntry& entry = entries[i];
 
       if (entry.string_index >= _string_table.size()) {
-        log::error("Invalid string index in mesh mapping: %u", entry.string_index);
+        scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid string index in mesh mapping: %u", entry.string_index);
         return false;
       }
 
       if (entry.target_index >= scene_data.meshes.size()) {
-        log::error("Invalid mesh index in mesh mapping: %u (total meshes: %zu)", entry.target_index, scene_data.meshes.size());
+        scene_data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Invalid mesh index in mesh mapping: %u (total meshes: %zu)", entry.target_index,
+          scene_data.meshes.size());
         return false;
       }
 
@@ -989,7 +999,7 @@ struct SceneSerializationImpl {
     bool generate_procedural) {
     std::ifstream file(path);
     if (file.is_open() == false) {
-      log::error("Failed to open materials file: %s", path_to_utf8(path).c_str());
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Failed to open materials file: %s", path_to_utf8(path).c_str());
       return false;
     }
 
@@ -1710,7 +1720,7 @@ struct SceneSerializationImpl {
       material_index = material_mapping.at(material.name);
     }
 
-    auto& mtl = data.materials[material_index];
+    auto& mtl = data.material_descriptions[material_index];
 
     const bool explicit_reflectance = (material.properties.find("Ks") != material.properties.end()) || (material.properties.find("map_Ks") != material.properties.end());
     const bool explicit_transmission = (material.properties.find("Kt") != material.properties.end()) || (material.properties.find("map_Kt") != material.properties.end()) ||
@@ -1720,12 +1730,13 @@ struct SceneSerializationImpl {
     mtl.emission = {};
     mtl.emission_collimation = 0.0f;
     mtl.temperature_kelvin = 0.0f;
+    mtl.layers = {};
 
     bool base_applied = false;
     if (get_param(material, "base")) {
       auto i = material_mapping.find(_data_buffer);
       if (i != material_mapping.end()) {
-        mtl = data.materials[i->second];
+        mtl = data.material_descriptions[i->second];
         base_applied = true;
       }
     }
@@ -1750,6 +1761,29 @@ struct SceneSerializationImpl {
         if ((strcmp(params[i], "class") == 0) && (i + 1 < e)) {
           mtl.cls = material_string_to_class(params[i + 1]);
           i += 1;
+        }
+      }
+    }
+
+    if (get_param(material, "layers")) {
+      MaterialLayerSettings layers;
+      layers.explicit_layers = 1u;
+      char trailing = 0;
+      if ((sscanf(_data_buffer, "%u %u %c", &layers.coating_enabled, &layers.thinfilm_enabled, &trailing) != 2) || (layers.coating_enabled > 1u) ||
+          (layers.thinfilm_enabled > 1u)) {
+        layers.coating_enabled = layers.thinfilm_enabled = kInvalidIndex;
+      }
+      mtl.layers = layers;
+    }
+    if ((mtl.layers.explicit_layers != 0u) && get_param(material, "bsdf")) {
+      mtl.layers.bsdf = MaterialClass::Undefined;
+      if (strcmp(_data_buffer, "auto") != 0) {
+        mtl.layers.bsdf = MaterialClass::Count;
+        for (uint32_t cls = 0u; cls < MaterialClass::Count; ++cls) {
+          if (strcmp(_data_buffer, material_class_to_string(cls)) == 0) {
+            mtl.layers.bsdf = cls;
+            break;
+          }
         }
       }
     }
@@ -2075,12 +2109,10 @@ struct SceneSerializationImpl {
         SpectralDistribution eta_spd = {};
         SpectralDistribution k_spd = {};
         SpectralDistribution::Class cls = SpectralDistribution::Invalid;
-        if (load_ior_from_identifier(buffer, database, eta_spd, k_spd, cls) == false) {
-          std::filesystem::path fallback = locate_spectrum_file(buffer, {});
-          if (fallback.empty() == false) {
-            std::string title = {};
-            cls = SpectralDistribution::load_refractive_index(path_to_utf8(fallback).c_str(), eta_spd, k_spd, title);
-          }
+        std::string identifier_buffer = buffer;
+        std::string identifier = {};
+        if (decode_path_value(identifier_buffer.data(), identifier)) {
+          load_ior_from_identifier(identifier.c_str(), base_dir, database, eta_spd, k_spd, cls);
         }
 
         if (cls == SpectralDistribution::Invalid) {
@@ -2100,6 +2132,124 @@ struct SceneSerializationImpl {
       }
     };
 
+    auto load_sampled_property = [&](const char* value_key, const char* image_key, SampledImage& target, bool roughness) {
+      if (get_param(material, value_key)) {
+        float2 value = {};
+        const int count = sscanf(_data_buffer, "%f %f", &value.x, &value.y);
+        if ((count == 0) || (count == EOF) || (value.x < 0.0f) || (value.y < 0.0f)) {
+          value.x = std::numeric_limits<float>::quiet_NaN();
+          value.y = value.x;
+        }
+        if (count == 1) {
+          value.y = value.x;
+        }
+        target.value = roughness ? float4{sqr(value.x), sqr(value.y), 0.0f, 0.0f} : float4{value.x, value.x, value.x, value.x};
+      }
+      if (get_param(material, image_key)) {
+        auto params = split_params(_data_buffer);
+        uint32_t channel = 0u;
+        for (size_t i = 1u; (i + 1u) < params.size(); ++i) {
+          if (strcmp(params[i], "channel") == 0) {
+            char trailing = 0;
+            if ((sscanf(params[++i], "%u%c", &channel, &trailing) != 1) || (channel > 4u)) {
+              channel = kInvalidIndex;
+            }
+          }
+        }
+        if ((params.empty() == false) && get_file(base_dir, params[0])) {
+          target.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
+          target.channel = channel;
+        }
+      }
+    };
+
+    if (mtl.cls == MaterialClass::Mix) {
+      for (uint32_t child = 0u; child < 2u; ++child) {
+        const char* key = child == 0u ? "mix_first" : "mix_second";
+        if (get_param(material, key) == false) {
+          continue;
+        }
+        uint32_t index = kInvalidIndex;
+        const auto found = data.material_mapping.find(_data_buffer);
+        if (found != data.material_mapping.end()) {
+          index = found->second;
+        }
+        (child == 0u ? mtl.mix.first : mtl.mix.second) = index;
+      }
+      load_sampled_property("mix_amount", "map_mix_amount", mtl.mix.amount, false);
+    }
+    if ((mtl.cls == MaterialClass::CoatedConductor) || (mtl.layers.explicit_layers != 0u)) {
+      if (get_param(material, "coating_ior")) {
+        load_ior(mtl.coating.ior, _data_buffer);
+      } else if (mtl.coating.ior.cls == SpectralDistribution::Invalid) {
+        load_ior(mtl.coating.ior, "1.5");
+      }
+      load_sampled_property("coating_roughness", "map_coating_roughness", mtl.coating.roughness, true);
+      load_sampled_property("coating_thickness", "map_coating_thickness", mtl.coating.thickness, false);
+      if (get_param(material, "coating_thickness_nm")) {
+        char trailing = 0;
+        if (sscanf(_data_buffer, "%f %f %c", &mtl.coating.min_thickness_nm, &mtl.coating.max_thickness_nm, &trailing) != 2) {
+          mtl.coating.min_thickness_nm = std::numeric_limits<float>::quiet_NaN();
+        }
+      }
+      if (get_param(material, "map_coating_thickness_nm")) {
+        const auto params = split_params(_data_buffer);
+        for (size_t i = 1u; i < params.size(); ++i) {
+          if (strcmp(params[i], "channel") != 0) {
+            continue;
+          }
+          if ((i + 1u) >= params.size()) {
+            mtl.coating.min_thickness_nm = std::numeric_limits<float>::quiet_NaN();
+            break;
+          }
+          const char* value = params[++i];
+          char* trailing = nullptr;
+          const auto channel = std::strtoull(value, &trailing, 10);
+          if ((trailing == value) || (*trailing != 0) || (channel != 0u)) {
+            mtl.coating.min_thickness_nm = std::numeric_limits<float>::quiet_NaN();
+          }
+        }
+        if ((params.empty() == false) && get_file(base_dir, params[0])) {
+          mtl.coating.thickness_nm_image = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
+        } else {
+          mtl.coating.min_thickness_nm = std::numeric_limits<float>::quiet_NaN();
+        }
+      }
+      if (get_param(material, "coating_anisotropy")) {
+        if (sscanf(_data_buffer, "%f", &mtl.coating.anisotropy) != 1) {
+          mtl.coating.anisotropy = std::numeric_limits<float>::quiet_NaN();
+        }
+      }
+      for (uint32_t component = 0u; component < 2u; ++component) {
+        const char* key = component == 0u ? "coating_absorption" : "coating_scattering";
+        SpectralImage& coefficient = component == 0u ? mtl.coating.absorption : mtl.coating.scattering;
+        if (get_param(material, key)) {
+          const uint32_t named = data.find_spectrum(_data_buffer);
+          if (named != kInvalidIndex) {
+            coefficient.spectrum_index = named;
+          } else {
+            SpectrumSource source = {};
+            source.kind = SpectrumSource::Kind::Coefficient;
+            source.mode = SpectrumSource::Mode::Color;
+            if (sscanf(_data_buffer, "%f %f %f", &source.color.x, &source.color.y, &source.color.z) != 3) {
+              if (sscanf(_data_buffer, "%f", &source.color.x) != 1) {
+                source.color.x = std::numeric_limits<float>::quiet_NaN();
+              }
+              source.color.y = source.color.x;
+              source.color.z = source.color.x;
+            }
+            source.generate();
+            coefficient.spectrum_index = data.add_spectrum(source.output());
+            data.spectrum_sources.emplace(coefficient.spectrum_index, std::move(source));
+          }
+        }
+        const char* image_key = component == 0u ? "map_coating_absorption" : "map_coating_scattering";
+        if (get_param(material, image_key) && get_file(base_dir, _data_buffer)) {
+          coefficient.image_index = data.add_image(_file_buffer, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, {}, {1.0f, 1.0f});
+        }
+      }
+    }
+
     if (get_param(material, "int_ior")) {
       std::filesystem::path path = std::filesystem::u8path(_data_buffer);
       if (path.is_absolute() == false) {
@@ -2116,7 +2266,7 @@ struct SceneSerializationImpl {
       bool recognized = false;
       const auto profile = load_temperature_optics(path_to_utf8(path).c_str(), recognized);
       if (recognized && (profile == nullptr)) {
-        log::error("Material %s has an invalid temperature optical profile", material.name.c_str());
+        data.diagnostic.fail(SceneDiagnosticKind::File, "Binary geometry", "Material %s has an invalid temperature optical profile", material.name.c_str());
         mtl.temperature_kelvin = std::numeric_limits<float>::quiet_NaN();
         return;
       }
@@ -2224,26 +2374,13 @@ struct SceneSerializationImpl {
             SpectralDistribution eta_spd = {};
             SpectralDistribution k_spd = {};
             SpectralDistribution::Class cls = SpectralDistribution::Invalid;
-            if (load_ior_from_identifier(params[i + 1], database, eta_spd, k_spd, cls) == false) {
-              std::filesystem::path fallback = locate_spectrum_file(params[i + 1], {});
-              if (fallback.empty() == false) {
-                std::string title = {};
-                cls = SpectralDistribution::load_refractive_index(path_to_utf8(fallback).c_str(), eta_spd, k_spd, title);
-              }
-            }
+            load_ior_from_identifier(params[i + 1], base_dir, database, eta_spd, k_spd, cls);
 
             if (cls == SpectralDistribution::Invalid) {
               log::warning("Unable to load thinfilm IOR `%s`, using dielectric 1.5", params[i + 1]);
               cls = SpectralDistribution::Dielectric;
               eta_spd = SpectralDistribution::constant(1.5f);
               k_spd = SpectralDistribution::constant(0.0f);
-            }
-
-            if (cls != SpectralDistribution::Dielectric) {
-              log::warning("Thinfilm IOR `%s` is not a non-absorbing dielectric; disabling the thin film", params[i + 1]);
-              mtl.thinfilm.weight = 0.0f;
-              i += 1;
-              continue;
             }
 
             mtl.thinfilm.ior.cls = cls;
@@ -2386,6 +2523,15 @@ struct SceneSerializationImpl {
   void parse_material_definitions(const char* base_dir, const std::vector<MaterialDefinition>& materials, SceneData& data, const IORDatabase& database, TaskScheduler& scheduler,
     bool generate_procedural) {
     _pending_procedural_geometry.clear();
+
+    for (const MaterialDefinition& definition : materials) {
+      if ((is_procedural_geometry_entry(definition.name) == false) && (special_name_equals(definition.name, "camera") == false) &&
+          (special_name_equals(definition.name, "medium") == false) && (special_name_equals(definition.name, "dir") == false) &&
+          (special_name_equals(definition.name, "env") == false) && (special_name_equals(definition.name, "atmosphere") == false) &&
+          (special_name_equals(definition.name, "spectrum") == false)) {
+        data.add_material(definition.name.c_str());
+      }
+    }
 
     // Explicit masks select independent alpha for the material library, including inherited materials.
     const bool legacy_alpha_masks = std::none_of(materials.begin(), materials.end(), [](const MaterialDefinition& material) {

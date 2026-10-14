@@ -277,7 +277,7 @@ void wavefront_store_direct_light_prepare_task(uint dispatch_index, ETX_IN(Wavef
   task.inline_medium_scattering = input_value.current_vertex.inline_medium_scattering;
   task.inline_medium_flags = input_value.current_vertex.inline_medium_flags;
   if (wavefront_path_vertex_is_surface(input_value.current_vertex) &&
-      ((input_value.material.cls == MaterialClass::Dielectric) || (input_value.material.subsurface_cls != SubsurfaceMaterial::Disabled))) {
+      (material_supports_surface_transmission(input_value.material) || (input_value.material.subsurface_cls != SubsurfaceMaterial::Disabled))) {
     const bool into_body = dot(input_value.current_vertex.geo_normal, input_value.sample_value.direction) < 0.0f;
     task.medium_index = into_body ? input_value.material.int_medium : input_value.material.ext_medium;
     task.inline_medium_flags = into_body ? task.inline_medium_flags : 0u;

@@ -128,6 +128,7 @@ struct ETX_ALIGNED EmitterSample {
   uint32_t triangle_index = kInvalidIndex;
   uint32_t instance_index = kInvalidIndex;
   uint32_t medium_index = kInvalidIndex;
+  uint32_t material_index = kInvalidIndex;
 
   bool is_delta = false;
   bool is_distant = false;
@@ -140,6 +141,9 @@ struct EmitterRadianceQuery {
   float3 direction = {};
   float2 uv = {};
   float3 shading_normal = {};
+  float3 shading_tangent = {};
+  float3 shading_bitangent = {};
+  uint32_t material_index = kInvalidIndex;
   bool directly_visible = false;
 };
 

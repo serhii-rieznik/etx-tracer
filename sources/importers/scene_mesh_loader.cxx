@@ -43,29 +43,20 @@ uint32_t load_mesh_document(ImportedMesh mesh, const std::filesystem::path& path
     data.vertices.tex[index].y = 1.0f - data.vertices.tex[index].y;
   }
   const uint32_t material = data.add_material("Imported mesh");
-  data.materials[material].cls = MaterialClass::Diffuse;
-  data.materials[material].scattering = {.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({0.7f, 0.7f, 0.7f}))};
-  data.materials[material].reflectance = {.spectrum_index = data.defaults.white_spectrum};
+  data.material_descriptions[material].cls = MaterialClass::Diffuse;
+  data.material_descriptions[material].scattering = {.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({0.7f, 0.7f, 0.7f}))};
+  data.material_descriptions[material].reflectance = {.spectrum_index = data.defaults.white_spectrum};
   float3 lower = {kMaxFloat, kMaxFloat, kMaxFloat}, upper = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
   data.triangles.reserve(mesh.indices.size());
   for (const auto& indices : mesh.indices) {
-    const float3& a = data.vertices.pos[indices.x];
-    const float3& b = data.vertices.pos[indices.y];
-    const float3& c = data.vertices.pos[indices.z];
-    const float3 geometric = cross(b - a, c - a);
-    const double area_squared = double(geometric.x) * geometric.x + double(geometric.y) * geometric.y + double(geometric.z) * geometric.z;
-    if ((std::isfinite(area_squared) == false) || (area_squared > std::numeric_limits<float>::max()))
-      throw std::runtime_error("Mesh triangle exceeds native geometric range.");
-    if (area_squared == 0.0)
-      continue;
-    if (dot(geometric, geometric) == 0.0f)
-      throw std::runtime_error("Mesh triangle is too small for native geometric precision.");
     Triangle triangle = {};
     triangle.i[0] = indices.x;
     triangle.i[1] = indices.y;
     triangle.i[2] = indices.z;
     triangle.material_index = material;
-    triangle.geo_n = unit_normal(geometric);
+    if (validate_triangle(triangle, data.vertices.pos) == false)
+      continue;
+    const float3 geometric = cross(data.vertices.pos[indices.y] - data.vertices.pos[indices.x], data.vertices.pos[indices.z] - data.vertices.pos[indices.x]);
     data.triangles.push_back(triangle);
     for (uint32_t index : triangle.i) {
       lower = min(lower, data.vertices.pos[index]);

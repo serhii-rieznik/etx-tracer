@@ -89,7 +89,59 @@ struct GPURaytracingRenderer : public Renderer {
     VCMGridScatter = 64u,
     CameraConnectLightClassify = 65u,
     CameraConnectLightCompact = 66u,
-    Count = 67u,
+    VCMMergeCoatedConductor = 67u,
+    CameraConnectLightPrepareCoatedConductor = 68u,
+    CameraConnectLightResolveCoatedConductor = 69u,
+    CameraContinuePrepareCoatedConductor = 70u,
+    LightContinuePrepareCoatedConductor = 71u,
+    CoatingClear = 72u,
+    CoatingDirect = 73u,
+    CoatingSampleBegin = 74u,
+    CoatingSampleDelta = 75u,
+    CoatingSampleResolve = 76u,
+    CoatingAdvance = 77u,
+    CoatingPhase = 78u,
+    CoatingBaseEvaluate = 79u,
+    CoatingBaseSample = 80u,
+    CoatingExit = 81u,
+    CoatingExitPdf = 82u,
+    CoatingFinish = 83u,
+    CameraContinueResolveCoatedConductor = 84u,
+    LightContinueResolveCoatedConductor = 85u,
+    CameraDirectLightPrepareCoatedConductor = 86u,
+    CameraDirectLightResolveCoatedConductor = 87u,
+    EmissionClear = 88u,
+    EmissionClassify = 89u,
+    EmissionSimple = 90u,
+    EmissionFiniteConductor = 91u,
+    EmissionBegin = 92u,
+    EmissionSampleBegin = 93u,
+    EmissionSampleDelta = 94u,
+    EmissionSampleResolve = 95u,
+    EmissionAdvance = 96u,
+    EmissionPhase = 97u,
+    EmissionBaseSample = 98u,
+    EmissionVelvetSample = 99u,
+    EmissionBaseEmission = 100u,
+    EmissionVelvetEscape = 101u,
+    EmissionBaseContinue = 102u,
+    EmissionFinish = 103u,
+    CameraDirectLightSampleResume = 104u,
+    InitLightPath0Resume = 105u,
+    CameraDirectHitAccumulateResume = 106u,
+    UPBPDirectHitResume = 107u,
+    CoatingVelvet = 108u,
+    TransportWorkClear = 109u,
+    TransportWorkCollect = 110u,
+    TransportWorkBuildArgs = 111u,
+    LightConnectCameraPrepareCoatedConductor = 112u,
+    LightConnectCameraResolveCoatedConductor = 113u,
+    CameraConnectLightPrepareCoatedConductorResume = 114u,
+    CameraConnectLightResolveCoatedConductorResume = 115u,
+    VCMCoatingClear = 116u,
+    VCMCoatingContinue = 117u,
+    VCMCoatingFinish = 118u,
+    Count = 119u,
   };
 
   GPURaytracingRenderer(TaskScheduler&);
@@ -101,8 +153,9 @@ struct GPURaytracingRenderer : public Renderer {
   void cleanup(RHIContext& ctx) override;
 
   void reload_shaders(RHIContext& ctx, SceneRepresentation& scene);
+  void reload_shaders(RHIContext& ctx, SceneRepresentation& scene, bool capture_statistics);
   bool finish_preparation(RHIContext& ctx, SceneRepresentation& scene);
-  void poll_preparation(RHIContext& ctx);
+  void poll_preparation(RHIContext& ctx, SceneRepresentation& scene);
   bool pipelines_valid() const;
   bool runtime_failed() const {
     return _runtime_failed;
@@ -211,6 +264,40 @@ struct GPURaytracingRenderer : public Renderer {
     double elapsed_ms = 0.0;
   };
 
+  struct PipelineNativeIdentity {
+    uint64_t content_hash = 0u;
+    size_t binary_size = 0u;
+    RHIBackend backend = RHIBackend::Vulkan;
+    RHIShaderBinaryFormat format = RHIShaderBinaryFormat::SpirV;
+    uint32_t local_size_x = 0u;
+    uint32_t local_size_y = 0u;
+    uint32_t local_size_z = 0u;
+    RHIMetalShaderMetadata metal_metadata = {};
+    bool capture_statistics = false;
+
+    PipelineNativeIdentity() = default;
+    PipelineNativeIdentity(const RHIShaderBinary& binary, bool capture)
+      : content_hash(binary.content_hash)
+      , binary_size(binary.spirv_size)
+      , backend(binary.backend)
+      , format(binary.format)
+      , local_size_x(binary.local_size_x)
+      , local_size_y(binary.local_size_y)
+      , local_size_z(binary.local_size_z)
+      , metal_metadata(binary.metal_metadata)
+      , capture_statistics(capture) {
+    }
+
+    bool matches(const RHIShaderBinary& binary, bool capture) const {
+      return (binary_size > 0u) && (content_hash == binary.content_hash) && (binary_size == binary.spirv_size) && (backend == binary.backend) && (format == binary.format) &&
+             (local_size_x == binary.local_size_x) && (local_size_y == binary.local_size_y) && (local_size_z == binary.local_size_z) &&
+             (metal_metadata.bindless_buffer_indices == binary.metal_metadata.bindless_buffer_indices) &&
+             (metal_metadata.bindless_binding_access == binary.metal_metadata.bindless_binding_access) &&
+             (metal_metadata.push_constants_buffer_index == binary.metal_metadata.push_constants_buffer_index) && (metal_metadata.valid == binary.metal_metadata.valid) &&
+             (capture_statistics == capture);
+    }
+  };
+
   struct PendingPipelinePreparation {
     uint32_t generation = 0u;
     uint32_t integrator_mode = 0u;
@@ -225,6 +312,7 @@ struct GPURaytracingRenderer : public Renderer {
     std::atomic<uint32_t> completed_compile_groups = 0u;
     std::atomic<uint32_t> completed_pipelines = 0u;
     std::atomic<uint32_t> compile_worker_count = 0u;
+    std::atomic<bool> stop_requested = false;
     std::atomic<bool> initialization_complete = false;
     std::atomic<bool> compilation_complete = false;
     std::atomic<bool> publish_started = false;
@@ -249,11 +337,13 @@ struct GPURaytracingRenderer : public Renderer {
 
   struct InflightPipelinePublishTask {
     Task::Handle handle = {};
+    std::atomic<bool> stop_requested = false;
     std::shared_ptr<PendingPipelinePreparation> preparation = {};
     std::vector<RHICreatePipelineBatchEntry> results = {};
     std::vector<uint32_t> pipeline_indices = {};
     uint32_t pipeline_count = 0u;
     uint32_t worker_count = 0u;
+    bool capture_statistics = false;
     std::chrono::steady_clock::time_point started_at = {};
     std::chrono::steady_clock::time_point finished_at = {};
   };
@@ -324,6 +414,9 @@ struct GPURaytracingRenderer : public Renderer {
     UPBPBuffer density_batch_buffer = {};
     UPBPBuffer density_surface_point_buffer = {};
     UPBPBuffer density_surface_point_aabb_buffer = {};
+    UPBPBuffer density_surface_grid_ranges_buffer = {};
+    UPBPBuffer density_surface_grid_indices_buffer = {};
+    uint32_t density_surface_grid_mask = 0u;
     UPBPBuffer density_medium_point_buffer = {};
     UPBPBuffer density_medium_point_aabb_buffer = {};
     UPBPBuffer density_beam_buffer = {};
@@ -423,6 +516,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool reserve_upbp_history(RHIContext& ctx, const SceneRepresentation& scene, const uint32_t* counters, uint32_t active_paths, uint32_t bounce_count, bool from_camera);
   bool ensure_light_vertex_capacity(RHIContext& ctx, uint32_t required_vertex_capacity);
   void request_pipeline_preparation(const SceneRepresentation& scene, const char* reason, bool force_reload);
+  void request_pending_pipeline_preparation(const SceneRepresentation& scene);
   void poll_preparation_tasks(RHIContext& ctx, bool wait_for_active = false);
   bool begin_pipeline_publish(std::shared_ptr<PendingPipelinePreparation> result);
   bool advance_pipeline_publish(RHIContext& ctx, uint32_t max_pipelines, bool wait_for_batch);
@@ -430,6 +524,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool create_pipelines_sync(RHIContext& ctx, SceneRepresentation& scene, const char* reason);
   void release_inflight_preparation_tasks(bool wait);
   void compile_pipeline_preparation(std::shared_ptr<PendingPipelinePreparation> result);
+  void invalidate_pipeline_preparation();
   void destroy_pipelines(RHIDevice& device);
   void reset_render_timing();
   void reset_render_progress(bool reset_wavefront_schedule);
@@ -451,10 +546,12 @@ struct GPURaytracingRenderer : public Renderer {
   void set_runtime_failure(std::string message);
   void set_runtime_failure(std::string message, RHIResult result);
   void set_configuration_failure(std::string message);
+  void set_configuration_failure(std::string message, RendererRecovery recovery, uint32_t resource_index);
 
  private:
   RHIPipeline _pipelines[static_cast<uint32_t>(PipelineStage::Count)] = {};
   uint64_t _pipeline_variant_keys[static_cast<uint32_t>(PipelineStage::Count)] = {};
+  PipelineNativeIdentity _pipeline_native_identities[static_cast<uint32_t>(PipelineStage::Count)] = {};
   RHIBindlessHandle _tlas = {};
   std::vector<RHIBindlessHandle> _blas;
   std::vector<RHIBindlessHandle> _blas_buffers;
@@ -509,6 +606,13 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _direct_light_sample_buffer = {};
   RHIBindlessHandle _direct_light_task_buffer = {};
   RHIBindlessHandle _direct_light_result_buffer = {};
+  RHIBindlessHandle _transport_work_buffer = {};
+  RHIBindlessHandle _coating_request_buffer = {};
+  RHIBindlessHandle _vcm_coating_buffer = {};
+  RHIBindlessHandle _coating_count_readback_buffer = {};
+  RHIBindlessHandle _emission_request_buffer = {};
+  RHIBindlessHandle _emission_consumer_buffer = {};
+  RHIBindlessHandle _emission_count_readback_buffer = {};
   RHIBindlessHandle _connect_light_task_buffer = {};
   RHIBindlessHandle _connect_camera_task_buffer = {};
   RHIBindlessHandle _connect_camera_result_buffer = {};
@@ -561,6 +665,13 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _direct_light_sample_buffer_size = 0;
   uint64_t _direct_light_task_buffer_size = 0;
   uint64_t _direct_light_result_buffer_size = 0;
+  uint64_t _transport_work_buffer_size = 0;
+  uint64_t _coating_request_buffer_size = 0;
+  uint64_t _vcm_coating_buffer_size = 0;
+  uint64_t _coating_count_readback_buffer_size = 0;
+  uint64_t _emission_request_buffer_size = 0;
+  uint64_t _emission_consumer_buffer_size = 0;
+  uint64_t _emission_count_readback_buffer_size = 0;
   uint64_t _connect_light_task_buffer_size = 0;
   uint64_t _connect_camera_task_buffer_size = 0;
   uint64_t _connect_camera_result_buffer_size = 0;
@@ -595,6 +706,13 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _direct_light_sample_buffer_descriptor_index = ~0u;
   uint32_t _direct_light_task_buffer_descriptor_index = ~0u;
   uint32_t _direct_light_result_buffer_descriptor_index = ~0u;
+  uint32_t _transport_work_buffer_descriptor_index = ~0u;
+  uint32_t _coating_request_buffer_descriptor_index = ~0u;
+  uint32_t _vcm_coating_buffer_descriptor_index = ~0u;
+  uint32_t _emission_request_buffer_descriptor_index = ~0u;
+  uint32_t _emission_consumer_buffer_descriptor_index = ~0u;
+  uint32_t _emission_count_readback_buffer_descriptor_index = ~0u;
+  uint32_t _coating_count_readback_buffer_descriptor_index = ~0u;
   uint32_t _connect_light_task_buffer_descriptor_index = ~0u;
   uint32_t _connect_camera_task_buffer_descriptor_index = ~0u;
   uint32_t _connect_camera_result_buffer_descriptor_index = ~0u;
@@ -663,6 +781,8 @@ struct GPURaytracingRenderer : public Renderer {
   RHIResourceState _camera_queue_count_readback_state = RHIResourceState::Undefined;
   RHIResourceState _light_queue_count_readback_state = RHIResourceState::Undefined;
   RHIResourceState _light_vertex_counter_readback_state = RHIResourceState::Undefined;
+  RHIResourceState _coating_count_readback_state = RHIResourceState::Undefined;
+  RHIResourceState _emission_count_readback_state = RHIResourceState::Undefined;
   uint32_t _integrator_mode = 0u;
   uint32_t _integrator_features = 0u;
   uint32_t _material_compile_mask = 0u;
@@ -687,6 +807,9 @@ struct GPURaytracingRenderer : public Renderer {
   std::string _runtime_failure_reason = {};
   bool _configuration_failed = false;
   bool _recovery_blocked = false;
+  RHIResult _runtime_failure_result = RHIResult::Success;
+  RendererRecovery _configuration_recovery = RendererRecovery::ChangeSettings;
+  uint32_t _failure_resource_index = kInvalidIndex;
   std::string _runtime_warning = {};
   std::string _preparation_phase = "Ready";
   std::string _preparation_message = {};
@@ -710,12 +833,15 @@ struct GPURaytracingRenderer : public Renderer {
   bool _initialized = false;
   bool _runtime_failed = false;
   bool _preparation_canceled = false;
+  bool _pending_pipeline_reload = false;
+  bool _pending_pipeline_force_reload = false;
   bool _pipeline_publish_logged = false;
   bool _display_output_valid = false;
   bool _cleanup_wait_succeeded = false;
   bool _render_timing_active = false;
   bool _preserved_timing_stats_valid = false;
   bool _kernel_timing_enabled = false;
+  bool _kernel_statistics_enabled = false;
   bool _scene_valid = false;
   RunState _run_state = RunState::Stopped;
   RendererPreparationState _preparation_state = RendererPreparationState::Ready;

@@ -1,4 +1,5 @@
 #include "gpu_rt_wavefront_common.hlsl"
+#include "gpu_rt_wavefront_emission_consumer_storage.hlsl"
 
 struct UPBPGPUBeamTransportPrefix {
   SpectralResponse weight;
@@ -1169,33 +1170,34 @@ GPUUPBPBeamReference upbp_load_bb1d_beam_reference(uint descriptor_index, uint i
   return result;
 }
 
-SpectralResponse upbp_local_emitter_radiance(uint emitter_index, SpectralQuery spect, float3 source_position, float3 target_position, float2 uv, float3 shading_normal,
-  bool directly_visible, out float pdf_area, out float pdf_dir, out float pdf_dir_out) {
-  (void)directly_visible;
+bool upbp_propose_local_emitter(uint emitter_index, float3 source_position, float3 target_position, float2 uv, float3 shading_normal, uint material_index, float3 barycentric,
+  out WavefrontEmissionInput emission_input, out float pdf_area, out float pdf_dir, out float pdf_dir_out) {
+  emission_input = wavefront_empty_emission_input();
   pdf_area = 0.0f;
   pdf_dir = 0.0f;
   pdf_dir_out = 0.0f;
+# if ETX_ENABLE_AREA_EMITTERS
   GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
   GPUEmitterProfileABIData emitter_profile = (GPUEmitterProfileABIData)0;
   if ((try_load_emitter_instance(emitter_index, emitter_instance) == false) || (try_load_emitter_profile(emitter_instance.emitter_profile_index, emitter_profile) == false) ||
       (emitter_access_is_local_class(emitter_instance.emitter_class) == false)) {
-    return spectral_response_zero(spect);
+    return false;
   }
-  const TriangleData triangle_data = load_triangle(WAVEFRONT_RO_BUFFER(constants.scene.triangles), emitter_instance.triangle_index);
+  TriangleData triangle_data = load_triangle(WAVEFRONT_RO_BUFFER(constants.scene.triangles), emitter_instance.triangle_index);
   const float3 geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(emitter_instance.instance_index), triangle_data.geo_n);
   Material material = (Material)0;
   if (try_load_material_full(triangle_data.material_index, material) == false) {
-    return spectral_response_zero(spect);
+    return false;
   }
   const float3 target_delta = target_position - source_position;
-  const bool two_sided_thermal = (material.thermal_rgb_image_index != kInvalidIndex) && (material.two_sided != 0u);
+  const bool two_sided_thermal = thermal_surface_side_probability(material) == 0.5f;
   if ((two_sided_thermal == false) && (dot(geo_normal, target_delta) >= 0.0f)) {
-    return spectral_response_zero(spect);
+    return false;
   }
   pdf_area = emitter_instance.triangle_area > 0.0f ? rcp(emitter_instance.triangle_area) : 0.0f;
   const float distance_squared = dot(target_delta, target_delta);
   if ((pdf_area <= 0.0f) || (distance_squared <= 0.0f)) {
-    return spectral_response_zero(spect);
+    return false;
   }
   const float signed_cosine = dot(-target_delta, geo_normal) * rsqrt(distance_squared);
   const float cosine = two_sided_thermal ? abs(signed_cosine) : max(0.0f, signed_cosine);
@@ -1203,10 +1205,22 @@ SpectralResponse upbp_local_emitter_radiance(uint emitter_index, SpectralQuery s
   if (cosine > kEpsilon) {
     pdf_dir = pdf_area * distance_squared / cosine;
     pdf_dir_out = pdf_area * scene_math_shared_collimated_direction_pdf(cosine, exponent) * thermal_surface_side_probability(material);
-    const float shading_cosine = abs(dot(-target_delta, shading_normal)) * rsqrt(distance_squared);
-    return thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, uv, signed_cosine, shading_cosine);
+    if (try_load_material_full(material_index, material) == false) {
+      return false;
+    }
+    Vertex vertex = wavefront_interpolate_vertex(triangle_data, barycentric);
+    vertex = scene_instance_transform_vertex(load_scene_instance(emitter_instance.instance_index), vertex);
+    triangle_data.material_index = material_index;
+    vertex = coated_emitter_vertex(vertex, triangle_data, barycentric, emitter_instance.instance_index, material, normalize(target_delta));
+    emission_input.material_index = material_index;
+    emission_input.uv = uv;
+    emission_input.geometric_cosine = signed_cosine;
+    emission_input.local_outgoing =
+      thermal_surface_local_direction(material, thermal_surface_uses_substrate_escape(material) ? vertex.nrm : shading_normal, vertex.tan, vertex.btn, normalize(-target_delta));
+    return true;
   }
-  return spectral_response_zero(spect);
+# endif
+  return false;
 }
 
 float upbp_distant_emitter_sample_pdf(uint emitter_index, float3 in_direction) {
@@ -1382,7 +1396,7 @@ bool upbp_camera_prefix_is_specular(GPUUPBPResources resources, GPUUPBPVertex en
       return false;
     }
     const GPUUPBPVertex vertex = upbp_load_vertex(resources.vertex_buffer, vertex_index);
-    if (((vertex.flags & GPUUPBPVertexFlags::Valid) == 0u) || ((vertex.path_length > 0u) && (upbp_vertex_is_delta(vertex) == false))) {
+    if (((vertex.flags & GPUUPBPVertexFlags::Valid) == 0u) || ((vertex.path_length > 0u) && (upbp_vertex_sampled_delta(vertex) == false))) {
       return false;
     }
     if (vertex.path_length == 0u) {
@@ -1393,7 +1407,7 @@ bool upbp_camera_prefix_is_specular(GPUUPBPResources resources, GPUUPBPVertex en
   return false;
 }
 
-void upbp_evaluate_direct_hit_dispatch(uint dispatch_index) {
+void upbp_evaluate_direct_hit_dispatch(uint dispatch_index, uint consumer_slot) {
   GPUWavefrontResources wavefront_resources = wavefront_load_resources();
   GPUUPBPResources resources = upbp_load_resources(wavefront_resources);
   if (((resources.iteration.flags & GPUUPBPIterationFlags::EvaluateCameraIndependentTerms) == 0u) || (scene_strategy_enabled(kSceneStrategyDirectHit) == false) ||
@@ -1426,9 +1440,10 @@ void upbp_evaluate_direct_hit_dispatch(uint dispatch_index) {
   float pdf_area = 0.0f;
   float pdf_dir = 0.0f;
   float pdf_dir_out = 0.0f;
-  const SpectralResponse radiance = upbp_local_emitter_radiance(emitter_vertex.emitter_index, spect, previous.position, emitter_vertex.position, emitter_vertex.texcoord,
-    emitter_vertex.normal, emitter_vertex.path_length <= 1u, pdf_area, pdf_dir, pdf_dir_out);
-  if (spectral_response_is_zero(radiance) || (pdf_area <= 0.0f) || (pdf_dir <= 0.0f) || (pdf_dir_out <= 0.0f)) {
+  const uint emission_seed = upbp_pair_seed(resources.iteration, emitter_vertex, emitter_vertex);
+  WavefrontEmissionInput emission_input = wavefront_empty_emission_input();
+  if (upbp_propose_local_emitter(emitter_vertex.emitter_index, previous.position, emitter_vertex.position, emitter_vertex.texcoord, emitter_vertex.normal,
+        emitter_vertex.material_index, emitter_vertex.barycentric, emission_input, pdf_area, pdf_dir, pdf_dir_out) == false) {
     return;
   }
   float mis_weight = 0.0f;
@@ -1447,9 +1462,29 @@ void upbp_evaluate_direct_hit_dispatch(uint dispatch_index) {
   } else if (upbp_camera_prefix_is_specular(resources, emitter_vertex)) {
     mis_weight = 1.0f;
   }
-  if (mis_weight > 0.0f) {
-    upbp_submit_camera_contribution(wavefront_resources, resources, GPUUPBPTechnique::BPT, emitter_vertex.global_path_index,
-      spectral_response_mul(spectral_response_mul(throughput, radiance), mis_weight));
+  WavefrontEmissionConsumer consumer = (WavefrontEmissionConsumer)0;
+  consumer.owner_index = dispatch_index;
+  consumer.output_pixel_index = emitter_vertex.global_path_index;
+  consumer.spect = spect;
+  consumer.factor = throughput;
+  consumer.selected_weight = ((pdf_area > 0.0f) && (pdf_dir > 0.0f) && (pdf_dir_out > 0.0f)) ? mis_weight : 0.0f;
+  wavefront_queue_emission_input(wavefront_resources, consumer_slot, emission_input, spect, emission_seed);
+  wavefront_emission_consumer_suspend(wavefront_resources, consumer_slot, consumer);
+}
+
+[numthreads(64, 1, 1)] void wavefront_upbp_direct_hit_resume_main(uint3 dtid : SV_DispatchThreadID) {
+  const GPUWavefrontResources wavefront_resources = wavefront_load_resources();
+  WavefrontEmissionConsumer consumer = (WavefrontEmissionConsumer)0;
+  if (wavefront_emission_consumer_load(wavefront_resources, dtid.x, consumer) == false) {
+    return;
+  }
+  uint seed = 0u;
+  const SpectralResponse radiance = wavefront_completed_emission(wavefront_resources, dtid.x, seed);
+  wavefront_emission_consumer_complete(wavefront_resources, dtid.x);
+  if ((consumer.selected_weight > 0.0f) && (spectral_response_is_zero(radiance) == false)) {
+    const GPUUPBPResources resources = upbp_load_resources(wavefront_resources);
+    upbp_submit_camera_contribution(wavefront_resources, resources, GPUUPBPTechnique::BPT, consumer.output_pixel_index,
+      spectral_response_mul(spectral_response_mul(consumer.factor, radiance), consumer.selected_weight));
   }
 }
 
@@ -1472,6 +1507,7 @@ uint upbp_surface_query_family_from_material(uint material_index) {
     case MaterialClass::Plastic:
       return GPUUPBPSurfaceQueryFamily::Plastic;
     case MaterialClass::Conductor:
+    case MaterialClass::CoatedConductor:
     case MaterialClass::OpenPBR:
       return GPUUPBPSurfaceQueryFamily::Conductor;
     case MaterialClass::Dielectric:
@@ -1748,7 +1784,7 @@ void upbp_store_beam_instance(GPUUPBPResources resources, uint instance_buffer_i
 
 [numthreads(64, 1, 1)] void wavefront_upbp_direct_hit_main(uint3 dtid : SV_DispatchThreadID) {
   if (dtid.x < constants.dispatch_item_count) {
-    upbp_evaluate_direct_hit_dispatch(constants.dispatch_item_offset + dtid.x);
+    upbp_evaluate_direct_hit_dispatch(constants.dispatch_item_offset + dtid.x, dtid.x);
   }
 }
 

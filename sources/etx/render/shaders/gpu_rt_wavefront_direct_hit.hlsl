@@ -1,5 +1,16 @@
 #include "gpu_rt_wavefront_surface_common.hlsl"
 
+void wavefront_finish_camera_direct_hit(GPUWavefrontResources resources, uint slot, WavefrontEmissionConsumer consumer, SpectralResponse radiance, uint seed) {
+  GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, consumer.owner_index);
+  state.sampler_seed = seed;
+  wavefront_store_path_state(resources.camera_state_buffer, consumer.owner_index, state);
+  wavefront_emission_consumer_complete(resources, slot);
+  const SpectralResponse contribution = spectral_response_mul(spectral_response_mul(radiance, consumer.factor), consumer.selected_weight);
+  if (spectral_response_is_zero(contribution) == false) {
+    wavefront_film_add(consumer.output_pixel_index, wavefront_spectral_estimate(contribution, consumer.spect));
+  }
+}
+
 [numthreads(64, 1, 1)] void wavefront_camera_direct_hit_accumulate_main(uint3 dtid : SV_DispatchThreadID) {
   const uint dispatch_index = dtid.x;
   if (scene_strategy_enabled(kSceneStrategyDirectHit) == false) {
@@ -26,8 +37,7 @@
   if (hit.emitter_index == kInvalidIndex) {
     return;
   }
-  if ((scene_path_mode_is_path_tracing() == false) &&
-      ((meta.camera_path_length < load_scene_options_min_path_length()) || (meta.camera_path_length > load_scene_options_max_path_length()))) {
+  if ((meta.camera_path_length < load_scene_options_min_path_length()) || (meta.camera_path_length > load_scene_options_max_path_length())) {
     return;
   }
 
@@ -47,10 +57,37 @@
     return;
   }
 
-  SpectralResponse contribution = wavefront_compute_local_direct_hit_contribution(state.spect, meta.camera_path_length, current_vertex, previous_vertex, hit.emitter_index);
-  if (spectral_response_is_zero(contribution)) {
+  float pdf_area = 0.0f;
+  float pdf_dir = 0.0f;
+  float pdf_dir_out = 0.0f;
+  WavefrontEmissionInput emission_input = wavefront_empty_emission_input();
+  if (wavefront_propose_local_direct_hit(hit.emitter_index, previous_vertex.position, current_vertex.position, current_vertex.texcoord, current_vertex.normal,
+        current_vertex.material_index, current_vertex.barycentric, emission_input, pdf_area, pdf_dir, pdf_dir_out) == false) {
     return;
   }
 
-  wavefront_film_add(state.pixel_index, wavefront_spectral_estimate(contribution, state.spect));
+  WavefrontEmissionConsumer consumer = (WavefrontEmissionConsumer)0;
+  consumer.owner_index = path_index;
+  consumer.sampler_seed = state.sampler_seed;
+  consumer.output_pixel_index = state.pixel_index;
+  consumer.spect = state.spect;
+  consumer.factor = current_vertex.throughput;
+  consumer.selected_weight = wavefront_local_direct_hit_weight(meta.camera_path_length, current_vertex, previous_vertex, hit.emitter_index, pdf_area, pdf_dir, pdf_dir_out);
+  wavefront_queue_emission_input(resources, dispatch_index, emission_input, state.spect, state.sampler_seed);
+  wavefront_emission_consumer_suspend(resources, dispatch_index, consumer);
+}
+
+  [numthreads(64, 1, 1)] void wavefront_camera_direct_hit_accumulate_resume_main(uint3 dtid : SV_DispatchThreadID) {
+  if (dtid.x >= constants.dispatch_item_count) {
+    return;
+  }
+  const uint slot = constants.dispatch_item_offset + dtid.x;
+  const GPUWavefrontResources resources = wavefront_load_resources();
+  WavefrontEmissionConsumer consumer = (WavefrontEmissionConsumer)0;
+  if (wavefront_emission_consumer_load(resources, slot, consumer) == false) {
+    return;
+  }
+  uint seed = 0u;
+  const SpectralResponse radiance = wavefront_completed_emission(resources, slot, seed);
+  wavefront_finish_camera_direct_hit(resources, slot, consumer, radiance, seed);
 }

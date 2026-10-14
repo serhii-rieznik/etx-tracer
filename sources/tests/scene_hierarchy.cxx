@@ -1182,10 +1182,10 @@ bool test_external_medium_change_is_detected_without_notification() {
 
   scene.camera().film_size = {1u, 1u};
   const uint32_t medium_index = scene.add_medium("Regression Medium");
-  Material material = {};
+  etx::MaterialDescription material = {};
   material.cls = MaterialClass::Diffuse;
   material.opacity = 1.0f;
-  scene.data().materials.push_back(material);
+  scene.data().material_descriptions.push_back(material);
   integrator_thread.start(&integrator);
   integrator_thread.commit_scene_changes();
   integrator_thread.run();
@@ -1198,7 +1198,10 @@ bool test_external_medium_change_is_detected_without_notification() {
       check_condition(integrator_thread.scene_revision() == initial_revision, "unchanged scene polling preserves the committed revision") == false) {
     return false;
   }
-  scene.data().materials.front().ext_medium = medium_index;
+  scene.data().material_descriptions.front().ext_medium = medium_index;
+  if (check_condition(scene.ensure_energy_compensation_interfaces(), "authored external-medium edit prepares transport materials") == false) {
+    return false;
+  }
   if (check_condition(raytracing.scene().materials[0u].ext_medium != medium_index, "active CPU render snapshot remains immutable until the next scene commit") == false) {
     return false;
   }
@@ -1209,7 +1212,10 @@ bool test_external_medium_change_is_detected_without_notification() {
                       check_condition(integrator.run_count == (initial_run_count + 1u), "external-medium edit restarts the active integrator without an explicit notification") &&
                       check_condition(raytracing.scene().materials[0u].ext_medium == medium_index, "external-medium edit is published in the next CPU render snapshot");
   integrator_thread.stop(etx::Integrator::Stop::Immediate);
-  scene.data().materials.front().ext_medium = kInvalidIndex;
+  scene.data().material_descriptions.front().ext_medium = kInvalidIndex;
+  if (check_condition(scene.ensure_energy_compensation_interfaces(), "authored external-medium reset prepares transport materials") == false) {
+    return false;
+  }
   integrator_thread.commit_scene_changes();
   return result && check_condition(integrator.run_count == (initial_run_count + 1u), "scene commits do not restart an explicitly stopped integrator");
 }

@@ -5,6 +5,92 @@
 ETX_STATIC_CONST uint32_t kBSDFExternalScatteringOrderMax = 16u;
 ETX_STATIC_CONST float kBSDFExternalLambdaMax = 1.0e10f;
 
+ETX_SHARED_INLINE bool bsdf_external_response_finite(ETX_IN(SpectralResponse, value)) {
+  return spectral_response_is_spectral(value) ? isfinite(value.value) : (isfinite(value.integrated.x) && isfinite(value.integrated.y) && isfinite(value.integrated.z));
+}
+
+ETX_SHARED_INLINE float2 bsdf_external_binary_proposal(float first, float second) {
+  if (first <= 0.0f) {
+    return float2(0.0f, second > 0.0f ? 1.0f : 0.0f);
+  }
+  if (second <= 0.0f) {
+    return float2(1.0f, 0.0f);
+  }
+  const float cells = 8388608.0f;
+  const bool first_smaller = first <= second;
+  const float smaller = first_smaller ? first : second;
+  const float larger = first_smaller ? second : first;
+  const float ratio = smaller / larger;
+  const float probability = ratio / (1.0f + ratio);
+  const float small_cells = max(1.0f, floor(cells * probability + 0.5f));
+  const float small_probability = small_cells / cells;
+  const float large_probability = (cells - small_cells) / cells;
+  return first_smaller ? float2(small_probability, large_probability) : float2(large_probability, small_probability);
+}
+
+ETX_SHARED_INLINE float bsdf_external_component_proposal(float first) {
+  const float cell = 1.0f / 8388608.0f;
+  return bsdf_external_binary_proposal(max(cell, first), max(cell, 1.0f - first)).x;
+}
+
+ETX_SHARED_INLINE float3 bsdf_external_atom_proposal(float reflection, float transmission, float continuous) {
+  const float cells = 8388608.0f;
+  // Transmission's mass cannot depend on side-specific reflection or absorption.
+  const float transmission_cells = transmission > 0.0f ? min(cells - 2.0f, max(1.0f, floor(cells * transmission + 0.5f))) : 0.0f;
+  const float remaining = cells - transmission_cells;
+  float reflection_cells = 0.0f;
+  float continuous_cells = 0.0f;
+  if (continuous > 0.0f) {
+    if (reflection > 0.0f) {
+      reflection_cells = min(remaining - 1.0f, max(1.0f, floor(remaining * (reflection / (reflection + continuous)) + 0.5f)));
+    }
+    continuous_cells = remaining - reflection_cells;
+  } else if (reflection > 0.0f) {
+    reflection_cells = min(remaining, max(1.0f, floor(cells * reflection + 0.5f)));
+  }
+  return float3(reflection_cells, transmission_cells, continuous_cells) / cells;
+}
+
+ETX_SHARED_INLINE float bsdf_external_transmitted_cosine(float cosine, float incident, float transmitted) {
+  const float3 state = bsdf_fresnel_dielectric_longitudinal(cosine, incident, transmitted);
+  return state.z > 0.0f ? sqrt(state.z) / state.y : 0.0f;
+}
+
+ETX_SHARED_INLINE float bsdf_external_transmitted_cosine(float cosine, ETX_IN(RefractiveIndexSample, incident), ETX_IN(RefractiveIndexSample, transmitted)) {
+  return bsdf_external_transmitted_cosine(cosine, max(kEpsilon, spectral_response_monochromatic(incident.eta)), max(kEpsilon, spectral_response_monochromatic(transmitted.eta)));
+}
+
+ETX_SHARED_INLINE bool bsdf_external_transmission_possible(float cosine, ETX_IN(RefractiveIndexSample, incident), ETX_IN(RefractiveIndexSample, transmitted)) {
+  return bsdf_external_transmitted_cosine(cosine, incident, transmitted) > 0.0f;
+}
+
+ETX_SHARED_INLINE float2 bsdf_external_dielectric_proposal(ETX_IN(SpectralResponse, reflection), ETX_IN(SpectralResponse, transmission), bool transmission_possible) {
+  return bsdf_external_binary_proposal(max(0.0f, spectral_response_maximum(reflection)), transmission_possible ? max(0.0f, spectral_response_maximum(transmission)) : 0.0f);
+}
+
+ETX_SHARED_INLINE bool bsdf_external_normalize_half_vector(ETX_IN(float3, sum), ETX_OUT(float3, normal)) {
+  const float scale = max(abs(sum.x), max(abs(sum.y), abs(sum.z)));
+  normal = float3(0.0f, 0.0f, 0.0f);
+  if (scale == 0.0f) {
+    return false;
+  }
+  // Near matched media the nonzero transmission half-vector can be arbitrarily small.
+  normal = normalize(sum / scale);
+  return true;
+}
+
+ETX_SHARED_INLINE float bsdf_external_continuation_probability(ETX_IN(SpectralResponse, throughput)) {
+  const float magnitude = spectral_response_maximum(throughput);
+  if (magnitude <= 0.0f) {
+    return 0.0f;
+  }
+  float probability = 1.0f;
+  while ((probability > (1.0f / 16.0f)) && (magnitude <= (probability * 0.5f))) {
+    probability *= 0.5f;
+  }
+  return probability;
+}
+
 struct BSDFExternalRayInfo {
   float3 w ETX_INIT({});
   float Lambda ETX_INIT(0.0f);
@@ -178,20 +264,33 @@ ETX_SHARED_INLINE float bsdf_external_beta(float m, float n) {
   return exp(log_beta);
 }
 
-ETX_SHARED_INLINE float3 bsdf_external_refract(ETX_IN(float3, wi), ETX_IN(float3, wm), float eta) {
-  if (abs(eta) <= kEpsilon) {
+ETX_SHARED_INLINE float3 bsdf_external_refract(ETX_IN(float3, wi), ETX_IN(float3, wm), float incident, float transmitted) {
+#if (ETX_CPP) && defined(__clang__)
+# pragma clang fp contract(off) reassociate(off)
+#endif
+  const float cos_theta_i = dot(wi, wm);
+  const float cos_theta_t = bsdf_external_transmitted_cosine(cos_theta_i, incident, transmitted);
+  if (cos_theta_t <= 0.0f) {
     return float3(0.0f, 0.0f, 0.0f);
   }
+  const float eta = transmitted / incident;
+#if (ETX_CPP)
+  const float3 result = (wm * cos_theta_i - wi) / eta - wm * cos_theta_t;
+#else
+  precise float3 result = (wm * cos_theta_i - wi) / eta - wm * cos_theta_t;
+#endif
+  return result;
+}
 
-  float cos_theta_i = dot(wi, wm);
-  float cos_theta_t2 = 1.0f - (1.0f - cos_theta_i * cos_theta_i) / (eta * eta);
-  float cos_theta_t = -sqrt(max(0.0f, cos_theta_t2));
-  return wm * (dot(wi, wm) / eta + cos_theta_t) - wi / eta;
+ETX_SHARED_INLINE float3 bsdf_external_refract(ETX_IN(float3, wi), ETX_IN(float3, wm), ETX_IN(RefractiveIndexSample, incident), ETX_IN(RefractiveIndexSample, transmitted)) {
+  return bsdf_external_refract(wi, wm, max(kEpsilon, spectral_response_monochromatic(incident.eta)), max(kEpsilon, spectral_response_monochromatic(transmitted.eta)));
 }
 
 struct BSDFExternalDielectricSample {
   float3 w_o ETX_INIT({});
+  SpectralResponse weight ETX_INIT({});
   bool reflection ETX_INIT(false);
+  bool numerical_failure ETX_INIT(false);
 };
 
 ETX_SHARED_INLINE float3 bsdf_external_sample_vndf_local(ETX_IN(float3, w_i), ETX_IN(float2, alpha), ETX_IN(float2, rnd)) {
@@ -224,15 +323,33 @@ ETX_SHARED_INLINE BSDFExternalDielectricSample bsdf_external_sample_phase_functi
 
   float i_dot_m = dot(wi, wm);
   SpectralResponse f = bsdf_fresnel_calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
-  float eta = spectral_response_monochromatic(spectral_response_div(int_ior.eta, ext_ior.eta));
+  const SpectralResponse transmission = bsdf_fresnel_transmission_calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
+  const float eta = bsdf_dielectric_directional_eta(ext_ior, int_ior);
 
   BSDFExternalDielectricSample result = ETX_ZERO(BSDFExternalDielectricSample);
-  result.reflection = rnd_reflection < spectral_response_monochromatic(f);
+  if ((bsdf_external_response_finite(f) == false) || (bsdf_external_response_finite(transmission) == false) || (isfinite(eta) == false) || (eta <= 0.0f) ||
+      (isfinite(i_dot_m) == false)) {
+    result.numerical_failure = true;
+    return result;
+  }
+  const float2 proposal = bsdf_external_dielectric_proposal(f, transmission, bsdf_external_transmission_possible(i_dot_m, ext_ior, int_ior));
+  result.reflection = rnd_reflection < proposal.x;
+  const float probability = result.reflection ? proposal.x : proposal.y;
+  if (probability <= 0.0f) {
+    return result;
+  }
+  result.weight = f;
+  if (result.reflection == false) {
+    result.weight = transmission;
+  }
+  result.weight = spectral_response_div(result.weight, probability);
   if (result.reflection) {
     result.w_o = -wi + 2.0f * wm * i_dot_m;
   } else {
-    const float3 refracted_w_o = bsdf_external_refract(wi, wm, eta);
-    result.w_o = (dot(refracted_w_o, refracted_w_o) > kEpsilon) ? normalize(refracted_w_o) : float3(0.0f, 0.0f, 0.0f);
+    const float3 refracted_w_o = bsdf_external_refract(wi, wm, ext_ior, int_ior);
+    result.w_o = normalize(refracted_w_o);
   }
+  result.numerical_failure =
+    (bsdf_external_response_finite(result.weight) == false) || (isfinite(result.w_o.x) == false) || (isfinite(result.w_o.y) == false) || (isfinite(result.w_o.z) == false);
   return result;
 }

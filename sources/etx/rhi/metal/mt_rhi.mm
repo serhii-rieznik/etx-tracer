@@ -2904,10 +2904,14 @@ RHICreatePipelineResult MTDevice::create_compute_pipeline(const RHIComputePipeli
   return create_metal_compute_pipeline(_impl, desc).result;
 }
 
-std::vector<RHICreatePipelineBatchEntry> MTDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency, const RHIPipelineBatchProgressCallback& progress_callback) {
+std::vector<RHICreatePipelineBatchEntry> MTDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency, const RHIPipelineBatchProgressCallback& progress_callback,
+  const std::function<bool()>& should_continue) {
   (void)max_concurrency;
-  std::vector<RHICreatePipelineBatchEntry> results(descs.size());
+  std::vector<RHICreatePipelineBatchEntry> results(descs.size(), {.result = RHIResult::NotReady});
   for (size_t i = 0u; i < descs.size(); ++i) {
+    if (should_continue && (should_continue() == false)) {
+      break;
+    }
     results[i].state = RHIPipelineBatchProgressState::DriverCompiling;
     if (progress_callback) {
       progress_callback(static_cast<uint32_t>(i), results[i]);

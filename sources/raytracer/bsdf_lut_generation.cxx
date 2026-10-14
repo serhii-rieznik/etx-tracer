@@ -179,8 +179,8 @@ DirectionalAlbedoResult integrate_dielectric_directional(float mu_i, float alpha
       continue;
     }
 
-    const float cos_theta_t2 = 1.0f - (1.0f - i_dot_m * i_dot_m) / (eta * eta);
-    const float fresnel = (cos_theta_t2 <= 0.0f) ? 1.0f : dielectric_fresnel_value(i_dot_m, ext_ior, int_ior);
+    const float cos_theta_t = bsdf_external_transmitted_cosine(i_dot_m, ext_ior, int_ior);
+    const float fresnel = (cos_theta_t <= 0.0f) ? 1.0f : dielectric_fresnel_value(i_dot_m, ext_ior, int_ior);
     const float3 w_o_r = -w_i + 2.0f * m * i_dot_m;
     if (w_o_r.z > 0.0f) {
       const float lambda_o = bsdf_external_ray_info_make(w_o_r, alpha2).Lambda;
@@ -189,8 +189,8 @@ DirectionalAlbedoResult integrate_dielectric_directional(float mu_i, float alpha
       result.visible_probability += fresnel;
     }
 
-    if ((fresnel < 1.0f) && (cos_theta_t2 > 0.0f)) {
-      const float3 w_o_t = normalize(bsdf_external_refract(w_i, m, eta));
+    if ((fresnel < 1.0f) && (cos_theta_t > 0.0f)) {
+      const float3 w_o_t = normalize(bsdf_external_refract(w_i, m, ext_ior, int_ior));
       if (w_o_t.z < 0.0f) {
         const float lambda_o = bsdf_external_ray_info_make(-w_o_t, alpha2).Lambda;
         const float g2 = bsdf_external_beta(1.0f + lambda_i, 1.0f + lambda_o);

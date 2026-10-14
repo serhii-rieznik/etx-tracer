@@ -50,25 +50,30 @@ bool UI::material_spectrum_control(SceneRepresentation& scene, const char* label
   return spectrum_control(scene, label, targets, kind, false);
 }
 
-void UI::edit_spectrum_button(SceneRepresentation& scene, const char* label, SpectrumTarget::Channel channel, uint32_t spectrum_index, float width) {
-  (void)spectrum_index;
-  if (ImGui::Button(label, ImVec2(width, 0.0f))) {
-    _spectrum_targets.clear();
-    if (_editing_material_indices != nullptr) {
-      for (uint32_t index : *_editing_material_indices) {
-        SpectrumTarget target{.material_index = index, .channel = channel};
-        if (const uint32_t* slot = target.spectrum_slot(scene.data()); slot != nullptr) {
-          target.spectrum_index = *slot;
-          _spectrum_targets.push_back(target);
-        }
+void UI::open_ior_spectrum(SceneRepresentation& scene, const char* label, SpectrumTarget::Channel channel) {
+  _spectrum_targets.clear();
+  if (_editing_material_indices != nullptr) {
+    for (uint32_t index : *_editing_material_indices) {
+      SpectrumTarget target{.material_index = index, .channel = channel};
+      if (const uint32_t* slot = target.spectrum_slot(scene.data()); slot != nullptr) {
+        target.spectrum_index = *slot;
+        _spectrum_targets.push_back(target);
       }
     }
-    _spectrum_kind = SpectrumSource::Kind::IOR;
-    _spectrum_label = label;
-    if (const auto separator = _spectrum_label.find("##"); separator != std::string::npos)
-      _spectrum_label.resize(separator);
-    _spectrum_tab_requested = true;
-    _ui_setup |= UIMemoryDiagnostics;
+  }
+  _spectrum_kind = SpectrumSource::Kind::IOR;
+  _spectrum_label = label;
+  _spectrum_tab_requested = true;
+  _ui_setup |= UIMemoryDiagnostics;
+}
+
+void UI::rebind_material_spectrum(SceneRepresentation& scene, uint32_t previous_material, uint32_t material_index) {
+  for (SpectrumTarget& target : _spectrum_targets) {
+    if (target.material_index == previous_material) {
+      target.material_index = material_index;
+      const uint32_t* slot = target.spectrum_slot(scene.data());
+      target.spectrum_index = slot != nullptr ? *slot : kInvalidIndex;
+    }
   }
 }
 
@@ -98,7 +103,9 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
   }
   auto& state = _spectrum_controls[index];
   if ((state.initialized == false) || ((state.pending == false) && (same_spectrum(state.observed, actual) == false))) {
+    std::string error = std::move(state.error);
     state = {};
+    state.error = std::move(error);
     state.initialized = true;
     state.observed = actual;
     if (const auto found = data.spectrum_sources.find(index); (found != data.spectrum_sources.end()) && found->second.matches(actual)) {
@@ -381,6 +388,8 @@ bool UI::spectrum_control(SceneRepresentation& scene, const char* label, const s
   }
   ImGui::PopID();
   ImGui::PopID();
+  if (state.error.empty() == false)
+    ImGui::TextWrapped("%s", state.error.c_str());
   // Application updates run after the UI has released its references into scene arrays.
   return false;
 }
@@ -390,6 +399,20 @@ bool UI::commit_pending_edits(SceneRepresentation& scene) {
   return flush_spectrum_changes(scene, false);
 }
 
+void UI::revert_material_spectrum_edits(SceneRepresentation& scene) {
+  for (auto& [index, state] : _spectrum_controls) {
+    if (std::any_of(state.targets.begin(), state.targets.end(), [](const SpectrumTarget& target) {
+          return target.material_index != kInvalidIndex;
+        })) {
+      if (state.pending || ((index < scene.data().spectrum_values.size()) && (same_spectrum(state.observed, scene.data().spectrum_values[index]) == false))) {
+        state.error = scene.data().diagnostic.text() + "\nPrevious values were restored.";
+      }
+      state.pending = false;
+      state.initialized = false;
+    }
+  }
+}
+
 bool UI::flush_spectrum_changes(SceneRepresentation& scene, bool defer_pending) {
   std::vector<SpectrumEdit> edits;
   std::vector<uint32_t> indices;
@@ -397,6 +420,14 @@ bool UI::flush_spectrum_changes(SceneRepresentation& scene, bool defer_pending) 
   for (auto& [index, state] : _spectrum_controls) {
     if (state.pending == false)
       continue;
+    if (std::any_of(state.targets.begin(), state.targets.end(), [&](const SpectrumTarget& target) {
+          const uint32_t* slot = target.spectrum_slot(scene.data());
+          return (slot == nullptr) || (*slot != target.spectrum_index);
+        })) {
+      state.pending = false;
+      state.initialized = false;
+      continue;
+    }
     if (defer_pending && (state.error.empty() == false)) {
       deferred = true;
       continue;
@@ -421,9 +452,12 @@ bool UI::flush_spectrum_changes(SceneRepresentation& scene, bool defer_pending) 
         state.observed = scene.data().spectrum_values[index];
       state.error.clear();
     } else if (state.error.empty()) {
-      state.error = "The spectrum could not be applied. Check its values or select the target again.";
+      state.error = scene.data().diagnostic.message.empty() ? "The spectrum contains empty or non-finite values. The edit was not applied." : scene.data().diagnostic.text();
     }
-    state.pending = applied == false;
+    state.pending = false;
+    if (applied == false) {
+      state.initialized = false;
+    }
   }
   return applied && (deferred == false);
 }
@@ -432,6 +466,10 @@ void UI::build_spectrum_editor(SceneRepresentation& scene) {
   if (_spectrum_targets.empty()) {
     ImGui::TextDisabled("No Spectrum Selected");
     return;
+  }
+  for (SpectrumTarget& target : _spectrum_targets) {
+    const uint32_t* slot = target.spectrum_slot(scene.data());
+    target.spectrum_index = slot != nullptr ? *slot : kInvalidIndex;
   }
   spectrum_control(scene, _spectrum_label.c_str(), _spectrum_targets, _spectrum_kind, true);
 }

@@ -26,21 +26,38 @@ ETX_STATIC_CONST float kRGBResponseWavelengthCount = float(RGBResponseWavelength
 ETX_STATIC_CONST float kUndefinedWavelength = -1.0f;
 ETX_STATIC_CONST float kInvCIEYIntegral = 1.0f / 118.517887f;
 ETX_STATIC_CONST float kWavelengthSamplingUniformMixture = 0.05f;
-ETX_STATIC_CONST float3 kSpectralDistributionRGBLuminanceScale = float3(0.817660332f, 1.05418909f, 1.09945524f);
+ETX_STATIC_CONST uint32_t kSpectralLookupRowStride = 16u;
+ETX_STATIC_CONST uint32_t kSpectralLookupBufferSize = (WavelengthCount + RGBResponseWavelengthCount) * kSpectralLookupRowStride;
 
+#if defined(ETX_SPECTRAL_TABLES_EXTERNAL) == false
 ETX_STATIC_CONST float3 kCIE2006[WavelengthCount] = {
-#include "spectrum_cie2006_table.inl"
+# include "spectrum_cie2006_table.inl"
 };
 
 ETX_STATIC_CONST float3 kRGBResponse[RGBResponseWavelengthCount] = {
-#include "spectrum_rgb_response_table.inl"
+# include "spectrum_rgb_response_table.inl"
 };
 
 // Each 1 nm interval combines normalized CIE-to-linear-RGB response magnitude
 // with uniform support. Sampling is uniform inside the selected interval.
 ETX_STATIC_CONST float kWavelengthSamplingCDF[WavelengthCount] = {
-#include "spectrum_sampling_cdf_table.inl"
+# include "spectrum_sampling_cdf_table.inl"
 };
+#endif
+
+#if defined(ETX_SPECTRAL_TABLES_EXTERNAL)
+float3 spectral_xyz(uint32_t index);
+float spectral_sampling_cdf(uint32_t index);
+float3 spectral_rgb_basis(uint32_t index);
+#else
+ETX_SHARED_INLINE float spectral_sampling_cdf(uint32_t index) {
+  return kWavelengthSamplingCDF[index];
+}
+
+ETX_SHARED_INLINE float3 spectral_rgb_basis(uint32_t index) {
+  return kRGBResponse[index];
+}
+#endif
 
 struct SpectralFlags {
   enum : uint32_t {
@@ -86,8 +103,11 @@ struct ETX_ALIGNED SpectralResponse {
   float value ETX_INIT(0.0f);
   float wavelength ETX_INIT(kUndefinedWavelength);
   uint32_t flags ETX_INIT(0u);
+  // Full shader serialization writes these reserved words explicitly.
+#if (ETX_CPP)
   uint32_t pad0 ETX_INIT(0u);
   uint32_t pad1 ETX_INIT(0u);
+#endif
 };
 
 struct RefractiveIndexSample {
@@ -102,12 +122,14 @@ ETX_SHARED_INLINE SpectralResponse spectral_response_make(ETX_IN(SpectralQuery, 
 ETX_SHARED_INLINE SpectralResponse spectral_response_make(ETX_IN(SpectralQuery, query), ETX_IN(float3, integrated_val));
 ETX_SHARED_INLINE SpectralQuery spectral_response_as_query(ETX_IN(SpectralResponse, value));
 
+#if defined(ETX_SPECTRAL_TABLES_EXTERNAL) == false
 ETX_SHARED_INLINE float3 spectral_xyz(uint32_t index) {
-#if defined(__cplusplus)
+# if defined(__cplusplus)
   ETX_ASSERT(index < WavelengthCount);
-#endif
+# endif
   return kCIE2006[index];
 }
+#endif
 
 ETX_SHARED_INLINE float3 spectral_xyz_to_rgb(ETX_IN(float3, xyz)) {
   return make_float3(3.24045420f * xyz.x - 1.5371385f * xyz.y - 0.4985314f * xyz.z, -0.9692660f * xyz.x + 1.8760108f * xyz.y + 0.0415560f * xyz.z,
@@ -121,10 +143,14 @@ ETX_SHARED_INLINE float3 spectral_rgb_to_xyz(ETX_IN(float3, rgb)) {
 
 ETX_SHARED_INLINE bool spectral_query_is_spectral(ETX_IN(SpectralQuery, query)) {
 #if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
+# if (ETX_CPP)
   (void)query;
+# endif
   return false;
 #elif ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
+# if (ETX_CPP)
   (void)query;
+# endif
   return true;
 #else
   return (query.flags & SpectralFlags::Spectral) != 0u;
@@ -137,7 +163,7 @@ ETX_SHARED_INLINE float spectral_query_wavelength_pdf(float wavelength) {
   }
 
   const uint32_t interval = min(uint32_t(wavelength - kShortestWavelength), WavelengthCount - 2u);
-  return kWavelengthSamplingCDF[interval + 1u] - kWavelengthSamplingCDF[interval];
+  return spectral_sampling_cdf(interval + 1u) - spectral_sampling_cdf(interval);
 }
 
 ETX_SHARED_INLINE float spectral_query_sampling_pdf(ETX_IN(SpectralQuery, query)) {
@@ -158,15 +184,15 @@ ETX_SHARED_INLINE SpectralQuery spectral_query_spectral_sample(float rnd) {
   uint32_t end = WavelengthCount - 1u;
   while ((end - begin) > 1u) {
     const uint32_t middle = begin + (end - begin) / 2u;
-    if (kWavelengthSamplingCDF[middle] <= clamped_rnd) {
+    if (spectral_sampling_cdf(middle) <= clamped_rnd) {
       begin = middle;
     } else {
       end = middle;
     }
   }
 
-  const float interval_begin = kWavelengthSamplingCDF[begin];
-  const float interval_probability = kWavelengthSamplingCDF[begin + 1u] - interval_begin;
+  const float interval_begin = spectral_sampling_cdf(begin);
+  const float interval_probability = spectral_sampling_cdf(begin + 1u) - interval_begin;
   const float interval_sample = (clamped_rnd - interval_begin) / interval_probability;
 
   SpectralQuery result;
@@ -276,7 +302,7 @@ ETX_SHARED_INLINE float spectral_rgb_evaluate_wavelength(float wavelength, ETX_I
   uint32_t wi = uint32_t(wavelength - kRGBResponseShortestWavelength);
   uint32_t wj = min(wi + 1u, RGBResponseWavelengthCount - 1u);
   float dw = wavelength - floor(wavelength);
-  float3 weight = lerp(kRGBResponse[wi], kRGBResponse[wj], dw);
+  float3 weight = lerp(spectral_rgb_basis(wi), spectral_rgb_basis(wj), dw);
   return rgb.x * weight.x + rgb.y * weight.y + rgb.z * weight.z;
 }
 
@@ -294,10 +320,14 @@ ETX_SHARED_INLINE float luminance(ETX_IN(float3, value)) {
 
 ETX_SHARED_INLINE bool spectral_response_is_spectral(ETX_IN(SpectralResponse, value)) {
 #if ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_RGB
+# if (ETX_CPP)
   (void)value;
+# endif
   return false;
 #elif ETX_SPECTRAL_MODE == ETX_SPECTRAL_MODE_SPECTRAL
+# if (ETX_CPP)
   (void)value;
+# endif
   return true;
 #else
   return value.flags & SpectralFlags::Spectral;

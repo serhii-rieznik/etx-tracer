@@ -109,7 +109,7 @@ nlohmann::json tungsten_albedo_json(const nlohmann::json& src) {
   return src.contains("albedo") ? src["albedo"] : nlohmann::json();
 }
 
-void tungsten_set_albedo(Material& mtl, const nlohmann::json& val, SceneData& data, const char* base_dir) {
+void tungsten_set_albedo(MaterialDescription& mtl, const nlohmann::json& val, SceneData& data, const char* base_dir) {
   if (val.is_string()) {
     uint32_t tex_idx = resolve_tungsten_texture(val, data, base_dir);
     if (tex_idx != kInvalidIndex) {
@@ -148,7 +148,7 @@ void tungsten_set_albedo(Material& mtl, const nlohmann::json& val, SceneData& da
   mtl.reflectance.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 1.0f, 1.0f}));
 }
 
-void tungsten_set_transmission(Material& mtl, const nlohmann::json& val, SceneData& data, const char* base_dir) {
+void tungsten_set_transmission(MaterialDescription& mtl, const nlohmann::json& val, SceneData& data, const char* base_dir) {
   if (val.is_string()) {
     uint32_t tex_idx = resolve_tungsten_texture(val, data, base_dir);
     if (tex_idx != kInvalidIndex) {
@@ -406,7 +406,7 @@ PrimitiveLoadResult handle_mesh_primitive(const nlohmann::json& prim, const char
   return r;
 }
 
-void set_conductor_ior(Material& mtl, const std::string& material_name, SceneData& data, const IORDatabase& database) {
+void set_conductor_ior(MaterialDescription& mtl, const std::string& material_name, SceneData& data, const IORDatabase& database) {
   const IORDefinition* def = database.find_by_name(material_name.c_str(), SpectralDistribution::Conductor);
   if (def != nullptr) {
     mtl.int_ior.cls = def->cls;
@@ -428,7 +428,7 @@ void set_conductor_ior(Material& mtl, const std::string& material_name, SceneDat
   }
 }
 
-void set_dielectric_ior(Material& mtl, const std::string& bsdf_name, const nlohmann::json& b, SceneData& data, const IORDatabase& database) {
+void set_dielectric_ior(MaterialDescription& mtl, const std::string& bsdf_name, const nlohmann::json& b, SceneData& data, const IORDatabase& database) {
   auto try_name = [&](const std::string& n) -> bool {
     if (n.empty())
       return false;
@@ -459,7 +459,7 @@ void set_dielectric_ior(Material& mtl, const std::string& bsdf_name, const nlohm
 
 uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b, SceneData& data, const char* base_dir, const IORDatabase& database, bool force_two_sided) {
   uint32_t mat_idx = data.add_material(name.c_str());
-  auto& mtl = data.materials[mat_idx];
+  auto& mtl = data.material_descriptions[mat_idx];
   bool two_sided = b.value("two_sided", b.value("twoSided", false));
   std::string type = b.value("type", "lambert");
   mtl.ext_ior.cls = SpectralDistribution::Dielectric;
@@ -483,13 +483,13 @@ uint32_t add_tungsten_material(const std::string& name, const nlohmann::json& b,
       if (coat_base.is_string()) {
         base_material = find_material_index(coat_base.get<std::string>());
       } else if (coat_base.is_object()) {
-        std::string base_name = name.empty() ? std::string("__coat_base_") + std::to_string(data.materials.size()) : name + "__coat_base";
+        std::string base_name = name.empty() ? std::string("__coat_base_") + std::to_string(data.material_descriptions.size()) : name + "__coat_base";
         base_material = add_tungsten_material(base_name, coat_base, data, base_dir, database, force_two_sided);
       }
     }
 
     if (base_material != kInvalidIndex) {
-      data.materials[mat_idx] = data.materials[base_material];
+      data.material_descriptions[mat_idx] = data.material_descriptions[base_material];
     }
 
     if ((mtl.cls == MaterialClass::Diffuse) || (mtl.cls == MaterialClass::Translucent)) {
@@ -630,7 +630,7 @@ void reserve_mesh_triangles(SceneData& data, uint32_t extra_triangles) {
     data.triangles.reserve(required);
 }
 
-void set_emission_from_json(Material& mtl, const nlohmann::json& v, SceneData& data, const char* base_dir, float scale = 1.0f) {
+void set_emission_from_json(MaterialDescription& mtl, const nlohmann::json& v, SceneData& data, const char* base_dir, float scale = 1.0f) {
   float3 scaled_white = {scale, scale, scale};
   if (v.is_string()) {
     uint32_t tex_idx = resolve_tungsten_texture(v, data, base_dir);
@@ -1312,13 +1312,13 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
           material_index = it->second;
         }
       } else if (bsdf_node->is_object()) {
-        std::string mat_name = std::string("__prim_bsdf_") + std::to_string(data.materials.size());
+        std::string mat_name = std::string("__prim_bsdf_") + std::to_string(data.material_descriptions.size());
         material_index = add_tungsten_material(mat_name, *bsdf_node, data, base_dir, database, force_two_sided);
       }
     }
 
     if (material_index == data.defaults.missing_material) {
-      std::string mat_name = std::string("__prim_bsdf_") + std::to_string(data.materials.size());
+      std::string mat_name = std::string("__prim_bsdf_") + std::to_string(data.material_descriptions.size());
       material_index = add_tungsten_material(mat_name, nlohmann::json::object(), data, base_dir, database, force_two_sided);
     }
 
@@ -1336,14 +1336,14 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
       emission_scale = float(prim["scale"].get<double>());
 
     bool wants_emission = has_power || has_emission;
-    const bool overrides_two_sided = two_sided && (data.materials[material_index].two_sided == 0u);
+    const bool overrides_two_sided = two_sided && (data.material_descriptions[material_index].two_sided == 0u);
     if ((wants_emission || overrides_two_sided) && bsdf_is_string && (material_index != data.defaults.missing_material)) {
-      std::string clone_name = bsdf_name.empty() ? std::string{} : bsdf_name + "__emitter_" + std::to_string(data.materials.size());
-      material_index = data.clone_material(data.materials[material_index], clone_name.c_str());
+      std::string clone_name = bsdf_name.empty() ? std::string{} : bsdf_name + "__emitter_" + std::to_string(data.material_descriptions.size());
+      material_index = data.clone_material(data.material_descriptions[material_index], clone_name.c_str());
     }
 
     if (two_sided)
-      data.materials[material_index].two_sided = 1u;
+      data.material_descriptions[material_index].two_sided = 1u;
 
     float3 translate = {};
     float3 scale = {1.0f, 1.0f, 1.0f};
@@ -1391,7 +1391,7 @@ uint32_t load_tungsten_primitives(const nlohmann::json& js, const char* base_dir
         for (size_t index = triangle_start; index < data.triangles.size(); ++index)
           data.triangles[index].material_index = material_index;
       }
-      auto& mtl = data.materials[material_index];
+      auto& mtl = data.material_descriptions[material_index];
       primitives_loaded = true;
       apply_transform_to_new_roots(data, node_start, tungsten_transform(translate, scale, rotation));
       const uint32_t mesh_end = static_cast<uint32_t>(data.meshes.size());

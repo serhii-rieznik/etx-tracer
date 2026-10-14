@@ -1,8 +1,14 @@
 #pragma once
 
+#if !defined(ETX_ENABLE_AREA_EMITTERS)
+# define ETX_ENABLE_AREA_EMITTERS 1
+#endif
+
 #if !defined(ETX_GPU_RT_BINDLESS_ALREADY_INCLUDED)
 # include "bindless.hlsl"
 #endif
+
+#include "gpu_spectral_tables.hlsl"
 
 #include <access/spectrum_access_gpu.hxx>
 #include <interop/geometry.hxx>
@@ -256,6 +262,7 @@ Vertex scene_instance_transform_vertex(GPUSceneInstanceData instance, Vertex ver
 }
 
 #include <access/material_access_gpu.hxx>
+#include <interop/material_mix_shared.hxx>
 
 BSDFResourceContext make_scene_bsdf_resource_gpu_context() {
   return make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.spectral_values, constants.scene.energy_compensation_interfaces,
@@ -265,6 +272,15 @@ BSDFResourceContext make_scene_bsdf_resource_gpu_context() {
 bool try_load_material_full(uint material_index, out Material material) {
   MaterialAccessGPUContext material_context = {constants.scene.materials};
   return material_access_try_load_full(material_context, material_index, material);
+}
+
+uint resolve_mix_material(uint material_index, float2 uv, inout uint seed) {
+  MaterialAccessGPUContext material_context = {constants.scene.materials};
+  MaterialAccess access = (MaterialAccess)0;
+  if (material_access_try_load(material_context, material_index, access) && (access.material_class == MaterialClass::Mix)) {
+    return material_mix_resolve(material_context, make_scene_bsdf_resource_gpu_context(), material_index, uv, rnd01(seed));
+  }
+  return material_index;
 }
 
 BSDFData make_surface_bsdf_data(Vertex vertex, SpectralQuery spect, uint medium_index, float3 incoming_direction) {
@@ -729,6 +745,16 @@ float alpha_test_rnd(inout AlphaTestContext context) {
 
 #include <interop/alpha_test_shared.hxx>
 
+float sampled_material_coverage(uint material_index, float2 uv) {
+  MaterialAccessGPUContext material_context = {constants.scene.materials};
+  AlphaTestContext context = (AlphaTestContext)0;
+  if (material_access_try_load(material_context, material_index, context.material_access) == false) {
+    return 0.0f;
+  }
+  context.uv = uv;
+  return alpha_test_shared_coverage(context);
+}
+
 struct SurfacePoint {
   float3 barycentrics;
   Vertex vertex;
@@ -861,7 +887,7 @@ bool evaluate_surface_derivatives(TraceSurfaceResult hit, out SurfaceDerivatives
   return try_load_surface_derivatives(hit.tri, hit.surface_point.barycentrics, hit.instance_index, derivatives);
 }
 
-[noinline] SurfacePoint surface_point_apply_material_maps(SurfacePoint surface_point, Material material, TriangleData tri, uint instance_index, float3 incoming_direction) {
+SurfacePoint surface_point_apply_material_maps(SurfacePoint surface_point, Material material, TriangleData tri, uint instance_index, float3 incoming_direction) {
   if ((material.normal_image_index != kInvalidIndex) && (material.normal_scale > kEpsilon)) {
     surface_point_apply_material_normal_map(surface_point, material, incoming_direction);
     return surface_point;
@@ -881,6 +907,19 @@ bool evaluate_surface_derivatives(TraceSurfaceResult hit, out SurfaceDerivatives
   bump_mapping_shared_apply(derivatives, height * bump.value.x, gradient * bump.value.x, surface_point.geo_normal, incoming_direction, surface_point.vertex.nrm,
     surface_point.vertex.tan, surface_point.vertex.btn);
   return surface_point;
+}
+
+Vertex coated_emitter_vertex(Vertex vertex, TriangleData tri, float3 barycentric, uint instance_index, Material material, float3 incoming_direction) {
+  if (thermal_surface_uses_substrate_escape(material) == false) {
+    return vertex;
+  }
+  SurfacePoint surface = (SurfacePoint)0;
+  surface.vertex = vertex;
+  surface.barycentrics = barycentric;
+  surface.geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(instance_index), tri.geo_n);
+  scene_math_shared_finalize_shading_frame(surface.vertex.nrm, surface.vertex.nrm, surface.vertex.tan, surface.vertex.btn, surface.geo_normal, incoming_direction,
+    surface.vertex.nrm, surface.vertex.tan, surface.vertex.btn);
+  return surface_point_apply_material_maps(surface, material, tri, instance_index, incoming_direction).vertex;
 }
 
 float2 interpolate_uv_from_barycentrics(ByteAddressBuffer texcoord_buffer, TriangleData tri, float3 bc) {
@@ -1078,8 +1117,9 @@ float3 evaluate_local_emission_integrated(uint emitter_index, float2 uv) {
   return evaluate_emission_integrated_source(access.emission_spectrum_index, access.emission_image_index, uv);
 }
 
-SpectralResponse evaluate_local_emission_spectral(uint emitter_index, float2 uv, float3 shading_normal, float3 outgoing_direction, SpectralQuery spect) {
+SpectralResponse evaluate_local_emission_spectral(uint emitter_index, uint material_index, Vertex vertex, float3 outgoing_direction, SpectralQuery spect, inout uint seed) {
   SpectralResponse zero_value = spectral_response_zero(spect);
+#if ETX_ENABLE_AREA_EMITTERS
   EmitterAccessGPUContext context = make_scene_emitter_access_gpu_context();
   ETX_ZERO_INIT(EmitterAccess, access);
   if (emitter_access_try_load_local(context, emitter_index, access) == false) {
@@ -1092,18 +1132,22 @@ SpectralResponse evaluate_local_emission_spectral(uint emitter_index, float2 uv,
   }
   TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
   Material material = (Material)0;
-  if (try_load_material_full(tri.material_index, material) == false) {
+  if (try_load_material_full(material_index, material) == false) {
     return zero_value;
-  }
-  if (material.thermal_rgb_image_index == kInvalidIndex) {
-    return evaluate_emission_spectral_source(access.emission_spectrum_index, access.emission_image_index, uv, spect);
   }
   const float3 geo_normal = scene_instance_transform_geometric_normal(load_scene_instance(emitter_instance.instance_index), tri.geo_n);
   const float signed_cosine = dot(geo_normal, outgoing_direction);
-  if ((signed_cosine <= 0.0f) && (material.two_sided == 0u)) {
+  if ((signed_cosine <= 0.0f) && (thermal_surface_emits_both_sides(material) == false)) {
     return zero_value;
   }
-  return thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, uv, signed_cosine, abs(dot(shading_normal, outgoing_direction)));
+  Sampler emission_sampler = make_bsdf_sampler(seed);
+  const SpectralResponse value = thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, vertex.tex, signed_cosine,
+    thermal_surface_local_direction(material, vertex.nrm, vertex.tan, vertex.btn, outgoing_direction), emission_sampler);
+  seed = emission_sampler.seed;
+  return value;
+#else
+  return zero_value;
+#endif
 }
 
 float3 evaluate_distant_emission_integrated(uint emitter_index, float3 direction) {
@@ -1182,6 +1226,7 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
 
   float medium_segment_start_t = ray.TMin;
   uint ray_medium_index = medium_index;
+  uint committed_material = kInvalidIndex;
   while (q.Proceed()) {
     if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) {
       continue;
@@ -1215,6 +1260,7 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
       candidate_uv = interpolate_uv(texcoord_buffer, tri, candidate_bary);
     }
 
+    tri.material_index = resolve_mix_material(tri.material_index, candidate_uv, seed);
     MaterialAccess material_access = ETX_ZERO(MaterialAccess);
     if (has_material_buffer) {
       MaterialAccessGPUContext material_context = {constants.scene.materials};
@@ -1237,6 +1283,7 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
 
     if (hit_policy.action == HitPolicyAction::CommitSurface) {
       q.CommitNonOpaqueTriangleHit();
+      committed_material = tri.material_index;
     }
   }
 
@@ -1277,6 +1324,7 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
   result.triangle_index = scene_instance_triangle_index(q.CommittedPrimitiveIndex(), result.instance_index);
   result.hit_t = q.CommittedRayT();
   result.tri = load_triangle(triangle_buffer, result.triangle_index);
+  result.tri.material_index = committed_material;
   float2 bary = q.CommittedTriangleBarycentrics();
   result.surface_point = load_surface_point(position_buffer, normal_buffer, tangent_buffer, bitangent_buffer, texcoord_buffer, has_surface_frame_buffers, has_texcoords, result.tri,
     bary, ray.Direction, result.instance_index);
@@ -1369,8 +1417,9 @@ SpectralResponse evaluate_distant_emission_spectral(uint emitter_index, float3 d
 
 #endif
 
-[noinline] SpectralResponse gpu_evaluate_local_emission_spectral(uint emitter_index, float2 uv, float3 shading_normal, float3 outgoing_direction, SpectralQuery spect) {
-  return evaluate_local_emission_spectral(emitter_index, uv, shading_normal, outgoing_direction, spect);
+[noinline] SpectralResponse gpu_evaluate_local_emission_spectral(uint emitter_index, uint material_index, Vertex vertex, float3 outgoing_direction, SpectralQuery spect,
+  inout uint seed) {
+  return evaluate_local_emission_spectral(emitter_index, material_index, vertex, outgoing_direction, spect, seed);
 }
 
   [noinline] SpectralResponse gpu_evaluate_distant_emission_spectral_all(float3 direction, SpectralQuery spect) {
@@ -1399,6 +1448,7 @@ bool gpu_bsdf_sample_supported_class(uint material_class) {
     case MaterialClass::Translucent:
     case MaterialClass::Plastic:
     case MaterialClass::Conductor:
+    case MaterialClass::CoatedConductor:
     case MaterialClass::Dielectric:
     case MaterialClass::Thinfilm:
     case MaterialClass::Mirror:

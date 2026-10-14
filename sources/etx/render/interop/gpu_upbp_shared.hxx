@@ -640,5 +640,7 @@ struct ETX_ALIGNED GPUUPBPResources {
   GPUUPBPBeamGridResources bp2d_beam_grid ETX_INIT({});
   GPUUPBPBeamGridResources bb1d_beam_grid ETX_INIT({});
   uint32_t beam_index_mode ETX_INIT(GPUUPBPBeamIndexMode::AccelerationStructure);
-  uint32_t reserved1[3u] ETX_INIT({});
+  uint32_t surface_grid_ranges_buffer ETX_INIT(kInvalidIndex);
+  uint32_t surface_grid_indices_buffer ETX_INIT(kInvalidIndex);
+  uint32_t surface_grid_mask ETX_INIT(0u);
 };

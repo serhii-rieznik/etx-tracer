@@ -11,12 +11,15 @@
 #include <etx/render/shared/sampler.hxx>
 
 #include <etx/render/host/scene_representation.hxx>
+#include <etx/render/host/material_preparation.hxx>
+#include <etx/render/host/material_description_json.hxx>
 #include <etx/render/host/image_pool.hxx>
 #include <etx/render/host/medium_pool.hxx>
 #include <etx/render/host/bsdf_energy_compensation_lut.hxx>
 #include <etx/render/host/thermal_preparation.hxx>
 #include <etx/render/host/subsurface_preparation.hxx>
 #include <etx/render/host/scene_data.hxx>
+#include <etx/render/host/scene_document_merge.hxx>
 #include <etx/render/host/scene_serialization.hxx>
 #include <etx/render/host/scene_loader_utils.hxx>
 #include <etx/render/host/scene_procedural_geometry.hxx>
@@ -29,6 +32,7 @@
 
 #include <array>
 #include <fstream>
+#include <memory>
 #include <unordered_set>
 namespace etx {
 
@@ -50,10 +54,10 @@ bool valid_direction(const float3& value) {
   return finite_point(value) && std::isfinite(length_squared) && (length_squared > 0.0f);
 }
 
-bool write_file_contents(const std::filesystem::path& path, const std::string& contents) {
+bool write_file_contents(const std::filesystem::path& path, const std::string& contents, SceneDiagnostic& diagnostic) {
   FILE* file = fopen_utf8(path_to_utf8(path).c_str(), "wb");
   if (file == nullptr) {
-    log::error("Failed to open file for writing: %s", path_to_utf8(path).c_str());
+    diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot open %s for writing: %s", path_to_utf8(path).c_str(), std::strerror(errno));
     return false;
   }
 
@@ -61,7 +65,7 @@ bool write_file_contents(const std::filesystem::path& path, const std::string& c
   const bool flush_succeeded = fflush(file) == 0;
   const bool close_succeeded = fclose(file) == 0;
   if ((bytes_written != contents.size()) || (flush_succeeded == false) || (close_succeeded == false)) {
-    log::error("Failed to write file: %s", path_to_utf8(path).c_str());
+    diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to write file: %s", path_to_utf8(path).c_str());
     return false;
   }
 
@@ -93,7 +97,7 @@ bool managed_scene_asset_path(const std::filesystem::path& path) {
   return directory_name.ends_with(".etx.assets");
 }
 
-bool inspect_scene_asset_path(const std::filesystem::path& path, bool& file_exists) {
+bool inspect_scene_asset_path(const std::filesystem::path& path, bool& file_exists, SceneDiagnostic& diagnostic) {
   std::error_code error;
   const std::filesystem::file_status status = std::filesystem::symlink_status(path, error);
   if (status.type() == std::filesystem::file_type::not_found) {
@@ -101,11 +105,11 @@ bool inspect_scene_asset_path(const std::filesystem::path& path, bool& file_exis
     return true;
   }
   if (error) {
-    log::error("Failed to inspect scene asset: %s", path_to_utf8(path).c_str());
+    diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to inspect scene asset %s: %s", path_to_utf8(path).c_str(), error.message().c_str());
     return false;
   }
   if (std::filesystem::is_regular_file(status) == false) {
-    log::error("Expected scene asset to be a regular file: %s", path_to_utf8(path).c_str());
+    diagnostic.fail(SceneDiagnosticKind::File, "Document", "Expected scene asset to be a regular file: %s", path_to_utf8(path).c_str());
     return false;
   }
   file_exists = true;
@@ -256,7 +260,7 @@ std::filesystem::path scene_save_marker(const std::array<StagedSceneFile, 3u>& f
   return marker;
 }
 
-bool inspect_scene_save_path(const std::filesystem::path& path, const char* description, bool& file_exists) {
+bool inspect_scene_save_path(const std::filesystem::path& path, const char* description, bool& file_exists, SceneDiagnostic& diagnostic) {
   std::error_code error;
   const std::filesystem::file_status status = std::filesystem::symlink_status(path, error);
   if (status.type() == std::filesystem::file_type::not_found) {
@@ -264,48 +268,55 @@ bool inspect_scene_save_path(const std::filesystem::path& path, const char* desc
     return true;
   }
   if (error) {
-    log::error("Failed to inspect %s: %s", description, path_to_utf8(path).c_str());
+    diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to inspect %s %s: %s", description, path_to_utf8(path).c_str(), error.message().c_str());
     return false;
   }
   if ((std::filesystem::is_regular_file(status) == false) && (std::filesystem::is_symlink(status) == false)) {
-    log::error("Expected %s to be a file: %s", description, path_to_utf8(path).c_str());
+    diagnostic.fail(SceneDiagnosticKind::File, "Document", "Expected %s to be a file: %s", description, path_to_utf8(path).c_str());
     return false;
   }
   file_exists = true;
   return true;
 }
 
-bool remove_scene_save_file(const std::filesystem::path& path, const char* description) {
+template <class... Args>
+bool fail_scene_save_recovery(SceneDiagnostic& diagnostic, const char* format, Args... args) {
+  if (diagnostic.message.empty())
+    return diagnostic.fail(SceneDiagnosticKind::File, "Document", format, args...);
+  const std::string reason = format_diagnostic(format, args...);
+  diagnostic.message += "\n" + reason;
+  log::error("%s", reason.c_str());
+  return false;
+}
+
+bool remove_scene_save_file(const std::filesystem::path& path, const char* description, SceneDiagnostic& diagnostic) {
   std::error_code error;
   const std::filesystem::file_status status = std::filesystem::symlink_status(path, error);
   if (status.type() == std::filesystem::file_type::not_found) {
     return true;
   }
   if (error) {
-    log::warning("Failed to inspect %s: %s", description, path_to_utf8(path).c_str());
-    return false;
+    return fail_scene_save_recovery(diagnostic, "Failed to inspect %s %s: %s", description, path_to_utf8(path).c_str(), error.message().c_str());
   }
   if ((std::filesystem::is_regular_file(status) == false) && (std::filesystem::is_symlink(status) == false)) {
-    log::error("Refusing to remove non-file %s: %s", description, path_to_utf8(path).c_str());
-    return false;
+    return fail_scene_save_recovery(diagnostic, "Refusing to remove non-file %s: %s", description, path_to_utf8(path).c_str());
   }
   std::filesystem::remove(path, error);
   if (error) {
-    log::warning("Failed to remove %s: %s", description, path_to_utf8(path).c_str());
-    return false;
+    return fail_scene_save_recovery(diagnostic, "Failed to remove %s %s: %s", description, path_to_utf8(path).c_str(), error.message().c_str());
   }
   return true;
 }
 
-bool discard_staged_scene_files(std::array<StagedSceneFile, 3u>& files) {
+bool discard_staged_scene_files(std::array<StagedSceneFile, 3u>& files, SceneDiagnostic& diagnostic) {
   bool discarded = true;
   for (StagedSceneFile& file : files) {
-    discarded = remove_scene_save_file(file.staged, "staged scene file") && discarded;
+    discarded = remove_scene_save_file(file.staged, "staged scene file", diagnostic) && discarded;
   }
   return discarded;
 }
 
-bool restore_scene_files(std::array<StagedSceneFile, 3u>& files) {
+bool restore_scene_files(std::array<StagedSceneFile, 3u>& files, SceneDiagnostic& diagnostic) {
   bool restored = true;
   for (StagedSceneFile& file : files) {
     if (file.staged_installed == false) {
@@ -314,7 +325,7 @@ bool restore_scene_files(std::array<StagedSceneFile, 3u>& files) {
     std::error_code error;
     std::filesystem::remove(file.destination, error);
     if (error) {
-      log::error("Failed to remove incomplete scene file during save rollback: %s", path_to_utf8(file.destination).c_str());
+      fail_scene_save_recovery(diagnostic, "Failed to remove incomplete scene file during save rollback %s: %s", path_to_utf8(file.destination).c_str(), error.message().c_str());
       restored = false;
       continue;
     }
@@ -328,21 +339,22 @@ bool restore_scene_files(std::array<StagedSceneFile, 3u>& files) {
     std::error_code error;
     std::filesystem::rename(file->backup, file->destination, error);
     if (error) {
-      log::error("Failed to restore scene file after save failure: %s", path_to_utf8(file->destination).c_str());
+      fail_scene_save_recovery(diagnostic, "Failed to restore scene file after save failure %s: %s. Preserve the backup at %s for manual recovery.",
+        path_to_utf8(file->destination).c_str(), error.message().c_str(), path_to_utf8(file->backup).c_str());
       restored = false;
       continue;
     }
     file->destination_backed_up = false;
   }
 
-  restored = discard_staged_scene_files(files) && restored;
+  restored = discard_staged_scene_files(files, diagnostic) && restored;
   return restored;
 }
 
-bool commit_staged_scene_files(std::array<StagedSceneFile, 3u>& files) {
+bool commit_staged_scene_files(std::array<StagedSceneFile, 3u>& files, SceneDiagnostic& diagnostic) {
   for (StagedSceneFile& file : files) {
-    if (inspect_scene_save_path(file.destination, "scene destination", file.destination_existed) == false) {
-      (void)restore_scene_files(files);
+    if (inspect_scene_save_path(file.destination, "scene destination", file.destination_existed, diagnostic) == false) {
+      (void)restore_scene_files(files, diagnostic);
       return false;
     }
   }
@@ -355,17 +367,17 @@ bool commit_staged_scene_files(std::array<StagedSceneFile, 3u>& files) {
   const std::filesystem::path pending_marker = scene_save_marker(files, "pending");
   const std::filesystem::path committed_marker = scene_save_marker(files, "committed");
   const std::filesystem::path preparing_marker = scene_save_marker(files, "preparing");
-  if (write_file_contents(preparing_marker, transaction_state) == false) {
-    (void)restore_scene_files(files);
-    remove_scene_save_file(preparing_marker, "scene save marker");
+  if (write_file_contents(preparing_marker, transaction_state, diagnostic) == false) {
+    (void)restore_scene_files(files, diagnostic);
+    remove_scene_save_file(preparing_marker, "scene save marker", diagnostic);
     return false;
   }
   std::error_code marker_error;
   std::filesystem::rename(preparing_marker, pending_marker, marker_error);
   if (marker_error) {
-    log::error("Failed to start scene save transaction: %s", path_to_utf8(pending_marker).c_str());
-    (void)restore_scene_files(files);
-    remove_scene_save_file(preparing_marker, "scene save marker");
+    diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to start scene save transaction %s: %s", path_to_utf8(pending_marker).c_str(), marker_error.message().c_str());
+    (void)restore_scene_files(files, diagnostic);
+    remove_scene_save_file(preparing_marker, "scene save marker", diagnostic);
     return false;
   }
 
@@ -377,9 +389,9 @@ bool commit_staged_scene_files(std::array<StagedSceneFile, 3u>& files) {
     std::error_code error;
     std::filesystem::rename(file.destination, file.backup, error);
     if (error) {
-      log::error("Failed to preserve scene file before saving: %s", path_to_utf8(file.destination).c_str());
-      if (restore_scene_files(files)) {
-        remove_scene_save_file(pending_marker, "scene save marker");
+      diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to preserve scene file before saving %s: %s", path_to_utf8(file.destination).c_str(), error.message().c_str());
+      if (restore_scene_files(files, diagnostic)) {
+        remove_scene_save_file(pending_marker, "scene save marker", diagnostic);
       }
       return false;
     }
@@ -390,9 +402,9 @@ bool commit_staged_scene_files(std::array<StagedSceneFile, 3u>& files) {
     std::error_code error;
     std::filesystem::rename(file.staged, file.destination, error);
     if (error) {
-      log::error("Failed to install saved scene file: %s", path_to_utf8(file.destination).c_str());
-      if (restore_scene_files(files)) {
-        remove_scene_save_file(pending_marker, "scene save marker");
+      diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to install saved scene file %s: %s", path_to_utf8(file.destination).c_str(), error.message().c_str());
+      if (restore_scene_files(files, diagnostic)) {
+        remove_scene_save_file(pending_marker, "scene save marker", diagnostic);
       }
       return false;
     }
@@ -402,9 +414,10 @@ bool commit_staged_scene_files(std::array<StagedSceneFile, 3u>& files) {
   marker_error.clear();
   std::filesystem::rename(pending_marker, committed_marker, marker_error);
   if (marker_error) {
-    log::error("Failed to commit scene save transaction: %s", path_to_utf8(committed_marker).c_str());
-    if (restore_scene_files(files)) {
-      remove_scene_save_file(pending_marker, "scene save marker");
+    diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to commit scene save transaction %s: %s", path_to_utf8(committed_marker).c_str(),
+      marker_error.message().c_str());
+    if (restore_scene_files(files, diagnostic)) {
+      remove_scene_save_file(pending_marker, "scene save marker", diagnostic);
     }
     return false;
   }
@@ -424,10 +437,10 @@ bool commit_staged_scene_files(std::array<StagedSceneFile, 3u>& files) {
   return true;
 }
 
-bool read_scene_save_state(const std::filesystem::path& marker, std::array<bool, 3u>& destination_existed) {
+bool read_scene_save_state(const std::filesystem::path& marker, std::array<bool, 3u>& destination_existed, SceneDiagnostic& diagnostic) {
   FILE* file = fopen_utf8(path_to_utf8(marker).c_str(), "rb");
   if (file == nullptr) {
-    log::error("Failed to open scene save marker: %s", path_to_utf8(marker).c_str());
+    diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to open scene save marker: %s", path_to_utf8(marker).c_str());
     return false;
   }
 
@@ -435,12 +448,12 @@ bool read_scene_save_state(const std::filesystem::path& marker, std::array<bool,
   const size_t bytes_read = fread(state.data(), 1, state.size(), file);
   const bool close_succeeded = fclose(file) == 0;
   if ((bytes_read != state.size()) || (close_succeeded == false)) {
-    log::error("Failed to read scene save marker: %s", path_to_utf8(marker).c_str());
+    diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to read scene save marker: %s", path_to_utf8(marker).c_str());
     return false;
   }
   for (size_t index = 0u; index < state.size(); ++index) {
     if ((state[index] != '0') && (state[index] != '1')) {
-      log::error("Invalid scene save marker: %s", path_to_utf8(marker).c_str());
+      diagnostic.fail(SceneDiagnosticKind::File, "Document", "Invalid scene save marker: %s", path_to_utf8(marker).c_str());
       return false;
     }
     destination_existed[index] = state[index] == '1';
@@ -448,17 +461,17 @@ bool read_scene_save_state(const std::filesystem::path& marker, std::array<bool,
   return true;
 }
 
-bool recover_interrupted_scene_save(std::array<StagedSceneFile, 3u>& files, bool& committed_scene_available) {
+bool recover_interrupted_scene_save(std::array<StagedSceneFile, 3u>& files, bool& committed_scene_available, SceneDiagnostic& diagnostic) {
   committed_scene_available = false;
   const std::filesystem::path pending_marker = scene_save_marker(files, "pending");
   const std::filesystem::path committed_marker = scene_save_marker(files, "committed");
   const std::filesystem::path preparing_marker = scene_save_marker(files, "preparing");
   bool pending_exists = false;
-  if (inspect_scene_save_path(pending_marker, "scene save marker", pending_exists) == false) {
+  if (inspect_scene_save_path(pending_marker, "scene save marker", pending_exists, diagnostic) == false) {
     return false;
   }
   bool committed_exists = false;
-  if (inspect_scene_save_path(committed_marker, "scene save marker", committed_exists) == false) {
+  if (inspect_scene_save_path(committed_marker, "scene save marker", committed_exists, diagnostic) == false) {
     return false;
   }
 
@@ -466,7 +479,7 @@ bool recover_interrupted_scene_save(std::array<StagedSceneFile, 3u>& files, bool
     bool complete_scene = true;
     for (const StagedSceneFile& file : files) {
       bool destination_exists = false;
-      if (inspect_scene_save_path(file.destination, "committed scene file", destination_exists) == false) {
+      if (inspect_scene_save_path(file.destination, "committed scene file", destination_exists, diagnostic) == false) {
         return false;
       }
       if (destination_exists == false) {
@@ -476,13 +489,13 @@ bool recover_interrupted_scene_save(std::array<StagedSceneFile, 3u>& files, bool
     if (complete_scene) {
       bool cleanup_succeeded = true;
       for (StagedSceneFile& file : files) {
-        cleanup_succeeded = remove_scene_save_file(file.backup, "scene save backup") && cleanup_succeeded;
+        cleanup_succeeded = remove_scene_save_file(file.backup, "scene save backup", diagnostic) && cleanup_succeeded;
       }
-      cleanup_succeeded = discard_staged_scene_files(files) && cleanup_succeeded;
-      cleanup_succeeded = remove_scene_save_file(preparing_marker, "scene save marker") && cleanup_succeeded;
-      cleanup_succeeded = remove_scene_save_file(pending_marker, "scene save marker") && cleanup_succeeded;
+      cleanup_succeeded = discard_staged_scene_files(files, diagnostic) && cleanup_succeeded;
+      cleanup_succeeded = remove_scene_save_file(preparing_marker, "scene save marker", diagnostic) && cleanup_succeeded;
+      cleanup_succeeded = remove_scene_save_file(pending_marker, "scene save marker", diagnostic) && cleanup_succeeded;
       if (cleanup_succeeded) {
-        (void)remove_scene_save_file(committed_marker, "scene save marker");
+        (void)remove_scene_save_file(committed_marker, "scene save marker", diagnostic);
       }
       committed_scene_available = true;
       return true;
@@ -492,7 +505,7 @@ bool recover_interrupted_scene_save(std::array<StagedSceneFile, 3u>& files, bool
   if (pending_exists || committed_exists) {
     const std::filesystem::path& state_marker = pending_exists ? pending_marker : committed_marker;
     std::array<bool, 3u> destination_existed = {};
-    if (read_scene_save_state(state_marker, destination_existed) == false) {
+    if (read_scene_save_state(state_marker, destination_existed, diagnostic) == false) {
       return false;
     }
 
@@ -500,82 +513,82 @@ bool recover_interrupted_scene_save(std::array<StagedSceneFile, 3u>& files, bool
     for (size_t index = 0u; index < files.size(); ++index) {
       StagedSceneFile& file = files[index];
       bool backup_exists = false;
-      if (inspect_scene_save_path(file.backup, "scene save backup", backup_exists) == false) {
+      if (inspect_scene_save_path(file.backup, "scene save backup", backup_exists, diagnostic) == false) {
         recovered = false;
         continue;
       }
 
       if (destination_existed[index]) {
         if (backup_exists) {
-          if (remove_scene_save_file(file.destination, "incomplete scene file") == false) {
-            log::error("Failed to remove incomplete scene file: %s", path_to_utf8(file.destination).c_str());
+          if (remove_scene_save_file(file.destination, "incomplete scene file", diagnostic) == false) {
+            diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to remove incomplete scene file: %s", path_to_utf8(file.destination).c_str());
             recovered = false;
             continue;
           }
           std::error_code error;
           std::filesystem::rename(file.backup, file.destination, error);
           if (error) {
-            log::error("Failed to recover scene save backup: %s", path_to_utf8(file.destination).c_str());
+            diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to recover scene save backup: %s", path_to_utf8(file.destination).c_str());
             recovered = false;
           }
           continue;
         }
 
         bool destination_exists = false;
-        if ((inspect_scene_save_path(file.destination, "original scene file", destination_exists) == false) || (destination_exists == false)) {
-          log::error("Original scene file is unavailable after an interrupted save: %s", path_to_utf8(file.destination).c_str());
+        if ((inspect_scene_save_path(file.destination, "original scene file", destination_exists, diagnostic) == false) || (destination_exists == false)) {
+          diagnostic.fail(SceneDiagnosticKind::File, "Document", "Original scene file is unavailable after an interrupted save: %s", path_to_utf8(file.destination).c_str());
           recovered = false;
         }
         continue;
       }
 
-      if (remove_scene_save_file(file.destination, "incomplete scene file") == false) {
-        log::error("Failed to remove incomplete scene file: %s", path_to_utf8(file.destination).c_str());
+      if (remove_scene_save_file(file.destination, "incomplete scene file", diagnostic) == false) {
+        diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to remove incomplete scene file: %s", path_to_utf8(file.destination).c_str());
         recovered = false;
       }
       if (backup_exists) {
-        recovered = remove_scene_save_file(file.backup, "unexpected scene save backup") && recovered;
+        recovered = remove_scene_save_file(file.backup, "unexpected scene save backup", diagnostic) && recovered;
       }
     }
 
     if (recovered == false) {
       return false;
     }
-    (void)discard_staged_scene_files(files);
-    remove_scene_save_file(preparing_marker, "scene save marker");
-    remove_scene_save_file(pending_marker, "scene save marker");
-    remove_scene_save_file(committed_marker, "scene save marker");
+    (void)discard_staged_scene_files(files, diagnostic);
+    remove_scene_save_file(preparing_marker, "scene save marker", diagnostic);
+    remove_scene_save_file(pending_marker, "scene save marker", diagnostic);
+    remove_scene_save_file(committed_marker, "scene save marker", diagnostic);
     log::warning("Recovered scene files after an interrupted save");
     return true;
   }
 
   for (StagedSceneFile& file : files) {
     bool backup_exists = false;
-    if (inspect_scene_save_path(file.backup, "scene save backup", backup_exists) == false) {
+    if (inspect_scene_save_path(file.backup, "scene save backup", backup_exists, diagnostic) == false) {
       return false;
     }
     if (backup_exists == false) {
       continue;
     }
     bool destination_exists = false;
-    if (inspect_scene_save_path(file.destination, "scene destination", destination_exists) == false) {
+    if (inspect_scene_save_path(file.destination, "scene destination", destination_exists, diagnostic) == false) {
       return false;
     }
     if (destination_exists) {
-      log::error("Ambiguous scene save backup requires manual recovery: %s", path_to_utf8(file.backup).c_str());
+      diagnostic.fail(SceneDiagnosticKind::File, "Document", "Ambiguous scene save backup requires manual recovery: %s", path_to_utf8(file.backup).c_str());
       return false;
     }
     std::error_code error;
     std::filesystem::rename(file.backup, file.destination, error);
     if (error) {
-      log::error("Failed to recover orphaned scene save backup: %s", path_to_utf8(file.destination).c_str());
+      diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to recover orphaned scene save backup: %s", path_to_utf8(file.destination).c_str());
       return false;
     }
   }
-  if (discard_staged_scene_files(files) == false) {
+  if (discard_staged_scene_files(files, diagnostic) == false) {
     return false;
   }
-  remove_scene_save_file(preparing_marker, "scene save marker");
+  remove_scene_save_file(preparing_marker, "scene save marker", diagnostic);
   return true;
 }
 
@@ -1085,8 +1098,8 @@ bool build_serialized_material_entries(const SceneData& data, std::vector<Serial
     if (internal_scene_resource_name(mapping.first)) {
       continue;
     }
-    if (mapping.second >= data.materials.size()) {
-      log::error("Cannot save material %s: material index %u is invalid", mapping.first.c_str(), mapping.second);
+    if (mapping.second >= data.material_descriptions.size()) {
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save material %s: material index %u is invalid", mapping.first.c_str(), mapping.second);
       return false;
     }
 
@@ -1115,7 +1128,7 @@ bool build_serialized_material_entries(const SceneData& data, std::vector<Serial
 
 bool build_serialized_medium_entries(const SceneData& data, std::vector<SerializedMediumEntry>& result) {
   if (data.mediums.mapping().size() != data.mediums.array_size()) {
-    log::error("Cannot save media: the name mapping does not match the medium array");
+    data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save media: the name mapping does not match the medium array");
     return false;
   }
 
@@ -1124,7 +1137,7 @@ bool build_serialized_medium_entries(const SceneData& data, std::vector<Serializ
   result.reserve(data.mediums.mapping().size());
   for (const auto& [name, medium_index] : data.mediums.mapping()) {
     if ((name.empty()) || (medium_index >= data.mediums.array_size()) || (mapped_indices.insert(medium_index).second == false)) {
-      log::error("Cannot save medium %s: its name mapping is invalid", name.c_str());
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save medium %s: its name mapping is invalid", name.c_str());
       return false;
     }
 
@@ -1199,17 +1212,17 @@ bool spectral_distribution_serializable(const SpectralDistribution& spectrum) {
   return true;
 }
 
-bool deserialize_spectral_distribution(const nlohmann::json& source, SpectralDistribution& result) {
+bool deserialize_spectral_distribution(const nlohmann::json& source, SpectralDistribution& result, SceneDiagnostic& diagnostic) {
   if ((source.is_object() == false) || (source.contains("integrated") == false) || (source["integrated"].is_array() == false) || (source["integrated"].size() != 3u) ||
       (source.contains("samples") == false) || (source["samples"].is_array() == false) || ((source["samples"].size() % 2u) != 0u) ||
       ((source["samples"].size() / 2u) > WavelengthCount)) {
-    return false;
+    return diagnostic.fail(SceneDiagnosticKind::File, "Spectrum", "A saved spectrum requires three integrated components and at most %u wavelength/value pairs.", WavelengthCount);
   }
 
   result = {};
   if ((json_float_value(source["integrated"][0u], result.integrated_value.x) == false) || (json_float_value(source["integrated"][1u], result.integrated_value.y) == false) ||
       (json_float_value(source["integrated"][2u], result.integrated_value.z) == false)) {
-    return false;
+    return diagnostic.fail(SceneDiagnosticKind::File, "Spectrum", "A saved spectrum has non-finite or invalid integrated components.");
   }
 
   const nlohmann::json& samples = source["samples"];
@@ -1219,15 +1232,17 @@ bool deserialize_spectral_distribution(const nlohmann::json& source, SpectralDis
     SpectralDistribution::Entry& entry = result.spectral_entries[sample_index];
     if ((json_float_value(samples[2u * sample_index], entry.wavelength) == false) || (json_float_value(samples[2u * sample_index + 1u], entry.power) == false) ||
         (entry.wavelength <= previous_wavelength)) {
-      return false;
+      return diagnostic.fail(SceneDiagnosticKind::File, "Spectrum",
+        "Saved spectrum entry #%u requires finite wavelength and value components, with strictly increasing wavelengths.", sample_index);
     }
     previous_wavelength = entry.wavelength;
   }
   return true;
 }
 
+template <typename TextureReference>
 nlohmann::json serialize_scene_spectral_overrides(const SceneData& data, const std::vector<SerializedMaterialEntry>& material_entries,
-  const std::vector<SerializedMediumEntry>& medium_entries, bool& valid) {
+  const std::vector<SerializedMediumEntry>& medium_entries, bool& valid, TextureReference texture_reference) {
   valid = true;
   nlohmann::json values = nlohmann::json::array();
   std::unordered_map<uint32_t, uint32_t> spectrum_mapping;
@@ -1237,12 +1252,12 @@ nlohmann::json serialize_scene_spectral_overrides(const SceneData& data, const s
       return nullptr;
     }
     if (spectrum_index >= data.spectrum_values.size()) {
-      log::error("Cannot save %s: spectrum index %u is invalid", context, spectrum_index);
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save %s: spectrum index %u is invalid", context, spectrum_index);
       valid = false;
       return nullptr;
     }
     if (spectral_distribution_serializable(data.spectrum_values[spectrum_index]) == false) {
-      log::error("Cannot save %s: spectrum index %u contains invalid data", context, spectrum_index);
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save %s: spectrum index %u contains invalid data", context, spectrum_index);
       valid = false;
       return nullptr;
     }
@@ -1271,50 +1286,53 @@ nlohmann::json serialize_scene_spectral_overrides(const SceneData& data, const s
     return serialized_index;
   };
 
-  auto serialize_ior = [&](const RefractiveIndex& ior, const char* context) {
-    return nlohmann::json{
-      {"class", ior.cls},
-      {"eta", spectrum_reference(ior.eta_index, context)},
-      {"k", spectrum_reference(ior.k_index, context)},
-    };
-  };
-
   nlohmann::json materials = nlohmann::json::array();
-  const auto image_settings = [&](uint32_t index) -> nlohmann::json {
-    if (index == kInvalidIndex)
-      return nullptr;
-    if (index >= data.images_vector.size()) {
-      valid = false;
+  const auto material_reference = [&](uint32_t index) -> nlohmann::json {
+    if (index == kInvalidIndex) {
       return nullptr;
     }
-    const Image& image = data.images_vector[index];
-    return {{"options", image.options & ~Image::Committed}, {"offset", {image.offset.x, image.offset.y}}, {"scale", {image.scale.x, image.scale.y}}};
+    for (const auto& entry : material_entries) {
+      if (entry.material_index == index) {
+        return entry.id;
+      }
+    }
+    valid = false;
+    return nullptr;
+  };
+  const auto medium_reference = [&](uint32_t index) -> nlohmann::json {
+    if (index == kInvalidIndex) {
+      return nullptr;
+    }
+    for (const auto& entry : medium_entries) {
+      if (entry.medium_index == index) {
+        return entry.id;
+      }
+    }
+    valid = false;
+    return nullptr;
   };
   for (const SerializedMaterialEntry& entry : material_entries) {
-    const Material& material = data.materials[entry.material_index];
+    const MaterialDescription& material = data.material_descriptions[entry.material_index];
+    if (material_description_serializable(material) == false) {
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save material %s: invalid authored parameters", entry.id.c_str());
+      valid = false;
+      continue;
+    }
     materials.push_back({
       {"name", entry.id},
-      {"reflectance", spectrum_reference(material.reflectance.spectrum_index, "material reflectance")},
-      {"scattering", spectrum_reference(material.scattering.spectrum_index, "material scattering")},
-      {"emission", spectrum_reference(material.emission.spectrum_index, "material emission")},
-      {"subsurface", spectrum_reference(material.subsurface.spectrum_index, "material subsurface")},
-      {"external_ior", serialize_ior(material.ext_ior, "external IOR")},
-      {"internal_ior", serialize_ior(material.int_ior, "internal IOR")},
-      {"thinfilm_ior", serialize_ior(material.thinfilm.ior, "thin-film IOR")},
-      {"textures", {{"reflectance", image_settings(material.reflectance.image_index)}, {"scattering", image_settings(material.scattering.image_index)},
-                     {"emission", image_settings(material.emission.image_index)},
-                     {"subsurface", image_settings(material.subsurface_cls != SubsurfaceMaterial::Disabled ? material.subsurface.image_index : kInvalidIndex)},
-                     {"roughness", image_settings(material.roughness.image_index)}, {"metalness", image_settings(material.metalness.image_index)},
-                     {"transmission", image_settings(material.transmission.image_index)}, {"normal", image_settings(material.normal_image_index)},
-                     {"thinfilm", image_settings(material.thinfilm.thinkness_image)}, {"alpha_mask", image_settings(material.alpha_mask.image_index)},
-                     {"bump", image_settings(material.bump.image_index)}}},
+      {"description", serialize_material_description(
+                        material,
+                        [&](uint32_t index) {
+                          return spectrum_reference(index, "material description");
+                        },
+                        texture_reference, material_reference, medium_reference)},
     });
   }
 
   nlohmann::json mediums = nlohmann::json::array();
   for (const SerializedMediumEntry& entry : medium_entries) {
     if (entry.medium_index >= data.mediums.array_size()) {
-      log::error("Cannot save medium %s: medium index %u is invalid", entry.authored_name.c_str(), entry.medium_index);
+      data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Cannot save medium %s: medium index %u is invalid", entry.authored_name.c_str(), entry.medium_index);
       valid = false;
       continue;
     }
@@ -1334,7 +1352,7 @@ nlohmann::json serialize_scene_spectral_overrides(const SceneData& data, const s
   }
 
   return {
-    {"version", 1u},
+    {"version", 2u},
     {"values", std::move(values)},
     {"materials", std::move(materials)},
     {"mediums", std::move(mediums)},
@@ -1343,9 +1361,10 @@ nlohmann::json serialize_scene_spectral_overrides(const SceneData& data, const s
 }
 
 bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& data) {
-  if ((source.is_object() == false) || (source.contains("version") == false) || (source["version"].is_number_unsigned() == false) || (source["version"].get<uint64_t>() != 1u) ||
-      (source.contains("values") == false) || (source["values"].is_array() == false) || (source.contains("materials") == false) || (source["materials"].is_array() == false) ||
-      (source.contains("mediums") == false) || (source["mediums"].is_array() == false) || (source.contains("emitters") == false) || (source["emitters"].is_array() == false)) {
+  if ((source.is_object() == false) || (source.contains("version") == false) || (source["version"].is_number_unsigned() == false) ||
+      ((source["version"].get<uint64_t>() != 1u) && (source["version"].get<uint64_t>() != 2u)) || (source.contains("values") == false) || (source["values"].is_array() == false) ||
+      (source.contains("materials") == false) || (source["materials"].is_array() == false) || (source.contains("mediums") == false) || (source["mediums"].is_array() == false) ||
+      (source.contains("emitters") == false) || (source["emitters"].is_array() == false)) {
     return false;
   }
 
@@ -1353,7 +1372,7 @@ bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& dat
   decoded_values.reserve(source["values"].size());
   for (const nlohmann::json& value : source["values"]) {
     SpectralDistribution& decoded = decoded_values.emplace_back();
-    if (deserialize_spectral_distribution(value, decoded) == false) {
+    if (deserialize_spectral_distribution(value, decoded, data.diagnostic) == false) {
       return false;
     }
   }
@@ -1383,7 +1402,7 @@ bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& dat
     if ((json_float_value(saved["strength"], author.strength) == false) || (author.strength < 0.0f) || (json_float_value(saved["temperature"], author.temperature) == false) ||
         (author.temperature < 1000.0f) || (author.temperature > 40000.0f) || (json_float_value(saved["color"][0], author.color.x) == false) ||
         (json_float_value(saved["color"][1], author.color.y) == false) || (json_float_value(saved["color"][2], author.color.z) == false) ||
-        (min(author.color.x, min(author.color.y, author.color.z)) < 0.0f) || (deserialize_spectral_distribution(saved["base"], author.base) == false)) {
+        (min(author.color.x, min(author.color.y, author.color.z)) < 0.0f) || (deserialize_spectral_distribution(saved["base"], author.base, data.diagnostic) == false)) {
       return false;
     }
     float previous = 0.0f;
@@ -1463,9 +1482,7 @@ bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& dat
   }
   std::unordered_set<std::string> restored_materials;
   for (const nlohmann::json& serialized : source["materials"]) {
-    if ((serialized.is_object() == false) || (serialized.contains("name") == false) || (serialized["name"].is_string() == false) || (serialized.contains("reflectance") == false) ||
-        (serialized.contains("scattering") == false) || (serialized.contains("emission") == false) || (serialized.contains("subsurface") == false) ||
-        (serialized.contains("external_ior") == false) || (serialized.contains("internal_ior") == false) || (serialized.contains("thinfilm_ior") == false)) {
+    if ((serialized.is_object() == false) || (serialized.contains("name") == false) || (serialized["name"].is_string() == false)) {
       return false;
     }
     const std::string& name = serialized["name"].get_ref<const std::string&>();
@@ -1473,10 +1490,70 @@ bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& dat
       return false;
     }
     const auto mapping = data.material_mapping.find(name);
-    if ((mapping == data.material_mapping.end()) || (mapping->second >= data.materials.size())) {
+    if ((mapping == data.material_mapping.end()) || (mapping->second >= data.material_descriptions.size())) {
       return false;
     }
-    Material& material = data.materials[mapping->second];
+    MaterialDescription& material = data.material_descriptions[mapping->second];
+    if (source["version"].get<uint64_t>() == 2u) {
+      const auto texture = [&](const nlohmann::json& value, uint32_t& index) {
+        if (value.is_null()) {
+          index = kInvalidIndex;
+          return true;
+        }
+        if ((value.is_object() == false) || (value.contains("path") == false) || (value["path"].is_string() == false) || (value.contains("options") == false) ||
+            (value["options"].is_number_unsigned() == false) || (value["options"].get<uint64_t>() > std::numeric_limits<uint32_t>::max()) || (value.contains("offset") == false) ||
+            (value["offset"].is_array() == false) || (value["offset"].size() != 2u) || (value.contains("scale") == false) || (value["scale"].is_array() == false) ||
+            (value["scale"].size() != 2u)) {
+          return false;
+        }
+        float2 offset = {}, scale = {};
+        if ((json_float_value(value["offset"][0], offset.x) == false) || (json_float_value(value["offset"][1], offset.y) == false) ||
+            (json_float_value(value["scale"][0], scale.x) == false) || (json_float_value(value["scale"][1], scale.y) == false)) {
+          return false;
+        }
+        const std::string& path = value["path"].get_ref<const std::string&>();
+        if (path.empty()) {
+          return false;
+        }
+        const auto resolved = (std::filesystem::u8path(data.json_file_name).parent_path() / std::filesystem::u8path(path)).lexically_normal();
+        index = data.add_image(path_to_utf8(resolved).c_str(), value["options"].get<uint32_t>() & ~Image::Committed, offset, scale);
+        return index != kInvalidIndex;
+      };
+      const auto named_reference = [](const nlohmann::json& value, const auto& mapping, uint32_t& index) {
+        if (value.is_null()) {
+          index = kInvalidIndex;
+          return true;
+        }
+        if (value.is_string() == false) {
+          return false;
+        }
+        const auto entry = mapping.find(value.template get<std::string>());
+        if (entry == mapping.end()) {
+          return false;
+        }
+        index = entry->second;
+        return true;
+      };
+      std::string error;
+      if ((serialized.contains("description") == false) || (deserialize_material_description(
+                                                              serialized["description"], material, resolve_reference, texture,
+                                                              [&](const nlohmann::json& value, uint32_t& index) {
+                                                                return named_reference(value, data.material_mapping, index);
+                                                              },
+                                                              [&](const nlohmann::json& value, uint32_t& index) {
+                                                                return named_reference(value, data.mediums.mapping(), index);
+                                                              },
+                                                              error) == false)) {
+        data.diagnostic.fail(SceneDiagnosticKind::File, "Document", "Failed to read material %s: %s", name.c_str(), error.c_str());
+        return false;
+      }
+      continue;
+    }
+    if ((serialized.contains("reflectance") == false) || (serialized.contains("scattering") == false) || (serialized.contains("emission") == false) ||
+        (serialized.contains("subsurface") == false) || (serialized.contains("external_ior") == false) || (serialized.contains("internal_ior") == false) ||
+        (serialized.contains("thinfilm_ior") == false)) {
+      return false;
+    }
     if ((resolve_reference(serialized["reflectance"], material.reflectance.spectrum_index) == false) ||
         (resolve_reference(serialized["scattering"], material.scattering.spectrum_index) == false) ||
         (resolve_reference(serialized["emission"], material.emission.spectrum_index) == false) ||
@@ -1484,6 +1561,12 @@ bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& dat
         (apply_ior(serialized["internal_ior"], material.int_ior) == false) || (apply_ior(serialized["thinfilm_ior"], material.thinfilm.ior) == false)) {
       return false;
     }
+    if (serialized.contains("coating_ior") && (apply_ior(serialized["coating_ior"], material.coating.ior) == false))
+      return false;
+    if (serialized.contains("coating_absorption") && (resolve_reference(serialized["coating_absorption"], material.coating.absorption.spectrum_index) == false))
+      return false;
+    if (serialized.contains("coating_scattering") && (resolve_reference(serialized["coating_scattering"], material.coating.scattering.spectrum_index) == false))
+      return false;
     if (serialized.contains("textures")) {
       const auto& textures = serialized["textures"];
       if (textures.is_object() == false)
@@ -1518,6 +1601,12 @@ bool apply_scene_spectral_overrides(const nlohmann::json& source, SceneData& dat
           (restore_image("thinfilm", material.thinfilm.thinkness_image) == false))
         return false;
       if (textures.contains("bump") && (restore_image("bump", material.bump.image_index) == false))
+        return false;
+      if ((textures.contains("mix_amount") && (restore_image("mix_amount", material.mix.amount.image_index) == false)) ||
+          (textures.contains("coating_roughness") && (restore_image("coating_roughness", material.coating.roughness.image_index) == false)) ||
+          (textures.contains("coating_thickness") && (restore_image("coating_thickness", material.coating.thickness.image_index) == false)) ||
+          (textures.contains("coating_absorption") && (restore_image("coating_absorption", material.coating.absorption.image_index) == false)) ||
+          (textures.contains("coating_scattering") && (restore_image("coating_scattering", material.coating.scattering.image_index) == false)))
         return false;
       if (textures.contains("alpha_mask")) {
         if (restore_image("alpha_mask", material.alpha_mask.image_index) == false)
@@ -1593,7 +1682,7 @@ bool restore_scene_material_names(const nlohmann::json& source, SceneData& data)
       return false;
     }
     const auto material = data.material_mapping.find(id);
-    if ((material == data.material_mapping.end()) || (material->second >= data.materials.size())) {
+    if ((material == data.material_mapping.end()) || (material->second >= data.material_descriptions.size())) {
       return false;
     }
     for (const nlohmann::json& serialized_name : binding["names"]) {
@@ -1694,8 +1783,8 @@ uint32_t clone_spectrum(SceneData& data, uint32_t spectrum_index) {
   return data.copy_spectrum(spectrum_index);
 }
 
-Material clone_material_resources(SceneData& data, const Material& source) {
-  Material result = source;
+MaterialDescription clone_material_resources(SceneData& data, const MaterialDescription& source) {
+  MaterialDescription result = source;
   result.reflectance.spectrum_index = clone_spectrum(data, source.reflectance.spectrum_index);
   result.scattering.spectrum_index = clone_spectrum(data, source.scattering.spectrum_index);
   result.emission.spectrum_index = clone_spectrum(data, source.emission.spectrum_index);
@@ -1706,8 +1795,10 @@ Material clone_material_resources(SceneData& data, const Material& source) {
   result.ext_ior.k_index = clone_spectrum(data, source.ext_ior.k_index);
   result.int_ior.eta_index = clone_spectrum(data, source.int_ior.eta_index);
   result.int_ior.k_index = clone_spectrum(data, source.int_ior.k_index);
-  result.energy_compensation_interface_index = kInvalidIndex;
-  result.conductor_energy_compensation_interface_index = kInvalidIndex;
+  result.coating.ior.eta_index = clone_spectrum(data, source.coating.ior.eta_index);
+  result.coating.ior.k_index = clone_spectrum(data, source.coating.ior.k_index);
+  result.coating.absorption.spectrum_index = clone_spectrum(data, source.coating.absorption.spectrum_index);
+  result.coating.scattering.spectrum_index = clone_spectrum(data, source.coating.scattering.spectrum_index);
   return result;
 }
 
@@ -1752,6 +1843,39 @@ std::string unique_renamed_node_name(const SceneHierarchy& hierarchy, uint32_t n
     candidate = base + " " + std::to_string(suffix++);
   } while (available(candidate) == false);
   return candidate;
+}
+
+uint32_t clone_material_graph(SceneData& data, uint32_t root, std::unordered_map<uint32_t, uint32_t>& copies) {
+  std::vector<uint32_t> pending = {root};
+  while (pending.empty() == false) {
+    const uint32_t index = pending.back();
+    if (copies.contains(index)) {
+      pending.pop_back();
+      continue;
+    }
+    const MaterialDescription source = data.material_descriptions[index];
+    if (source.cls == MaterialClass::Mix) {
+      if (copies.contains(source.mix.first) == false) {
+        pending.push_back(source.mix.first);
+        continue;
+      }
+      if (copies.contains(source.mix.second) == false) {
+        pending.push_back(source.mix.second);
+        continue;
+      }
+    }
+    MaterialDescription clone = clone_material_resources(data, source);
+    if (source.cls == MaterialClass::Mix) {
+      clone.mix.first = copies.at(source.mix.first);
+      clone.mix.second = copies.at(source.mix.second);
+    }
+    const std::string name = mapping_name(data.material_mapping, index, "material-") + " Copy";
+    const std::string unique_name = unique_mapping_name(data.material_mapping, name.c_str(), "Material Copy");
+    const uint32_t clone_index = data.clone_material(clone, unique_name.c_str());
+    copies.emplace(index, clone_index);
+    pending.pop_back();
+  }
+  return copies.at(root);
 }
 
 bool valid_attachment_resource(const SceneData& data, SceneAttachment::Type type, uint32_t resource_index) {
@@ -1932,7 +2056,7 @@ const char* scene_primitive_name(ScenePrimitive primitive) {
   return "Object";
 }
 
-void material_class_to_string(Material::Class cls, const char** str) {
+void material_class_to_string(MaterialDescription::Class cls, const char** str) {
   static const char* names[] = {
     "diffuse",
     "translucent",
@@ -1946,13 +2070,15 @@ void material_class_to_string(Material::Class cls, const char** str) {
     "openpbr",
     "void",
     "diffraction_grating",
+    "coated_conductor",
+    "mix",
     "undefined",
   };
   static_assert(sizeof(names) / sizeof(names[0]) == uint32_t(MaterialClass::Count) + 1);
   *str = cls < MaterialClass::Count ? names[uint32_t(cls)] : "undefined";
 }
 
-const char* material_class_to_string(Material::Class cls) {
+const char* material_class_to_string(MaterialDescription::Class cls) {
   const char* result = nullptr;
   material_class_to_string(cls, &result);
   return result;
@@ -1971,6 +2097,9 @@ struct SceneRepresentationImpl {
   scattering::GpuContext scattering_gpu = {};
   bool scattering_gpu_ready = false;
   EnergyCompensationGenerationContext energy_compensation_generation = {};
+  std::unique_ptr<SceneData> material_preparation_candidate;
+  SceneDiagnostic material_preparation_error;
+  mutable std::mutex material_preparation_error_mutex;
   EnergyCompensationPreparationState energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
   std::chrono::steady_clock::time_point energy_compensation_preparation_started_at = {};
   // Material-derived media overwrite the render-facing local bounds, so retain the authored volume bounds separately for later node attachment.
@@ -2039,19 +2168,19 @@ struct SceneRepresentationImpl {
     data.options.properties[Scene::Properties::BlueNoise] = true;
 
     data.defaults.subsurface_scatter_material = data.add_material("etx::subsurface-scatter");
-    data.materials[data.defaults.subsurface_scatter_material].reflectance = {.spectrum_index = data.defaults.black_spectrum};
-    data.materials[data.defaults.subsurface_scatter_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
-    data.materials[data.defaults.subsurface_scatter_material].cls = MaterialClass::Translucent;
+    data.material_descriptions[data.defaults.subsurface_scatter_material].reflectance = {.spectrum_index = data.defaults.black_spectrum};
+    data.material_descriptions[data.defaults.subsurface_scatter_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
+    data.material_descriptions[data.defaults.subsurface_scatter_material].cls = MaterialClass::Translucent;
 
     data.defaults.subsurface_exit_material = data.add_material("etx::subsurface-exit");
-    data.materials[data.defaults.subsurface_exit_material].reflectance = {.spectrum_index = data.defaults.white_spectrum};
-    data.materials[data.defaults.subsurface_exit_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
-    data.materials[data.defaults.subsurface_exit_material].cls = MaterialClass::Diffuse;
+    data.material_descriptions[data.defaults.subsurface_exit_material].reflectance = {.spectrum_index = data.defaults.white_spectrum};
+    data.material_descriptions[data.defaults.subsurface_exit_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
+    data.material_descriptions[data.defaults.subsurface_exit_material].cls = MaterialClass::Diffuse;
 
     data.defaults.missing_material = data.add_material("etx::missing");
-    data.materials[data.defaults.missing_material].reflectance = {.spectrum_index = data.defaults.white_spectrum};
-    data.materials[data.defaults.missing_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
-    data.materials[data.defaults.missing_material].cls = MaterialClass::Diffuse;
+    data.material_descriptions[data.defaults.missing_material].reflectance = {.spectrum_index = data.defaults.white_spectrum};
+    data.material_descriptions[data.defaults.missing_material].scattering = {.spectrum_index = data.defaults.white_spectrum};
+    data.material_descriptions[data.defaults.missing_material].cls = MaterialClass::Diffuse;
   }
 
   void cleanup() {
@@ -2064,7 +2193,12 @@ struct SceneRepresentationImpl {
       cleanup_energy_compensation_generation(*rhi, energy_compensation_generation);
     }
     energy_compensation_generation = {};
+    material_preparation_candidate.reset();
     energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
+    {
+      std::lock_guard lock(material_preparation_error_mutex);
+      material_preparation_error = {};
+    }
     scene_valid = false;
     data.clear(scheduler);
     medium_authored_bounds.clear();
@@ -2087,113 +2221,75 @@ struct SceneRepresentationImpl {
     return 0.5f * length(cross(data.vertices.pos[t.i[1]] - data.vertices.pos[t.i[0]], data.vertices.pos[t.i[2]] - data.vertices.pos[t.i[0]]));
   }
 
-  void validate_materials() {
+  void initialize_material_defaults(SceneData& material_data) {
     std::mutex mt;
-    scheduler.execute(data.materials.size(), [this, &mt](uint32_t begin, uint32_t end, uint32_t) {
+    scheduler.execute(material_data.material_descriptions.size(), [this, &mt, &material_data](uint32_t begin, uint32_t end, uint32_t) {
       for (uint32_t i = begin; i < end; ++i) {
-        auto& mtl = data.materials[i];
-        mtl.thinfilm.weight = clamp(mtl.thinfilm.weight, 0.0f, 1.0f);
-        mtl.thinfilm.min_thickness = max(0.0f, mtl.thinfilm.min_thickness);
-        mtl.thinfilm.max_thickness = max(0.0f, mtl.thinfilm.max_thickness);
-        if ((mtl.cls == MaterialClass::DiffractionGrating) &&
-            ((std::isfinite(mtl.diffraction_grating.period_nm) == false) || (mtl.diffraction_grating.period_nm < kDiffractionGratingMinimumPeriodNm) ||
-              (mtl.diffraction_grating.period_nm > kDiffractionGratingMaximumPeriodNm))) {
-          log::warning("Material %u diffraction period %.9g nm is outside the supported [%g, %g] nm range; clamping it", i, mtl.diffraction_grating.period_nm,
-            kDiffractionGratingMinimumPeriodNm, kDiffractionGratingMaximumPeriodNm);
-          mtl.diffraction_grating.period_nm = clamp(mtl.diffraction_grating.period_nm, kDiffractionGratingMinimumPeriodNm, kDiffractionGratingMaximumPeriodNm);
-          if (std::isfinite(mtl.diffraction_grating.period_nm) == false) {
-            mtl.diffraction_grating.period_nm = 1600.0f;
-          }
-        }
-        if ((mtl.cls == MaterialClass::DiffractionGrating) &&
-            ((std::isfinite(mtl.diffraction_grating.duty_cycle) == false) || (mtl.diffraction_grating.duty_cycle < 0.0f) || (mtl.diffraction_grating.duty_cycle > 1.0f))) {
-          log::warning("Material %u diffraction duty cycle %.9g is outside [0, 1]; clamping it", i, mtl.diffraction_grating.duty_cycle);
-          mtl.diffraction_grating.duty_cycle = clamp(mtl.diffraction_grating.duty_cycle, 0.0f, 1.0f);
-          if (std::isfinite(mtl.diffraction_grating.duty_cycle) == false) {
-            mtl.diffraction_grating.duty_cycle = 0.5f;
-          }
-        }
-        if ((mtl.cls == MaterialClass::DiffractionGrating) && ((std::isfinite(mtl.diffraction_grating.optical_path_difference_nm) == false) ||
-                                                                (mtl.diffraction_grating.optical_path_difference_nm < kDiffractionGratingMinimumOpticalPathDifferenceNm) ||
-                                                                (mtl.diffraction_grating.optical_path_difference_nm > kDiffractionGratingMaximumOpticalPathDifferenceNm))) {
-          log::warning("Material %u diffraction optical path difference %.9g nm is outside the supported [%g, %g] nm range; clamping it", i,
-            mtl.diffraction_grating.optical_path_difference_nm, kDiffractionGratingMinimumOpticalPathDifferenceNm, kDiffractionGratingMaximumOpticalPathDifferenceNm);
-          mtl.diffraction_grating.optical_path_difference_nm =
-            clamp(mtl.diffraction_grating.optical_path_difference_nm, kDiffractionGratingMinimumOpticalPathDifferenceNm, kDiffractionGratingMaximumOpticalPathDifferenceNm);
-          if (std::isfinite(mtl.diffraction_grating.optical_path_difference_nm) == false) {
-            mtl.diffraction_grating.optical_path_difference_nm = 280.0f;
-          }
-        }
-        if ((mtl.cls == MaterialClass::DiffractionGrating) && (std::isfinite(mtl.diffraction_grating.rotation) == false)) {
-          log::warning("Material %u diffraction rotation is not finite; resetting it to zero", i);
-          mtl.diffraction_grating.rotation = 0.0f;
-        }
+        auto& mtl = material_data.material_descriptions[i];
         if (mtl.reflectance.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          mtl.reflectance.spectrum_index = data.copy_spectrum(data.defaults.white_spectrum);
+          mtl.reflectance.spectrum_index = material_data.copy_spectrum(material_data.defaults.white_spectrum);
         }
         if (mtl.scattering.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          mtl.scattering.spectrum_index = data.copy_spectrum(data.defaults.white_spectrum);
+          mtl.scattering.spectrum_index = material_data.copy_spectrum(material_data.defaults.white_spectrum);
         }
         if (mtl.subsurface.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          mtl.subsurface.spectrum_index = data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
-        }
-        if ((mtl.subsurface_cls != SubsurfaceMaterial::Disabled) && (mtl.subsurface_cls != SubsurfaceMaterial::RandomWalk)) {
-          mtl.subsurface_cls = SubsurfaceMaterial::RandomWalk;
+          mtl.subsurface.spectrum_index = material_data.add_spectrum(SpectralDistribution::rgb_reflectance({1.0f, 0.2f, 0.04f}));
         }
         if (mtl.emission.spectrum_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          mtl.emission.spectrum_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
-        }
-        if ((mtl.roughness.value.x > 0.0f) || (mtl.roughness.value.y > 0.0f)) {
-          mtl.roughness.value.x = max(kEpsilon, mtl.roughness.value.x);
-          mtl.roughness.value.y = max(kEpsilon, mtl.roughness.value.y);
+          mtl.emission.spectrum_index = material_data.add_spectrum(SpectralDistribution::constant(0.0f));
         }
         if (mtl.int_ior.eta_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          if (mtl.cls == MaterialClass::Conductor) {
+          if ((mtl.cls == MaterialClass::Conductor) || (mtl.cls == MaterialClass::CoatedConductor)) {
             mtl.int_ior.cls = SpectralDistribution::Conductor;
-            mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
+            mtl.int_ior.eta_index = material_data.add_spectrum(SpectralDistribution::constant(0.0f));
           } else {
             mtl.int_ior.cls = SpectralDistribution::Dielectric;
-            mtl.int_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
+            mtl.int_ior.eta_index = material_data.add_spectrum(SpectralDistribution::constant(kDefaultDielectricEta));
           }
         }
         if (mtl.int_ior.k_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          if (mtl.cls == MaterialClass::Conductor) {
-            mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
+          if ((mtl.cls == MaterialClass::Conductor) || (mtl.cls == MaterialClass::CoatedConductor)) {
+            mtl.int_ior.k_index = material_data.add_spectrum(SpectralDistribution::constant(kDefaultConductorK));
           } else {
-            mtl.int_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
+            mtl.int_ior.k_index = material_data.add_spectrum(SpectralDistribution::constant(0.0f));
           }
         }
         if (mtl.ext_ior.eta_index == kInvalidIndex) {
           std::unique_lock lock(mt);
           mtl.ext_ior.cls = SpectralDistribution::Dielectric;
-          mtl.ext_ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
+          mtl.ext_ior.eta_index = material_data.add_spectrum(SpectralDistribution::constant(1.0f));
         }
         if (mtl.ext_ior.k_index == kInvalidIndex) {
           std::unique_lock lock(mt);
-          mtl.ext_ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
+          mtl.ext_ior.k_index = material_data.add_spectrum(SpectralDistribution::constant(0.0f));
         }
-        const bool thinfilm_requested = (mtl.thinfilm.weight > 0.0f) && (max(mtl.thinfilm.min_thickness, mtl.thinfilm.max_thickness) > 0.0f);
-        if (thinfilm_requested && (mtl.thinfilm.ior.cls != SpectralDistribution::Dielectric)) {
-          log::warning("Material %u uses a non-dielectric thin-film IOR; disabling its unsupported thin film", i);
-          mtl.thinfilm.weight = 0.0f;
+        if ((mtl.cls == MaterialClass::Plastic) || (mtl.cls == MaterialClass::CoatedConductor) || (mtl.layers.explicit_layers != 0u)) {
+          std::unique_lock lock(mt);
+          if (mtl.coating.ior.eta_index == kInvalidIndex) {
+            mtl.coating.ior.cls = mtl.cls == MaterialClass::Plastic ? mtl.int_ior.cls : SpectralDistribution::Dielectric;
+            mtl.coating.ior.eta_index = material_data.copy_spectrum(mtl.cls == MaterialClass::Plastic ? mtl.int_ior.eta_index : material_data.defaults.dielectric_eta);
+          }
+          if (mtl.coating.ior.k_index == kInvalidIndex)
+            mtl.coating.ior.k_index = material_data.copy_spectrum(material_data.defaults.black_spectrum);
+          if (mtl.coating.absorption.spectrum_index == kInvalidIndex)
+            mtl.coating.absorption.spectrum_index = material_data.copy_spectrum(material_data.defaults.black_spectrum);
+          if (mtl.coating.scattering.spectrum_index == kInvalidIndex)
+            mtl.coating.scattering.spectrum_index = material_data.copy_spectrum(material_data.defaults.black_spectrum);
         }
         {
           std::unique_lock lock(mt);
-          if (mtl.thinfilm.ior.k_index >= data.spectrum_values.size()) {
-            mtl.thinfilm.ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
+          if (mtl.thinfilm.ior.k_index == kInvalidIndex) {
+            mtl.thinfilm.ior.k_index = material_data.add_spectrum(SpectralDistribution::constant(0.0f));
           }
-          if (mtl.thinfilm.ior.eta_index >= data.spectrum_values.size()) {
-            mtl.thinfilm.ior.eta_index = data.add_spectrum(SpectralDistribution::constant(1.0f));
-          }
-          if (thinfilm_requested && (mtl.thinfilm.ior.cls == SpectralDistribution::Dielectric) && (data.spectrum_values[mtl.thinfilm.ior.k_index].is_zero() == false)) {
-            log::warning("Material %u uses absorption in its thin film; forcing extinction to zero for the supported lossless-film model", i);
-            mtl.thinfilm.ior.k_index = data.add_spectrum(SpectralDistribution::constant(0.0f));
+          if (mtl.thinfilm.ior.eta_index == kInvalidIndex) {
+            mtl.thinfilm.ior.cls = SpectralDistribution::Dielectric;
+            mtl.thinfilm.ior.eta_index = material_data.add_spectrum(SpectralDistribution::constant(1.0f));
           }
         }
       }
@@ -2360,7 +2456,7 @@ struct SceneRepresentationImpl {
     log::info("Total tangent building: %.4f sec", total_timer.lap());
   }
 
-  void validate_tangents(std::vector<bool>& referenced_vertices, bool force) {
+  void validate_tangents(const std::vector<bool>& referenced_vertices) {
     for (uint64_t vertex_index = 0, e = data.vertices.tan.size(); vertex_index < e; ++vertex_index) {
       auto& v_nrm = data.vertices.nrm[vertex_index];
       auto& v_tan = data.vertices.tan[vertex_index];
@@ -2373,7 +2469,7 @@ struct SceneRepresentationImpl {
         continue;
       }
 
-      if (force || referenced_vertices[vertex_index]) {
+      if (referenced_vertices[vertex_index]) {
         ETX_ASSERT(is_valid_vector(v_nrm));
         auto [t, b] = orthonormal_basis(v_nrm);
         v_tan = t;
@@ -2928,13 +3024,18 @@ void SceneRepresentation::replace_loaded_scene(SceneRepresentation& source) {
   swap(_private->scattering_gpu, source._private->scattering_gpu);
   swap(_private->scattering_gpu_ready, source._private->scattering_gpu_ready);
   swap(_private->energy_compensation_generation, source._private->energy_compensation_generation);
+  swap(_private->material_preparation_candidate, source._private->material_preparation_candidate);
   swap(_private->energy_compensation_preparation_state, source._private->energy_compensation_preparation_state);
   swap(_private->energy_compensation_preparation_started_at, source._private->energy_compensation_preparation_started_at);
+  {
+    std::scoped_lock lock(_private->material_preparation_error_mutex, source._private->material_preparation_error_mutex);
+    swap(_private->material_preparation_error, source._private->material_preparation_error);
+  }
 }
 
 uint32_t SceneRepresentation::add_material(const char* name) {
   uint32_t index = _private->data.add_material(name);
-  auto& mat = _private->data.materials[index];
+  auto& mat = _private->data.material_descriptions[index];
   mat.cls = MaterialClass::Diffuse;
   mat.reflectance.spectrum_index = _private->data.copy_spectrum(_private->data.defaults.white_spectrum);
   mat.scattering.spectrum_index = _private->data.copy_spectrum(_private->data.defaults.white_spectrum);
@@ -2957,20 +3058,20 @@ SceneResourceEditResult SceneRepresentation::create_material(const char* name) {
 
 SceneResourceEditResult SceneRepresentation::duplicate_material(uint32_t index) {
   SceneData& scene_data = _private->data;
-  if (index >= scene_data.materials.size()) {
+  if (index >= scene_data.material_descriptions.size()) {
     return {.status = SceneResourceEditStatus::InvalidResource};
   }
 
-  const std::string source_name = mapping_name(scene_data.material_mapping, index, "material-");
-  const std::string duplicate_name = unique_mapping_name(scene_data.material_mapping, (source_name + " Copy").c_str(), "Material Copy");
-  const Material material = clone_material_resources(scene_data, scene_data.materials[index]);
-  const uint32_t duplicate_index = scene_data.clone_material(material, duplicate_name.c_str());
-  return {.status = SceneResourceEditStatus::Success, .resource_index = duplicate_index};
+  if (material_graph_valid(scene_data) == false) {
+    return {.status = SceneResourceEditStatus::InvalidResource};
+  }
+  std::unordered_map<uint32_t, uint32_t> copies;
+  return {.status = SceneResourceEditStatus::Success, .resource_index = clone_material_graph(scene_data, index, copies)};
 }
 
 SceneResourceEditResult SceneRepresentation::delete_material(uint32_t index) {
   SceneData& scene_data = _private->data;
-  if (index >= scene_data.materials.size()) {
+  if (index >= scene_data.material_descriptions.size()) {
     return {.status = SceneResourceEditStatus::InvalidResource};
   }
   if ((scene_data.defaults.subsurface_scatter_material == index) || (scene_data.defaults.subsurface_exit_material == index) || (scene_data.defaults.missing_material == index)) {
@@ -2982,12 +3083,39 @@ SceneResourceEditResult SceneRepresentation::delete_material(uint32_t index) {
     }
   }
 
+  for (const auto* descriptions : {&scene_data.material_descriptions, &scene_data.committed_material_descriptions}) {
+    for (const MaterialDescription& material : *descriptions) {
+      if ((material.cls == MaterialClass::Mix) && ((material.mix.first == index) || (material.mix.second == index))) {
+        return {.status = SceneResourceEditStatus::ResourceInUse};
+      }
+    }
+  }
+
   SceneResourceEditResult result = {
     .status = SceneResourceEditStatus::Success,
     .resource_index = kInvalidIndex,
-    .resource_remapping = removal_remapping(scene_data.materials.size(), index),
+    .resource_remapping = removal_remapping(scene_data.material_descriptions.size(), index),
   };
-  scene_data.materials.erase(scene_data.materials.begin() + index);
+  scene_data.material_descriptions.erase(scene_data.material_descriptions.begin() + index);
+  if (index < scene_data.committed_material_descriptions.size()) {
+    scene_data.committed_material_descriptions.erase(scene_data.committed_material_descriptions.begin() + index);
+  }
+  if (index < scene_data.materials.size()) {
+    scene_data.materials.erase(scene_data.materials.begin() + index);
+  }
+  const auto remap_material_resources = [index, material_count = scene_data.material_descriptions.size() + 1u](auto& resources) {
+    resources.erase(index);
+    for (uint32_t old_index = index + 1u; old_index < material_count; ++old_index) {
+      auto entry = resources.extract(old_index);
+      if (entry.empty() == false) {
+        entry.key() = old_index - 1u;
+        resources.insert(std::move(entry));
+      }
+    }
+  };
+  remap_material_resources(scene_data.thermal_surface_resources);
+  remap_material_resources(scene_data.thermal_medium_resources);
+  remap_material_resources(scene_data.temperature_optics_resources);
   erase_mapping_resource(scene_data.material_mapping, index);
   for (Triangle& triangle : scene_data.triangles) {
     if ((triangle.material_index != kInvalidIndex) && (triangle.material_index > index)) {
@@ -2995,13 +3123,27 @@ SceneResourceEditResult SceneRepresentation::delete_material(uint32_t index) {
     }
   }
   auto remap_default = [index](uint32_t& default_index) {
-    if ((default_index != kInvalidIndex) && (default_index > index)) {
+    if (default_index == index) {
+      default_index = kInvalidIndex;
+    } else if ((default_index != kInvalidIndex) && (default_index > index)) {
       --default_index;
     }
   };
   remap_default(scene_data.defaults.subsurface_scatter_material);
   remap_default(scene_data.defaults.subsurface_exit_material);
   remap_default(scene_data.defaults.missing_material);
+  for (MaterialDescription& material : scene_data.material_descriptions) {
+    remap_default(material.mix.first);
+    remap_default(material.mix.second);
+  }
+  for (MaterialDescription& material : scene_data.committed_material_descriptions) {
+    remap_default(material.mix.first);
+    remap_default(material.mix.second);
+  }
+  for (Material& material : scene_data.materials) {
+    remap_default(material.mix.first);
+    remap_default(material.mix.second);
+  }
   scene_data.material_to_emitter_profile.clear();
   return result;
 }
@@ -3050,6 +3192,13 @@ SceneResourceEditResult SceneRepresentation::delete_medium(uint32_t index) {
   if (index >= scene_data.mediums.array_size()) {
     return {.status = SceneResourceEditStatus::InvalidResource};
   }
+  for (const auto* descriptions : {&scene_data.material_descriptions, &scene_data.committed_material_descriptions}) {
+    for (const MaterialDescription& material : *descriptions) {
+      if ((material.int_medium == index) || (material.ext_medium == index)) {
+        return {.status = SceneResourceEditStatus::ResourceInUse};
+      }
+    }
+  }
   for (const Material& material : scene_data.materials) {
     if ((material.int_medium == index) || (material.ext_medium == index)) {
       return {.status = SceneResourceEditStatus::ResourceInUse};
@@ -3078,9 +3227,28 @@ SceneResourceEditResult SceneRepresentation::delete_medium(uint32_t index) {
       --medium_index;
     }
   };
+  for (MaterialDescription& material : scene_data.material_descriptions) {
+    remap_medium(material.int_medium);
+    remap_medium(material.ext_medium);
+  }
+  for (MaterialDescription& material : scene_data.committed_material_descriptions) {
+    remap_medium(material.int_medium);
+    remap_medium(material.ext_medium);
+  }
   for (Material& material : scene_data.materials) {
     remap_medium(material.int_medium);
     remap_medium(material.ext_medium);
+    remap_medium(material.thermal_int_medium_index);
+  }
+  for (auto& [material_index, resources] : scene_data.temperature_optics_resources) {
+    if (resources.medium_index == index) {
+      resources.medium_index = kInvalidIndex;
+    } else {
+      remap_medium(resources.medium_index);
+    }
+  }
+  for (auto& state : scene_data.thermal_medium_states) {
+    remap_medium(state.base_medium_index);
   }
   for (EmitterProfile& emitter : scene_data.emitter_profiles) {
     remap_medium(emitter.medium_index);
@@ -3437,7 +3605,7 @@ SceneEditResult SceneRepresentation::create_primitive(ScenePrimitive primitive) 
   const size_t texcoord_count = scene_data.vertices.tex.size();
   const size_t triangle_count = scene_data.triangles.size();
   const size_t mesh_count = scene_data.meshes.size();
-  const size_t material_count = scene_data.materials.size();
+  const size_t material_count = scene_data.material_descriptions.size();
   const size_t spectrum_count = scene_data.spectrum_values.size();
   const size_t spectrum_name_count = scene_data.spectrum_names.size();
   const SceneHierarchy original_hierarchy = scene_data.hierarchy;
@@ -3451,7 +3619,7 @@ SceneEditResult SceneRepresentation::create_primitive(ScenePrimitive primitive) 
     scene_data.vertices.tex.resize(texcoord_count);
     scene_data.triangles.resize(triangle_count);
     scene_data.meshes.resize(mesh_count);
-    scene_data.materials.resize(material_count);
+    scene_data.material_descriptions.resize(material_count);
     scene_data.spectrum_values.resize(spectrum_count);
     std::erase_if(scene_data.spectrum_sources, [spectrum_count](const auto& entry) {
       return entry.first >= spectrum_count;
@@ -3465,7 +3633,7 @@ SceneEditResult SceneRepresentation::create_primitive(ScenePrimitive primitive) 
 
   uint32_t material_index = kInvalidIndex;
   const auto default_material = scene_data.material_mapping.find("Default Material");
-  if ((default_material != scene_data.material_mapping.end()) && (default_material->second < scene_data.materials.size())) {
+  if ((default_material != scene_data.material_mapping.end()) && (default_material->second < scene_data.material_descriptions.size())) {
     material_index = default_material->second;
   } else {
     material_index = create_material("Default Material").resource_index;
@@ -3601,7 +3769,7 @@ SceneEditResult SceneRepresentation::duplicate_node_subtree(uint32_t node_index,
   const size_t tangent_count = data.vertices.tan.size();
   const size_t bitangent_count = data.vertices.btn.size();
   const size_t texcoord_count = data.vertices.tex.size();
-  const size_t material_count = data.materials.size();
+  const size_t material_count = data.material_descriptions.size();
   const size_t spectrum_count = data.spectrum_values.size();
   const size_t spectrum_name_count = data.spectrum_names.size();
   const size_t camera_count = data.cameras.size();
@@ -3620,7 +3788,7 @@ SceneEditResult SceneRepresentation::duplicate_node_subtree(uint32_t node_index,
       std::vector<uint32_t> remapping;
       data.mediums.remove(static_cast<uint32_t>(data.mediums.array_size() - 1u), remapping);
     }
-    data.materials.resize(material_count);
+    data.material_descriptions.resize(material_count);
     data.spectrum_values.resize(spectrum_count);
     std::erase_if(data.spectrum_sources, [spectrum_count](const auto& entry) {
       return entry.first >= spectrum_count;
@@ -3695,6 +3863,27 @@ SceneEditResult SceneRepresentation::duplicate_node_subtree(uint32_t node_index,
       }
     }
   }
+  auto material_requires_medium_copy = [&](uint32_t root) {
+    std::vector<uint32_t> pending = {root};
+    std::vector<uint8_t> visited(data.material_descriptions.size(), 0u);
+    while (pending.empty() == false) {
+      const uint32_t index = pending.back();
+      pending.pop_back();
+      if ((index >= data.material_descriptions.size()) || (visited[index] != 0u)) {
+        continue;
+      }
+      visited[index] = 1u;
+      const MaterialDescription& material = data.material_descriptions[index];
+      if (media.contains(material.int_medium) || media.contains(material.ext_medium)) {
+        return true;
+      }
+      if (material.cls == MaterialClass::Mix) {
+        pending.push_back(material.mix.first);
+        pending.push_back(material.mix.second);
+      }
+    }
+    return false;
+  };
   auto mesh_requires_copy = [&](uint32_t index) {
     if (mode == NodeDuplicateMode::Independent) {
       return true;
@@ -3702,7 +3891,7 @@ SceneEditResult SceneRepresentation::duplicate_node_subtree(uint32_t node_index,
     const Mesh& mesh = data.meshes[index];
     for (uint32_t i = 0u; i < mesh.triangle_count; ++i) {
       const uint32_t material = data.triangles[mesh.triangle_offset + i].material_index;
-      if ((material < data.materials.size()) && (media.contains(data.materials[material].int_medium) || media.contains(data.materials[material].ext_medium))) {
+      if (material_requires_medium_copy(material)) {
         return true;
       }
     }
@@ -3761,14 +3950,15 @@ SceneEditResult SceneRepresentation::duplicate_node_subtree(uint32_t node_index,
       if (material == kInvalidIndex) {
         continue;
       }
-      if ((mode == NodeDuplicateMode::Linked) && (material < data.materials.size()) && (media.contains(data.materials[material].int_medium) == false) &&
-          (media.contains(data.materials[material].ext_medium) == false)) {
+      if ((mode == NodeDuplicateMode::Linked) && (material_requires_medium_copy(material) == false)) {
         continue;
       }
       if (materials.contains(material) == false) {
-        const auto result = duplicate_material(material);
-        valid = result.succeeded();
-        materials.emplace(material, result.resource_index);
+        if (material_graph_valid(data)) {
+          (void)clone_material_graph(data, material, materials);
+        } else {
+          valid = false;
+        }
       }
       if (valid) {
         material = materials.at(material);
@@ -3776,9 +3966,9 @@ SceneEditResult SceneRepresentation::duplicate_node_subtree(uint32_t node_index,
     }
   }
   for (const auto& [source, copy] : materials) {
-    if (copy < data.materials.size()) {
-      remap_medium(data.materials[copy].int_medium);
-      remap_medium(data.materials[copy].ext_medium);
+    if (copy < data.material_descriptions.size()) {
+      remap_medium(data.material_descriptions[copy].int_medium);
+      remap_medium(data.material_descriptions[copy].ext_medium);
     }
   }
   for (const auto& [source, copy] : cameras) {
@@ -3810,7 +4000,7 @@ SceneEditResult SceneRepresentation::set_node_mesh_material(uint32_t node_index,
 
 SceneEditResult SceneRepresentation::set_node_mesh_material(uint32_t node_index, uint32_t mesh_index, uint32_t source_material, uint32_t material_index, bool make_unique) {
   SceneData& data = _private->data;
-  if ((node_index >= data.hierarchy.nodes.size()) || (mesh_index >= data.meshes.size()) || (material_index >= data.materials.size())) {
+  if ((node_index >= data.hierarchy.nodes.size()) || (mesh_index >= data.meshes.size()) || (material_index >= data.material_descriptions.size())) {
     return {.status = SceneEditStatus::InvalidResource};
   }
   const SceneNode node = data.hierarchy.nodes[node_index];
@@ -4336,6 +4526,11 @@ EnergyCompensationPreparationStatus SceneRepresentation::energy_compensation_int
   return _private->energy_compensation_interface_preparation_status();
 }
 
+SceneDiagnostic SceneRepresentation::material_preparation_diagnostic() const {
+  std::lock_guard lock(_private->material_preparation_error_mutex);
+  return _private->material_preparation_error;
+}
+
 void SceneRepresentationImpl::set_scattering_rhi(RHIContext& rhi_context) {
   if ((rhi == &rhi_context) && scattering_gpu_ready) {
     return;
@@ -4348,6 +4543,7 @@ void SceneRepresentationImpl::set_scattering_rhi(RHIContext& rhi_context) {
       energy_compensation_generation = {};
     }
     energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
+    material_preparation_candidate.reset();
   }
   if ((rhi != nullptr) && scattering_gpu.initialized) {
     scattering::gpu_cleanup(*rhi, scattering_gpu);
@@ -4359,31 +4555,64 @@ void SceneRepresentationImpl::set_scattering_rhi(RHIContext& rhi_context) {
 }
 
 bool SceneRepresentationImpl::ensure_energy_compensation_interfaces() {
-  if (prepare_temperature_optics(data) == false) {
+  cancel_energy_compensation_interface_preparation();
+  {
+    std::lock_guard lock(material_preparation_error_mutex);
+    material_preparation_error = {};
+  }
+  SceneData candidate(scheduler);
+  candidate.copy_material_preparation_from(data);
+  candidate.material_mapping = data.material_mapping;
+  candidate.diagnostic.phase = "Material validation";
+  initialize_material_defaults(candidate);
+  candidate.project_material_descriptions();
+  if ((material_graph_valid(candidate) == false) || (compile_material_layers(candidate) == false) || (prepare_temperature_optics(candidate) == false) ||
+      (material_graph_valid(candidate, candidate.materials) == false) || (subsurface_materials_valid(candidate) == false)) {
+    std::lock_guard lock(material_preparation_error_mutex);
+    material_preparation_error = candidate.diagnostic;
     return false;
   }
+  candidate.diagnostic.phase = "Material resource preparation";
   const bool scattering_ready =
-    ((rhi != nullptr) && rhi->valid()) ? etx::ensure_energy_compensation_interfaces(data, scheduler, *rhi) : etx::ensure_energy_compensation_interfaces(data, scheduler);
-  if ((scattering_ready == false) || (subsurface_materials_valid(data) == false) || (prepare_thermal_materials(data, active_camera.medium_index) == false)) {
+    ((rhi != nullptr) && rhi->valid()) ? etx::ensure_energy_compensation_interfaces(candidate, scheduler, *rhi) : etx::ensure_energy_compensation_interfaces(candidate, scheduler);
+  if ((scattering_ready == false) || (prepare_thermal_materials(candidate, active_camera.medium_index) == false)) {
+    std::lock_guard lock(material_preparation_error_mutex);
+    material_preparation_error = candidate.diagnostic;
     return false;
   }
+  prepare_mix_emitters(candidate);
+  data.publish_material_preparation(candidate);
+  data.commit_material_authoring(candidate.material_descriptions);
   create_area_emitters_from_materials();
   return true;
 }
 
 bool SceneRepresentationImpl::begin_energy_compensation_interface_preparation() {
-  if (prepare_temperature_optics(data) == false) {
-    energy_compensation_preparation_state = EnergyCompensationPreparationState::Failed;
-    return false;
+  cancel_energy_compensation_interface_preparation();
+  {
+    std::lock_guard lock(material_preparation_error_mutex);
+    material_preparation_error = {};
   }
   if ((rhi == nullptr) || (rhi->valid() == false)) {
     energy_compensation_preparation_state = EnergyCompensationPreparationState::Failed;
     return false;
   }
 
-  if (energy_compensation_generation.pipeline.valid()) {
-    cleanup_energy_compensation_generation(*rhi, energy_compensation_generation);
+  auto candidate = std::make_unique<SceneData>(scheduler);
+  candidate->copy_material_preparation_from(data);
+  candidate->material_mapping = data.material_mapping;
+  candidate->diagnostic.phase = "Material validation";
+  initialize_material_defaults(*candidate);
+  candidate->project_material_descriptions();
+  if ((material_graph_valid(*candidate) == false) || (compile_material_layers(*candidate) == false) || (prepare_temperature_optics(*candidate) == false) ||
+      (material_graph_valid(*candidate, candidate->materials) == false) || (subsurface_materials_valid(*candidate) == false)) {
+    std::lock_guard lock(material_preparation_error_mutex);
+    material_preparation_error = candidate->diagnostic;
+    energy_compensation_preparation_state = EnergyCompensationPreparationState::Failed;
+    return false;
   }
+  candidate->diagnostic.phase = "Material resource preparation";
+  material_preparation_candidate = std::move(candidate);
   energy_compensation_generation = {};
   energy_compensation_preparation_started_at = std::chrono::steady_clock::now();
   energy_compensation_preparation_state = EnergyCompensationPreparationState::Preparing;
@@ -4396,6 +4625,7 @@ void SceneRepresentationImpl::cancel_energy_compensation_interface_preparation()
   } else {
     energy_compensation_generation = {};
   }
+  material_preparation_candidate.reset();
   energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
 }
 
@@ -4404,27 +4634,40 @@ EnergyCompensationPreparationState SceneRepresentationImpl::poll_energy_compensa
     return energy_compensation_preparation_state;
   }
 
-  const EnergyCompensationGenerationResult result = generate_energy_compensation_interfaces_step(data, scheduler, *rhi, energy_compensation_generation);
+  SceneData& candidate = *material_preparation_candidate;
+  const EnergyCompensationGenerationResult result = generate_energy_compensation_interfaces_step(candidate, scheduler, *rhi, energy_compensation_generation);
   if (result == EnergyCompensationGenerationResult::Pending) {
     return energy_compensation_preparation_state;
   }
 
-  if ((result == EnergyCompensationGenerationResult::Complete) && subsurface_materials_valid(data) && prepare_thermal_materials(data, active_camera.medium_index)) {
+  if ((result == EnergyCompensationGenerationResult::Complete) && material_graph_valid(candidate, candidate.materials) && subsurface_materials_valid(candidate) &&
+      prepare_thermal_materials(candidate, active_camera.medium_index)) {
+    prepare_mix_emitters(candidate);
+    data.publish_material_preparation(candidate);
+    data.commit_material_authoring(candidate.material_descriptions);
+    material_preparation_candidate.reset();
     create_area_emitters_from_materials();
     energy_compensation_preparation_state = EnergyCompensationPreparationState::Ready;
     return energy_compensation_preparation_state;
   }
 
   cleanup_energy_compensation_generation(*rhi, energy_compensation_generation);
+  {
+    std::lock_guard lock(material_preparation_error_mutex);
+    material_preparation_error = candidate.diagnostic;
+  }
+  material_preparation_candidate.reset();
   energy_compensation_preparation_state = EnergyCompensationPreparationState::Failed;
   return energy_compensation_preparation_state;
 }
 
 EnergyCompensationPreparationStatus SceneRepresentationImpl::energy_compensation_interface_preparation_status() const {
+  std::lock_guard lock(material_preparation_error_mutex);
   EnergyCompensationPreparationStatus result = {
     .state = energy_compensation_preparation_state,
     .completed_steps = energy_compensation_generation.completed_steps,
     .total_steps = energy_compensation_generation.total_steps,
+    .diagnostic = energy_compensation_preparation_state == EnergyCompensationPreparationState::Failed ? material_preparation_error : SceneDiagnostic{},
   };
   if (energy_compensation_preparation_state != EnergyCompensationPreparationState::Preparing) {
     return result;
@@ -4801,6 +5044,7 @@ void synthesize_identity_scene_hierarchy(SceneData& data) {
 #include "scene_document_read.inl.hxx"
 
 bool SceneRepresentationImpl::update_medium_bounds() {
+  const auto& materials = data.transport_materials();
   const uint32_t medium_count = data.mediums.array_size();
   if (medium_count == 0u) {
     medium_authored_bounds.clear();
@@ -4849,11 +5093,11 @@ bool SceneRepresentationImpl::update_medium_bounds() {
     }
     for (uint32_t triangle_index = mesh.triangle_offset; triangle_index < triangle_end; ++triangle_index) {
       const Triangle& triangle = data.triangles[triangle_index];
-      if ((triangle.material_index >= data.materials.size()) || (triangle.i[0] >= data.vertices.pos.size()) || (triangle.i[1] >= data.vertices.pos.size()) ||
+      if ((triangle.material_index >= materials.size()) || (triangle.i[0] >= data.vertices.pos.size()) || (triangle.i[1] >= data.vertices.pos.size()) ||
           (triangle.i[2] >= data.vertices.pos.size())) {
         continue;
       }
-      const Material& material = data.materials[triangle.material_index];
+      const Material& material = materials[triangle.material_index];
       if (((material.int_medium == kInvalidIndex) || (material.int_medium >= medium_count)) && ((material.ext_medium == kInvalidIndex) || (material.ext_medium >= medium_count))) {
         continue;
       }
@@ -4988,7 +5232,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
       }
     }
     data.images.load_images(scheduler);
-    scene_valid = data.images.loading_succeeded() && data.resolve_hierarchy();
+    scene_valid = data.images.loading_succeeded() && data.resolve_hierarchy() && material_graph_valid(data);
     return scene_valid;
   }
 
@@ -5019,7 +5263,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
   }
 
   bool has_emissive_materials = false;
-  for (const auto& material : data.materials) {
+  for (const auto& material : data.material_descriptions) {
     if ((material.emission.spectrum_index != kInvalidIndex) && (material.emission.spectrum_index < data.spectrum_values.size()) &&
         (data.spectrum_values[material.emission.spectrum_index].luminance() > 0.0f)) {
       has_emissive_materials = true;
@@ -5027,9 +5271,9 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
     }
   }
 
-  validate_materials();
+  initialize_material_defaults(data);
 
-  for (const auto& material : data.materials) {
+  for (const auto& material : data.material_descriptions) {
     if ((std::isfinite(material.bump.value.x) == false) || ((material.bump.image_index != kInvalidIndex) && (material.bump.channel > 4u))) {
       log::error("Material has an invalid bump strength or channel");
       return false;
@@ -5044,7 +5288,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
 
   data.images.load_images(scheduler);
   if (data.owns_assets && (data.images.loading_succeeded() == false)) {
-    log::error("An owned native document asset could not be decoded");
+    data.diagnostic.fail(SceneDiagnosticKind::File, "Image dependency", "%s", data.images.loading_error().c_str());
     return false;
   }
 
@@ -5063,7 +5307,7 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
       log::warning("Tangents are valid, skipping rebuild");
     }
 
-    validate_tangents(referenced_vertices, has_invalid_tangents || force_tangents);
+    validate_tangents(referenced_vertices);
     log::warning("Tangents validated: %.2f sec", m.lap());
   }
 
@@ -5123,6 +5367,10 @@ bool SceneRepresentationImpl::finalize_scene_loading(uint32_t options, const cha
 }
 
 void SceneRepresentationImpl::create_area_emitters_from_materials() {
+  if (data.materials.empty()) {
+    return;
+  }
+  const auto& materials = data.transport_materials();
   ensure_emitter_names(data);
   std::vector<uint32_t> old_to_new(data.emitter_profiles.size(), kInvalidIndex);
   std::vector<EmitterProfile> non_area_profiles;
@@ -5153,10 +5401,10 @@ void SceneRepresentationImpl::create_area_emitters_from_materials() {
 
   for (size_t tri_index = 0; tri_index < data.triangles.size(); ++tri_index) {
     const Triangle& tri = data.triangles[tri_index];
-    if (tri.material_index >= data.materials.size())
+    if (tri.material_index >= materials.size())
       continue;
 
-    const Material& mtl = data.materials[tri.material_index];
+    const Material& mtl = materials[tri.material_index];
     const float spectrum_weight = (mtl.emission.spectrum_index < data.spectrum_values.size()) ? data.spectrum_values[mtl.emission.spectrum_index].luminance() : 0.0f;
     if ((spectrum_weight <= kEpsilon) && (mtl.thermal_emission_weight <= 0.0f))
       continue;

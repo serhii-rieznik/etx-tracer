@@ -138,6 +138,37 @@ ETX_SHARED_INLINE Material gpu_abi_load_material_full(ByteAddressBuffer buffer, 
   result.subsurface_anisotropy = gpu_abi_load_f32(buffer, base_offset + kMaterialSubsurfaceAnisotropyOffset);
   result.energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialEnergyCompensationInterfaceIndexOffset);
   result.conductor_energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialConductorEnergyCompensationInterfaceIndexOffset);
+  result.coating.ior.cls = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingIorOffset);
+  result.coating.ior.eta_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingIorOffset + 4u);
+  result.coating.ior.k_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingIorOffset + 8u);
+  result.coating.roughness.value = asfloat(buffer.Load4(base_offset + kMaterialCoatingRoughnessOffset));
+  result.coating.roughness.image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingRoughnessOffset + 16u);
+  result.coating.roughness.channel = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingRoughnessOffset + 20u);
+  result.coating.thickness.value = asfloat(buffer.Load4(base_offset + kMaterialCoatingThicknessOffset));
+  result.coating.thickness.image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingThicknessOffset + 16u);
+  result.coating.thickness.channel = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingThicknessOffset + 20u);
+  result.coating.absorption.spectrum_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingAbsorptionOffset);
+  result.coating.absorption.image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingAbsorptionOffset + 4u);
+  result.coating.scattering.spectrum_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingScatteringOffset);
+  result.coating.scattering.image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingScatteringOffset + 4u);
+  result.coating.anisotropy = gpu_abi_load_f32(buffer, base_offset + kMaterialCoatingAnisotropyOffset);
+  result.coating.energy_compensation_interface_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingInterfaceOffset);
+  result.coating.unit_spectrum_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingUnitSpectrumOffset);
+  result.coating.thermal_spectrum_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoatingThermalSpectrumOffset);
+  result.mix.amount.value = asfloat(buffer.Load4(base_offset + kMaterialMixAmountOffset));
+  result.mix.amount.image_index = gpu_abi_load_u32(buffer, base_offset + kMaterialMixAmountOffset + 16u);
+  result.mix.amount.channel = gpu_abi_load_u32(buffer, base_offset + kMaterialMixAmountOffset + 20u);
+  result.mix.first = gpu_abi_load_u32(buffer, base_offset + kMaterialMixFirstOffset);
+  result.mix.second = gpu_abi_load_u32(buffer, base_offset + kMaterialMixSecondOffset);
+  result.layer_base_class = gpu_abi_load_u32(buffer, base_offset + kMaterialLayerBaseClassOffset);
+#if ETX_ENABLE_COHERENT_COATING
+  result.coherent_coating.ior.cls = gpu_abi_load_u32(buffer, base_offset + kMaterialCoherentCoatingIorOffset);
+  result.coherent_coating.ior.eta_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoherentCoatingIorOffset + 4u);
+  result.coherent_coating.ior.k_index = gpu_abi_load_u32(buffer, base_offset + kMaterialCoherentCoatingIorOffset + 8u);
+  result.coherent_coating.thickness_image = gpu_abi_load_u32(buffer, base_offset + kMaterialCoherentCoatingThicknessImageOffset);
+  result.coherent_coating.min_thickness_nm = gpu_abi_load_f32(buffer, base_offset + kMaterialCoherentCoatingMinThicknessOffset);
+  result.coherent_coating.max_thickness_nm = gpu_abi_load_f32(buffer, base_offset + kMaterialCoherentCoatingMaxThicknessOffset);
+#endif
   return result;
 }
 

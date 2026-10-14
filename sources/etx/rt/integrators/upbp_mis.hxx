@@ -125,11 +125,15 @@ inline double upbp_emitter_direction_pdf(const Scene& scene, const SpectralQuery
     .target_position = emitter_vertex.position,
     .uv = emitter_vertex.intersection.tex,
     .shading_normal = emitter_vertex.intersection.nrm,
+    .shading_tangent = emitter_vertex.intersection.tan,
+    .shading_bitangent = emitter_vertex.intersection.btn,
+    .material_index = emitter_vertex.intersection.material_index,
   };
   float pdf_area = 0.0f;
   float pdf_dir = 0.0f;
   float pdf_dir_out = 0.0f;
-  (void)emitter_get_radiance(emitter, spect, query, pdf_area, pdf_dir, pdf_dir_out);
+  Sampler pdf_sampler(0u);
+  (void)emitter_get_radiance(emitter, spect, query, pdf_sampler, pdf_area, pdf_dir, pdf_dir_out);
   return pdf_area > 0.0f ? pdf_dir_out / pdf_area : 0.0;
 }
 
@@ -195,9 +199,11 @@ inline bool upbp_build_joined_path_probability(const Raytracing& rt, const Scene
     }
 
     double forward_direction_pdf = 0.0;
+    const bool from_connection =
+      (path.selected_light_vertex_count > 0u) && (((edge_index + 1u) == path.selected_light_vertex_count) || (edge_index == path.selected_light_vertex_count));
     if (edge_index == 0u) {
       forward_direction_pdf = from.delta ? from.endpoint_pdf_direction : upbp_emitter_direction_pdf(scene, spect, from, to);
-    } else if (from.delta) {
+    } else if (from.sampled_delta() && (from_connection == false)) {
       if (edge_index < path.selected_light_vertex_count - 1u) {
         forward_direction_pdf = from.scatter_pdf_forward;
       } else if (edge_index >= path.selected_light_vertex_count) {
@@ -214,10 +220,12 @@ inline bool upbp_build_joined_path_probability(const Raytracing& rt, const Scene
     }
 
     double reverse_direction_pdf = 0.0;
+    const bool to_connection =
+      (path.selected_light_vertex_count > 0u) && (((edge_index + 2u) == path.selected_light_vertex_count) || ((edge_index + 1u) == path.selected_light_vertex_count));
     if (edge_index + 2u == path.vertices.size()) {
       const Ray camera_ray = {camera_vertex.position, -direction, kRayEpsilon, kMaxFloat};
       reverse_direction_pdf = film_evaluate_out(spect, rt.camera(), camera_ray).pdf_dir;
-    } else if (to.delta) {
+    } else if (to.sampled_delta() && (to_connection == false)) {
       const uint32_t target_index = edge_index + 1u;
       if (target_index < path.selected_light_vertex_count - 1u) {
         reverse_direction_pdf = to.scatter_pdf_reverse;
@@ -440,7 +448,7 @@ inline bool upbp_evaluate_direct_environment_hit(const Raytracing& rt, const Sce
     float pdf_area = 0.0f;
     float pdf_dir = 0.0f;
     float pdf_dir_out = 0.0f;
-    const SpectralResponse radiance = emitter_get_radiance(emitter, spect, query, pdf_area, pdf_dir, pdf_dir_out);
+    const SpectralResponse radiance = emitter_get_radiance(emitter, spect, query, sampler, pdf_area, pdf_dir, pdf_dir_out);
     if (radiance.is_zero() || (pdf_area <= 0.0f) || (pdf_dir <= 0.0f)) {
       continue;
     }
@@ -624,12 +632,15 @@ inline bool upbp_evaluate_direct_area_hit(const Raytracing& rt, const Scene& sce
     .target_position = emitter_vertex.position,
     .uv = emitter_vertex.intersection.tex,
     .shading_normal = emitter_vertex.intersection.nrm,
+    .shading_tangent = emitter_vertex.intersection.tan,
+    .shading_bitangent = emitter_vertex.intersection.btn,
+    .material_index = emitter_vertex.intersection.material_index,
     .directly_visible = camera_vertex_count <= 2u,
   };
   float pdf_area = 0.0f;
   float pdf_dir = 0.0f;
   float pdf_dir_out = 0.0f;
-  const SpectralResponse radiance = emitter_get_radiance(emitter, spect, query, pdf_area, pdf_dir, pdf_dir_out);
+  const SpectralResponse radiance = emitter_get_radiance(emitter, spect, query, sampler, pdf_area, pdf_dir, pdf_dir_out);
   if ((pdf_dir <= 0.0f) || radiance.is_zero()) {
     return true;
   }

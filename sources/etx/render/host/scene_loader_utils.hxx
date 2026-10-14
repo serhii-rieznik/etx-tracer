@@ -28,12 +28,15 @@ inline float3 make_float3(const float values[]) {
 }
 
 inline bool validate_triangle(Triangle& tri, const std::vector<float3>& vertices) {
-  if (tri.i[0] >= vertices.size() || tri.i[1] >= vertices.size() || tri.i[2] >= vertices.size()) {
+  if ((tri.i[0] >= vertices.size()) || (tri.i[1] >= vertices.size()) || (tri.i[2] >= vertices.size())) {
+    return false;
+  }
+  if ((value_is_correct(vertices[tri.i[0]]) == false) || (value_is_correct(vertices[tri.i[1]]) == false) || (value_is_correct(vertices[tri.i[2]]) == false)) {
     return false;
   }
   tri.geo_n = cross(vertices[tri.i[1]] - vertices[tri.i[0]], vertices[tri.i[2]] - vertices[tri.i[0]]);
-  float l = length(tri.geo_n);
-  if (l == 0.0f) {
+  const float l = length(tri.geo_n);
+  if ((std::isfinite(l) == false) || (l == 0.0f)) {
     return false;
   }
   tri.geo_n /= l;
@@ -93,19 +96,24 @@ inline void trim_whitespace(std::string& str) {
   str = str.substr(start, end - start);
 }
 
-inline bool load_ior_from_identifier(const char* identifier, const IORDatabase& ior_database, SpectralDistribution& eta, SpectralDistribution& k,
+inline bool load_ior_from_identifier(const char* identifier, const char* base_dir, const IORDatabase& ior_database, SpectralDistribution& eta, SpectralDistribution& k,
   SpectralDistribution::Class& cls) {
   if ((identifier == nullptr) || (identifier[0] == 0))
     return false;
 
-  if (const IORDefinition* def = ior_database.find_by_name(identifier)) {
-    cls = def->cls;
-    eta = def->eta;
-    k = def->k;
-    return true;
+  const auto requested = std::filesystem::u8path(identifier);
+  const bool explicit_file = requested.has_parent_path() || requested.has_extension();
+  if (explicit_file == false) {
+    if (const IORDefinition* def = ior_database.find_by_name(identifier)) {
+      cls = def->cls;
+      eta = def->eta;
+      k = def->k;
+      return true;
+    }
   }
 
-  std::filesystem::path candidate = locate_spectrum_file(identifier, {"conductor", "dielectric"});
+  const std::filesystem::path candidate =
+    explicit_file ? (requested.is_absolute() ? requested : std::filesystem::u8path(base_dir) / requested) : locate_spectrum_file(identifier, {"conductor", "dielectric"});
   if (candidate.empty())
     return false;
 

@@ -70,6 +70,7 @@ struct RTApplication {
  private:
   bool load_scene_file(const std::string&, uint32_t options, bool start_rendering);
   bool load_scene_file(const std::string&, uint32_t options, bool start_rendering, bool unsaved);
+  bool flush_pending_edits_for_save();
   std::string save_scene_file(const std::string&);
   bool add_scene_file(const std::string&, std::string& error, bool owned_source);
   bool begin_scene_import(const ApplicationCommand&, std::string& error);
@@ -85,6 +86,8 @@ struct RTApplication {
   void on_options_changed();
   void on_use_image_as_reference();
   SceneResourceEditResult on_material_added();
+  SceneResourceEditResult on_material_file_loaded(const std::string& filename);
+  std::string on_material_file_saved(uint32_t index, const std::string& filename);
   SceneResourceEditResult on_material_duplicated(uint32_t index);
   SceneResourceEditResult on_material_deleted(uint32_t index);
   std::string on_material_renamed(uint32_t index, const std::string&);
@@ -192,6 +195,10 @@ struct RTApplication {
   bool _material_render_resource_preparation_active = false;
   bool _material_render_resource_preparation_failed = false;
   std::string _command_failure_reason = {};
+  ApplicationCommandType _failed_command_type = ApplicationCommandType::Run;
+  SceneDiagnostic _material_edit_diagnostic;
+  std::string _file_operation_error;
+  std::string _dismissed_diagnostic_message;
   bool _restart_cpu_after_material_resource_preparation = false;
   bool _restart_gpu_after_material_resource_preparation = false;
   bool _scene_dirty = false;

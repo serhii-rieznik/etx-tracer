@@ -56,6 +56,7 @@ struct UPBPSubsurfaceState {
   MediumTrackingInput tracking = {};
   MediumInstance medium = {};
   uint32_t material_index = kInvalidIndex;
+  uint32_t boundary_material_index = kInvalidIndex;
   uint32_t owner_instance_index = kInvalidIndex;
   float packing = 0.0f;
   bool correlated_origin = false;
@@ -119,6 +120,7 @@ inline bool upbp_make_subsurface_state(const Scene& scene, const SpectralQuery s
   result.tracking.spect = spect;
   result.tracking.density_majorant = 1.0f;
   result.material_index = intersection.material_index;
+  result.boundary_material_index = scene.triangles[intersection.triangle_index].material_index;
   result.owner_instance_index = intersection.instance_index;
   result.packing = material.subsurface_packing;
   if (material.int_medium != kInvalidIndex) {
@@ -156,8 +158,8 @@ inline bool upbp_walk_subsurface_segment(const Raytracing& rt, const Scene& scen
   const Sampler initial_exit_sampler = intersection_sampler;
   const bool exit_found = upbp_trace_with_medium_origin_retry(
     traversal.ray,
-    [&rt, &scene, &intersection_sampler](const Ray& trace_ray, Intersection& trace_intersection) {
-      return rt.trace(scene, trace_ray, trace_intersection, intersection_sampler);
+    [&rt, &scene, &intersection_sampler, &subsurface_state](const Ray& trace_ray, Intersection& trace_intersection) {
+      return rt.trace(scene, trace_ray, trace_intersection, intersection_sampler, subsurface_state.boundary_material_index, subsurface_state.material_index);
     },
     [&intersection_sampler, &initial_exit_sampler]() {
       intersection_sampler = initial_exit_sampler;
@@ -248,8 +250,24 @@ inline UPBPPathVertexRecord upbp_make_emitter_endpoint(const Scene& scene, const
   endpoint.intersection.w_i = emitter_sample.direction;
   endpoint.intersection.emitter_index = emitter_sample.emitter_index;
   endpoint.intersection.instance_index = emitter_sample.instance_index;
+  endpoint.intersection.material_index = emitter_sample.material_index;
   if (emitter_sample.triangle_index != kInvalidIndex) {
-    endpoint.intersection.tex = lerp_vertex(scene, scene.triangles[emitter_sample.triangle_index], emitter_sample.barycentric).tex;
+    Vertex vertex = lerp_vertex(scene, scene.triangles[emitter_sample.triangle_index], emitter_sample.barycentric);
+    if (emitter_sample.instance_index < scene.instances.count) {
+      vertex = scene_instance_transform_vertex(scene.instances[emitter_sample.instance_index], vertex);
+    }
+    endpoint.intersection.tex = vertex.tex;
+    endpoint.intersection.tan = vertex.tan;
+    endpoint.intersection.btn = vertex.btn;
+    if (scene.materials[emitter_sample.material_index].cls == MaterialClass::CoatedConductor) {
+      IntersectionBase base = {};
+      base.triangle_index = emitter_sample.triangle_index;
+      base.barycentric = {emitter_sample.barycentric.y, emitter_sample.barycentric.z};
+      base.instance_index = emitter_sample.instance_index;
+      base.material_index = emitter_sample.material_index;
+      endpoint.intersection = make_intersection(scene, -emitter_sample.direction, base);
+      endpoint.intersection.w_i = emitter_sample.direction;
+    }
   } else {
     endpoint.intersection.tex = emitter_sample.image_uv;
   }
@@ -518,8 +536,8 @@ inline bool upbp_build_subpath(const Raytracing& rt, const Scene& scene, const U
       vertex.scatter_pdf_reverse = ((sample.properties & BSDFSample::Delta) != 0u) ? sample.pdf : bsdf::reverse_pdf(bsdf_data, sample.w_o, scattering_material, path_sampler);
       vertex.sample_properties = sample.properties;
       vertex.cls = UPBPVertexClass::Surface;
-      vertex.connectible = (sample.properties & BSDFSample::Delta) == 0u;
-      vertex.delta = (sample.properties & BSDFSample::Delta) != 0u;
+      vertex.connectible = bsdf::is_delta(scattering_material, intersection.tex, path_sampler) == false;
+      vertex.delta = vertex.connectible == false;
       vertex.outgoing_medium_index = ((sample.properties & BSDFSample::MediumChanged) != 0u) ? sample.medium_index : result.active_medium_index;
       if (subsurface_path || coated_subsurface || (inside_subsurface && (exiting_subsurface == false)) || (exiting_subsurface && (subsurface_state.packing > 0.0f))) {
         vertex.medium = subsurface_state.medium;

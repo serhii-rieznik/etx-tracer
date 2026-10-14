@@ -249,6 +249,10 @@ ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, bp2d_beam_acceleration_structures, 
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, bp2d_beam_grid, kGPUUPBPResourcesBP2DBeamGridOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, bb1d_beam_grid, kGPUUPBPResourcesBB1DBeamGridOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, beam_index_mode, kGPUUPBPResourcesBeamIndexModeOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, surface_grid_ranges_buffer, kGPUUPBPResourcesSurfaceGridRangesBufferOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, surface_grid_indices_buffer, kGPUUPBPResourcesSurfaceGridIndicesBufferOffset);
+ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPResources, surface_grid_mask, kGPUUPBPResourcesSurfaceGridMaskOffset);
+static_assert((kGPUUPBPCoatingSubtotalOffset + kGPUWavefrontCompactSpectralResponseStride) <= kGPUVCMCoatingLaneStride, "UPBP coating subtotal exceeds its lane stride");
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamGridResources, metadata_buffer, kGPUUPBPBeamGridResourcesMetadataBufferOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamGridResources, cell_offsets_buffer, kGPUUPBPBeamGridResourcesCellOffsetsBufferOffset);
 ETX_ASSERT_GPU_UPBP_OFFSET(GPUUPBPBeamGridResources, reserved0, kGPUUPBPBeamGridResourcesReserved0Offset);
@@ -790,6 +794,20 @@ static_assert(offsetof(GPUWavefrontResources, vcm_grid_next_buffer) == kGPUWavef
   "GPUWavefrontResources::vcm_grid_next_buffer offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontResources, upbp_resources_buffer) == kGPUWavefrontResourcesUPBPResourcesBufferOffset,
   "GPUWavefrontResources::upbp_resources_buffer offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, coating_request_buffer) == kGPUWavefrontResourcesCoatingRequestBufferOffset,
+  "GPUWavefrontResources::coating_request_buffer offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, emission_request_buffer) == kGPUWavefrontResourcesEmissionRequestBufferOffset,
+  "GPUWavefrontResources::emission_request_buffer offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, emission_consumer_buffer) == kGPUWavefrontResourcesEmissionConsumerBufferOffset,
+  "GPUWavefrontResources::emission_consumer_buffer offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, transport_work_buffer) == kGPUWavefrontResourcesTransportWorkBufferOffset,
+  "GPUWavefrontResources::transport_work_buffer offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, vcm_coating_buffer) == kGPUWavefrontResourcesVCMCoatingBufferOffset,
+  "GPUWavefrontResources::vcm_coating_buffer offset changed; update GPU wavefront ABI");
+static_assert((kGPUVCMCoatingSamplerOffset + 4u * sizeof(uint32_t)) <= kGPUVCMCoatingLaneStride, "VCM coating lane sampler exceeds its stride");
+
+static_assert(offsetof(GPUWavefrontResources, emission_request_stride) == kGPUWavefrontResourcesEmissionRequestStrideOffset,
+  "GPUWavefrontResources::emission_request_stride offset changed; update GPU wavefront ABI");
 
 static_assert(std::is_standard_layout_v<float2>, "float2 must stay standard layout for GPU upload ABI");
 static_assert(std::is_trivially_copyable_v<float2>, "float2 must stay trivially copyable for GPU upload ABI");
@@ -840,6 +858,24 @@ static_assert(offsetof(Emitter, triangle_area) == kEmitterTriangleAreaOffset, "E
 static_assert(std::is_standard_layout_v<Material>, "Material must stay standard layout for GPU upload ABI");
 static_assert(std::is_trivially_copyable_v<Material>, "Material must stay trivially copyable for GPU upload ABI");
 static_assert(sizeof(Material) == kMaterialStride, "Material size changed; update GPU shader decode stride");
+static_assert(offsetof(Material, layer_base_class) == kMaterialLayerBaseClassOffset, "Material::layer_base_class offset changed");
+static_assert(sizeof(CoherentCoating) == 32u);
+static_assert(offsetof(Material, coherent_coating) == kMaterialCoherentCoatingIorOffset);
+static_assert((offsetof(Material, coherent_coating) + offsetof(CoherentCoating, thickness_image)) == kMaterialCoherentCoatingThicknessImageOffset);
+static_assert((offsetof(Material, coherent_coating) + offsetof(CoherentCoating, min_thickness_nm)) == kMaterialCoherentCoatingMinThicknessOffset);
+static_assert((offsetof(Material, coherent_coating) + offsetof(CoherentCoating, max_thickness_nm)) == kMaterialCoherentCoatingMaxThicknessOffset);
+static_assert(offsetof(Material, coating) == kMaterialCoatingIorOffset);
+static_assert(offsetof(Material, mix) == kMaterialMixAmountOffset);
+static_assert((offsetof(Material, coating) + offsetof(Coating, roughness)) == kMaterialCoatingRoughnessOffset);
+static_assert((offsetof(Material, coating) + offsetof(Coating, thickness)) == kMaterialCoatingThicknessOffset);
+static_assert((offsetof(Material, coating) + offsetof(Coating, absorption)) == kMaterialCoatingAbsorptionOffset);
+static_assert((offsetof(Material, coating) + offsetof(Coating, scattering)) == kMaterialCoatingScatteringOffset);
+static_assert((offsetof(Material, coating) + offsetof(Coating, anisotropy)) == kMaterialCoatingAnisotropyOffset);
+static_assert((offsetof(Material, coating) + offsetof(Coating, energy_compensation_interface_index)) == kMaterialCoatingInterfaceOffset);
+static_assert((offsetof(Material, coating) + offsetof(Coating, unit_spectrum_index)) == kMaterialCoatingUnitSpectrumOffset);
+static_assert((offsetof(Material, coating) + offsetof(Coating, thermal_spectrum_index)) == kMaterialCoatingThermalSpectrumOffset);
+static_assert((offsetof(Material, mix) + offsetof(MaterialMix, first)) == kMaterialMixFirstOffset);
+static_assert((offsetof(Material, mix) + offsetof(MaterialMix, second)) == kMaterialMixSecondOffset);
 static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, period_nm)) == kMaterialDiffractionGratingPeriodNmOffset,
   "Material::diffraction_grating.period_nm offset changed; update GPU shader decode");
 static_assert((offsetof(Material, diffraction_grating) + offsetof(DiffractionGrating, optical_path_difference_nm)) == kMaterialDiffractionGratingOpticalPathDifferenceNmOffset,

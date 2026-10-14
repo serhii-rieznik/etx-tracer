@@ -14,6 +14,8 @@ struct IntegratorThreadImpl {
   uint64_t current_camera_hash = 0;
   uint64_t failed_camera_hash = 0;
   const char* scene_failure_reason = nullptr;
+  std::string scene_failure_message;
+  mutable std::mutex scene_failure_mutex;
   uint64_t scene_revision = 0u;
   Integrator* integrator = nullptr;
   Integrator::State latest_state = Integrator::State::Stopped;
@@ -31,16 +33,26 @@ struct IntegratorThreadImpl {
   void reset_scene_hashes() {
     current_scene_hashes = {};
     current_camera_hash = 0;
-    scene_failure_reason = nullptr;
+    {
+      std::lock_guard lock(scene_failure_mutex);
+      scene_failure_reason = nullptr;
+      scene_failure_message.clear();
+    }
     scene_update_scope.store(SceneUpdateScope::Full);
   }
 
   void fail_scene_preparation(const char* reason) {
-    scene_failure_reason = reason;
+    const SceneDiagnostic diagnostic = scene_representation.material_preparation_diagnostic();
+    {
+      std::lock_guard lock(scene_failure_mutex);
+      scene_failure_message = diagnostic.message.empty() ? std::string(reason) : diagnostic.text();
+      scene_failure_reason = scene_failure_message.c_str();
+    }
     failed_scene_hashes = scene_representation.data().compute_hashes();
     const auto& camera = scene_representation.camera();
     failed_camera_hash = xxh64(&camera, sizeof(camera));
-    log::error("%s", reason);
+    if (diagnostic.message.empty())
+      log::error("%s", scene_failure_reason);
   }
 
   void request_scene_check(SceneUpdateScope requested_scope) {
@@ -123,7 +135,11 @@ struct IntegratorThreadImpl {
         changes = new_hashes.compare(current_scene_hashes);
       }
     }
-    scene_failure_reason = nullptr;
+    {
+      std::lock_guard lock(scene_failure_mutex);
+      scene_failure_reason = nullptr;
+      scene_failure_message.clear();
+    }
     current_scene_hashes = new_hashes;
 
     const bool suppress_run = (pending_scope != SceneUpdateScope::None) && suppress_scene_commit_run.exchange(false);
@@ -229,8 +245,9 @@ bool IntegratorThread::scene_changes_pending() const {
   return (_private->scene_update_scope.load() != SceneUpdateScope::None) || (_private->scene_failure_reason != nullptr);
 }
 
-const char* IntegratorThread::scene_failure_reason() const {
-  return _private->scene_failure_reason;
+std::string IntegratorThread::scene_failure_reason() const {
+  std::lock_guard lock(_private->scene_failure_mutex);
+  return _private->scene_failure_message;
 }
 
 uint64_t IntegratorThread::scene_revision() const {

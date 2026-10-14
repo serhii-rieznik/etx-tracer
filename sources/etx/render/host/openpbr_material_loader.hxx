@@ -6,6 +6,6 @@
 
 namespace etx {
 
-bool load_openpbr_material_file(const std::filesystem::path& path, SceneData& data, Material& material);
+bool load_openpbr_material_file(const std::filesystem::path& path, SceneData& data, MaterialDescription& material, std::string& error);
 
 }  // namespace etx

@@ -435,7 +435,7 @@ void load_gltf_materials(const tinygltf::Model& model, GltfLoaderState& state) {
     uint32_t material_index = data.add_material(material_name.c_str());
     state.gltf_material_mapping[gltf_material_index] = material_index;
 
-    auto& mtl = data.materials[material_index];
+    auto& mtl = data.material_descriptions[material_index];
 
     bool is_unlit = false;
     for (const auto& ext : material.extensions) {

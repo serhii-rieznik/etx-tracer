@@ -481,7 +481,7 @@ struct Loader {
       return named_material(statement, _state.material_name);
     auto& binding = _inline_materials[_state.material];
     if (binding.material == kInvalidIndex)
-      binding.material = make_material(binding.statement, binding.statement.arguments[0], "PBRT material " + std::to_string(_data.materials.size()));
+      binding.material = make_material(binding.statement, binding.statement.arguments[0], "PBRT material " + std::to_string(_data.material_descriptions.size()));
     return binding.material;
   }
 
@@ -543,7 +543,7 @@ struct Loader {
     return image_index;
   }
 
-  uint32_t roughness(const PbrtStatement& statement, const std::string& type, Material& material) {
+  uint32_t roughness(const PbrtStatement& statement, const std::string& type, MaterialDescription& material) {
     const bool conductor = (type == "metal") || (type == "conductor");
     const bool smooth_default = (type == "glass") || (type == "subsurface");
     const float fallback = _version == PbrtVersion::V3 ? (conductor ? 0.01f : (smooth_default ? 0.0f : 0.1f)) : 0.0f;
@@ -642,7 +642,7 @@ struct Loader {
     return found->second;
   }
 
-  void subsurface(const PbrtStatement& statement, Material& material, const std::string& name) {
+  void subsurface(const PbrtStatement& statement, MaterialDescription& material, const std::string& name) {
     SpectralDistribution absorption, scattering;
     float g = scalar(statement, "g", 0.0f);
     const float scale = scalar(statement, "scale", 1.0f);
@@ -692,7 +692,7 @@ struct Loader {
       fail(statement, "Subsurface anisotropy must lie in (-1, 1).");
     absorption = pbrt_multiply_spectra(absorption, SpectralDistribution::constant(scale));
     scattering = pbrt_multiply_spectra(scattering, SpectralDistribution::constant(scale));
-    const std::string medium_name = "PBRT SSS " + name + " " + std::to_string(_data.materials.size());
+    const std::string medium_name = "PBRT SSS " + name + " " + std::to_string(_data.material_descriptions.size());
     material.cls = MaterialClass::Plastic;
     material.subsurface_cls = SubsurfaceMaterial::RandomWalk;
     material.subsurface_anisotropy = g;
@@ -704,21 +704,63 @@ struct Loader {
 
   uint32_t make_material(const PbrtStatement& statement, const std::string& type, const std::string& name) {
     if (type == "coatedconductor") {
-      PbrtStatement native = statement;
-      for (auto& parameter : native.parameters) {
+      PbrtStatement substrate = statement;
+      PbrtStatement interface = statement;
+      for (auto& parameter : substrate.parameters) {
         if (parameter.name.starts_with("conductor."))
           parameter.name.erase(0u, std::string_view("conductor.").size());
       }
-      if (native.find("roughness") == nullptr) {
-        if (const auto* roughness = statement.find("interface.roughness")) {
-          native.parameters.push_back(*roughness);
-          native.parameters.back().name = "roughness";
-        }
+      for (auto& parameter : interface.parameters) {
+        if (parameter.name.starts_with("interface."))
+          parameter.name.erase(0u, std::string_view("interface.").size());
       }
-      log::warning("%s: coatedconductor is imported as a native conductor without its coating", statement.location.describe().c_str());
-      return make_material(native, "conductor", name);
+      const uint32_t index = make_material(substrate, "conductor", name);
+      MaterialDescription interface_material;
+      const uint32_t interface_projection = roughness(interface, "dielectric", interface_material);
+      const TextureValue eta = spectrum(interface, "eta", 1.5f, false);
+      if (eta.image != kInvalidIndex)
+        fail(statement, "Spatially varying coating IORs are not implemented.");
+      const TextureValue thickness = float_texture(statement, "thickness", 0.01f);
+      const TextureValue albedo = spectrum(statement, "albedo", 0.0f, false);
+      TextureValue absorption;
+      if (albedo.image == kInvalidIndex) {
+        float2 samples[WavelengthCount];
+        for (uint32_t wavelength_index = 0u; wavelength_index < WavelengthCount; ++wavelength_index) {
+          const float wavelength = static_cast<float>(ShortestWavelength + wavelength_index);
+          const float value = albedo.spectrum.query(SpectralQuery(wavelength, SpectralFlags::Spectral)).value;
+          if ((value < 0.0f) || (value > 1.0f))
+            fail(statement, "Coating albedo must lie in [0, 1].");
+          samples[wavelength_index] = {wavelength, 1.0f - value};
+        }
+        absorption.spectrum = SpectralDistribution::from_samples(samples, WavelengthCount);
+        absorption.spectrum.integrated_value = float3{1.0f, 1.0f, 1.0f} - albedo.spectrum.integrated();
+      } else {
+        std::atomic<bool> invalid_albedo = false;
+        absorption.image = bake_texture(statement, {albedo.image, kInvalidIndex, kInvalidIndex}, [&](const float2& uv) {
+          const float3 value = texture_rgb(albedo, uv);
+          if ((min(value.x, min(value.y, value.z)) < 0.0f) || (max(value.x, max(value.y, value.z)) > 1.0f))
+            invalid_albedo.store(true, std::memory_order_relaxed);
+          return float3{1.0f, 1.0f, 1.0f} - value;
+        });
+        if (invalid_albedo.load(std::memory_order_relaxed))
+          fail(statement, "Coating albedo must lie in [0, 1].");
+        absorption.spectrum = SpectralDistribution::constant(1.0f);
+        absorption.projection = albedo.projection;
+      }
+      MaterialDescription& material = _data.material_descriptions[index];
+      material.cls = MaterialClass::CoatedConductor;
+      material.coating.ior = {SpectralDistribution::Dielectric, _data.add_spectrum(eta.spectrum), _data.add_spectrum(SpectralDistribution::constant(0.0f))};
+      material.coating.roughness = interface_material.roughness;
+      material.coating.thickness = {{thickness.spectrum.integrated().x, 0.0f, 0.0f, 0.0f}, thickness.image, 4u};
+      material.coating.absorption = spectral_image(absorption);
+      material.coating.scattering = spectral_image(albedo);
+      material.coating.anisotropy = scalar(statement, "g", 0.0f);
+      _material_projections[index] =
+        common_projection(statement, {{{}, material.roughness.image_index, _roughness_projections.at(index)}, {{}, material.coating.roughness.image_index, interface_projection},
+                                       thickness, albedo, absorption, {{}, material.reflectance.image_index, _material_projections.at(index)}});
+      return index;
     }
-    Material material;
+    MaterialDescription material;
     material.ext_ior = {SpectralDistribution::Dielectric, _data.add_spectrum(SpectralDistribution::constant(1.0f)), _data.add_spectrum(SpectralDistribution::constant(0.0f))};
     uint32_t roughness_projection = kInvalidIndex, bump_projection = kInvalidIndex;
     const bool conductor = (type == "metal") || (type == "conductor");
@@ -743,20 +785,20 @@ struct Loader {
       material.reflectance = spectral_image(reflection);
       material.scattering = spectral_image(transmission);
       material.roughness.value = {};
-    } else if ((type == "plastic") || (type == "coateddiffuse") || (type == "substrate") || (type == "mix")) {
+    } else if ((type == "plastic") || (type == "coateddiffuse") || (type == "substrate")) {
       material.cls = MaterialClass::Plastic;
       if (_version == PbrtVersion::V3)
         material.reflectance = spectral_image(spectrum(statement, "Ks", 0.25f, false));
-      if (type == "mix") {
-        const auto* children = statement.find("materials");
-        if ((children == nullptr) || (children->strings.size() != 2u))
-          fail(statement, "Mix material requires two named materials.");
-        const uint32_t first = named_material(statement, children->strings[0]);
-        material.scattering = _data.materials[first].scattering;
-        material.roughness = _data.materials[first].roughness;
-        roughness_projection = _roughness_projections.at(first);
-        log::warning("%s: mix material uses native plastic with the first child's base color and roughness", statement.location.describe().c_str());
-      }
+    } else if (type == "mix") {
+      const auto* children = statement.find("materials");
+      if ((children == nullptr) || (children->strings.size() != 2u))
+        fail(statement, "Mix material requires two named materials.");
+      material.cls = MaterialClass::Mix;
+      material.mix.first = named_material(statement, children->strings[0]);
+      material.mix.second = named_material(statement, children->strings[1]);
+      const TextureValue amount = float_texture(statement, "amount", 0.5f);
+      material.mix.amount = {{amount.spectrum.integrated().x, 0.0f, 0.0f, 0.0f}, amount.image, 4u};
+      roughness_projection = amount.projection;
     } else if ((type == "dielectric") || (type == "glass")) {
       material.cls = MaterialClass::Dielectric;
       material.scattering = spectral_image(spectrum(statement, "Kt", 1.0f, false));
@@ -840,14 +882,23 @@ struct Loader {
     }
     std::string unique_name = name;
     while (_data.has_material(unique_name.c_str()))
-      unique_name += "#" + std::to_string(_data.materials.size());
+      unique_name += "#" + std::to_string(_data.material_descriptions.size());
     const uint32_t index = _data.add_material(unique_name.c_str());
-    _data.materials[index] = material;
+    _data.material_descriptions[index] = material;
     _roughness_projections.emplace(index, roughness_projection);
-    const uint32_t projection = common_projection(statement,
+    uint32_t projection = common_projection(statement,
       {projected_spectrum(material.reflectance), projected_spectrum(material.scattering),
         material.subsurface.image_index != kInvalidIndex ? projected_spectrum(material.subsurface) : TextureValue{}, {{}, material.roughness.image_index, roughness_projection},
-        {{}, material.bump.image_index, bump_projection}, {{}, material.normal_image_index, kInvalidIndex}});
+        {{}, material.bump.image_index, bump_projection}, {{}, material.normal_image_index, kInvalidIndex}, {{}, material.mix.amount.image_index, roughness_projection}});
+    if (material.cls == MaterialClass::Mix) {
+      for (const uint32_t child : {material.mix.first, material.mix.second}) {
+        const uint32_t child_projection = _material_projections.at(child);
+        if ((child_projection != kInvalidIndex) && (projection != kInvalidIndex) && (child_projection != projection))
+          fail(statement, "Mix children require incompatible native UV projections.");
+        if (child_projection != kInvalidIndex)
+          projection = child_projection;
+      }
+    }
     _material_projections.emplace(index, projection);
     return index;
   }
@@ -1121,21 +1172,21 @@ struct Loader {
     const bool normals = source.normals.empty() == false;
     uint32_t material = bound_material(statement);
     uint32_t projection = _material_projections.at(material);
-    const auto& bound = _data.materials[material];
+    const auto& bound = _data.material_descriptions[material];
     const bool has_image = (bound.reflectance.image_index != kInvalidIndex) || (bound.scattering.image_index != kInvalidIndex) || (bound.subsurface.image_index != kInvalidIndex) ||
                            (bound.roughness.image_index != kInvalidIndex) || (bound.bump.image_index != kInvalidIndex) || (bound.normal_image_index != kInvalidIndex);
     uint32_t projection_image = has_image ? 0u : kInvalidIndex;
     projection = common_projection(statement, {{{}, projection_image, projection}, {{}, alpha_image, alpha_projection}});
     if (alpha_image != kInvalidIndex)
       projection_image = 0u;
-    const bool normal_mapped = _data.materials[material].normal_image_index != kInvalidIndex;
+    const bool normal_mapped = _data.material_descriptions[material].normal_image_index != kInvalidIndex;
     const bool shared_vertices = normals && (source.texcoords.empty() == false) && (normal_mapped == false);
     const size_t vertex_count = shared_vertices ? source.positions.size() : source.indices.size() * 3u;
     if ((vertex_count > (std::numeric_limits<uint32_t>::max() - _data.vertices.pos.size())) ||
         (source.indices.size() > (std::numeric_limits<uint32_t>::max() - _data.triangles.size())))
       fail(statement, "Shape exceeds native geometry index capacity.");
     const uint32_t inside = medium(statement, _state.inside_medium), outside = medium(statement, _state.outside_medium);
-    const auto& base = _data.materials[material];
+    const auto& base = _data.material_descriptions[material];
     if ((base.subsurface_cls != SubsurfaceMaterial::Disabled) && (inside != kInvalidIndex))
       fail(statement, "A subsurface material cannot also bind an explicit interior medium.");
     const uint32_t internal = base.subsurface_cls != SubsurfaceMaterial::Disabled ? base.int_medium : inside;
@@ -1145,9 +1196,9 @@ struct Loader {
       if (found != _medium_materials.end())
         material = found->second;
       else {
-        material = _data.clone_material(_data.materials[material], "");
-        _data.materials[material].int_medium = internal;
-        _data.materials[material].ext_medium = outside;
+        material = _data.clone_material(_data.material_descriptions[material], "");
+        _data.material_descriptions[material].int_medium = internal;
+        _data.material_descriptions[material].ext_medium = outside;
         _medium_materials.emplace(key, material);
       }
     }
@@ -1157,18 +1208,18 @@ struct Loader {
         fail(light, "Unsupported area light type.");
       if (string(light, "filename", "").empty() == false)
         fail(light, "PBRT image area lights are not implemented.");
-      material = _data.clone_material(_data.materials[material], "");
+      material = _data.clone_material(_data.material_descriptions[material], "");
       TextureValue emission = radiance(light, "L");
       projection = common_projection(light, {{{}, projection_image, projection}, emission});
-      _data.materials[material].emission = spectral_image(emission);
-      _data.materials[material].two_sided = boolean(light, "twosided", false) ? 1u : 0u;
+      _data.material_descriptions[material].emission = spectral_image(emission);
+      _data.material_descriptions[material].two_sided = boolean(light, "twosided", false) ? 1u : 0u;
     }
     if (std::isfinite(alpha_scale) == false)
       fail(statement, "PBRT alpha texture scale exceeds the native floating-point range.");
     if ((sample_only == false) && ((alpha_image != kInvalidIndex) || (alpha_scale != 1.0f))) {
       if (_state.area_light.directive.empty())
-        material = _data.clone_material(_data.materials[material], "");
-      _data.materials[material].alpha_mask = {{max(0.0f, alpha_scale), 1.0f, 1.0f, 1.0f}, alpha_image, 4u};
+        material = _data.clone_material(_data.material_descriptions[material], "");
+      _data.material_descriptions[material].alpha_mask = {{max(0.0f, alpha_scale), 1.0f, 1.0f, 1.0f}, alpha_image, 4u};
       _has_alpha_masks = _has_alpha_masks || (alpha_image != kInvalidIndex);
     }
     const uint32_t vertex_start = static_cast<uint32_t>(_data.vertices.pos.size());
@@ -1558,7 +1609,7 @@ struct Loader {
     } else if (directive == "Material") {
       _state.material_name.clear();
       if (_version == PbrtVersion::V3)
-        _state.material = make_material(statement, statement.arguments[0], "PBRT material " + std::to_string(_data.materials.size()));
+        _state.material = make_material(statement, statement.arguments[0], "PBRT material " + std::to_string(_data.material_descriptions.size()));
       else {
         _state.material = static_cast<uint32_t>(_inline_materials.size());
         _inline_materials.push_back({statement, kInvalidIndex});
@@ -1642,7 +1693,7 @@ struct Loader {
       _data.images.load_images(_scheduler);
       if (_data.images.loading_succeeded() == false)
         throw std::runtime_error("Cannot decode a PBRT scalar texture image.");
-      for (auto& material : _data.materials) {
+      for (auto& material : _data.material_descriptions) {
         if (material.alpha_mask.image_index != kInvalidIndex) {
           const auto& image = _data.images.get(material.alpha_mask.image_index);
           material.alpha_mask.channel = (image.options & Image::HasAlphaChannel) != 0u ? 3u : 4u;

@@ -16,8 +16,14 @@
 #define ETX_BSDF_RUNTIME_VALIDATION_KIND_CONDUCTOR   2
 #define ETX_BSDF_RUNTIME_VALIDATION_KIND_DIELECTRIC  3
 #define ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION 4
+#define ETX_BSDF_RUNTIME_VALIDATION_KIND_VELVET      5
+#define ETX_BSDF_RUNTIME_VALIDATION_KIND_TRANSLUCENT 6
 
-#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
+#if defined(ETX_BSDF_RUNTIME_VALIDATION_KIND) && (ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_VELVET)
+  #include <interop/bsdf_velvet_shared.hxx>
+#elif defined(ETX_BSDF_RUNTIME_VALIDATION_KIND) && (ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_TRANSLUCENT)
+  #include <interop/bsdf_various_shared.hxx>
+#elif ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
   #include <interop/bsdf_energy_compensated_shared.hxx>
   #include <interop/bsdf_diffraction_grating_shared.hxx>
 #elif ETX_BSDF_RUNTIME_VALIDATION_MODE == 2
@@ -103,6 +109,10 @@ BSDFSample validation_sample(BSDFResourceContext context, BSDFData data, Materia
   return bsdf_plastic_sample(context, data, material, sampler);
 # elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION
   return bsdf_diffraction_grating_sample(context, data, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_VELVET
+  return bsdf_velvet_sample(context, data, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_TRANSLUCENT
+  return bsdf_translucent_sample(context, data, material, sampler);
 # endif
 #else
   if (material.cls == MaterialClass::Conductor) {
@@ -142,6 +152,10 @@ BSDFEval validation_evaluate(BSDFResourceContext context, BSDFData data, float3 
   return bsdf_plastic_evaluate(context, data, outgoing_direction, material, sampler);
 # elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION
   return bsdf_diffraction_grating_evaluate(context, data, outgoing_direction, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_VELVET
+  return bsdf_velvet_evaluate(context, data, outgoing_direction, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_TRANSLUCENT
+  return bsdf_translucent_evaluate(context, data, outgoing_direction, material, sampler);
 # endif
 #else
   if (material.cls == MaterialClass::Conductor) {
@@ -181,6 +195,10 @@ float validation_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing
   return bsdf_plastic_pdf(context, data, outgoing_direction, material, sampler);
 # elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION
   return bsdf_diffraction_grating_pdf(context, data, outgoing_direction, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_VELVET
+  return bsdf_velvet_pdf(context, data, outgoing_direction, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_TRANSLUCENT
+  return bsdf_translucent_pdf(context, data, outgoing_direction, material, sampler);
 # endif
 #else
   if (material.cls == MaterialClass::Conductor) {
@@ -232,6 +250,10 @@ bool validation_is_delta(BSDFResourceContext context, Material material, float2 
   return bsdf_plastic_is_delta(material, tex, sampler);
 # elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION
   return bsdf_diffraction_grating_is_delta(material, tex, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_VELVET
+  return bsdf_velvet_is_delta(material, tex, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_TRANSLUCENT
+  return bsdf_translucent_is_delta(material, tex, sampler);
 # endif
 #else
   if (material.cls == MaterialClass::Conductor) {
@@ -269,6 +291,10 @@ SpectralResponse validation_albedo(BSDFResourceContext context, BSDFData data, M
   return bsdf_plastic_albedo(context, data, material, sampler);
 # elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION
   return bsdf_diffraction_grating_albedo(context, data, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_VELVET
+  return bsdf_velvet_albedo(context, data, material, sampler);
+# elif ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_TRANSLUCENT
+  return bsdf_translucent_albedo(context, data, material, sampler);
 # endif
 #else
   if (material.cls == MaterialClass::Conductor) {
@@ -316,7 +342,7 @@ void main(uint3 id : SV_DispatchThreadID) {
 
   Material material = gpu_abi_load_material_full(material_buffer, material_index);
   BSDFData data = validation_data();
-#if ETX_BSDF_RUNTIME_VALIDATION_MODE == 3
+#if (ETX_BSDF_RUNTIME_VALIDATION_MODE == 3) && (ETX_BSDF_RUNTIME_VALIDATION_KIND == ETX_BSDF_RUNTIME_VALIDATION_KIND_DIFFRACTION)
   const float diffraction_tangent = data.spectrum_sample.wavelength / material.diffraction_grating.period_nm;
   const float3 outgoing_direction = float3(diffraction_tangent, 0.0f, sqrt(max(0.0f, 1.0f - diffraction_tangent * diffraction_tangent)));
 #else

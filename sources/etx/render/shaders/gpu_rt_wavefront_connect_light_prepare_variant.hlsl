@@ -2,10 +2,11 @@
 #include <interop/image_filter_shared.hxx>
 #include <access/bsdf_resource_gpu.hxx>
 
-#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE    1
-#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC    2
-#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR  3
-#define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC 4
+#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE          1
+#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC          2
+#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR        3
+#define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC       4
+#define ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR 6
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
 # if ETX_ENABLE_VELVET_STAGE
@@ -27,13 +28,23 @@
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
 # include <interop/bsdf_energy_compensated_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Conductor
-# define ETX_STAGE_BSDF_EVAL  bsdf_conductor_energy_compensated_evaluate
-# define ETX_STAGE_BSDF_PDF   bsdf_conductor_energy_compensated_pdf
+# define ETX_STAGE_BSDF_EVAL  wavefront_connect_light_stage_conductor_eval
+# define ETX_STAGE_BSDF_PDF   wavefront_connect_light_stage_conductor_pdf
+#elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+# include "gpu_rt_wavefront_coating_storage.hlsl"
+# define ETX_STAGE_BSDF_CLASS MaterialClass::CoatedConductor
+# define ETX_STAGE_BSDF_PDF   bsdf_coated_conductor_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
 # include <interop/bsdf_energy_compensated_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Dielectric
 # define ETX_STAGE_BSDF_EVAL  bsdf_dielectric_energy_compensated_evaluate
 # define ETX_STAGE_BSDF_PDF   bsdf_dielectric_energy_compensated_pdf
+#endif
+
+#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+# define ETX_STAGE_CONNECT_QUEUE_FAMILY 2u
+#else
+# define ETX_STAGE_CONNECT_QUEUE_FAMILY (ETX_BSDF_KIND - 1u)
 #endif
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
@@ -88,9 +99,20 @@ float wavefront_connect_light_stage_various_pdf(BSDFResourceContext context, BSD
 }
 #endif
 
+#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
+BSDFEval wavefront_connect_light_stage_conductor_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+  return bsdf_conductor_energy_compensated_evaluate(context, data, outgoing_direction, material, sampler);
+}
+float wavefront_connect_light_stage_conductor_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
+  return bsdf_conductor_energy_compensated_pdf(context, data, outgoing_direction, material, sampler);
+}
+#endif
+
+#if ETX_BSDF_KIND != ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
 BSDFEval wavefront_connect_light_stage_camera_bsdf_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_EVAL(context, data, outgoing_direction, material, sampler);
 }
+#endif
 
 float wavefront_connect_light_stage_camera_bsdf_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_PDF(context, data, outgoing_direction, material, sampler);
@@ -117,6 +139,7 @@ WavefrontConnectLightStagePrepared wavefront_connect_light_stage_prepare_materia
   return result;
 }
 
+#if ETX_BSDF_KIND != ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
 BSDFEval wavefront_connect_light_stage_camera_bsdf_eval_prepared(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material,
   WavefrontConnectLightStagePrepared prepared, inout Sampler sampler) {
 #if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR
@@ -130,6 +153,7 @@ BSDFEval wavefront_connect_light_stage_camera_bsdf_eval_prepared(BSDFResourceCon
   return wavefront_connect_light_stage_camera_bsdf_eval(context, data, outgoing_direction, material, sampler);
 #endif
 }
+#endif
 
 float wavefront_connect_light_stage_camera_bsdf_pdf_prepared(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material,
   WavefrontConnectLightStagePrepared prepared, inout Sampler sampler) {
@@ -173,7 +197,7 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
   uint initialized_previous_light_vertex_index = kInvalidIndex;
 #if ETX_ENABLE_WORK_QUEUES
   const bool initialize_candidate = false;
-  if (wavefront_connect_queue_load(wavefront_load_resources(), ETX_BSDF_KIND - 1u, dtid.x + dtid.y * (65535u * 64u), dispatch_index, batch_index) == false) {
+  if (wavefront_connect_queue_load(wavefront_load_resources(), ETX_STAGE_CONNECT_QUEUE_FAMILY, dtid.x + dtid.y * (65535u * 64u), dispatch_index, batch_index) == false) {
     return;
   }
 #else
@@ -181,6 +205,21 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
   if (initialize_candidate) {
     wavefront_initialize_connect_light_prepare_candidate(dispatch_index, batch_index, initialized_light_vertex_index, initialized_previous_light_vertex_index);
   }
+#endif
+
+#if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
+  const GPUWavefrontResources resources = wavefront_load_resources();
+  uint request_index = 0u;
+  if (wavefront_connect_light_coating_request(resources, dispatch_index, batch_index, request_index) == false) {
+    return;
+  }
+  const uint flag_offset = (batch_index * resources.path_capacity + dispatch_index) * kGPUWavefrontConnectLightTaskStride + kGPUWavefrontConnectLightResolverFlagsOffset;
+# if ETX_COATING_RESOLVE
+  if (WAVEFRONT_RO_BUFFER(resources.connect_light_task_buffer).Load(flag_offset) != GPUWavefrontConnectLightTaskFlags::CameraCoatingPending) {
+    return;
+  }
+  WAVEFRONT_RW_BUFFER(resources.connect_light_task_buffer).Store(flag_offset, 0u);
+# endif
 #endif
 
   WavefrontConnectLightPrepareInput input_value = (WavefrontConnectLightPrepareInput)0;
@@ -204,17 +243,36 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
   spect.wavelength = input_value.camera_vertex.throughput.wavelength;
   spect.flags = input_value.camera_vertex.throughput.flags;
 
+#if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
+  Sampler bsdf_sampler = (Sampler)0;
+# if ETX_COATING_RESOLVE
+  const BSDFEval bsdf_eval = wavefront_coating_load_evaluation(resources, request_index, bsdf_sampler);
+  wavefront_store_connect_light_camera_task(input_value, bsdf_eval, (WavefrontConnectLightStagePrepared)0, bsdf_sampler.seed);
+# else
+  uint bsdf_seed = scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 29u));
+#  if ETX_UPBP
+  if (scene_path_mode_is_upbp()) {
+    bsdf_seed = sampler_random_seed(input_value.camera_sampler_seed, 1u);
+  }
+#  endif
+  bsdf_sampler = make_bsdf_sampler(bsdf_seed);
+  const BSDFData bsdf_data = bsdf_data_make(wavefront_make_connect_path_vertex(input_value.camera_vertex), spect, kInvalidIndex, PathSource::Camera, input_value.camera_vertex.w_i);
+  wavefront_coating_begin_evaluation(make_scene_bsdf_resource_gpu_context(), resources, request_index, input_value.camera_vertex.material_index, bsdf_data, direction_to_light,
+    input_value.camera_material, bsdf_sampler);
+  WAVEFRONT_RW_BUFFER(resources.connect_light_task_buffer).Store(flag_offset, uint(GPUWavefrontConnectLightTaskFlags::CameraCoatingPending));
+# endif
+#else
   BSDFEval bsdf_eval = (BSDFEval)0;
   uint camera_reverse_seed = input_value.camera_sampler_seed;
   if (wavefront_path_vertex_is_medium(input_value.camera_vertex)) {
     bsdf_eval = wavefront_connect_light_medium_eval(spect, input_value.camera_vertex, input_value.camera_vertex.w_i, direction_to_light);
   } else {
     uint bsdf_seed = scene_random_seed(input_value.task_index, constants.sample_index ^ (constants.path_iteration + 29u));
-#if ETX_UPBP
+# if ETX_UPBP
     if (scene_path_mode_is_upbp()) {
       bsdf_seed = sampler_random_seed(input_value.camera_sampler_seed, 1u);
     }
-#endif
+# endif
     Sampler bsdf_sampler = make_bsdf_sampler(bsdf_seed);
     BSDFData bsdf_data = bsdf_data_make(wavefront_make_connect_path_vertex(input_value.camera_vertex), spect, kInvalidIndex, PathSource::Camera, input_value.camera_vertex.w_i);
     const BSDFResourceContext resource_context = make_scene_bsdf_resource_gpu_context();
@@ -225,6 +283,7 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
     return;
   }
   wavefront_store_connect_light_camera_task(input_value, bsdf_eval, (WavefrontConnectLightStagePrepared)0, camera_reverse_seed);
+#endif
 }
 
   [numthreads(64, 1, 1)] void wavefront_connect_light_classify_main(uint3 dtid : SV_DispatchThreadID) {
@@ -246,8 +305,10 @@ bool wavefront_connect_light_stage_matches_material(uint material_class) {
   if (wavefront_load_connect_light_prepare_input(dtid.x, dtid.y, true, light_vertex_index, previous_light_vertex_index, input_value) == false) {
     return;
   }
-  const uint camera_family = wavefront_connect_material_family(input_value.camera_vertex, input_value.camera_material.cls);
-  const uint light_family = wavefront_connect_material_family(input_value.light_vertex, input_value.light_material.cls);
+  const uint camera_family =
+    wavefront_connect_material_family(input_value.camera_vertex, material_boundary_class(input_value.camera_material.cls, input_value.camera_material.subsurface_cls));
+  const uint light_family =
+    wavefront_connect_material_family(input_value.light_vertex, material_boundary_class(input_value.light_material.cls, input_value.light_material.subsurface_cls));
   if ((camera_family < kGPUWavefrontConnectQueueFamilyCount) && (light_family < kGPUWavefrontConnectQueueFamilyCount)) {
     wavefront_connect_queue_count(resources, task_index, camera_family, light_family);
   }

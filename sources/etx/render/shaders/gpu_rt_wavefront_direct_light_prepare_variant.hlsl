@@ -2,10 +2,11 @@
 #include <interop/image_filter_shared.hxx>
 #include <access/bsdf_resource_gpu.hxx>
 
-#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE    1
-#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC    2
-#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR  3
-#define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC 4
+#define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE          1
+#define ETX_WAVEFRONT_BSDF_KIND_PLASTIC          2
+#define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR        3
+#define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC       4
+#define ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR 6
 
 #if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
 # if ETX_ENABLE_VELVET_STAGE
@@ -33,6 +34,10 @@
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Conductor
 # define ETX_STAGE_BSDF_EVAL  wavefront_direct_light_stage_conductor_eval
 # define ETX_STAGE_BSDF_PDF   wavefront_direct_light_stage_conductor_pdf
+#elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+# include "gpu_rt_wavefront_coating_storage.hlsl"
+# define ETX_STAGE_BSDF_CLASS MaterialClass::CoatedConductor
+# define ETX_STAGE_BSDF_PDF   bsdf_coated_conductor_pdf
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
 # include <interop/bsdf_energy_compensated_shared.hxx>
 # define ETX_STAGE_BSDF_CLASS MaterialClass::Dielectric
@@ -116,9 +121,11 @@ float wavefront_direct_light_stage_conductor_pdf(BSDFResourceContext context, BS
 # endif
 #endif
 
+#if (ETX_BSDF_KIND != ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
 BSDFEval wavefront_direct_light_stage_bsdf_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_EVAL(context, data, outgoing_direction, material, sampler);
 }
+#endif
 
 #if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
 float wavefront_direct_light_stage_bsdf_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
@@ -138,11 +145,11 @@ bool wavefront_direct_light_stage_matches_material(uint material_class) {
 # endif
     ;
 #elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
+  return (material_class == MaterialClass::Conductor)
 # if ETX_ENABLE_OPENPBR_STAGE
-  return (material_class == MaterialClass::Conductor) || (material_class == MaterialClass::OpenPBR);
-# else
-  return material_class == MaterialClass::Conductor;
+         || (material_class == MaterialClass::OpenPBR)
 # endif
+    ;
 #else
   return material_class == ETX_STAGE_BSDF_CLASS;
 #endif
@@ -159,21 +166,33 @@ bool wavefront_direct_light_stage_matches_material(uint material_class) {
     return;
   }
 
+#if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR) && ETX_COATING_RESOLVE
+  Sampler bsdf_sampler = (Sampler)0;
+  BSDFEval bsdf_eval = wavefront_coating_load_evaluation(input_value.resources, wavefront_coating_request_index(input_value.resources, true, input_value.path_index), bsdf_sampler);
+  wavefront_store_direct_light_prepare_task(input_value.task_index, input_value, bsdf_eval, bsdf_sampler);
+#else
   uint bsdf_seed = input_value.state.sampler_seed;
-#if ETX_UPBP
+# if ETX_UPBP
   const bool upbp = scene_path_mode_is_upbp();
   if (upbp) {
     bsdf_seed = wavefront_direct_light_upbp_evaluation_seed(input_value, kUPBPRandomDomainScatteringEvaluation);
   }
-#else
+# else
   const bool upbp = false;
-#endif
+# endif
   Sampler bsdf_sampler = wavefront_make_bsdf_sampler(bsdf_seed);
   if (upbp == false) {
     bsdf_sampler_push_fixed(bsdf_sampler, input_value.state.film_uv.x, input_value.state.film_uv.y, input_value.state.last_emitter_pdf);
   }
   BSDFData bsdf_data = wavefront_make_surface_bsdf_data(input_value.hit.vertex, input_value.state.spect, input_value.current_vertex.medium_index, input_value.current_vertex.w_i);
+# if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+  wavefront_coating_begin_evaluation(wavefront_make_scene_bsdf_resource_gpu_context(), input_value.resources,
+    wavefront_coating_request_index(input_value.resources, true, input_value.path_index), input_value.current_vertex.material_index, bsdf_data, input_value.sample_value.direction,
+    input_value.material, bsdf_sampler);
+# else
   BSDFEval bsdf_eval =
     wavefront_direct_light_stage_bsdf_eval(wavefront_make_scene_bsdf_resource_gpu_context(), bsdf_data, input_value.sample_value.direction, input_value.material, bsdf_sampler);
   wavefront_store_direct_light_prepare_task(input_value.task_index, input_value, bsdf_eval, bsdf_sampler);
+# endif
+#endif
 }

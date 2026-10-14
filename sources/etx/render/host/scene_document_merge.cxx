@@ -13,9 +13,10 @@ bool append_scene_document(SceneData& destination, const SceneData& source, std:
       return static_cast<uint32_t>(base);
     };
     const uint32_t spectrum_base = offset(destination.spectrum_values.size(), source.spectrum_values.size());
-    const uint32_t material_base = offset(destination.materials.size(), source.materials.size());
+    const uint32_t material_base = offset(destination.material_descriptions.size(), source.material_descriptions.size());
     const uint32_t medium_base = offset(destination.mediums_vector.size(), source.mediums_vector.size());
-    const uint32_t image_base = offset(destination.images_vector.size(), source.images_vector.size());
+    offset(destination.images_vector.size(), source.images_vector.size());
+    std::vector<uint32_t> image_remapping(source.images_vector.size(), kInvalidIndex);
     const uint32_t emitter_base = offset(destination.emitter_profiles.size(), source.emitter_profiles.size());
     const uint32_t vertex_base = offset(destination.vertices.pos.size(), source.vertices.pos.size());
     const uint32_t triangle_base = offset(destination.triangles.size(), source.triangles.size());
@@ -33,7 +34,11 @@ bool append_scene_document(SceneData& destination, const SceneData& source, std:
       return remap(value, spectrum_base, source.spectrum_values.size());
     };
     auto image = [&](uint32_t value) {
-      return remap(value, image_base, source.images_vector.size());
+      if (value == kInvalidIndex)
+        return value;
+      if (value >= image_remapping.size())
+        throw std::runtime_error("Source document contains an invalid image reference.");
+      return image_remapping[value];
     };
     auto medium = [&](uint32_t value) {
       return remap(value, medium_base, source.mediums_vector.size());
@@ -48,7 +53,8 @@ bool append_scene_document(SceneData& destination, const SceneData& source, std:
     for (const auto& [index, metadata] : source.spectrum_sources)
       destination.spectrum_sources.emplace(spectrum(index), metadata);
     for (uint32_t index = 0u; index < source.images_vector.size(); ++index) {
-      if (destination.images.add_copy(source.images_vector[index], source.images.path(index)) != (image_base + index)) {
+      image_remapping[index] = destination.images.add_copy(source.images_vector[index], source.images.path(index));
+      if (image_remapping[index] == kInvalidIndex) {
         throw std::runtime_error("Failed to copy a document image.");
       }
     }
@@ -100,7 +106,7 @@ bool append_scene_document(SceneData& destination, const SceneData& source, std:
       value.eta_index = spectrum(value.eta_index);
       value.k_index = spectrum(value.k_index);
     };
-    for (auto material : source.materials) {
+    for (auto material : source.material_descriptions) {
       spectral_image(material.reflectance);
       spectral_image(material.scattering);
       spectral_image(material.emission);
@@ -108,6 +114,15 @@ bool append_scene_document(SceneData& destination, const SceneData& source, std:
       ior(material.ext_ior);
       ior(material.int_ior);
       ior(material.thinfilm.ior);
+      ior(material.coating.ior);
+      spectral_image(material.coating.absorption);
+      spectral_image(material.coating.scattering);
+      material.coating.roughness.image_index = image(material.coating.roughness.image_index);
+      material.coating.thickness.image_index = image(material.coating.thickness.image_index);
+      material.coating.thickness_nm_image = image(material.coating.thickness_nm_image);
+      material.mix.amount.image_index = image(material.mix.amount.image_index);
+      material.mix.first = remap(material.mix.first, material_base, source.material_descriptions.size());
+      material.mix.second = remap(material.mix.second, material_base, source.material_descriptions.size());
       material.roughness.image_index = image(material.roughness.image_index);
       material.metalness.image_index = image(material.metalness.image_index);
       material.transmission.image_index = image(material.transmission.image_index);
@@ -117,17 +132,10 @@ bool append_scene_document(SceneData& destination, const SceneData& source, std:
       material.bump.image_index = image(material.bump.image_index);
       material.int_medium = medium(material.int_medium);
       material.ext_medium = medium(material.ext_medium);
-      material.energy_compensation_interface_index = kInvalidIndex;
-      material.conductor_energy_compensation_interface_index = kInvalidIndex;
-      material.thermal_rgb_image_index = kInvalidIndex;
-      material.thermal_conductor_image_index = kInvalidIndex;
-      material.thermal_energy_compensation_interface_index = kInvalidIndex;
-      material.thermal_int_medium_index = kInvalidIndex;
-      material.thermal_emission_weight = 0.0f;
-      destination.materials.push_back(material);
+      destination.material_descriptions.push_back(material);
     }
     for (const auto& [name, index] : source.material_mapping)
-      destination.material_mapping.emplace(unique_name(destination.material_mapping, name), remap(index, material_base, source.materials.size()));
+      destination.material_mapping.emplace(unique_name(destination.material_mapping, name), remap(index, material_base, source.material_descriptions.size()));
     auto append = [](auto& dst, const auto& src) {
       dst.insert(dst.end(), src.begin(), src.end());
     };
@@ -139,7 +147,7 @@ bool append_scene_document(SceneData& destination, const SceneData& source, std:
     for (auto triangle : source.triangles) {
       for (auto& index : triangle.i)
         index = remap(index, vertex_base, source.vertices.pos.size());
-      triangle.material_index = remap(triangle.material_index, material_base, source.materials.size());
+      triangle.material_index = remap(triangle.material_index, material_base, source.material_descriptions.size());
       triangle.emitter_index = emitter(triangle.emitter_index);
       destination.triangles.push_back(triangle);
     }
@@ -164,7 +172,7 @@ bool append_scene_document(SceneData& destination, const SceneData& source, std:
       destination.emitter_names.push_back(name);
     }
     for (const auto& [material_index, emitter_index] : source.material_to_emitter_profile) {
-      destination.material_to_emitter_profile.emplace(remap(material_index, material_base, source.materials.size()), emitter(emitter_index));
+      destination.material_to_emitter_profile.emplace(remap(material_index, material_base, source.material_descriptions.size()), emitter(emitter_index));
     }
     std::unordered_set<std::string> camera_names;
     for (const auto& camera : destination.cameras)

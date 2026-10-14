@@ -44,7 +44,7 @@ struct SceneLimits {
 
 ETX_STATIC_CONST uint32_t kTriangleStride = 32u;
 
-ETX_STATIC_CONST uint32_t kMaterialStride = 400u;
+ETX_STATIC_CONST uint32_t kMaterialStride = 624u;
 ETX_STATIC_CONST uint32_t kMaterialReflectanceSpectrumIndexOffset = 0u;
 ETX_STATIC_CONST uint32_t kMaterialReflectanceImageIndexOffset = 4u;
 ETX_STATIC_CONST uint32_t kMaterialScatteringSpectrumIndexOffset = 16u;
@@ -107,6 +107,24 @@ ETX_STATIC_CONST uint32_t kMaterialAlphaMaskChannelOffset = 356u;
 ETX_STATIC_CONST uint32_t kMaterialBumpValueOffset = 368u;
 ETX_STATIC_CONST uint32_t kMaterialBumpImageIndexOffset = 384u;
 ETX_STATIC_CONST uint32_t kMaterialBumpChannelOffset = 388u;
+
+ETX_STATIC_CONST uint32_t kMaterialCoatingIorOffset = 400u;
+ETX_STATIC_CONST uint32_t kMaterialCoatingRoughnessOffset = 416u;
+ETX_STATIC_CONST uint32_t kMaterialCoatingThicknessOffset = 448u;
+ETX_STATIC_CONST uint32_t kMaterialCoatingAbsorptionOffset = 480u;
+ETX_STATIC_CONST uint32_t kMaterialCoatingScatteringOffset = 496u;
+ETX_STATIC_CONST uint32_t kMaterialCoatingAnisotropyOffset = 512u;
+ETX_STATIC_CONST uint32_t kMaterialCoatingInterfaceOffset = 516u;
+ETX_STATIC_CONST uint32_t kMaterialCoatingUnitSpectrumOffset = 520u;
+ETX_STATIC_CONST uint32_t kMaterialCoatingThermalSpectrumOffset = 524u;
+ETX_STATIC_CONST uint32_t kMaterialMixAmountOffset = 528u;
+ETX_STATIC_CONST uint32_t kMaterialMixFirstOffset = 560u;
+ETX_STATIC_CONST uint32_t kMaterialMixSecondOffset = 564u;
+ETX_STATIC_CONST uint32_t kMaterialLayerBaseClassOffset = 576u;
+ETX_STATIC_CONST uint32_t kMaterialCoherentCoatingIorOffset = 592u;
+ETX_STATIC_CONST uint32_t kMaterialCoherentCoatingThicknessImageOffset = 608u;
+ETX_STATIC_CONST uint32_t kMaterialCoherentCoatingMinThicknessOffset = 612u;
+ETX_STATIC_CONST uint32_t kMaterialCoherentCoatingMaxThicknessOffset = 616u;
 
 ETX_STATIC_CONST uint32_t kEmitterStride = 32u;
 ETX_STATIC_CONST uint32_t kEmitterClassOffset = 0u;

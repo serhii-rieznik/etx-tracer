@@ -106,7 +106,13 @@ void RTApplication::poll_scene_import() {
   }
   if (success && message.empty())
     message = "Imported into the current document.";
-  _command_failure_reason = success ? std::string{} : message;
+  if (success == false) {
+    _dismissed_diagnostic_message.clear();
+    _failed_command_type = job->command.type;
+    _command_failure_reason = message;
+  } else if (_failed_command_type == job->command.type) {
+    _command_failure_reason.clear();
+  }
   std::lock_guard<std::mutex> lock(_application_control_mutex);
   _application_command_results.push_back({job->command.id, success, std::move(message)});
 }
@@ -122,7 +128,7 @@ bool RTApplication::add_scene_file(const std::string& path, std::string& error, 
   }
   SceneRepresentation source(scheduler, _ior_database);
   if (source.load_from_file(path.c_str(), SceneRepresentation::DocumentOnly) == false) {
-    error = "Cannot read the native source document.";
+    error = source.data().diagnostic.text();
     return false;
   }
   if (owned_source)
@@ -135,7 +141,7 @@ bool RTApplication::add_scene_file(const std::string& path, std::string& error, 
   staged.set_integrator_data(scene.integrator_data());
   staged.set_scattering_rhi(render_context.get_context());
   if (staged.prepare_document(SceneRepresentation::LoadGeometry) == false) {
-    error = "Merged document preparation failed.";
+    error = staged.data().diagnostic.message.empty() ? staged.material_preparation_diagnostic().text() : staged.data().diagnostic.text();
     return false;
   }
   cancel_preview();

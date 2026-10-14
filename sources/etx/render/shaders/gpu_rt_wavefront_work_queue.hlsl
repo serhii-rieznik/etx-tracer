@@ -63,6 +63,7 @@ uint wavefront_material_queue_index(uint material_class) {
     case MaterialClass::Plastic:
       return kGPUWavefrontMaterialQueuePlastic;
     case MaterialClass::Conductor:
+    case MaterialClass::CoatedConductor:
       return kGPUWavefrontMaterialQueueConductor;
     case MaterialClass::Dielectric:
       return kGPUWavefrontMaterialQueueDielectric;
@@ -81,7 +82,7 @@ uint wavefront_material_queue_index(uint material_class) {
   }
 }
 
-uint wavefront_material_queue_index_from_material(uint material_index) {
+uint wavefront_material_boundary_class(uint material_index) {
   if ((material_index == kInvalidIndex) || (constants.scene.materials == kInvalidIndex)) {
     return kInvalidIndex;
   }
@@ -89,7 +90,7 @@ uint wavefront_material_queue_index_from_material(uint material_index) {
   const uint base_offset = material_index * kMaterialStride;
   const uint material_class = materials.Load(base_offset + kMaterialClassOffset);
   const uint subsurface_class = materials.Load(base_offset + kMaterialSubsurfaceClassOffset);
-  return wavefront_material_queue_index(material_boundary_class(material_class, subsurface_class));
+  return material_boundary_class(material_class, subsurface_class);
 }
 
 uint wavefront_shadow_queue_base_offset(GPUWavefrontResources resources, uint shadow_queue_index) {

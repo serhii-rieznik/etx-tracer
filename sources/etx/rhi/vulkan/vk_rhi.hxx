@@ -305,7 +305,7 @@ struct VKDevice {
   RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
   RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);
   std::vector<RHICreatePipelineBatchEntry> create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency,
-    const RHIPipelineBatchProgressCallback& progress_callback);
+    const RHIPipelineBatchProgressCallback& progress_callback, const std::function<bool()>& should_continue);
   void persist_pipeline_cache();
   RHIResult reload_graphics_pipeline(RHIPipeline pipeline, const RHIGraphicsPipelineDesc& new_desc);
   RHIResult reload_compute_pipeline(RHIPipeline pipeline, const RHIComputePipelineDesc& new_desc);
@@ -313,7 +313,7 @@ struct VKDevice {
 
   RHIMemoryStats get_memory_statistics() const;
 
-  const VKPipelineData* get_compute_pipeline_data(RHIPipeline handle) const;
+  VKPipelineData get_compute_pipeline_data(RHIPipeline handle) const;
   const VKPipelineData* get_graphics_pipeline_data(RHIPipeline handle) const;
   VKTextureData* get_texture_data(RHIBindlessHandle handle) const;
   const VKAccelerationStructureData* get_acceleration_structure_data(RHIBindlessHandle handle) const;
@@ -330,6 +330,7 @@ struct VKDevice {
   VkCommandPool get_vk_command_pool(uint32_t index) const;
   bool supports_bindless() const;
   bool supports_ray_tracing() const;
+  bool supports_frame_boundary() const;
   bool supports_timestamps() const;
   bool supports_timestamp_stage(RHITimestampStage stage) const;
   uint32_t timestamp_valid_bits() const;

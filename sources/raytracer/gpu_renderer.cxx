@@ -1,16 +1,16 @@
 #include "gpu_renderer.hxx"
-#include "shader_packager.hxx"
 #include <interop/gpu_abi_constants.hxx>
 #include <interop/gpu_rt_shared.hxx>
 #include <interop/gpu_upbp_abi.hxx>
 #include <interop/gpu_wavefront_abi.hxx>
+#include <interop/gpu_emission_abi.hxx>
+#include <interop/gpu_emission_consumer_abi.hxx>
 #include <interop/material.hxx>
 #include <interop/sampler_policy.hxx>
 #include <etx/core/profiler.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/rhi/rhi.hxx>
 #include <etx/rhi/shader/shader_compiler.hxx>
-#include <etx/rhi/shader/shader_package.hxx>
 #include <etx/render/host/gpu_asset_descriptor.hxx>
 #include <etx/render/host/emitter_packing.hxx>
 #include <etx/render/host/scene_representation.hxx>
@@ -89,6 +89,15 @@ constexpr uint64_t kUPBPBeamGridScratchBudget = 256ull * 1024ull * 1024ull;
 constexpr uint32_t kUPBPDensityTechniqueMask = static_cast<uint32_t>(UPBPTechnique::Surface) | static_cast<uint32_t>(UPBPTechnique::PP3D) |
                                                static_cast<uint32_t>(UPBPTechnique::PB2D) | static_cast<uint32_t>(UPBPTechnique::BP2D) | static_cast<uint32_t>(UPBPTechnique::BB1D);
 constexpr uint64_t kWavefrontMemoryReserveDivisor = 8ull;
+constexpr uint32_t kMaterialCompileEmissionCoated = 1u << 14u;
+constexpr uint32_t kMaterialCompileEmissionVelvet = 1u << 15u;
+constexpr uint32_t kMaterialCompileEmissionCoatedVelvet = 1u << 16u;
+constexpr uint32_t kMaterialCompileEmissionFiniteConductor = 1u << 17u;
+constexpr uint32_t kMaterialCompileCoatedTransmission = 1u << 18u;
+static_assert(MaterialClass::Count <= 14u);
+constexpr uint32_t kMaterialCompileAreaEmitters = 1u << 27u;
+constexpr uint32_t kMaterialCompileCoherentCoating = 1u << 28u;
+constexpr uint32_t kMaterialCompileCoatedVelvet = 1u << 29u;
 constexpr uint32_t kMaterialCompileConnectibleConductor = 1u << 30u;
 constexpr uint32_t kMaterialCompileConnectibleDielectric = 1u << 31u;
 
@@ -99,6 +108,8 @@ static_assert((GPUWavefrontVertexFlags::Subsurface & ~kGPUWavefrontLightPathVert
 static_assert((GPUWavefrontSubsurfaceFlags::InlineMedium & ~kGPUWavefrontLightPathVertexInlineMediumFlagsValueMask) == 0u);
 
 uint32_t divide_round_up(uint32_t value, uint32_t divisor);
+uint32_t wavefront_vcm_grid_head_count(uint32_t vertex_capacity);
+uint64_t wavefront_vcm_grid_storage_size(uint32_t cell_count);
 
 uint32_t upbp_partition_size(uint32_t total_count, uint32_t partition_index, uint32_t partition_count) {
   const uint32_t base_count = total_count / partition_count;
@@ -111,7 +122,7 @@ uint32_t upbp_partition_offset(uint32_t total_count, uint32_t partition_index, u
 }
 
 uint64_t upbp_initial_resident_storage_bytes(uint32_t resident_path_capacity, uint32_t maximum_path_length, uint32_t maximum_boundary_count, uint32_t technique_mask,
-  uint32_t maximum_bb1d_light_path_count) {
+  uint32_t maximum_bb1d_light_path_count, uint32_t coating_path_types) {
   (void)maximum_bb1d_light_path_count;
   maximum_path_length = std::min(maximum_path_length, kUPBPHistoryReservationBounces);
   const uint64_t path_count = resident_path_capacity;
@@ -128,11 +139,17 @@ uint64_t upbp_initial_resident_storage_bytes(uint32_t resident_path_capacity, ui
   const uint64_t point_count = collect_points ? segment_count : 0u;
   const uint64_t beam_count = collect_beams ? interval_count : 0u;
   const uint64_t counter_bytes = static_cast<uint64_t>(GPUUPBPCounterIndex::Count) * sizeof(uint32_t);
+  const uint64_t coating_slots = path_count * coating_path_types;
+  const uint64_t coating_capacity = std::max<uint64_t>(kGPUVCMCoatingLaneCount, coating_slots);
+  const uint64_t coating_lanes = std::min<uint64_t>(coating_capacity, static_cast<uint64_t>(kDensityQueryGroupDispatchChunkSize) * kGPUVCMCoatingLaneCount);
+  const uint64_t coating_scratch_bytes = coating_path_types > 0u ? kGPUVCMCoatingHeaderSize + coating_lanes * kGPUVCMCoatingLaneStride +
+                                                                     (coating_capacity - coating_slots) * (kGPUCoatingRequestStride + sizeof(uint32_t))
+                                                                 : 0u;
 
   return vertex_count * (kGPUUPBPVertexStride + kGPUUPBPBPTVertexStride) + segment_count * kGPUUPBPSegmentStride + interval_count * kGPUUPBPIntervalStride +
          std::max<uint64_t>(1u, event_count) * kGPUUPBPTrackingEventStride + std::max<uint64_t>(1u, point_count) * kGPUUPBPPointStride +
          std::max<uint64_t>(1u, beam_count) * kGPUUPBPBeamStride + path_count * (kGPUUPBPPathStateStride + kGPUUPBPBPTPathStateStride) + kGPUUPBPResourcesStride +
-         2u * counter_bytes;
+         2u * counter_bytes + coating_scratch_bytes;
 }
 
 bool upbp_resident_storage_addressable(uint32_t resident_path_capacity, uint32_t maximum_path_length, uint32_t maximum_boundary_count, uint32_t technique_mask,
@@ -164,7 +181,7 @@ bool upbp_resident_storage_addressable(uint32_t resident_path_capacity, uint32_t
 }
 
 uint64_t upbp_density_cache_reserve_bytes(uint64_t working_set_budget, uint32_t global_path_count, uint32_t maximum_path_length, uint32_t technique_mask,
-  uint32_t maximum_bb1d_light_path_count) {
+  uint32_t maximum_bb1d_light_path_count, bool has_coating) {
   const bool collect_points =
     (technique_mask & (static_cast<uint32_t>(UPBPTechnique::Surface) | static_cast<uint32_t>(UPBPTechnique::PP3D) | static_cast<uint32_t>(UPBPTechnique::PB2D))) != 0u;
   const bool collect_beams = (technique_mask & (static_cast<uint32_t>(UPBPTechnique::BP2D) | static_cast<uint32_t>(UPBPTechnique::BB1D))) != 0u;
@@ -180,19 +197,24 @@ uint64_t upbp_density_cache_reserve_bytes(uint64_t working_set_budget, uint32_t 
     collect_bp2d_beams ? maximum_record_count * kGPUUPBPBeamReferenceStride : (collect_bb1d_beams ? maximum_selected_beam_count * kGPUUPBPBeamReferenceStride : 0u);
   const uint64_t bb1d_instance_bytes = collect_bb1d_beams ? maximum_selected_beam_count * sizeof(RHIAccelerationStructureInstance) : 0u;
   const uint64_t compact_input_bytes = point_bytes + beam_bytes + event_bytes + beam_reference_bytes + bb1d_instance_bytes;
-  const uint64_t cache_with_acceleration_reserve = compact_input_bytes + compact_input_bytes / 2u;
+  const uint32_t maximum_surface_count = static_cast<uint32_t>(std::min(maximum_record_count, kWavefrontMaxAddressableBufferSize / kGPUUPBPDensityPointStride));
+  const bool coated_surface = has_coating && ((technique_mask & static_cast<uint32_t>(UPBPTechnique::Surface)) != 0u) && (maximum_surface_count > 0u);
+  const uint64_t surface_index_bytes =
+    coated_surface ? wavefront_vcm_grid_storage_size(wavefront_vcm_grid_head_count(maximum_surface_count)) + static_cast<uint64_t>(maximum_surface_count) * sizeof(uint32_t) : 0u;
+  const uint64_t cache_with_acceleration_reserve = compact_input_bytes + compact_input_bytes / 2u + surface_index_bytes;
   return std::min(working_set_budget / 2u, cache_with_acceleration_reserve);
 }
 
 uint32_t upbp_resident_path_capacity(uint64_t working_set_budget, uint32_t maximum_capacity, uint32_t maximum_path_length, uint32_t maximum_boundary_count, uint32_t technique_mask,
-  uint32_t maximum_bb1d_light_path_count, uint64_t co_resident_bytes_per_path) {
+  uint32_t maximum_bb1d_light_path_count, uint64_t co_resident_bytes_per_path, uint32_t coating_path_types) {
   uint32_t first = 1u;
   uint32_t last = maximum_capacity;
   uint32_t result = 0u;
   while (first <= last) {
     const uint32_t candidate = first + (last - first) / 2u;
     const uint64_t co_resident_bytes = static_cast<uint64_t>(candidate) * co_resident_bytes_per_path;
-    const uint64_t upbp_bytes = upbp_initial_resident_storage_bytes(candidate, maximum_path_length, maximum_boundary_count, technique_mask, maximum_bb1d_light_path_count);
+    const uint64_t upbp_bytes =
+      upbp_initial_resident_storage_bytes(candidate, maximum_path_length, maximum_boundary_count, technique_mask, maximum_bb1d_light_path_count, coating_path_types);
     if (upbp_resident_storage_addressable(candidate, maximum_path_length, maximum_boundary_count, technique_mask, maximum_bb1d_light_path_count) &&
         (co_resident_bytes <= working_set_budget) && (upbp_bytes <= (working_set_budget - co_resident_bytes))) {
       result = candidate;
@@ -217,8 +239,12 @@ uint64_t upbp_phase_wavefront_storage_bytes(uint32_t resident_path_capacity, boo
   return static_cast<uint64_t>(resident_path_capacity) * std::max(camera_bytes_per_path, light_bytes_per_path);
 }
 
+uint32_t wavefront_emission_request_stride(bool has_coating) {
+  return has_coating ? kGPUEmissionRequestStride : kGPUEmissionRequestCompactStride;
+}
+
 uint64_t upbp_camera_resident_storage_bytes(uint32_t resident_path_capacity, uint32_t maximum_path_length, uint32_t maximum_boundary_count, uint32_t technique_mask,
-  bool connect_to_light, bool connect_to_camera, bool has_subsurface_material) {
+  bool connect_to_light, bool connect_to_camera, bool has_subsurface_material, bool has_coating, bool has_area_emitters) {
   maximum_path_length = std::min(maximum_path_length, kUPBPHistoryReservationBounces);
   const uint64_t path_count = resident_path_capacity;
   const uint64_t vertex_count = path_count * (static_cast<uint64_t>(maximum_path_length) + 1u);
@@ -231,21 +257,30 @@ uint64_t upbp_camera_resident_storage_bytes(uint32_t resident_path_capacity, uin
   const uint64_t event_count = track_camera_events ? interval_count * kUPBPInitialTrackingEventsPerInterval : 0u;
   const uint64_t point_count = collect_points ? segment_count : 0u;
   const uint64_t beam_count = collect_beams ? interval_count : 0u;
+  const bool coated_surface = has_coating && ((technique_mask & static_cast<uint32_t>(UPBPTechnique::Surface)) != 0u);
+  const uint64_t coating_capacity = coated_surface ? std::max<uint64_t>(kGPUVCMCoatingLaneCount, path_count) : path_count;
+  const uint64_t coating_lane_capacity = std::min<uint64_t>(coating_capacity, static_cast<uint64_t>(kDensityQueryGroupDispatchChunkSize) * kGPUVCMCoatingLaneCount);
   return vertex_count * kGPUUPBPVertexStride + segment_count * kGPUUPBPSegmentStride + interval_count * kGPUUPBPIntervalStride +
          std::max<uint64_t>(1u, event_count) * kGPUUPBPTrackingEventStride + std::max<uint64_t>(1u, point_count) * kGPUUPBPPointStride +
          std::max<uint64_t>(1u, beam_count) * kGPUUPBPBeamStride + path_count * kGPUUPBPPathStateStride +
-         upbp_phase_wavefront_storage_bytes(resident_path_capacity, connect_to_light, connect_to_camera, has_subsurface_material);
+         upbp_phase_wavefront_storage_bytes(resident_path_capacity, connect_to_light, connect_to_camera, has_subsurface_material) +
+         (has_coating ? kGPUCoatingRequestHeaderSize + coating_capacity * kGPUCoatingRequestStride : 0u) +
+         (coated_surface ? kGPUVCMCoatingHeaderSize + coating_lane_capacity * kGPUVCMCoatingLaneStride : 0u) +
+         ((has_coating || has_area_emitters) ? kGPUTransportWorkHeaderSize + coating_capacity * sizeof(uint32_t) : 0u) +
+         (has_area_emitters
+             ? kGPUEmissionRequestHeaderSize + kGPUEmissionConsumerHeaderSize + path_count * (wavefront_emission_request_stride(has_coating) + kGPUEmissionConsumerStride)
+             : 0u);
 }
 
 uint32_t upbp_camera_resident_path_capacity(uint64_t working_set_budget, uint32_t maximum_capacity, uint32_t maximum_path_length, uint32_t maximum_boundary_count,
-  uint32_t technique_mask, bool connect_to_light, bool connect_to_camera, bool has_subsurface_material) {
+  uint32_t technique_mask, bool connect_to_light, bool connect_to_camera, bool has_subsurface_material, bool has_coating, bool has_area_emitters) {
   uint32_t first = 1u;
   uint32_t last = maximum_capacity;
   uint32_t result = 0u;
   while (first <= last) {
     const uint32_t candidate = first + (last - first) / 2u;
-    const uint64_t required_bytes =
-      upbp_camera_resident_storage_bytes(candidate, maximum_path_length, maximum_boundary_count, technique_mask, connect_to_light, connect_to_camera, has_subsurface_material);
+    const uint64_t required_bytes = upbp_camera_resident_storage_bytes(candidate, maximum_path_length, maximum_boundary_count, technique_mask, connect_to_light, connect_to_camera,
+      has_subsurface_material, has_coating, has_area_emitters);
     if (upbp_resident_storage_addressable(candidate, maximum_path_length, maximum_boundary_count, technique_mask, 0u) && (required_bytes <= working_set_budget)) {
       result = candidate;
       first = candidate + 1u;
@@ -373,6 +408,10 @@ constexpr WavefrontStage kWavefrontStages[] = {
     "wavefront_camera_connect_light_prepare_plastic_main", "3", "2", true},
   {GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareConductor, "shaders/gpu_rt_wavefront_connect_light_prepare_variant.hlsl",
     "wavefront_camera_connect_light_prepare_conductor_main", "3", "3", true},
+  {GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareCoatedConductor, "shaders/gpu_rt_wavefront_connect_light_prepare_variant.hlsl",
+    "wavefront_camera_connect_light_prepare_coated_conductor_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareCoatedConductorResume, "shaders/gpu_rt_wavefront_connect_light_prepare_variant.hlsl",
+    "wavefront_camera_connect_light_prepare_coated_conductor_resume_main", "3", "6", true},
   {GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareDielectric, "shaders/gpu_rt_wavefront_connect_light_prepare_variant.hlsl",
     "wavefront_camera_connect_light_prepare_dielectric_main", "3", "4", true},
   {GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveDiffuse, "shaders/gpu_rt_wavefront_connect_light_resolve_variant.hlsl",
@@ -381,6 +420,10 @@ constexpr WavefrontStage kWavefrontStages[] = {
     "wavefront_camera_connect_light_resolve_plastic_main", "3", "2", true},
   {GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveConductor, "shaders/gpu_rt_wavefront_connect_light_resolve_variant.hlsl",
     "wavefront_camera_connect_light_resolve_conductor_main", "3", "3", true},
+  {GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveCoatedConductor, "shaders/gpu_rt_wavefront_connect_light_resolve_variant.hlsl",
+    "wavefront_camera_connect_light_resolve_coated_conductor_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveCoatedConductorResume, "shaders/gpu_rt_wavefront_connect_light_resolve_variant.hlsl",
+    "wavefront_camera_connect_light_resolve_coated_conductor_resume_main", "3", "6", true},
   {GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveDielectric, "shaders/gpu_rt_wavefront_connect_light_resolve_variant.hlsl",
     "wavefront_camera_connect_light_resolve_dielectric_main", "3", "4", true},
   {GPURaytracingRenderer::PipelineStage::CameraConnectLightShadow, "shaders/gpu_rt_wavefront_shadow.hlsl", "wavefront_camera_connect_light_shadow_main", nullptr, nullptr},
@@ -390,6 +433,8 @@ constexpr WavefrontStage kWavefrontStages[] = {
     "wavefront_camera_continue_prepare_plastic_main", "3", "2", true},
   {GPURaytracingRenderer::PipelineStage::CameraContinuePrepareConductor, "shaders/gpu_rt_wavefront_surface_continue_prepare_camera_variant.hlsl",
     "wavefront_camera_continue_prepare_conductor_main", "3", "3", true},
+  {GPURaytracingRenderer::PipelineStage::CameraContinuePrepareCoatedConductor, "shaders/gpu_rt_wavefront_surface_continue_prepare_camera_variant.hlsl",
+    "wavefront_camera_continue_prepare_coated_conductor_main", "3", "6", true},
   {GPURaytracingRenderer::PipelineStage::CameraContinuePrepareDielectric, "shaders/gpu_rt_wavefront_surface_continue_prepare_camera_variant.hlsl",
     "wavefront_camera_continue_prepare_dielectric_main", "3", "4", true},
   {GPURaytracingRenderer::PipelineStage::CameraContinuePrepareThinfilm, "shaders/gpu_rt_wavefront_surface_continue_prepare_camera_variant.hlsl",
@@ -403,6 +448,8 @@ constexpr WavefrontStage kWavefrontStages[] = {
     "wavefront_light_continue_prepare_plastic_main", "3", "2", true},
   {GPURaytracingRenderer::PipelineStage::LightContinuePrepareConductor, "shaders/gpu_rt_wavefront_surface_continue_prepare_light_variant.hlsl",
     "wavefront_light_continue_prepare_conductor_main", "3", "3", true},
+  {GPURaytracingRenderer::PipelineStage::LightContinuePrepareCoatedConductor, "shaders/gpu_rt_wavefront_surface_continue_prepare_light_variant.hlsl",
+    "wavefront_light_continue_prepare_coated_conductor_main", "3", "6", true},
   {GPURaytracingRenderer::PipelineStage::LightContinuePrepareDielectric, "shaders/gpu_rt_wavefront_surface_continue_prepare_light_variant.hlsl",
     "wavefront_light_continue_prepare_dielectric_main", "3", "4", true},
   {GPURaytracingRenderer::PipelineStage::LightContinuePrepareThinfilm, "shaders/gpu_rt_wavefront_surface_continue_prepare_light_variant.hlsl",
@@ -416,6 +463,10 @@ constexpr WavefrontStage kWavefrontStages[] = {
     "wavefront_light_connect_camera_prepare_conductor_main", "3", "3", true},
   {GPURaytracingRenderer::PipelineStage::LightConnectCameraPrepareDielectric, "shaders/gpu_rt_wavefront_connect_camera_prepare_variant.hlsl",
     "wavefront_light_connect_camera_prepare_dielectric_main", "3", "4", true},
+  {GPURaytracingRenderer::PipelineStage::LightConnectCameraPrepareCoatedConductor, "shaders/gpu_rt_wavefront_connect_camera_prepare_variant.hlsl",
+    "wavefront_light_connect_camera_prepare_coated_conductor_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::LightConnectCameraResolveCoatedConductor, "shaders/gpu_rt_wavefront_connect_camera_prepare_variant.hlsl",
+    "wavefront_light_connect_camera_resolve_coated_conductor_main", "3", "6", true},
   {GPURaytracingRenderer::PipelineStage::LightConnectCameraShadow, "shaders/gpu_rt_wavefront_shadow.hlsl", "wavefront_light_connect_camera_shadow_main", nullptr, nullptr},
   {GPURaytracingRenderer::PipelineStage::LightConnectCameraAccumulate, "shaders/gpu_rt_wavefront_connect_camera.hlsl", "wavefront_light_connect_camera_accumulate_main", nullptr,
     nullptr},
@@ -435,6 +486,10 @@ constexpr WavefrontStage kWavefrontStages[] = {
   {GPURaytracingRenderer::PipelineStage::VCMMergeDiffuse, "shaders/gpu_rt_wavefront_vcm_merge_variant.hlsl", "wavefront_vcm_merge_diffuse_main", "3", "1", true},
   {GPURaytracingRenderer::PipelineStage::VCMMergePlastic, "shaders/gpu_rt_wavefront_vcm_merge_variant.hlsl", "wavefront_vcm_merge_plastic_main", "3", "2", true},
   {GPURaytracingRenderer::PipelineStage::VCMMergeConductor, "shaders/gpu_rt_wavefront_vcm_merge_variant.hlsl", "wavefront_vcm_merge_conductor_main", "3", "3", true},
+  {GPURaytracingRenderer::PipelineStage::VCMMergeCoatedConductor, "shaders/gpu_rt_wavefront_vcm_merge_variant.hlsl", "wavefront_vcm_merge_coated_conductor_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::VCMCoatingClear, "shaders/gpu_rt_wavefront_vcm_merge_variant.hlsl", "wavefront_vcm_coating_clear_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::VCMCoatingContinue, "shaders/gpu_rt_wavefront_vcm_merge_variant.hlsl", "wavefront_vcm_coating_continue_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::VCMCoatingFinish, "shaders/gpu_rt_wavefront_vcm_merge_variant.hlsl", "wavefront_vcm_coating_finish_main", "3", "6", true},
   {GPURaytracingRenderer::PipelineStage::VCMMergeDielectric, "shaders/gpu_rt_wavefront_vcm_merge_variant.hlsl", "wavefront_vcm_merge_dielectric_main", "3", "4", true},
   {GPURaytracingRenderer::PipelineStage::UPBPDensityCompact, "shaders/gpu_rt_wavefront_upbp_density.hlsl", "wavefront_upbp_density_compact_main", "3", nullptr},
   {GPURaytracingRenderer::PipelineStage::UPBPPP3D, "shaders/gpu_rt_wavefront_upbp_density.hlsl", "wavefront_upbp_pp3d_main", "3", nullptr},
@@ -445,6 +500,52 @@ constexpr WavefrontStage kWavefrontStages[] = {
   {GPURaytracingRenderer::PipelineStage::UPBPValidate, "shaders/gpu_rt_wavefront_upbp_prepare.hlsl", "wavefront_upbp_validate_main", "3", nullptr},
   {GPURaytracingRenderer::PipelineStage::UPBPBeamInstances, "shaders/gpu_rt_wavefront_upbp_density.hlsl", "wavefront_upbp_beam_instances_main", "3", nullptr},
   {GPURaytracingRenderer::PipelineStage::UPBPBeamGridBuild, "shaders/gpu_rt_wavefront_upbp_density.hlsl", "wavefront_upbp_beam_grid_build_main", "3", nullptr},
+  {GPURaytracingRenderer::PipelineStage::EmissionClear, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_clear_main", "3", "6"},
+  {GPURaytracingRenderer::PipelineStage::EmissionClassify, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_classify_main", "3", "6"},
+  {GPURaytracingRenderer::PipelineStage::EmissionSimple, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_simple_main", "3", "6"},
+  {GPURaytracingRenderer::PipelineStage::EmissionFiniteConductor, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_finite_conductor_main", "3", "6"},
+  {GPURaytracingRenderer::PipelineStage::EmissionBegin, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_begin_main", "3", "6"},
+  {GPURaytracingRenderer::PipelineStage::EmissionSampleBegin, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_sample_begin_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::EmissionSampleDelta, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_sample_delta_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::EmissionSampleResolve, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_sample_resolve_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::EmissionAdvance, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_advance_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::EmissionPhase, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_phase_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::EmissionBaseSample, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_base_sample_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::EmissionVelvetSample, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_velvet_sample_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::EmissionBaseEmission, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_base_emission_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::EmissionVelvetEscape, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_velvet_escape_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::EmissionBaseContinue, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_base_continue_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::EmissionFinish, "shaders/gpu_rt_wavefront_emission.hlsl", "wavefront_emission_finish_main", "3", "6"},
+  {GPURaytracingRenderer::PipelineStage::CameraDirectLightSampleResume, "shaders/gpu_rt_wavefront_direct_light_sample.hlsl", "wavefront_camera_direct_light_sample_resume_main",
+    "3", nullptr},
+  {GPURaytracingRenderer::PipelineStage::InitLightPath0Resume, "shaders/gpu_rt_wavefront_init_light.hlsl", "wavefront_init_light_path_0_resume_main", "3", nullptr},
+  {GPURaytracingRenderer::PipelineStage::CameraDirectHitAccumulateResume, "shaders/gpu_rt_wavefront_direct_hit.hlsl", "wavefront_camera_direct_hit_accumulate_resume_main", "3",
+    nullptr},
+  {GPURaytracingRenderer::PipelineStage::UPBPDirectHitResume, "shaders/gpu_rt_wavefront_upbp_density.hlsl", "wavefront_upbp_direct_hit_resume_main", "3", nullptr},
+  {GPURaytracingRenderer::PipelineStage::TransportWorkClear, "shaders/gpu_rt_wavefront_transport_work.hlsl", "wavefront_transport_work_clear_main", "3", "6"},
+  {GPURaytracingRenderer::PipelineStage::TransportWorkCollect, "shaders/gpu_rt_wavefront_transport_work.hlsl", "wavefront_transport_work_collect_main", "3", "6"},
+  {GPURaytracingRenderer::PipelineStage::TransportWorkBuildArgs, "shaders/gpu_rt_wavefront_transport_work.hlsl", "wavefront_transport_work_build_args_main", "3", "6"},
+  {GPURaytracingRenderer::PipelineStage::CoatingClear, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_clear_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingDirect, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_direct_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingSampleBegin, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_sample_begin_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingSampleDelta, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_sample_delta_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingSampleResolve, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_sample_resolve_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingAdvance, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_advance_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingPhase, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_phase_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingBaseEvaluate, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_base_evaluate_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingBaseSample, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_base_sample_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingExit, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_exit_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingExitPdf, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_exit_pdf_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingVelvet, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_velvet_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CoatingFinish, "shaders/gpu_rt_wavefront_coating.hlsl", "wavefront_coating_finish_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CameraContinueResolveCoatedConductor, "shaders/gpu_rt_wavefront_surface_continue_prepare_camera_variant.hlsl",
+    "wavefront_camera_continue_resolve_coated_conductor_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::LightContinueResolveCoatedConductor, "shaders/gpu_rt_wavefront_surface_continue_prepare_light_variant.hlsl",
+    "wavefront_light_continue_resolve_coated_conductor_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareCoatedConductor, "shaders/gpu_rt_wavefront_direct_light_prepare_variant.hlsl",
+    "wavefront_camera_direct_light_prepare_coated_conductor_main", "3", "6", true},
+  {GPURaytracingRenderer::PipelineStage::CameraDirectLightResolveCoatedConductor, "shaders/gpu_rt_wavefront_direct_light_prepare_variant.hlsl",
+    "wavefront_camera_direct_light_resolve_coated_conductor_main", "3", "6", true},
 };
 
 struct WavefrontWindow {
@@ -711,7 +812,7 @@ GPUIntegratorSelection gpu_integrator_selection_from_scene(const SceneRepresenta
   const auto& integrator_data = scene.integrator_data();
   result.integrator_type = integrator_data.selected;
   const bool camera_source_path = ((scene.data().options.strategy_flags & Scene::Strategy::DirectHit) != 0u) || scene_has_authored_medium_emission(scene.data()) ||
-                                  std::any_of(scene.data().materials.begin(), scene.data().materials.end(), [](const Material& material) {
+                                  std::any_of(scene.data().material_descriptions.begin(), scene.data().material_descriptions.end(), [](const MaterialDescription& material) {
                                     return (material.temperature_kelvin > 0.0f) && (material.int_medium != kInvalidIndex) &&
                                            ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Boundary));
                                   });
@@ -952,6 +1053,10 @@ const char* pipeline_stage_to_string(GPURaytracingRenderer::PipelineStage stage)
       return "CameraConnectLightPreparePlastic";
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareConductor:
       return "CameraConnectLightPrepareConductor";
+    case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareCoatedConductor:
+      return "CameraConnectLightPrepareCoatedConductor";
+    case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareCoatedConductorResume:
+      return "CameraConnectLightPrepareCoatedConductorResume";
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareDielectric:
       return "CameraConnectLightPrepareDielectric";
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveDiffuse:
@@ -960,6 +1065,10 @@ const char* pipeline_stage_to_string(GPURaytracingRenderer::PipelineStage stage)
       return "CameraConnectLightResolvePlastic";
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveConductor:
       return "CameraConnectLightResolveConductor";
+    case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveCoatedConductor:
+      return "CameraConnectLightResolveCoatedConductor";
+    case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveCoatedConductorResume:
+      return "CameraConnectLightResolveCoatedConductorResume";
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveDielectric:
       return "CameraConnectLightResolveDielectric";
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightShadow:
@@ -970,6 +1079,8 @@ const char* pipeline_stage_to_string(GPURaytracingRenderer::PipelineStage stage)
       return "CameraContinuePreparePlastic";
     case GPURaytracingRenderer::PipelineStage::CameraContinuePrepareConductor:
       return "CameraContinuePrepareConductor";
+    case GPURaytracingRenderer::PipelineStage::CameraContinuePrepareCoatedConductor:
+      return "CameraContinuePrepareCoatedConductor";
     case GPURaytracingRenderer::PipelineStage::CameraContinuePrepareDielectric:
       return "CameraContinuePrepareDielectric";
     case GPURaytracingRenderer::PipelineStage::CameraContinuePrepareThinfilm:
@@ -986,6 +1097,10 @@ const char* pipeline_stage_to_string(GPURaytracingRenderer::PipelineStage stage)
       return "LightConnectCameraPreparePlastic";
     case GPURaytracingRenderer::PipelineStage::LightConnectCameraPrepareConductor:
       return "LightConnectCameraPrepareConductor";
+    case GPURaytracingRenderer::PipelineStage::LightConnectCameraPrepareCoatedConductor:
+      return "LightConnectCameraPrepareCoatedConductor";
+    case GPURaytracingRenderer::PipelineStage::LightConnectCameraResolveCoatedConductor:
+      return "LightConnectCameraResolveCoatedConductor";
     case GPURaytracingRenderer::PipelineStage::LightConnectCameraPrepareDielectric:
       return "LightConnectCameraPrepareDielectric";
     case GPURaytracingRenderer::PipelineStage::LightConnectCameraShadow:
@@ -998,6 +1113,8 @@ const char* pipeline_stage_to_string(GPURaytracingRenderer::PipelineStage stage)
       return "LightContinuePreparePlastic";
     case GPURaytracingRenderer::PipelineStage::LightContinuePrepareConductor:
       return "LightContinuePrepareConductor";
+    case GPURaytracingRenderer::PipelineStage::LightContinuePrepareCoatedConductor:
+      return "LightContinuePrepareCoatedConductor";
     case GPURaytracingRenderer::PipelineStage::LightContinuePrepareDielectric:
       return "LightContinuePrepareDielectric";
     case GPURaytracingRenderer::PipelineStage::LightContinuePrepareThinfilm:
@@ -1032,6 +1149,14 @@ const char* pipeline_stage_to_string(GPURaytracingRenderer::PipelineStage stage)
       return "VCMMergePlastic";
     case GPURaytracingRenderer::PipelineStage::VCMMergeConductor:
       return "VCMMergeConductor";
+    case GPURaytracingRenderer::PipelineStage::VCMMergeCoatedConductor:
+      return "VCMMergeCoatedConductor";
+    case GPURaytracingRenderer::PipelineStage::VCMCoatingClear:
+      return "VCMCoatingClear";
+    case GPURaytracingRenderer::PipelineStage::VCMCoatingContinue:
+      return "VCMCoatingContinue";
+    case GPURaytracingRenderer::PipelineStage::VCMCoatingFinish:
+      return "VCMCoatingFinish";
     case GPURaytracingRenderer::PipelineStage::VCMMergeDielectric:
       return "VCMMergeDielectric";
     case GPURaytracingRenderer::PipelineStage::UPBPDensityCompact:
@@ -1052,8 +1177,88 @@ const char* pipeline_stage_to_string(GPURaytracingRenderer::PipelineStage stage)
       return "UPBPDirectHit";
     case GPURaytracingRenderer::PipelineStage::UPBPValidate:
       return "UPBPValidate";
+    case GPURaytracingRenderer::PipelineStage::EmissionClear:
+      return "EmissionClear";
+    case GPURaytracingRenderer::PipelineStage::EmissionClassify:
+      return "EmissionClassify";
+    case GPURaytracingRenderer::PipelineStage::EmissionSimple:
+      return "EmissionSimple";
+    case GPURaytracingRenderer::PipelineStage::EmissionFiniteConductor:
+      return "EmissionFiniteConductor";
+    case GPURaytracingRenderer::PipelineStage::EmissionBegin:
+      return "EmissionBegin";
+    case GPURaytracingRenderer::PipelineStage::EmissionSampleBegin:
+      return "EmissionSampleBegin";
+    case GPURaytracingRenderer::PipelineStage::EmissionSampleDelta:
+      return "EmissionSampleDelta";
+    case GPURaytracingRenderer::PipelineStage::EmissionSampleResolve:
+      return "EmissionSampleResolve";
+    case GPURaytracingRenderer::PipelineStage::EmissionAdvance:
+      return "EmissionAdvance";
+    case GPURaytracingRenderer::PipelineStage::EmissionPhase:
+      return "EmissionPhase";
+    case GPURaytracingRenderer::PipelineStage::EmissionBaseSample:
+      return "EmissionBaseSample";
+    case GPURaytracingRenderer::PipelineStage::EmissionVelvetSample:
+      return "EmissionVelvetSample";
+    case GPURaytracingRenderer::PipelineStage::EmissionBaseEmission:
+      return "EmissionBaseEmission";
+    case GPURaytracingRenderer::PipelineStage::EmissionVelvetEscape:
+      return "EmissionVelvetEscape";
+    case GPURaytracingRenderer::PipelineStage::EmissionBaseContinue:
+      return "EmissionBaseContinue";
+    case GPURaytracingRenderer::PipelineStage::EmissionFinish:
+      return "EmissionFinish";
+    case GPURaytracingRenderer::PipelineStage::CameraDirectLightSampleResume:
+      return "CameraDirectLightSampleResume";
+    case GPURaytracingRenderer::PipelineStage::InitLightPath0Resume:
+      return "InitLightPath0Resume";
+    case GPURaytracingRenderer::PipelineStage::CameraDirectHitAccumulateResume:
+      return "CameraDirectHitAccumulateResume";
+    case GPURaytracingRenderer::PipelineStage::UPBPDirectHitResume:
+      return "UPBPDirectHitResume";
     case GPURaytracingRenderer::PipelineStage::Count:
       return "Count";
+    case GPURaytracingRenderer::PipelineStage::CoatingClear:
+      return "CoatingClear";
+    case GPURaytracingRenderer::PipelineStage::CoatingDirect:
+      return "CoatingDirect";
+    case GPURaytracingRenderer::PipelineStage::CoatingSampleBegin:
+      return "CoatingSampleBegin";
+    case GPURaytracingRenderer::PipelineStage::CoatingSampleDelta:
+      return "CoatingSampleDelta";
+    case GPURaytracingRenderer::PipelineStage::CoatingSampleResolve:
+      return "CoatingSampleResolve";
+    case GPURaytracingRenderer::PipelineStage::CoatingAdvance:
+      return "CoatingAdvance";
+    case GPURaytracingRenderer::PipelineStage::CoatingPhase:
+      return "CoatingPhase";
+    case GPURaytracingRenderer::PipelineStage::CoatingBaseEvaluate:
+      return "CoatingBaseEvaluate";
+    case GPURaytracingRenderer::PipelineStage::CoatingBaseSample:
+      return "CoatingBaseSample";
+    case GPURaytracingRenderer::PipelineStage::CoatingExit:
+      return "CoatingExit";
+    case GPURaytracingRenderer::PipelineStage::CoatingExitPdf:
+      return "CoatingExitPdf";
+    case GPURaytracingRenderer::PipelineStage::CoatingVelvet:
+      return "CoatingVelvet";
+    case GPURaytracingRenderer::PipelineStage::TransportWorkClear:
+      return "TransportWorkClear";
+    case GPURaytracingRenderer::PipelineStage::TransportWorkCollect:
+      return "TransportWorkCollect";
+    case GPURaytracingRenderer::PipelineStage::TransportWorkBuildArgs:
+      return "TransportWorkBuildArgs";
+    case GPURaytracingRenderer::PipelineStage::CoatingFinish:
+      return "CoatingFinish";
+    case GPURaytracingRenderer::PipelineStage::CameraContinueResolveCoatedConductor:
+      return "CameraContinueResolveCoatedConductor";
+    case GPURaytracingRenderer::PipelineStage::LightContinueResolveCoatedConductor:
+      return "LightContinueResolveCoatedConductor";
+    case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareCoatedConductor:
+      return "CameraDirectLightPrepareCoatedConductor";
+    case GPURaytracingRenderer::PipelineStage::CameraDirectLightResolveCoatedConductor:
+      return "CameraDirectLightResolveCoatedConductor";
     default:
       return "Unknown";
   }
@@ -1098,6 +1303,9 @@ const char* bsdf_kind_to_string(const std::string& bsdf_kind) {
   if (bsdf_kind == "5") {
     return "Thinfilm";
   }
+  if (bsdf_kind == "6") {
+    return "CoatedConductor";
+  }
   return bsdf_kind.empty() ? "-" : bsdf_kind.c_str();
 }
 
@@ -1122,11 +1330,11 @@ bool material_compile_mask_has_various_connect(uint32_t mask) {
 }
 
 bool material_compile_mask_has_conductor_stage(uint32_t mask) {
-  return material_compile_mask_has(mask, MaterialClass::Conductor);
+  return (material_compile_mask_has(mask, MaterialClass::Conductor)) || (material_compile_mask_has(mask, MaterialClass::CoatedConductor));
 }
 
 bool material_compile_mask_has_connectible_conductor(uint32_t mask) {
-  return (mask & kMaterialCompileConnectibleConductor) != 0u;
+  return ((mask & kMaterialCompileConnectibleConductor) != 0u) || (material_compile_mask_has(mask, MaterialClass::CoatedConductor));
 }
 
 bool material_compile_mask_has_connectible_dielectric(uint32_t mask) {
@@ -1148,16 +1356,28 @@ bool wavefront_stage_source_is(const WavefrontStage& stage, const char* source_f
   return (stage.source_file != nullptr) && (std::strcmp(stage.source_file, source_file) == 0);
 }
 
+bool wavefront_stage_uses_area_emitters(const WavefrontStage& stage) {
+  return wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_init_light.hlsl") || wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_direct_light_sample.hlsl") ||
+         wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_direct_hit.hlsl") || wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_upbp_density.hlsl") ||
+         wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_emission.hlsl");
+}
+
 struct WavefrontStageCompileOptions {
   bool path_tracing_only = false;
   bool work_queues = false;
   bool thinfilm = false;
   bool velvet = false;
   bool upbp = false;
+  bool coating_substrates_specialized = false;
+  bool coated_transmission = false;
+  bool coated_velvet = false;
+  bool coherent_coating = false;
+  bool area_emitters = true;
 };
 
 WavefrontStageCompileOptions wavefront_stage_compile_options(const WavefrontStage& stage, GPUIntegratorMode mode, uint32_t material_compile_mask) {
   const bool diffuse_variant = (stage.bsdf_kind != nullptr) && (std::strcmp(stage.bsdf_kind, "1") == 0);
+  const bool coated_variant = (stage.bsdf_kind != nullptr) && (std::strcmp(stage.bsdf_kind, "6") == 0);
   const bool dielectric_variant = (stage.bsdf_kind != nullptr) && (std::strcmp(stage.bsdf_kind, "4") == 0);
   const bool surface_continue_variant = wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_surface_continue_prepare_camera_variant.hlsl") ||
                                         wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_surface_continue_prepare_light_variant.hlsl");
@@ -1184,7 +1404,19 @@ WavefrontStageCompileOptions wavefront_stage_compile_options(const WavefrontStag
   result.velvet =
     diffuse_variant && material_compile_mask_has(material_compile_mask, MaterialClass::Velvet) &&
     (surface_continue_variant || direct_light_variant || connect_light_prepare_variant || connect_light_resolve_variant || connect_camera_variant || vcm_merge_variant);
-  result.upbp = mode == GPUIntegratorMode::UPBP;
+  result.upbp = (mode == GPUIntegratorMode::UPBP) && (wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_coating.hlsl") == false) &&
+                (wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_transport_work.hlsl") == false);
+  result.coating_substrates_specialized = coated_variant;
+  const bool coated_transmission_stage =
+    coated_variant || surface_continue_variant || wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_init_light.hlsl") ||
+    wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_direct_light_sample.hlsl") || wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_direct_hit.hlsl") ||
+    wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_upbp_density.hlsl") || wavefront_stage_source_is(stage, "shaders/gpu_rt_wavefront_emission.hlsl");
+  result.coated_transmission = (coated_transmission_stage == false) || ((material_compile_mask & kMaterialCompileCoatedTransmission) != 0u);
+  result.coated_velvet = result.coating_substrates_specialized && ((material_compile_mask & kMaterialCompileCoatedVelvet) != 0u);
+  result.coherent_coating = (material_compile_mask & kMaterialCompileCoherentCoating) != 0u;
+  if (wavefront_stage_uses_area_emitters(stage)) {
+    result.area_emitters = (material_compile_mask & kMaterialCompileAreaEmitters) != 0u;
+  }
   return result;
 }
 
@@ -1196,6 +1428,10 @@ uint64_t wavefront_stage_variant_key(const WavefrontStage& stage, GPUIntegratorM
   result |= options.thinfilm ? (1ull << 10u) : 0ull;
   result |= options.velvet ? (1ull << 11u) : 0ull;
   result |= options.upbp ? (1ull << 12u) : 0ull;
+  result |= options.coated_transmission ? (1ull << 13u) : 0ull;
+  result |= options.coated_velvet ? (1ull << 14u) : 0ull;
+  result |= options.coherent_coating ? (1ull << 15u) : 0ull;
+  result |= (wavefront_stage_uses_area_emitters(stage) && options.area_emitters) ? (1ull << 16u) : 0ull;
   return result;
 }
 
@@ -1208,8 +1444,16 @@ std::unordered_map<std::string, std::string> wavefront_stage_defines(const Wavef
     result["ETX_BSDF_KIND"] = stage.bsdf_kind;
   }
   result["ETX_SPECTRAL_MODE"] = std::to_string(spectral_mode);
+  if (spectral_mode == static_cast<uint32_t>(GPUSpectralMode::Spectral)) {
+    result["ETX_SPECTRAL_TABLES_EXTERNAL"] = "1";
+  }
 
   const WavefrontStageCompileOptions options = wavefront_stage_compile_options(stage, mode, material_compile_mask);
+  result["ETX_ENABLE_COHERENT_COATING"] = options.coherent_coating ? "1" : "0";
+  result["ETX_ENABLE_COATED_TRANSMISSION_SUBSTRATE"] = options.coated_transmission ? "1" : "0";
+  if (wavefront_stage_uses_area_emitters(stage)) {
+    result["ETX_ENABLE_AREA_EMITTERS"] = options.area_emitters ? "1" : "0";
+  }
   if (options.path_tracing_only) {
     result["ETX_WAVEFRONT_PATH_TRACING_ONLY"] = "1";
   }
@@ -1225,6 +1469,24 @@ std::unordered_map<std::string, std::string> wavefront_stage_defines(const Wavef
   if (options.upbp) {
     result["ETX_UPBP"] = "1";
   }
+  if (options.coating_substrates_specialized) {
+    result["ETX_ENABLE_COATED_VELVET_SUBSTRATE"] = options.coated_velvet ? "1" : "0";
+  }
+  if ((stage.stage == GPURaytracingRenderer::PipelineStage::CameraContinueResolveCoatedConductor) ||
+      (stage.stage == GPURaytracingRenderer::PipelineStage::LightContinueResolveCoatedConductor) ||
+      (stage.stage == GPURaytracingRenderer::PipelineStage::CameraDirectLightResolveCoatedConductor) ||
+      (stage.stage == GPURaytracingRenderer::PipelineStage::LightConnectCameraResolveCoatedConductor) ||
+      (stage.stage == GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareCoatedConductorResume) ||
+      (stage.stage == GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveCoatedConductorResume)) {
+    result["ETX_COATING_RESOLVE"] = "1";
+  }
+  if (stage.stage == GPURaytracingRenderer::PipelineStage::VCMCoatingClear) {
+    result["ETX_VCM_COATING_PHASE"] = "1";
+  } else if (stage.stage == GPURaytracingRenderer::PipelineStage::VCMCoatingContinue) {
+    result["ETX_VCM_COATING_PHASE"] = "2";
+  } else if (stage.stage == GPURaytracingRenderer::PipelineStage::VCMCoatingFinish) {
+    result["ETX_VCM_COATING_PHASE"] = "3";
+  }
   if (stage.uses_stage_entry_define) {
     result["ETX_STAGE_ENTRY"] = stage.entry_point;
   }
@@ -1233,6 +1495,41 @@ std::unordered_map<std::string, std::string> wavefront_stage_defines(const Wavef
 
 bool gpu_integrator_feature_enabled(uint32_t features, uint32_t feature) {
   return (features & feature) != 0u;
+}
+
+bool wavefront_emission_stage_enabled(GPURaytracingRenderer::PipelineStage stage, uint32_t material_compile_mask) {
+  if ((material_compile_mask & kMaterialCompileAreaEmitters) == 0u) {
+    return false;
+  }
+  const bool has_coating = (material_compile_mask & kMaterialCompileEmissionCoated) != 0u;
+  const bool has_velvet = (material_compile_mask & kMaterialCompileEmissionVelvet) != 0u;
+  const bool has_coated_velvet = (material_compile_mask & kMaterialCompileEmissionCoatedVelvet) != 0u;
+  switch (stage) {
+    case GPURaytracingRenderer::PipelineStage::EmissionClear:
+    case GPURaytracingRenderer::PipelineStage::EmissionClassify:
+    case GPURaytracingRenderer::PipelineStage::EmissionSimple:
+      return true;
+    case GPURaytracingRenderer::PipelineStage::EmissionFiniteConductor:
+      return (material_compile_mask & kMaterialCompileEmissionFiniteConductor) != 0u;
+    case GPURaytracingRenderer::PipelineStage::EmissionBegin:
+    case GPURaytracingRenderer::PipelineStage::EmissionFinish:
+      return has_coating || has_velvet;
+    case GPURaytracingRenderer::PipelineStage::EmissionSampleBegin:
+    case GPURaytracingRenderer::PipelineStage::EmissionSampleDelta:
+    case GPURaytracingRenderer::PipelineStage::EmissionSampleResolve:
+    case GPURaytracingRenderer::PipelineStage::EmissionAdvance:
+    case GPURaytracingRenderer::PipelineStage::EmissionPhase:
+    case GPURaytracingRenderer::PipelineStage::EmissionBaseSample:
+    case GPURaytracingRenderer::PipelineStage::EmissionBaseEmission:
+    case GPURaytracingRenderer::PipelineStage::EmissionBaseContinue:
+      return has_coating;
+    case GPURaytracingRenderer::PipelineStage::EmissionVelvetSample:
+      return has_coated_velvet;
+    case GPURaytracingRenderer::PipelineStage::EmissionVelvetEscape:
+      return has_velvet || has_coated_velvet;
+    default:
+      return false;
+  }
 }
 
 bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUIntegratorMode mode, uint32_t features, uint32_t material_compile_mask, uint32_t spectral_mode) {
@@ -1251,13 +1548,70 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
   const bool has_various_continue = material_compile_mask_has_various_continue(material_compile_mask);
   const bool has_various_connect = material_compile_mask_has_various_connect(material_compile_mask);
   const bool has_plastic = material_compile_mask_has(material_compile_mask, MaterialClass::Plastic);
-  const bool has_conductor = material_compile_mask_has_conductor_stage(material_compile_mask);
   const bool has_dielectric = material_compile_mask_has(material_compile_mask, MaterialClass::Dielectric);
   const bool has_connectible_conductor = material_compile_mask_has_connectible_conductor(material_compile_mask);
   const bool has_connectible_dielectric = material_compile_mask_has_connectible_dielectric(material_compile_mask);
   const bool has_thinfilm = material_compile_mask_has(material_compile_mask, MaterialClass::Thinfilm);
 
   switch (stage) {
+    case GPURaytracingRenderer::PipelineStage::TransportWorkClear:
+    case GPURaytracingRenderer::PipelineStage::TransportWorkCollect:
+    case GPURaytracingRenderer::PipelineStage::TransportWorkBuildArgs:
+      return (enable_camera_path || enable_light_path) &&
+             (material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor) || ((material_compile_mask & kMaterialCompileAreaEmitters) != 0u));
+    case GPURaytracingRenderer::PipelineStage::CoatingVelvet:
+      return (enable_camera_path || enable_light_path) && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor) &&
+             ((material_compile_mask & kMaterialCompileCoatedVelvet) != 0u);
+    case GPURaytracingRenderer::PipelineStage::EmissionClear:
+    case GPURaytracingRenderer::PipelineStage::EmissionClassify:
+    case GPURaytracingRenderer::PipelineStage::EmissionSimple:
+    case GPURaytracingRenderer::PipelineStage::EmissionFiniteConductor:
+    case GPURaytracingRenderer::PipelineStage::EmissionBegin:
+    case GPURaytracingRenderer::PipelineStage::EmissionSampleBegin:
+    case GPURaytracingRenderer::PipelineStage::EmissionSampleDelta:
+    case GPURaytracingRenderer::PipelineStage::EmissionSampleResolve:
+    case GPURaytracingRenderer::PipelineStage::EmissionAdvance:
+    case GPURaytracingRenderer::PipelineStage::EmissionPhase:
+    case GPURaytracingRenderer::PipelineStage::EmissionBaseSample:
+    case GPURaytracingRenderer::PipelineStage::EmissionVelvetSample:
+    case GPURaytracingRenderer::PipelineStage::EmissionBaseEmission:
+    case GPURaytracingRenderer::PipelineStage::EmissionVelvetEscape:
+    case GPURaytracingRenderer::PipelineStage::EmissionBaseContinue:
+    case GPURaytracingRenderer::PipelineStage::EmissionFinish:
+      return (enable_camera_path || enable_light_path) && wavefront_emission_stage_enabled(stage, material_compile_mask);
+    case GPURaytracingRenderer::PipelineStage::CameraDirectLightSampleResume:
+      return ((material_compile_mask & kMaterialCompileAreaEmitters) != 0u) &&
+             wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage::CameraDirectLightSample, mode, features, material_compile_mask, spectral_mode);
+    case GPURaytracingRenderer::PipelineStage::InitLightPath0Resume:
+      return ((material_compile_mask & kMaterialCompileAreaEmitters) != 0u) &&
+             wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage::InitLightPath0, mode, features, material_compile_mask, spectral_mode);
+    case GPURaytracingRenderer::PipelineStage::CameraDirectHitAccumulateResume:
+      return ((material_compile_mask & kMaterialCompileAreaEmitters) != 0u) &&
+             wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage::CameraDirectHitAccumulate, mode, features, material_compile_mask, spectral_mode);
+    case GPURaytracingRenderer::PipelineStage::UPBPDirectHitResume:
+      return ((material_compile_mask & kMaterialCompileAreaEmitters) != 0u) &&
+             wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage::UPBPDirectHit, mode, features, material_compile_mask, spectral_mode);
+    case GPURaytracingRenderer::PipelineStage::CoatingClear:
+    case GPURaytracingRenderer::PipelineStage::CoatingDirect:
+    case GPURaytracingRenderer::PipelineStage::CoatingSampleBegin:
+    case GPURaytracingRenderer::PipelineStage::CoatingSampleDelta:
+    case GPURaytracingRenderer::PipelineStage::CoatingSampleResolve:
+    case GPURaytracingRenderer::PipelineStage::CoatingAdvance:
+    case GPURaytracingRenderer::PipelineStage::CoatingPhase:
+    case GPURaytracingRenderer::PipelineStage::CoatingBaseEvaluate:
+    case GPURaytracingRenderer::PipelineStage::CoatingBaseSample:
+    case GPURaytracingRenderer::PipelineStage::CoatingExit:
+    case GPURaytracingRenderer::PipelineStage::CoatingExitPdf:
+    case GPURaytracingRenderer::PipelineStage::CoatingFinish:
+      return (enable_camera_path || enable_light_path) && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
+    case GPURaytracingRenderer::PipelineStage::CameraContinueResolveCoatedConductor:
+      return enable_camera_path && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
+    case GPURaytracingRenderer::PipelineStage::LightContinueResolveCoatedConductor:
+      return enable_light_path && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
+    case GPURaytracingRenderer::PipelineStage::CameraDirectLightPrepareCoatedConductor:
+    case GPURaytracingRenderer::PipelineStage::CameraDirectLightResolveCoatedConductor:
+      return enable_connect_to_light && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
+
     case GPURaytracingRenderer::PipelineStage::InitCameraPath0:
     case GPURaytracingRenderer::PipelineStage::TraceCamera:
     case GPURaytracingRenderer::PipelineStage::CameraSurfaceClassify:
@@ -1267,7 +1621,9 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
     case GPURaytracingRenderer::PipelineStage::CameraContinuePreparePlastic:
       return enable_camera_path && has_plastic;
     case GPURaytracingRenderer::PipelineStage::CameraContinuePrepareConductor:
-      return enable_camera_path && has_conductor;
+      return enable_camera_path && material_compile_mask_has(material_compile_mask, MaterialClass::Conductor);
+    case GPURaytracingRenderer::PipelineStage::CameraContinuePrepareCoatedConductor:
+      return enable_camera_path && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
     case GPURaytracingRenderer::PipelineStage::CameraContinuePrepareDielectric:
       return enable_camera_path && has_dielectric;
     case GPURaytracingRenderer::PipelineStage::CameraContinuePrepareThinfilm:
@@ -1293,7 +1649,10 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPreparePlastic:
       return enable_connect_vertices && has_plastic;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareConductor:
-      return enable_connect_vertices && has_connectible_conductor;
+      return enable_connect_vertices && ((material_compile_mask & kMaterialCompileConnectibleConductor) != 0u);
+    case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareCoatedConductor:
+    case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareCoatedConductorResume:
+      return enable_connect_vertices && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightPrepareDielectric:
       return enable_connect_vertices && has_connectible_dielectric;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveDiffuse:
@@ -1301,7 +1660,10 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolvePlastic:
       return enable_connect_vertices && has_plastic;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveConductor:
-      return enable_connect_vertices && has_connectible_conductor;
+      return enable_connect_vertices && ((material_compile_mask & kMaterialCompileConnectibleConductor) != 0u);
+    case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveCoatedConductor:
+    case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveCoatedConductorResume:
+      return enable_connect_vertices && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightResolveDielectric:
       return enable_connect_vertices && has_connectible_dielectric;
     case GPURaytracingRenderer::PipelineStage::CameraConnectLightShadow:
@@ -1318,7 +1680,9 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
     case GPURaytracingRenderer::PipelineStage::LightContinuePreparePlastic:
       return enable_light_path && has_plastic;
     case GPURaytracingRenderer::PipelineStage::LightContinuePrepareConductor:
-      return enable_light_path && has_conductor;
+      return enable_light_path && material_compile_mask_has(material_compile_mask, MaterialClass::Conductor);
+    case GPURaytracingRenderer::PipelineStage::LightContinuePrepareCoatedConductor:
+      return enable_light_path && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
     case GPURaytracingRenderer::PipelineStage::LightContinuePrepareDielectric:
       return enable_light_path && has_dielectric;
     case GPURaytracingRenderer::PipelineStage::LightContinuePrepareThinfilm:
@@ -1335,21 +1699,34 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
     case GPURaytracingRenderer::PipelineStage::LightConnectCameraPreparePlastic:
       return enable_connect_to_camera && has_plastic;
     case GPURaytracingRenderer::PipelineStage::LightConnectCameraPrepareConductor:
-      return enable_connect_to_camera && has_connectible_conductor;
+      return enable_connect_to_camera && ((material_compile_mask & kMaterialCompileConnectibleConductor) != 0u);
+    case GPURaytracingRenderer::PipelineStage::LightConnectCameraPrepareCoatedConductor:
+    case GPURaytracingRenderer::PipelineStage::LightConnectCameraResolveCoatedConductor:
+      return enable_connect_to_camera && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
     case GPURaytracingRenderer::PipelineStage::LightConnectCameraPrepareDielectric:
       return enable_connect_to_camera && has_connectible_dielectric;
     case GPURaytracingRenderer::PipelineStage::VCMGridClear:
     case GPURaytracingRenderer::PipelineStage::VCMGridBuild:
     case GPURaytracingRenderer::PipelineStage::VCMGridPrefix:
     case GPURaytracingRenderer::PipelineStage::VCMGridScatter:
-      return (mode == GPUIntegratorMode::VCM) && enable_merge_vertices;
+      return ((mode == GPUIntegratorMode::VCM) && enable_merge_vertices) ||
+             ((mode == GPUIntegratorMode::UPBP) && enable_upbp_surface && material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor));
     case GPURaytracingRenderer::PipelineStage::VCMMergeDiffuse:
       return (((mode == GPUIntegratorMode::VCM) && enable_merge_vertices) && has_various_connect) ||
              (((mode == GPUIntegratorMode::UPBP) && enable_upbp_surface) && has_various_continue);
     case GPURaytracingRenderer::PipelineStage::VCMMergePlastic:
       return (((mode == GPUIntegratorMode::VCM) && enable_merge_vertices) || ((mode == GPUIntegratorMode::UPBP) && enable_upbp_surface)) && has_plastic;
     case GPURaytracingRenderer::PipelineStage::VCMMergeConductor:
-      return (((mode == GPUIntegratorMode::VCM) && enable_merge_vertices) || ((mode == GPUIntegratorMode::UPBP) && enable_upbp_surface)) && has_connectible_conductor;
+      return (((mode == GPUIntegratorMode::VCM) && enable_merge_vertices) || ((mode == GPUIntegratorMode::UPBP) && enable_upbp_surface)) &&
+             ((material_compile_mask & kMaterialCompileConnectibleConductor) != 0u);
+    case GPURaytracingRenderer::PipelineStage::VCMMergeCoatedConductor:
+      return (((mode == GPUIntegratorMode::VCM) && enable_merge_vertices) || ((mode == GPUIntegratorMode::UPBP) && enable_upbp_surface)) &&
+             material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
+    case GPURaytracingRenderer::PipelineStage::VCMCoatingClear:
+    case GPURaytracingRenderer::PipelineStage::VCMCoatingContinue:
+    case GPURaytracingRenderer::PipelineStage::VCMCoatingFinish:
+      return (((mode == GPUIntegratorMode::VCM) && enable_merge_vertices) || ((mode == GPUIntegratorMode::UPBP) && enable_upbp_surface)) &&
+             material_compile_mask_has(material_compile_mask, MaterialClass::CoatedConductor);
     case GPURaytracingRenderer::PipelineStage::VCMMergeDielectric:
       return (((mode == GPUIntegratorMode::VCM) && enable_merge_vertices) && has_connectible_dielectric) ||
              (((mode == GPUIntegratorMode::UPBP) && enable_upbp_surface) && (has_connectible_dielectric || has_thinfilm));
@@ -1384,13 +1761,57 @@ bool wavefront_stage_enabled(GPURaytracingRenderer::PipelineStage stage, GPUInte
   }
 }
 
+bool scene_has_area_emitters(const SceneData& scene_data) {
+  return std::any_of(scene_data.emitter_profiles.begin(), scene_data.emitter_profiles.end(), [](const EmitterProfile& profile) {
+    return profile.cls == EmitterProfile::Class::Area;
+  });
+}
+
 uint32_t build_material_compile_mask(const SceneData& scene_data) {
-  uint32_t result = 0u;
-  for (const auto& material : scene_data.materials) {
+  uint32_t result = scene_has_area_emitters(scene_data) ? kMaterialCompileAreaEmitters : 0u;
+  uint32_t all_emission_families = 0u;
+  bool has_emissive_mix = false;
+  for (const auto& material : scene_data.transport_materials()) {
+    const bool has_emission_source =
+      (material.temperature_kelvin > 0.0f) || (material.emission.image_index != kInvalidIndex) || (material.thermal_emission_weight > 0.0f) ||
+      (material.coating.thermal_spectrum_index != kInvalidIndex) ||
+      ((material.emission.spectrum_index < scene_data.spectrum_values.size()) && (scene_data.spectrum_values[material.emission.spectrum_index].is_zero() == false));
+    if (material.cls == MaterialClass::Mix) {
+      has_emissive_mix = has_emissive_mix || has_emission_source;
+      continue;
+    }
+    uint32_t emission_families = 0u;
+    if (material.cls == MaterialClass::CoatedConductor) {
+      emission_families |= kMaterialCompileEmissionCoated;
+      if (material_coating_base_class(material) == MaterialClass::Velvet) {
+        emission_families |= kMaterialCompileEmissionCoatedVelvet;
+      }
+    } else if (material.cls == MaterialClass::Velvet) {
+      emission_families |= kMaterialCompileEmissionVelvet;
+    } else if ((material.cls == MaterialClass::Conductor) && (material.coherent_coating.ior.cls == SpectralDistribution::Conductor)) {
+      emission_families |= kMaterialCompileEmissionFiniteConductor;
+    }
+    all_emission_families |= emission_families;
+    if (has_emission_source) {
+      result |= emission_families;
+    }
     const uint32_t boundary_class = material_boundary_class(material.cls, material.subsurface_cls);
     result |= material_compile_bit(boundary_class);
-    const float2 roughness = {material.roughness.value.x, material.roughness.value.y};
-    const bool textured_roughness = material.roughness.image_index != kInvalidIndex;
+    if ((material.coherent_coating.max_thickness_nm > 0.0f) ||
+        ((material.cls == MaterialClass::Conductor) && (material.coherent_coating.ior.cls == SpectralDistribution::Conductor))) {
+      result |= kMaterialCompileCoherentCoating;
+    }
+    if ((material.cls == MaterialClass::CoatedConductor) && (material_coating_base_class(material) == MaterialClass::Velvet)) {
+      result |= kMaterialCompileCoatedVelvet;
+    }
+    if ((material.cls == MaterialClass::CoatedConductor) &&
+        ((material_coating_base_class(material) == MaterialClass::Dielectric) || (material_coating_base_class(material) == MaterialClass::Translucent))) {
+      result |= kMaterialCompileCoatedTransmission;
+    }
+    const SampledImage& boundary_roughness =
+      ((material.cls == MaterialClass::Plastic) && (material.layer_base_class == (MaterialClass::Diffuse + 1u))) ? material.coating.roughness : material.roughness;
+    const float2 roughness = {boundary_roughness.value.x, boundary_roughness.value.y};
+    const bool textured_roughness = boundary_roughness.image_index != kInvalidIndex;
     const bool connectible = textured_roughness || (std::max(roughness.x, roughness.y) > kDeltaAlphaTreshold);
     if ((material.cls == MaterialClass::Conductor) && connectible) {
       result |= kMaterialCompileConnectibleConductor;
@@ -1399,7 +1820,8 @@ uint32_t build_material_compile_mask(const SceneData& scene_data) {
       result |= kMaterialCompileConnectibleDielectric;
     }
   }
-  return result;
+  // An emissive Mix may select a zero-emission leaf that still needs its operation to complete.
+  return result | (has_emissive_mix ? all_emission_families : 0u);
 }
 
 bool gpu_material_compile_mask_supported(uint32_t mask) {
@@ -1972,6 +2394,26 @@ PackedChunkedBlobBuildResult build_packed_mediums_blob(const SceneData& scene_da
   return result;
 }
 
+std::vector<uint8_t> build_spectrum_buffer(const SceneData& data) {
+  const size_t spectra_size = data.spectrum_values.size() * sizeof(SpectralDistribution);
+  std::vector<uint8_t> result(spectra_size + kSpectralLookupBufferSize);
+  if (spectra_size > 0u) {
+    std::memcpy(result.data(), data.spectrum_values.data(), spectra_size);
+  }
+  // Shared lookup rows avoid initializing the spectral tables in every shader invocation.
+  for (uint32_t index = 0u; index < WavelengthCount; ++index) {
+    const float3 xyz = kCIE2006[index];
+    const float4 row = {xyz.x, xyz.y, xyz.z, kWavelengthSamplingCDF[index]};
+    std::memcpy(result.data() + spectra_size + index * kSpectralLookupRowStride, &row, sizeof(row));
+  }
+  for (uint32_t index = 0u; index < RGBResponseWavelengthCount; ++index) {
+    const float3 rgb = kRGBResponse[index];
+    const float4 row = {rgb.x, rgb.y, rgb.z, 0.0f};
+    std::memcpy(result.data() + spectra_size + (WavelengthCount + index) * kSpectralLookupRowStride, &row, sizeof(row));
+  }
+  return result;
+}
+
 GPUSceneGlobals build_scene_globals(const SceneData& scene_data, const Camera& camera, const PackedEmitterData* packed_emitters, const GPUSceneGlobals& previous,
   const BoundingBox& transport_bounds) {
   ETX_PROFILER_SCOPE();
@@ -2271,17 +2713,14 @@ struct GPURaytracingRenderer::SceneUpload {
     if (transfers == nullptr)
       return true;
     if (transfers->prepare() == false) {
-      log::error("GPU RT: failed to prepare scene metadata uploads");
+      renderer.set_runtime_failure("GPU scene metadata upload preparation failed");
       return false;
     }
     RHIResult result = transfers->submit();
     if (result == RHIResult::Success)
       result = transfers->finish();
-    if (result == RHIResult::DeviceLost) {
-      renderer.set_runtime_failure("GPU scene metadata upload failed", result);
-    }
     if (result != RHIResult::Success) {
-      log::error("GPU RT: scene metadata upload failed (%u)", static_cast<uint32_t>(result));
+      renderer.set_runtime_failure("GPU scene metadata upload failed", result);
       return false;
     }
     return true;
@@ -2396,10 +2835,17 @@ void GPURaytracingRenderer::reset_runtime_failure() {
   _runtime_failed = false;
   _configuration_failed = false;
   _runtime_failure_reason.clear();
+  _runtime_failure_result = RHIResult::Success;
 }
 
 void GPURaytracingRenderer::set_runtime_failure(std::string message, RHIResult result) {
+  if ((_runtime_failed == false) || (result == RHIResult::DeviceLost))
+    _runtime_failure_result = result;
+  if ((result != RHIResult::Success) && (message.find(rhi_result_name(result)) == std::string::npos))
+    message += " [" + std::string(rhi_result_name(result)) + "]";
   if (result == RHIResult::DeviceLost) {
+    if (_recovery_blocked == false)
+      _runtime_failed = false;
     _recovery_blocked = true;
     message = "The graphics device was lost. " + message;
   }
@@ -2407,6 +2853,8 @@ void GPURaytracingRenderer::set_runtime_failure(std::string message, RHIResult r
 }
 
 void GPURaytracingRenderer::set_runtime_failure(std::string message) {
+  if (_runtime_failed && (_runtime_failure_reason.empty() == false))
+    return;
   _configuration_failed = false;
   const bool report_failure = (_runtime_failed == false) || (_runtime_failure_reason != message);
   if (_runtime_failed == false) {
@@ -2422,9 +2870,22 @@ void GPURaytracingRenderer::set_runtime_failure(std::string message) {
 }
 
 void GPURaytracingRenderer::set_configuration_failure(std::string message) {
+  set_configuration_failure(std::move(message), RendererRecovery::ChangeSettings, kInvalidIndex);
+}
+
+void GPURaytracingRenderer::set_configuration_failure(std::string message, RendererRecovery recovery, uint32_t resource_index) {
   if (_recovery_blocked) {
     return;
   }
+  if (_pipeline_publish_task) {
+    _pipeline_publish_task->stop_requested.store(true, std::memory_order_relaxed);
+  }
+  invalidate_pipeline_preparation();
+  _active_preparation.reset();
+  _publish_preparation.reset();
+  _pending_pipeline_reload = false;
+  _pending_pipeline_force_reload = false;
+  _preparation_canceled = false;
   const bool report = (_configuration_failed == false) || (_runtime_failure_reason != message);
   if (_runtime_failed == false) {
     preserve_render_statistics();
@@ -2433,6 +2894,8 @@ void GPURaytracingRenderer::set_configuration_failure(std::string message) {
   _runtime_failure_reason = std::move(message);
   _runtime_failed = true;
   _configuration_failed = true;
+  _configuration_recovery = recovery;
+  _failure_resource_index = resource_index;
   if (report) {
     log::warning("%s", _runtime_failure_reason.c_str());
   }
@@ -2479,6 +2942,11 @@ void GPURaytracingRenderer::reload_shaders(RHIContext& ctx, SceneRepresentation&
   ETX_PROFILER_SCOPE();
   (void)ctx;
   request_pipeline_preparation(scene, "reload", true);
+}
+
+void GPURaytracingRenderer::reload_shaders(RHIContext& ctx, SceneRepresentation& scene, bool capture_statistics) {
+  _kernel_statistics_enabled = capture_statistics;
+  reload_shaders(ctx, scene);
 }
 
 void GPURaytracingRenderer::set_compile_stage_filter(const std::string& value) {
@@ -2583,8 +3051,19 @@ RendererStatus GPURaytracingRenderer::status() const {
     result.message = _runtime_failed ? _runtime_failure_reason : _preparation_message;
     result.diagnostic = {
       .severity = _configuration_failed ? RendererDiagnosticSeverity::Warning : RendererDiagnosticSeverity::Error,
-      .recovery = _configuration_failed ? RendererRecovery::ChangeSettings : (_recovery_blocked ? RendererRecovery::RestartApplication : RendererRecovery::Restart),
+      .recovery = _configuration_failed ? _configuration_recovery
+                  : _recovery_blocked   ? RendererRecovery::RestartApplication
+                  : ((_runtime_failure_result == RHIResult::OutOfMemory) || (_runtime_failure_result == RHIResult::UnsupportedFeature) ||
+                      (_runtime_failure_result == RHIResult::NotImplemented))
+                    ? RendererRecovery::ChangeSettings
+                    : RendererRecovery::Restart,
     };
+    result.diagnostic.title = _configuration_failed ? "GPU configuration unsupported" : "GPU renderer interrupted";
+    if (_configuration_failed && (_configuration_recovery == RendererRecovery::EditCamera))
+      result.diagnostic.title = "Camera medium binding invalid";
+    result.diagnostic.resource_index = _failure_resource_index;
+    result.diagnostic.consequence = _recovery_blocked ? "Rendering is stopped. Save your scene if possible, then close and reopen ETX Tracer."
+                                                      : "Rendering is paused; the last completed output remains visible.";
   } else if (_preparation_state == RendererPreparationState::Canceled) {
     result.message = _preparation_message;
     result.diagnostic = {RendererDiagnosticSeverity::Info, RendererRecovery::Restart};
@@ -2754,7 +3233,8 @@ RendererMemoryStats GPURaytracingRenderer::memory_stats() const {
   const uint64_t direct_light_bytes = _direct_light_sample_buffer_size + _direct_light_task_buffer_size + _direct_light_result_buffer_size;
   const uint64_t connection_bytes = _connect_light_task_buffer_size + _connect_camera_task_buffer_size + _connect_camera_result_buffer_size;
   const uint64_t subsurface_bytes = _camera_subsurface_state_buffer_size + _light_subsurface_state_buffer_size;
-  const uint64_t readback_bytes = _camera_queue_count_readback_buffer_size + _light_queue_count_readback_buffer_size + _light_vertex_counter_readback_buffer_size;
+  const uint64_t readback_bytes = _camera_queue_count_readback_buffer_size + _light_queue_count_readback_buffer_size + _light_vertex_counter_readback_buffer_size +
+                                  _coating_count_readback_buffer_size + _emission_count_readback_buffer_size;
   const uint64_t output_bytes = static_cast<uint64_t>(_output_dimensions.x) * static_cast<uint64_t>(_output_dimensions.y) * sizeof(float4);
   const UPBPBuffer* upbp_resident_buffers[] = {&_upbp.resources_buffer, &_upbp.vertex_buffer, &_upbp.segment_buffer, &_upbp.interval_buffer, &_upbp.event_buffer,
     &_upbp.point_buffer, &_upbp.beam_buffer, &_upbp.counter_buffer, &_upbp.path_state_buffer};
@@ -2776,7 +3256,8 @@ RendererMemoryStats GPURaytracingRenderer::memory_stats() const {
   const UPBPBuffer* upbp_density_index_buffers[] = {&_upbp.density_batch_buffer, &_upbp.density_surface_point_buffer, &_upbp.density_surface_point_aabb_buffer,
     &_upbp.density_medium_point_buffer, &_upbp.density_medium_point_aabb_buffer, &_upbp.density_beam_buffer, &_upbp.density_surface_point_instance_buffer,
     &_upbp.density_medium_point_instance_buffer, &_upbp.density_bp2d_beam_instance_buffer, &_upbp.density_bb1d_beam_instance_buffer, &_upbp.density_bb1d_beam_buffer,
-    &_upbp.density_beam_reference_buffer, &_upbp.density_beam_unit_aabb_buffer, &_upbp.density_as_scratch_buffer};
+    &_upbp.density_beam_reference_buffer, &_upbp.density_beam_unit_aabb_buffer, &_upbp.density_as_scratch_buffer, &_upbp.density_surface_grid_ranges_buffer,
+    &_upbp.density_surface_grid_indices_buffer};
   uint64_t upbp_density_index_bytes = 0u;
   uint32_t upbp_density_index_allocation_count = 0u;
   for (const UPBPBuffer* buffer : upbp_density_index_buffers) {
@@ -2811,8 +3292,14 @@ RendererMemoryStats GPURaytracingRenderer::memory_stats() const {
   add_entry("Wavefront", "Direct-light work", RendererMemoryLocation::GPUDevice, direct_light_bytes, direct_light_allocation_count);
   add_entry("Wavefront", "Vertex-connection work", RendererMemoryLocation::GPUDevice, connection_bytes, connection_allocation_count);
   add_entry("Wavefront", "Subsurface state", RendererMemoryLocation::GPUDevice, subsurface_bytes, 2u);
+  add_entry("Wavefront", "Transport work", RendererMemoryLocation::GPUDevice, _transport_work_buffer_size, _transport_work_buffer.valid() ? 1u : 0u);
+  add_entry("Wavefront", "Coating requests", RendererMemoryLocation::GPUDevice, _coating_request_buffer_size, _coating_request_buffer.valid() ? 1u : 0u);
+  add_entry("Wavefront", "VCM coating lanes", RendererMemoryLocation::GPUDevice, _vcm_coating_buffer_size, _vcm_coating_buffer.valid() ? 1u : 0u);
+  add_entry("Wavefront", "Emission requests", RendererMemoryLocation::GPUDevice, _emission_request_buffer_size, _emission_request_buffer.valid() ? 1u : 0u);
+  add_entry("Wavefront", "Emission continuations", RendererMemoryLocation::GPUDevice, _emission_consumer_buffer_size, _emission_consumer_buffer.valid() ? 1u : 0u);
   add_entry("Wavefront", "Light-history counter", RendererMemoryLocation::GPUDevice, _light_vertex_counter_buffer_size, 1u);
-  add_entry("Readback", "Queue and history counters", RendererMemoryLocation::GPUHostVisible, readback_bytes, 3u);
+  add_entry("Readback", "Queue and history counters", RendererMemoryLocation::GPUHostVisible, readback_bytes,
+    3u + (_coating_count_readback_buffer.valid() ? 1u : 0u) + (_emission_count_readback_buffer.valid() ? 1u : 0u));
   add_entry("UPBP", "Resident path storage", RendererMemoryLocation::GPUDevice, upbp_resident_bytes, upbp_resident_allocation_count);
   add_entry("UPBP", "Persistent density records and bounds", RendererMemoryLocation::GPUDevice, upbp_density_record_bytes, upbp_density_record_allocation_count);
   add_entry("UPBP", "Density index buffers and build scratch", RendererMemoryLocation::GPUDevice, upbp_density_index_bytes, upbp_density_index_allocation_count);
@@ -3076,6 +3563,7 @@ void GPURaytracingRenderer::destroy_pipelines(RHIDevice& device) {
       pipeline = {};
     }
     _pipeline_variant_keys[stage_index] = 0u;
+    _pipeline_native_identities[stage_index] = {};
   }
 }
 
@@ -3103,6 +3591,16 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
   }
 
   result->compile_started_at = std::chrono::steady_clock::now();
+  const auto finish_canceled = [&]() {
+    result->compile_worker_count.store(0u);
+    result->compile_finished_at = std::chrono::steady_clock::now();
+    result->compilation_complete.store(true, std::memory_order_release);
+    result->progress_condition.notify_all();
+  };
+  if (result->stop_requested.load(std::memory_order_relaxed)) {
+    finish_canceled();
+    return;
+  }
   log::info("GPU RT preparation queued: generation=%u integrator=%s features=0x%08x material_mask=0x%08x spectral_mode=%u filter=%s", result->generation,
     gpu_integrator_mode_to_string(static_cast<GPUIntegratorMode>(result->integrator_mode)), result->integrator_features, result->material_compile_mask, result->spectral_mode,
     result->compile_stage_filter.empty() ? "<all>" : result->compile_stage_filter.c_str());
@@ -3200,6 +3698,11 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
   result->initialization_complete.store(true, std::memory_order_release);
   result->progress_condition.notify_all();
 
+  if (result->stop_requested.load(std::memory_order_relaxed)) {
+    finish_canceled();
+    return;
+  }
+
   if (compile_groups.empty()) {
     result->success = true;
     result->compile_finished_at = std::chrono::steady_clock::now();
@@ -3215,6 +3718,9 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
   result->compile_worker_count.store(worker_count);
 
   auto compile_group = [&](StageCompileGroup& group) {
+    if (result->stop_requested.load(std::memory_order_relaxed)) {
+      return;
+    }
     {
       std::lock_guard lock(result->progress_mutex);
       for (const uint32_t progress_index : group.progress_indices) {
@@ -3233,9 +3739,12 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
       wavefront_stage_defines(*group.stages.front(), static_cast<GPUIntegratorMode>(result->integrator_mode), result->material_compile_mask, result->spectral_mode);
 
     const auto group_compile_begin = std::chrono::steady_clock::now();
-    group.compilation = compiler.compile(group.source_file, entry_points, defines, _backend);
+    group.compilation = compiler.compile(group.source_file, entry_points, defines, _backend, &result->stop_requested);
     const auto group_compile_end = std::chrono::steady_clock::now();
     group.compile_time_ms = elapsed_ms(group_compile_begin, group_compile_end);
+    if (result->stop_requested.load(std::memory_order_relaxed)) {
+      return;
+    }
     const bool compile_succeeded = (group.compilation.result == RHIResult::Success) && (group.compilation.binaries.size() == group.stages.size());
 
     std::vector<CompiledStageBinary> compiled_stages = {};
@@ -3294,6 +3803,11 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
   }
   result->compile_worker_count.store(0u);
 
+  if (result->stop_requested.load(std::memory_order_relaxed)) {
+    finish_canceled();
+    return;
+  }
+
   const auto compile_end = std::chrono::steady_clock::now();
   const double compile_wall_time_ms = elapsed_ms(compile_begin, compile_end);
 
@@ -3315,7 +3829,7 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
 
   log::info("GPU RT preparation background compile finished: generation=%u stages=%u groups=%u workers=%u wall=%.2fms", result->generation, result->total_pipelines,
     result->total_compile_groups, worker_count, compile_wall_time_ms);
-  const char* shader_action = compiler.runtime_compilation_allowed() ? "Compiled" : "Loaded";
+  const char* shader_action = "Prepared";
   for (const auto& group : compile_groups) {
     if (group.stages.size() == 1u) {
       log::info("%s %s - %.2fms", shader_action, group.stages[0]->entry_point, group.compile_time_ms);
@@ -3331,10 +3845,42 @@ void GPURaytracingRenderer::compile_pipeline_preparation(std::shared_ptr<Pending
   result->progress_condition.notify_all();
 }
 
+void GPURaytracingRenderer::invalidate_pipeline_preparation() {
+  for (const auto& task : _inflight_preparation_tasks) {
+    task.result->stop_requested.store(true, std::memory_order_relaxed);
+    task.result->progress_condition.notify_all();
+  }
+  _preparation_generation += 1u;
+}
+
 void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentation& scene, const char* reason, bool force_reload) {
   if ((_initialized == false) || _recovery_blocked) {
     return;
   }
+
+  const bool effective_force_reload = force_reload || _pending_pipeline_force_reload;
+  if (_pipeline_publish_task) {
+    _pipeline_publish_task->stop_requested.store(true, std::memory_order_relaxed);
+    _pending_pipeline_reload = true;
+    _pending_pipeline_force_reload = effective_force_reload;
+    invalidate_pipeline_preparation();
+    _preparation_canceled = false;
+    set_preparation_state(RendererPreparationState::Preparing, "Waiting for pipeline compiler",
+      reason ? (std::string("Reload queued (") + reason + ")") : std::string("Reload queued"));
+    return;
+  }
+  if (scene.energy_compensation_interface_preparation_status().state != EnergyCompensationPreparationState::Ready) {
+    _pending_pipeline_reload = true;
+    _pending_pipeline_force_reload = effective_force_reload;
+    invalidate_pipeline_preparation();
+    _active_preparation.reset();
+    _publish_preparation.reset();
+    _preparation_canceled = false;
+    set_preparation_state(RendererPreparationState::Preparing, "Waiting for material resources");
+    return;
+  }
+  _pending_pipeline_reload = false;
+  _pending_pipeline_force_reload = false;
 
   const GPUIntegratorSelection integrator_selection = gpu_integrator_selection_from_scene(scene);
   if (integrator_selection.supported == false) {
@@ -3361,7 +3907,8 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
 
     const uint32_t stage_index = static_cast<uint32_t>(stage_info.stage);
     const uint64_t variant_key = wavefront_stage_variant_key(stage_info, integrator_selection.mode, material_compile_mask, spectral_mode);
-    const bool stage_requires_preparation = force_reload || filter_matches || (_pipelines[stage_index].valid() == false) || (_pipeline_variant_keys[stage_index] != variant_key);
+    const bool stage_requires_preparation =
+      effective_force_reload || filter_matches || (_pipelines[stage_index].valid() == false) || (_pipeline_variant_keys[stage_index] != variant_key);
     if (stage_requires_preparation) {
       requested_stages.set(stage_index);
       requested_stage_count += 1u;
@@ -3370,14 +3917,6 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
 
   if ((_compile_stage_filter.empty() == false) && (requested_stage_count == 0u)) {
     set_runtime_failure("GPU RT compile stage filter '" + _compile_stage_filter + "' did not match any pipeline entry point");
-    return;
-  }
-
-  if (_pipeline_publish_task) {
-    _preparation_generation += 1u;
-    _preparation_canceled = false;
-    set_preparation_state(RendererPreparationState::Preparing, "Waiting for pipeline compiler",
-      reason ? (std::string("Reload queued (") + reason + ")") : std::string("Reload queued"));
     return;
   }
 
@@ -3392,7 +3931,7 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
   _integrator_features = integrator_selection.features;
   _material_compile_mask = material_compile_mask;
   _spectral_mode = spectral_mode;
-  _preparation_generation += 1u;
+  invalidate_pipeline_preparation();
 
   if (requested_stage_count == 0u) {
     _active_preparation.reset();
@@ -3420,7 +3959,7 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
   _publish_pipeline_index = 0u;
   _pipeline_publish_logged = false;
   _preparation_started_at = _active_preparation->queued_at;
-  const char* preparation_phase = ShaderCompiler::instance().runtime_compilation_allowed() ? "Compiling shaders" : "Loading shader package";
+  const char* preparation_phase = "Preparing shaders";
   set_preparation_state(RendererPreparationState::Preparing, preparation_phase, reason ? (std::string("Queued (") + reason + ")") : std::string("Queued"));
   _inflight_preparation_tasks.push_back({
     .handle = scheduler.schedule(1u,
@@ -3429,6 +3968,13 @@ void GPURaytracingRenderer::request_pipeline_preparation(const SceneRepresentati
       }),
     .result = _active_preparation,
   });
+}
+
+void GPURaytracingRenderer::request_pending_pipeline_preparation(const SceneRepresentation& scene) {
+  if (_pending_pipeline_reload && (_pipeline_publish_task == nullptr) &&
+      (scene.energy_compensation_interface_preparation_status().state == EnergyCompensationPreparationState::Ready)) {
+    request_pipeline_preparation(scene, "queued request", _pending_pipeline_force_reload);
+  }
 }
 
 void GPURaytracingRenderer::poll_preparation_tasks(RHIContext& ctx, bool wait_for_active) {
@@ -3469,9 +4015,12 @@ void GPURaytracingRenderer::poll_preparation_tasks(RHIContext& ctx, bool wait_fo
 
     _active_preparation = result;
     if (result->success == false) {
+      if (_pipeline_publish_task) {
+        _pipeline_publish_task->stop_requested.store(true, std::memory_order_relaxed);
+      }
       set_runtime_failure(result->error_message);
       set_preparation_failed(result->error_message, "Compile failed");
-      log::error("GPU RT preparation failed: generation=%u phase=compile message=%s", result->generation, result->error_message.c_str());
+      set_runtime_failure(format_diagnostic("GPU RT preparation failed: generation=%u phase=compile message=%s", result->generation, result->error_message.c_str()));
       _publish_preparation.reset();
       continue;
     }
@@ -3531,7 +4080,10 @@ bool GPURaytracingRenderer::finish_pipeline_publish_batch(RHIDevice& device, boo
         device.destroy_pipeline(pipeline_result.handle);
       }
     }
-    if (_preparation_canceled && current_generation) {
+    if (_active_preparation == task->preparation) {
+      _active_preparation.reset();
+    }
+    if (_preparation_canceled) {
       _publish_preparation.reset();
       set_preparation_state(RendererPreparationState::Canceled, "Canceled", "GPU pipeline preparation was canceled.");
       stop_rendering();
@@ -3575,8 +4127,9 @@ bool GPURaytracingRenderer::finish_pipeline_publish_batch(RHIDevice& device, boo
       stage.uses_stage_entry_define ? "yes" : "no", static_cast<unsigned long long>(stage.binary.spirv_size), pipeline_result.cache_hit ? "hit" : "compiled",
       pipeline_result.elapsed_ms);
     if ((pipeline_result.result != RHIResult::Success) || (pipeline_result.handle.valid() == false)) {
-      if (batch_failure.empty() || ((pipeline_result.result == RHIResult::DeviceLost) && (batch_failure_result != RHIResult::DeviceLost))) {
-        batch_failure = "GPU pipeline creation failed at '" + stage.entry_point + "' (" + std::to_string(static_cast<uint32_t>(pipeline_result.result)) + ")";
+      if (batch_failure.empty() || ((batch_failure_result == RHIResult::NotReady) && (pipeline_result.result != RHIResult::NotReady)) ||
+          ((pipeline_result.result == RHIResult::DeviceLost) && (batch_failure_result != RHIResult::DeviceLost))) {
+        batch_failure = "GPU pipeline creation failed at '" + stage.entry_point + "' (" + std::string(rhi_result_name(pipeline_result.result)) + ")";
         batch_failure_result = pipeline_result.result;
       }
     }
@@ -3606,6 +4159,7 @@ bool GPURaytracingRenderer::finish_pipeline_publish_batch(RHIDevice& device, boo
     }
     _pipelines[stage_index] = task->results[batch_index].handle;
     _pipeline_variant_keys[stage_index] = stage.variant_key;
+    _pipeline_native_identities[stage_index] = PipelineNativeIdentity(stage.binary, task->capture_statistics);
   }
   _publish_pipeline_index += task->pipeline_count;
   _published_pipeline_count += task->pipeline_count;
@@ -3627,6 +4181,9 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
     if (_publish_preparation == nullptr) {
       return true;
     }
+  }
+  if ((_publish_preparation->generation != _preparation_generation) || _preparation_canceled || _publish_preparation->stop_requested.load(std::memory_order_relaxed)) {
+    return false;
   }
 
   const bool compilation_complete = _publish_preparation->compilation_complete.load(std::memory_order_acquire);
@@ -3682,9 +4239,7 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
     const uint32_t available_pipeline_count = static_cast<uint32_t>(_publish_preparation->ready_pipeline_indices.size());
     const uint32_t requested_batch_pipeline_count = std::min(available_pipeline_count, std::max(1u, max_pipelines));
     uint32_t batch_pipeline_count = requested_batch_pipeline_count;
-    if (device.backend() == RHIBackend::Vulkan) {
-      batch_pipeline_count = std::min(requested_batch_pipeline_count, kVulkanPipelineMaxWorkerCount);
-    } else if (device.backend() == RHIBackend::Metal) {
+    if (device.backend() == RHIBackend::Metal) {
       // Metal creates this batch serially, and large batches can stall its synchronous compiler service.
       batch_pipeline_count = 1u;
     }
@@ -3692,6 +4247,35 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
     pipeline_indices.assign(_publish_preparation->ready_pipeline_indices.begin(), _publish_preparation->ready_pipeline_indices.begin() + batch_pipeline_count);
     _publish_preparation->ready_pipeline_indices.erase(_publish_preparation->ready_pipeline_indices.begin(),
       _publish_preparation->ready_pipeline_indices.begin() + batch_pipeline_count);
+  }
+
+  const bool capture_statistics = _kernel_statistics_enabled;
+  const auto first_new_pipeline = std::remove_if(pipeline_indices.begin(), pipeline_indices.end(), [&](uint32_t pipeline_index) {
+    const auto& stage = _publish_preparation->compiled_stages[pipeline_index];
+    const uint32_t stage_index = static_cast<uint32_t>(stage.stage);
+    // Statistics are reported only during native pipeline creation.
+    if (capture_statistics || (_pipelines[stage_index].valid() == false) || (_pipeline_native_identities[stage_index].matches(stage.binary, capture_statistics) == false)) {
+      return false;
+    }
+    _pipeline_variant_keys[stage_index] = stage.variant_key;
+    {
+      std::lock_guard lock(_publish_preparation->progress_mutex);
+      auto& progress = _publish_preparation->pipeline_progress[pipeline_index];
+      progress.state = RendererPreparationStepState::Complete;
+      progress.detail = "Existing pipeline reused";
+      progress.cache_hit = true;
+      progress.elapsed_ms = 0.0;
+    }
+    _publish_preparation->completed_pipelines.fetch_add(1u);
+    _publish_pipeline_index += 1u;
+    _published_pipeline_count += 1u;
+    log::info("GPU RT pipeline reused: generation=%u stage=%s entry=%s spirv=%lluB", _publish_preparation->generation, pipeline_stage_to_string(stage.stage),
+      stage.entry_point.c_str(), static_cast<unsigned long long>(stage.binary.spirv_size));
+    return true;
+  });
+  pipeline_indices.erase(first_new_pipeline, pipeline_indices.end());
+  if (pipeline_indices.empty()) {
+    return true;
   }
 
   const uint32_t batch_pipeline_count = static_cast<uint32_t>(pipeline_indices.size());
@@ -3711,6 +4295,7 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
   for (const uint32_t pipeline_index : pipeline_indices) {
     const auto& stage = _publish_preparation->compiled_stages[pipeline_index];
     pipeline_descs.push_back(device.make_compute_pipeline_desc(stage.binary));
+    pipeline_descs.back().capture_statistics = capture_statistics;
   }
 
   const auto publish_task = std::make_shared<InflightPipelinePublishTask>();
@@ -3718,8 +4303,9 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
   publish_task->pipeline_indices = pipeline_indices;
   publish_task->pipeline_count = batch_pipeline_count;
   publish_task->worker_count = pipeline_creation_worker_count;
+  publish_task->capture_statistics = capture_statistics;
   publish_task->started_at = std::chrono::steady_clock::now();
-  const auto progress_callback = [preparation = _publish_preparation, pipeline_indices](uint32_t batch_index, const RHICreatePipelineBatchEntry& pipeline_result) {
+  const auto progress_callback = [preparation = _publish_preparation, pipeline_indices, publish_task](uint32_t batch_index, const RHICreatePipelineBatchEntry& pipeline_result) {
     {
       std::lock_guard lock(preparation->progress_mutex);
       auto& progress = preparation->pipeline_progress[pipeline_indices[batch_index]];
@@ -3742,20 +4328,27 @@ bool GPURaytracingRenderer::advance_pipeline_publish(RHIContext& ctx, uint32_t m
     }
     if (pipeline_result.state == RHIPipelineBatchProgressState::Complete) {
       preparation->completed_pipelines.fetch_add(1u);
+      if (pipeline_result.result != RHIResult::Success) {
+        publish_task->stop_requested.store(true, std::memory_order_relaxed);
+      }
     }
+  };
+  const auto should_continue = [publish_task]() {
+    return publish_task->stop_requested.load(std::memory_order_relaxed) == false;
   };
 
   _pipeline_publish_task = publish_task;
   if (device.backend() == RHIBackend::Vulkan) {
     RHIDevice* const publish_device = &device;
-    publish_task->handle = scheduler.schedule(1u, [publish_device, publish_task, pipeline_descs = std::move(pipeline_descs), progress_callback](uint32_t, uint32_t, uint32_t) {
-      publish_task->results = publish_device->create_compute_pipelines(pipeline_descs, publish_task->worker_count, progress_callback);
-      publish_task->finished_at = std::chrono::steady_clock::now();
-    });
+    publish_task->handle =
+      scheduler.schedule(1u, [publish_device, publish_task, pipeline_descs = std::move(pipeline_descs), progress_callback, should_continue](uint32_t, uint32_t, uint32_t) {
+        publish_task->results = publish_device->create_compute_pipelines(pipeline_descs, publish_task->worker_count, progress_callback, should_continue);
+        publish_task->finished_at = std::chrono::steady_clock::now();
+      });
     return true;
   }
 
-  publish_task->results = device.create_compute_pipelines(pipeline_descs, pipeline_creation_worker_count, progress_callback);
+  publish_task->results = device.create_compute_pipelines(pipeline_descs, pipeline_creation_worker_count, progress_callback, should_continue);
   publish_task->finished_at = std::chrono::steady_clock::now();
   finish_pipeline_publish_batch(device, true);
   return true;
@@ -3767,7 +4360,6 @@ bool GPURaytracingRenderer::create_pipelines_sync(RHIContext& ctx, SceneRepresen
 }
 
 bool GPURaytracingRenderer::finish_preparation(RHIContext& ctx, SceneRepresentation& scene) {
-  (void)scene;
   const RHIResult density_result = finish_density_dispatch(ctx, true);
   if (density_result != RHIResult::Success) {
     set_runtime_failure("GPU UPBP density dispatch failed before pipeline preparation", density_result);
@@ -3777,7 +4369,14 @@ bool GPURaytracingRenderer::finish_preparation(RHIContext& ctx, SceneRepresentat
     poll_preparation_tasks(ctx, false);
     if (_publish_preparation) {
       advance_pipeline_publish(ctx, std::max(1u, _publish_preparation->total_pipelines), true);
-    } else if (_active_preparation) {
+    } else if (_pipeline_publish_task) {
+      finish_pipeline_publish_batch(ctx.device(), true);
+    }
+    request_pending_pipeline_preparation(scene);
+    if (_pending_pipeline_reload && (_pipeline_publish_task == nullptr)) {
+      return false;
+    }
+    if ((_publish_preparation == nullptr) && _active_preparation) {
       std::unique_lock lock(_active_preparation->progress_mutex);
       _active_preparation->progress_condition.wait(lock, [&]() {
         return _active_preparation->initialization_complete.load(std::memory_order_acquire) || _active_preparation->compilation_complete.load(std::memory_order_acquire) ||
@@ -3789,7 +4388,7 @@ bool GPURaytracingRenderer::finish_preparation(RHIContext& ctx, SceneRepresentat
   return pipelines_valid();
 }
 
-void GPURaytracingRenderer::poll_preparation(RHIContext& ctx) {
+void GPURaytracingRenderer::poll_preparation(RHIContext& ctx, SceneRepresentation& scene) {
   const RHIResult density_result = finish_density_dispatch(ctx, false);
   if (density_result == RHIResult::NotReady) {
     return;
@@ -3801,6 +4400,12 @@ void GPURaytracingRenderer::poll_preparation(RHIContext& ctx) {
   poll_preparation_tasks(ctx, false);
   if (_pipeline_publish_task) {
     finish_pipeline_publish_batch(ctx.device(), false);
+  }
+  request_pending_pipeline_preparation(scene);
+  if (_publish_preparation) {
+    const uint32_t pipeline_publish_batch_size =
+      (ctx.device().backend() == RHIBackend::Vulkan) ? std::max(1u, _publish_preparation->total_pipelines) : kNonVulkanPipelinePublishBatchSize;
+    advance_pipeline_publish(ctx, pipeline_publish_batch_size, false);
   }
 }
 
@@ -3837,6 +4442,12 @@ bool GPURaytracingRenderer::pipelines_valid() const {
 }
 
 void GPURaytracingRenderer::cancel_preparation() {
+  _pending_pipeline_reload = false;
+  _pending_pipeline_force_reload = false;
+  if (_pipeline_publish_task) {
+    _pipeline_publish_task->stop_requested.store(true, std::memory_order_relaxed);
+  }
+  invalidate_pipeline_preparation();
   if (_preparation_state != RendererPreparationState::Preparing) {
     return;
   }
@@ -3851,7 +4462,6 @@ void GPURaytracingRenderer::cancel_preparation() {
   }
 
   const auto canceled_preparation = _active_preparation;
-  _preparation_generation += 1u;
   _active_preparation.reset();
   _publish_preparation.reset();
   _published_pipeline_count = 0u;
@@ -3908,10 +4518,11 @@ bool GPURaytracingRenderer::recover(RHIContext& ctx, SceneRepresentation& scene)
   finish_density_dispatch(ctx, true);
   const RHIResult wait_result = ctx.wait_idle();
   if (wait_result != RHIResult::Success) {
-    set_runtime_failure("GPU restart could not synchronize the device (" + std::to_string(static_cast<uint32_t>(wait_result)) + "). Restart the application.", wait_result);
+    set_runtime_failure("GPU restart could not synchronize the device (" + std::string(rhi_result_name(wait_result)) + "). Restart the application.", wait_result);
     _recovery_blocked = true;
     return false;
   }
+  destroy_pipelines(ctx.device());
   destroy_wavefront_buffers(ctx);
   _current_scene_hashes = {};
   _current_camera_hash = 0u;
@@ -3957,7 +4568,7 @@ void GPURaytracingRenderer::wait_for_pending_work(RHIContext& ctx) {
   while (_density_dispatch_count > 0u) {
     const RHIResult result = finish_density_dispatch(ctx, true);
     if (result != RHIResult::Success) {
-      set_runtime_failure("GPU UPBP density dispatch failed (" + std::to_string(static_cast<uint32_t>(result)) + ")", result);
+      set_runtime_failure("GPU UPBP density dispatch failed (" + std::string(rhi_result_name(result)) + ")", result);
       return;
     }
     if ((_wavefront_render_step == WavefrontRenderStep::UPBPEvaluateDensity) && (_upbp.density_query_work_index < _upbp.density_query_work.size())) {
@@ -3989,6 +4600,10 @@ void GPURaytracingRenderer::submit_density_dispatch(RHIContext& ctx) {
   const uint32_t dispatch_count = divide_round_up(packet_count, chunk_limit);
   const bool timed = _kernel_timing_enabled && measured;
   const RHICommandBuffer cmd = ctx.get_async_command_buffer();
+  if (cmd.valid() == false) {
+    set_runtime_failure("GPU UPBP could not acquire a density command buffer", RHIResult::InvalidHandle);
+    return;
+  }
   ctx.command_buffer_begin(cmd);
   ctx.cmd_compute_barrier(cmd);
   GPURTConstants constants = _upbp.density_constants;
@@ -4014,7 +4629,12 @@ void GPURaytracingRenderer::submit_density_dispatch(RHIContext& ctx) {
   }
   ctx.cmd_compute_barrier(cmd);
   ctx.command_buffer_end(cmd);
-  ctx.submit_command_buffer({cmd});
+  const RHIResult submit_result = ctx.submit_command_buffer({cmd});
+  if (submit_result != RHIResult::Success) {
+    ctx.destroy_command_buffer(cmd);
+    set_runtime_failure("GPU UPBP density submission failed (" + std::string(rhi_result_name(submit_result)) + ")", submit_result);
+    return;
+  }
   _density_dispatches[_density_dispatch_count++] = {cmd, work.stage, timed, measured, dispatch_count, packet_count};
   _upbp.density_query_offset += packet_count;
   if (_upbp.density_query_offset == work.count) {
@@ -4026,7 +4646,7 @@ void GPURaytracingRenderer::submit_density_dispatch(RHIContext& ctx) {
 void GPURaytracingRenderer::advance_density_dispatches(RHIContext& ctx) {
   const RHIResult result = finish_density_dispatch(ctx, false);
   if ((result != RHIResult::Success) && (result != RHIResult::NotReady)) {
-    set_runtime_failure("GPU UPBP density dispatch failed (" + std::to_string(static_cast<uint32_t>(result)) + ")", result);
+    set_runtime_failure("GPU UPBP density dispatch failed (" + std::string(rhi_result_name(result)) + ")", result);
     return;
   }
   while ((_density_dispatch_count < _density_dispatches.size()) && (_upbp.density_query_work_index < _upbp.density_query_work.size())) {
@@ -4081,7 +4701,7 @@ RHIResult GPURaytracingRenderer::finish_density_dispatch(RHIContext& ctx, bool w
     }
     _density_dispatches[--_density_dispatch_count] = {};
     if (result != RHIResult::Success) {
-      log::error("GPU UPBP %s density dispatch failed (%u)", pipeline_stage_to_string(dispatch.stage), static_cast<uint32_t>(result));
+      set_runtime_failure(format_diagnostic("GPU UPBP %s density dispatch failed (%s)", pipeline_stage_to_string(dispatch.stage), rhi_result_name(result)), result);
       if (wait == false) {
         return result;
       }
@@ -4130,6 +4750,15 @@ void GPURaytracingRenderer::destroy_wavefront_buffers(RHIContext& ctx) {
   destroy_linear_scene_buffer(device, _connect_camera_result_buffer, _connect_camera_result_buffer_size, _connect_camera_result_buffer_descriptor_index);
   destroy_linear_scene_buffer(device, _camera_subsurface_state_buffer, _camera_subsurface_state_buffer_size, _camera_subsurface_state_buffer_descriptor_index);
   destroy_linear_scene_buffer(device, _light_subsurface_state_buffer, _light_subsurface_state_buffer_size, _light_subsurface_state_buffer_descriptor_index);
+  destroy_linear_scene_buffer(device, _transport_work_buffer, _transport_work_buffer_size, _transport_work_buffer_descriptor_index);
+  destroy_linear_scene_buffer(device, _coating_request_buffer, _coating_request_buffer_size, _coating_request_buffer_descriptor_index);
+  destroy_linear_scene_buffer(device, _vcm_coating_buffer, _vcm_coating_buffer_size, _vcm_coating_buffer_descriptor_index);
+  destroy_linear_scene_buffer(device, _coating_count_readback_buffer, _coating_count_readback_buffer_size, _coating_count_readback_buffer_descriptor_index);
+  _coating_count_readback_state = RHIResourceState::Undefined;
+  destroy_linear_scene_buffer(device, _emission_request_buffer, _emission_request_buffer_size, _emission_request_buffer_descriptor_index);
+  destroy_linear_scene_buffer(device, _emission_consumer_buffer, _emission_consumer_buffer_size, _emission_consumer_buffer_descriptor_index);
+  destroy_linear_scene_buffer(device, _emission_count_readback_buffer, _emission_count_readback_buffer_size, _emission_count_readback_buffer_descriptor_index);
+  _emission_count_readback_state = RHIResourceState::Undefined;
   _wavefront_path_capacity = 0u;
   _wavefront_vertex_capacity = 0u;
   _wavefront_allocated_integrator_mode = ~0u;
@@ -4231,6 +4860,12 @@ void GPURaytracingRenderer::destroy_upbp_density_cache(RHIDevice& device, bool r
   destroy(_upbp.density_batch_buffer);
   destroy(_upbp.density_surface_point_buffer);
   destroy(_upbp.density_surface_point_aabb_buffer);
+  destroy(_upbp.density_surface_grid_ranges_buffer);
+  destroy(_upbp.density_surface_grid_indices_buffer);
+  _upbp.density_surface_grid_mask = 0u;
+  _upbp.resources.surface_grid_ranges_buffer = kInvalidDescriptorIndex;
+  _upbp.resources.surface_grid_indices_buffer = kInvalidDescriptorIndex;
+  _upbp.resources.surface_grid_mask = 0u;
   destroy(_upbp.density_medium_point_buffer);
   destroy(_upbp.density_medium_point_aabb_buffer);
   destroy(_upbp.density_beam_buffer);
@@ -4306,6 +4941,9 @@ void GPURaytracingRenderer::bind_upbp_density_cache_resources() {
   _upbp.resources.density_output_surface_point_buffer =
     ready && _upbp.density_surface_point_buffer.handle.valid() ? _upbp.density_surface_point_buffer.descriptor_index : kInvalidDescriptorIndex;
   _upbp.resources.density_output_surface_point_capacity = ready ? _upbp.density_surface_point_count : 0u;
+  _upbp.resources.surface_grid_ranges_buffer = ready ? _upbp.density_surface_grid_ranges_buffer.descriptor_index : kInvalidDescriptorIndex;
+  _upbp.resources.surface_grid_indices_buffer = ready ? _upbp.density_surface_grid_indices_buffer.descriptor_index : kInvalidDescriptorIndex;
+  _upbp.resources.surface_grid_mask = ready ? _upbp.density_surface_grid_mask : 0u;
   _upbp.resources.density_output_medium_point_buffer =
     ready && _upbp.density_medium_point_buffer.handle.valid() ? _upbp.density_medium_point_buffer.descriptor_index : kInvalidDescriptorIndex;
   _upbp.resources.density_output_medium_point_capacity = ready ? _upbp.density_medium_point_count : 0u;
@@ -4468,7 +5106,7 @@ bool GPURaytracingRenderer::ensure_upbp_buffers(RHIContext& ctx, const SceneRepr
   }
   std::string validation_reason = {};
   if (upbp_options_valid(options, validation_reason) == false) {
-    log::error("GPU UPBP: %s", validation_reason.c_str());
+    set_runtime_failure(format_diagnostic("GPU UPBP: %s", validation_reason.c_str()));
     return false;
   }
 
@@ -4476,18 +5114,19 @@ bool GPURaytracingRenderer::ensure_upbp_buffers(RHIContext& ctx, const SceneRepr
   const bool merge_vertices_enabled = (scene.data().options.strategy_flags & Scene::Strategy::MergeVertices) != 0u;
   const uint32_t storage_technique_mask = upbp_effective_technique_mask(options, merge_vertices_enabled);
   if (storage_technique_mask == 0u) {
-    log::error("GPU UPBP: no techniques remain enabled after applying the scene strategy controls");
+    set_runtime_failure(format_diagnostic("GPU UPBP: no techniques remain enabled after applying the scene strategy controls"));
     return false;
   }
   resident_light_capacity = std::min(global_path_count, resident_light_capacity);
   resident_camera_capacity = std::min(global_path_count, resident_camera_capacity);
   if ((resident_light_capacity > _wavefront_path_capacity) || (resident_camera_capacity > _wavefront_path_capacity)) {
-    log::error("GPU UPBP: resident path capacity exceeds the allocated wavefront capacity (light=%u camera=%u wavefront=%u)", resident_light_capacity, resident_camera_capacity,
-      _wavefront_path_capacity);
+    set_runtime_failure(format_diagnostic("GPU UPBP: resident path capacity exceeds the allocated wavefront capacity (light=%u camera=%u wavefront=%u)", resident_light_capacity,
+      resident_camera_capacity, _wavefront_path_capacity));
     return false;
   }
   if ((camera_batch_count == 0u) || (camera_batch_count > resident_camera_capacity) || ((static_cast<uint64_t>(camera_batch_offset) + camera_batch_count) > global_path_count)) {
-    log::error("GPU UPBP: camera batch [%u, %u) is outside the resident or global path population", camera_batch_offset, camera_batch_offset + camera_batch_count);
+    set_runtime_failure(
+      format_diagnostic("GPU UPBP: camera batch [%u, %u) is outside the resident or global path population", camera_batch_offset, camera_batch_offset + camera_batch_count));
     return false;
   }
   auto& device = ctx.device();
@@ -4500,7 +5139,7 @@ bool GPURaytracingRenderer::ensure_upbp_buffers(RHIContext& ctx, const SceneRepr
   if (density_cache_invalid || storage_layout_changed) {
     const RHIResult reclaim_result = ctx.wait_idle();
     if (reclaim_result != RHIResult::Success) {
-      log::error("GPU UPBP: failed to reclaim the previous resident layout (%u)", static_cast<uint32_t>(reclaim_result));
+      set_runtime_failure(format_diagnostic("GPU UPBP: failed to reclaim the previous resident layout (%s)", rhi_result_name(reclaim_result)), reclaim_result);
       return false;
     }
     if (storage_layout_changed) {
@@ -4546,7 +5185,7 @@ bool GPURaytracingRenderer::ensure_upbp_buffers(RHIContext& ctx, const SceneRepr
   };
   for (const Capacity& capacity : capacities) {
     if ((capacity.count > std::numeric_limits<uint32_t>::max()) || ((capacity.count * capacity.stride) > kWavefrontMaxAddressableBufferSize)) {
-      log::error("GPU UPBP: %s storage exceeds the shader-addressable range", capacity.name);
+      set_runtime_failure(format_diagnostic("GPU UPBP: %s storage exceeds the shader-addressable range", capacity.name));
       return false;
     }
   }
@@ -4652,8 +5291,8 @@ bool GPURaytracingRenderer::reserve_upbp_history(RHIContext& ctx, const SceneRep
     const uint64_t required = static_cast<uint64_t>(reservation.used) + reservation.additional;
     const uint64_t maximum = kWavefrontMaxAddressableBufferSize / reservation.stride;
     if ((reservation.used > capacity) || (required > maximum)) {
-      log::error("GPU UPBP %s history reservation exceeds storage limits: used=%u required=%llu capacity=%llu maximum=%llu", reservation.name, reservation.used,
-        static_cast<unsigned long long>(required), static_cast<unsigned long long>(capacity), static_cast<unsigned long long>(maximum));
+      set_runtime_failure(format_diagnostic("GPU UPBP %s history reservation exceeds storage limits: used=%u required=%llu capacity=%llu maximum=%llu", reservation.name,
+        reservation.used, static_cast<unsigned long long>(required), static_cast<unsigned long long>(capacity), static_cast<unsigned long long>(maximum)));
       return false;
     }
     if (required <= capacity) {
@@ -4665,8 +5304,9 @@ bool GPURaytracingRenderer::reserve_upbp_history(RHIContext& ctx, const SceneRep
     desc.usage = RHIBufferUsage::Storage | RHIBufferUsage::TransferSrc | RHIBufferUsage::TransferDst;
     const RHICreateBindlessResult created = device.create_buffer(desc);
     if ((created.result != RHIResult::Success) || (created.handle.valid() == false)) {
-      log::error("GPU UPBP failed to grow %s history from %.2f to %.2f MiB (%u)", reservation.name, static_cast<double>(reservation.buffer.size) / (1024.0 * 1024.0),
-        static_cast<double>(desc.size) / (1024.0 * 1024.0), static_cast<uint32_t>(created.result));
+      set_runtime_failure(format_diagnostic("GPU UPBP failed to grow %s history from %.2f to %.2f MiB (%s)", reservation.name,
+                            static_cast<double>(reservation.buffer.size) / (1024.0 * 1024.0), static_cast<double>(desc.size) / (1024.0 * 1024.0), rhi_result_name(created.result)),
+        created.result);
       return false;
     }
     const RHICommandBuffer cmd = ctx.get_command_buffer();
@@ -4682,12 +5322,12 @@ bool GPURaytracingRenderer::reserve_upbp_history(RHIContext& ctx, const SceneRep
     }
     ctx.cmd_buffer_barrier(cmd, created.handle, RHIResourceState::TransferDst, RHIResourceState::General);
     ctx.command_buffer_end(cmd);
-    ctx.submit_command_buffer({cmd});
-    const RHIResult copy_result = ctx.wait_for_command_buffer(cmd);
+    const RHIResult submit_result = ctx.submit_command_buffer({cmd});
+    const RHIResult copy_result = submit_result == RHIResult::Success ? ctx.wait_for_command_buffer(cmd) : submit_result;
     ctx.destroy_command_buffer(cmd);
     if (copy_result != RHIResult::Success) {
       device.destroy_buffer(created.handle);
-      log::error("GPU UPBP failed to preserve %s history during growth (%u)", reservation.name, static_cast<uint32_t>(copy_result));
+      set_runtime_failure(format_diagnostic("GPU UPBP failed to preserve %s history during growth (%s)", reservation.name, rhi_result_name(copy_result)), copy_result);
       return false;
     }
     device.destroy_buffer(reservation.buffer.handle);
@@ -4763,7 +5403,7 @@ bool GPURaytracingRenderer::update_upbp_iteration_resources(RHIDevice& device, c
   }
   const RHIResult result = device.update_buffer(_upbp.resources_buffer.handle, &_upbp.resources, sizeof(_upbp.resources));
   if (result != RHIResult::Success) {
-    log::error("GPU UPBP: failed to update iteration resources (%u)", static_cast<uint32_t>(result));
+    set_runtime_failure(format_diagnostic("GPU UPBP: failed to update iteration resources (%s)", rhi_result_name(result)), result);
     return false;
   }
   return true;
@@ -4780,12 +5420,12 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
 
   const uint64_t film_pixel_count_u64 = static_cast<uint64_t>(film_size.x) * static_cast<uint64_t>(film_size.y);
   if (film_pixel_count_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
-    log::error("GPU RT: wavefront film capacity overflow");
+    set_runtime_failure(format_diagnostic("GPU RT: wavefront film capacity overflow"));
     return false;
   }
 
   if (path_capacity == 0u) {
-    log::error("GPU RT: wavefront path capacity is zero");
+    set_runtime_failure(format_diagnostic("GPU RT: wavefront path capacity is zero"));
     return false;
   }
 
@@ -4820,7 +5460,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   const uint32_t wavefront_hard_iteration_cap = scene_max_path_length;
   const uint64_t camera_vertex_capacity_u64 = allocate_camera_path ? static_cast<uint64_t>(path_capacity) * static_cast<uint64_t>(camera_history_bounces + 1u) : 0u;
   if (camera_vertex_capacity_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
-    log::error("GPU RT: wavefront camera vertex capacity overflow");
+    set_runtime_failure(format_diagnostic("GPU RT: wavefront camera vertex capacity overflow"));
     return false;
   }
   uint64_t light_vertex_capacity_u64 = allocate_light_path ? static_cast<uint64_t>(path_capacity) * static_cast<uint64_t>(light_history_bounces + 1u) : 0u;
@@ -4828,12 +5468,28 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     light_vertex_capacity_u64 = std::max(light_vertex_capacity_u64, static_cast<uint64_t>(_wavefront_resources.light_vertex_capacity));
   }
   if (light_vertex_capacity_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
-    log::error("GPU RT: wavefront light vertex capacity overflow");
+    set_runtime_failure(format_diagnostic("GPU RT: wavefront light vertex capacity overflow"));
     return false;
   }
   const uint32_t camera_vertex_capacity = static_cast<uint32_t>(camera_vertex_capacity_u64);
   const uint32_t light_vertex_capacity = static_cast<uint32_t>(light_vertex_capacity_u64);
 
+  const bool has_coating = material_compile_mask_has(_material_compile_mask, MaterialClass::CoatedConductor);
+  const bool queued_vcm_coating =
+    has_coating &&
+    (((static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::VCM) && enable_merge_vertices) ||
+      ((static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::UPBP) && gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::UPBPSurface)));
+  const uint64_t coating_path_capacity = static_cast<uint64_t>(path_capacity) * (static_cast<uint32_t>(allocate_camera_path) + static_cast<uint32_t>(allocate_light_path));
+  const uint64_t coating_request_capacity = queued_vcm_coating ? std::max<uint64_t>(kGPUVCMCoatingLaneCount, coating_path_capacity) : coating_path_capacity;
+  const uint64_t vcm_coating_lane_capacity = std::min<uint64_t>(coating_request_capacity, static_cast<uint64_t>(kDensityQueryGroupDispatchChunkSize) * kGPUVCMCoatingLaneCount);
+  const uint64_t vcm_coating_buffer_size = queued_vcm_coating ? kGPUVCMCoatingHeaderSize + vcm_coating_lane_capacity * kGPUVCMCoatingLaneStride : 0u;
+  const uint64_t coating_request_buffer_size = has_coating ? kGPUCoatingRequestHeaderSize + coating_request_capacity * kGPUCoatingRequestStride : 0u;
+  const bool has_area_emitters = (_material_compile_mask & kMaterialCompileAreaEmitters) != 0u;
+  const uint64_t transport_work_capacity = std::max(has_coating ? coating_request_capacity : 0u, has_area_emitters ? static_cast<uint64_t>(path_capacity) : 0u);
+  const uint64_t transport_work_buffer_size = transport_work_capacity != 0u ? kGPUTransportWorkHeaderSize + transport_work_capacity * sizeof(uint32_t) : 0u;
+  const uint32_t emission_request_stride = wavefront_emission_request_stride(has_coating);
+  const uint64_t emission_request_buffer_size = has_area_emitters ? kGPUEmissionRequestHeaderSize + static_cast<uint64_t>(path_capacity) * emission_request_stride : 0u;
+  const uint64_t emission_consumer_buffer_size = has_area_emitters ? kGPUEmissionConsumerHeaderSize + static_cast<uint64_t>(path_capacity) * kGPUEmissionConsumerStride : 0u;
   const uint64_t queue_buffer_size = kGPUWavefrontQueueHeaderSize + static_cast<uint64_t>(path_capacity) * sizeof(uint32_t);
   const uint64_t material_queue_buffer_size = queue_buffer_size * kGPUWavefrontMaterialQueueCount;
   const uint64_t shadow_queue_buffer_size = (kGPUWavefrontQueueHeaderSize + static_cast<uint64_t>(path_capacity) * sizeof(uint32_t)) +
@@ -4871,9 +5527,9 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   const RHIBufferUsage dispatch_args_buffer_usage = RHIBufferUsage::Storage | RHIBufferUsage::Indirect;
   const RHIBufferUsage queue_readback_usage = RHIBufferUsage::TransferDst;
 
-  const auto validate_wavefront_buffer_size = [](const char* buffer_name, uint64_t size) {
+  const auto validate_wavefront_buffer_size = [this](const char* buffer_name, uint64_t size) {
     if (size > kWavefrontMaxAddressableBufferSize) {
-      log::error("GPU RT: '%s' wavefront buffer exceeds 32-bit shader byte-address range (%llu bytes)", buffer_name, size);
+      set_runtime_failure(format_diagnostic("GPU RT: '%s' wavefront buffer exceeds 32-bit shader byte-address range (%llu bytes)", buffer_name, size));
       return false;
     }
     return true;
@@ -4916,6 +5572,11 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   if (enable_subsurface_state_buffers) {
     wavefront_buffer_sizes_valid = wavefront_buffer_sizes_valid && validate_wavefront_buffer_size("wavefront_subsurface_state", subsurface_state_buffer_size);
   }
+  wavefront_buffer_sizes_valid = wavefront_buffer_sizes_valid && validate_wavefront_buffer_size("wavefront_transport_work", transport_work_buffer_size);
+  wavefront_buffer_sizes_valid = wavefront_buffer_sizes_valid && validate_wavefront_buffer_size("wavefront_coating_requests", coating_request_buffer_size);
+  wavefront_buffer_sizes_valid = wavefront_buffer_sizes_valid && validate_wavefront_buffer_size("wavefront_vcm_coating", vcm_coating_buffer_size);
+  wavefront_buffer_sizes_valid = wavefront_buffer_sizes_valid && validate_wavefront_buffer_size("wavefront_emission_requests", emission_request_buffer_size);
+  wavefront_buffer_sizes_valid = wavefront_buffer_sizes_valid && validate_wavefront_buffer_size("wavefront_emission_consumers", emission_consumer_buffer_size);
   if (wavefront_buffer_sizes_valid == false) {
     return false;
   }
@@ -5004,7 +5665,7 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
   } else {
     destroy_linear_scene_buffer(device, _light_queue_b_buffer, _light_queue_b_buffer_size, _light_queue_b_buffer_descriptor_index);
   }
-  if (ensure_storage_buffer_capacity(device, material_queue_buffer_size, wavefront_usage, _material_queue_buffer, _material_queue_buffer_size,
+  if (ensure_storage_buffer_capacity(device, material_queue_buffer_size, wavefront_usage | RHIBufferUsage::TransferSrc, _material_queue_buffer, _material_queue_buffer_size,
         _material_queue_buffer_descriptor_index, "wavefront_material_queue") == false) {
     return false;
   }
@@ -5152,8 +5813,73 @@ bool GPURaytracingRenderer::ensure_wavefront_buffers(RHIContext& ctx, const Scen
     destroy_linear_scene_buffer(device, _light_subsurface_state_buffer, _light_subsurface_state_buffer_size, _light_subsurface_state_buffer_descriptor_index);
   }
 
+  if (transport_work_capacity != 0u) {
+    if (ensure_storage_buffer_capacity(device, transport_work_buffer_size, queue_buffer_usage, _transport_work_buffer, _transport_work_buffer_size,
+          _transport_work_buffer_descriptor_index, "wavefront_transport_work") == false) {
+      return false;
+    }
+  } else {
+    destroy_linear_scene_buffer(device, _transport_work_buffer, _transport_work_buffer_size, _transport_work_buffer_descriptor_index);
+  }
+
+  if (queued_vcm_coating) {
+    if (ensure_storage_buffer_capacity(device, vcm_coating_buffer_size, queue_buffer_usage, _vcm_coating_buffer, _vcm_coating_buffer_size, _vcm_coating_buffer_descriptor_index,
+          "wavefront_vcm_coating") == false) {
+      return false;
+    }
+  } else {
+    destroy_linear_scene_buffer(device, _vcm_coating_buffer, _vcm_coating_buffer_size, _vcm_coating_buffer_descriptor_index);
+  }
+
+  if (has_coating) {
+    if (ensure_storage_buffer_capacity(device, coating_request_buffer_size, queue_buffer_usage, _coating_request_buffer, _coating_request_buffer_size,
+          _coating_request_buffer_descriptor_index, "wavefront_coating_requests") == false) {
+      return false;
+    }
+    const bool recreate_readback = _coating_count_readback_buffer.valid() == false;
+    if (ensure_host_visible_buffer(device, sizeof(uint32_t), queue_readback_usage, _coating_count_readback_buffer, _coating_count_readback_buffer_size,
+          _coating_count_readback_buffer_descriptor_index, "wavefront_coating_count_readback") == false) {
+      return false;
+    }
+    if (recreate_readback) {
+      _coating_count_readback_state = RHIResourceState::Undefined;
+    }
+  } else {
+    destroy_linear_scene_buffer(device, _coating_request_buffer, _coating_request_buffer_size, _coating_request_buffer_descriptor_index);
+    destroy_linear_scene_buffer(device, _coating_count_readback_buffer, _coating_count_readback_buffer_size, _coating_count_readback_buffer_descriptor_index);
+    _coating_count_readback_state = RHIResourceState::Undefined;
+  }
+
+  if (has_area_emitters) {
+    if ((ensure_storage_buffer_capacity(device, emission_request_buffer_size, queue_buffer_usage, _emission_request_buffer, _emission_request_buffer_size,
+           _emission_request_buffer_descriptor_index, "wavefront_emission_requests") == false) ||
+        (ensure_storage_buffer_capacity(device, emission_consumer_buffer_size, queue_buffer_usage, _emission_consumer_buffer, _emission_consumer_buffer_size,
+           _emission_consumer_buffer_descriptor_index, "wavefront_emission_consumers") == false)) {
+      return false;
+    }
+    const bool recreate_readback = _emission_count_readback_buffer.valid() == false;
+    if (ensure_host_visible_buffer(device, 2u * sizeof(uint32_t), queue_readback_usage, _emission_count_readback_buffer, _emission_count_readback_buffer_size,
+          _emission_count_readback_buffer_descriptor_index, "wavefront_emission_count_readback") == false) {
+      return false;
+    }
+    if (recreate_readback) {
+      _emission_count_readback_state = RHIResourceState::Undefined;
+    }
+  } else {
+    destroy_linear_scene_buffer(device, _emission_request_buffer, _emission_request_buffer_size, _emission_request_buffer_descriptor_index);
+    destroy_linear_scene_buffer(device, _emission_consumer_buffer, _emission_consumer_buffer_size, _emission_consumer_buffer_descriptor_index);
+    destroy_linear_scene_buffer(device, _emission_count_readback_buffer, _emission_count_readback_buffer_size, _emission_count_readback_buffer_descriptor_index);
+    _emission_count_readback_state = RHIResourceState::Undefined;
+  }
+
   _wavefront_resources = {};
   GPUWavefrontResources& resources = _wavefront_resources;
+  resources.emission_request_buffer = _emission_request_buffer_descriptor_index;
+  resources.emission_consumer_buffer = _emission_consumer_buffer_descriptor_index;
+  resources.emission_request_stride = emission_request_stride;
+  resources.transport_work_buffer = _transport_work_buffer_descriptor_index;
+  resources.coating_request_buffer = _coating_request_buffer_descriptor_index;
+  resources.vcm_coating_buffer = _vcm_coating_buffer_descriptor_index;
   resources.camera_state_buffer = _camera_state_buffer_descriptor_index;
   resources.light_state_buffer = _light_state_buffer_descriptor_index;
   resources.camera_hit_buffer = _camera_hit_buffer_descriptor_index;
@@ -5213,8 +5939,8 @@ bool GPURaytracingRenderer::ensure_light_vertex_capacity(RHIContext& ctx, uint32
     (static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::VCM) ? kGPUWavefrontLightPathVertexVCMStride : kGPUWavefrontLightPathVertexStride;
   const uint64_t max_vertex_capacity = std::min<uint64_t>(static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()), kWavefrontMaxAddressableBufferSize / vertex_stride);
   if (static_cast<uint64_t>(required_vertex_capacity) > max_vertex_capacity) {
-    log::error("GPU RT: compact light history requires more than the shader-addressable capacity (required=%u maximum=%llu)", required_vertex_capacity,
-      static_cast<unsigned long long>(max_vertex_capacity));
+    set_runtime_failure(format_diagnostic("GPU RT: compact light history requires more than the shader-addressable capacity (required=%u maximum=%llu)", required_vertex_capacity,
+      static_cast<unsigned long long>(max_vertex_capacity)));
     return false;
   }
 
@@ -5233,11 +5959,13 @@ bool GPURaytracingRenderer::ensure_light_vertex_capacity(RHIContext& ctx, uint32
     const RHICreateBindlessResult create_result = device.create_buffer(desc);
     if ((create_result.result != RHIResult::Success) || (create_result.handle.valid() == false)) {
       const RHIMemoryStats memory_stats = device.get_memory_statistics();
-      log::error("GPU RT: failed to grow light history buffer (%u): requested=%llu bytes (%.2fMB), previous=%llu bytes (%.2fMB), device-local=%.2f/%.2fMB",
-        static_cast<uint32_t>(create_result.result), static_cast<unsigned long long>(new_buffer_size), static_cast<double>(new_buffer_size) / (1024.0 * 1024.0),
-        static_cast<unsigned long long>(_light_vertex_buffer_size), static_cast<double>(_light_vertex_buffer_size) / (1024.0 * 1024.0),
-        static_cast<double>(memory_stats.gpu_device_local_allocated_bytes) / (1024.0 * 1024.0),
-        static_cast<double>(memory_stats.gpu_device_local_budget_bytes) / (1024.0 * 1024.0));
+      set_runtime_failure(
+        format_diagnostic("GPU RT: failed to grow light history buffer (%s): requested=%llu bytes (%.2fMB), previous=%llu bytes (%.2fMB), device-local=%.2f/%.2fMB",
+          rhi_result_name(create_result.result), static_cast<unsigned long long>(new_buffer_size), static_cast<double>(new_buffer_size) / (1024.0 * 1024.0),
+          static_cast<unsigned long long>(_light_vertex_buffer_size), static_cast<double>(_light_vertex_buffer_size) / (1024.0 * 1024.0),
+          static_cast<double>(memory_stats.gpu_device_local_allocated_bytes) / (1024.0 * 1024.0),
+          static_cast<double>(memory_stats.gpu_device_local_budget_bytes) / (1024.0 * 1024.0)),
+        create_result.result);
       return false;
     }
     new_light_vertex_buffer = create_result.handle;
@@ -5254,12 +5982,12 @@ bool GPURaytracingRenderer::ensure_light_vertex_capacity(RHIContext& ctx, uint32
     ctx.cmd_buffer_barrier(cmd, _light_vertex_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
     ctx.cmd_buffer_barrier(cmd, new_light_vertex_buffer, RHIResourceState::TransferDst, RHIResourceState::General);
     ctx.command_buffer_end(cmd);
-    ctx.submit_command_buffer({cmd});
-    const RHIResult copy_result = ctx.wait_for_command_buffer(cmd);
+    const RHIResult submit_result = ctx.submit_command_buffer({cmd});
+    const RHIResult copy_result = submit_result == RHIResult::Success ? ctx.wait_for_command_buffer(cmd) : submit_result;
     ctx.destroy_command_buffer(cmd);
     if (copy_result != RHIResult::Success) {
       device.destroy_buffer(new_light_vertex_buffer);
-      log::error("GPU RT: failed to copy the grown light history buffer (%u)", static_cast<uint32_t>(copy_result));
+      set_runtime_failure(format_diagnostic("GPU RT: failed to copy the grown light history buffer (%s)", rhi_result_name(copy_result)), copy_result);
       return false;
     }
   }
@@ -5289,7 +6017,7 @@ bool GPURaytracingRenderer::ensure_light_vertex_capacity(RHIContext& ctx, uint32
     if (reuse_light_vertex_buffer == false) {
       device.destroy_buffer(new_light_vertex_buffer);
     }
-    log::error("GPU RT: failed to update resources after light history growth (%u)", static_cast<uint32_t>(resource_update_result));
+    set_runtime_failure(format_diagnostic("GPU RT: failed to update resources after light history growth (%s)", rhi_result_name(resource_update_result)), resource_update_result);
     return false;
   }
 
@@ -5336,7 +6064,7 @@ bool GPURaytracingRenderer::update_blue_noise_buffer(RHIContext& ctx, const Scen
 
   std::vector<uint8_t> table_data = {};
   if (build_blue_noise_table_data(target_samples, table_data) == false) {
-    log::error("GPU RT: failed to build blue noise table");
+    set_runtime_failure(format_diagnostic("GPU RT: failed to build blue noise table"));
     return false;
   }
 
@@ -5345,7 +6073,7 @@ bool GPURaytracingRenderer::update_blue_noise_buffer(RHIContext& ctx, const Scen
   const bool upload_success = upload_or_update_linear_scene_buffer(device, table_data.data(), table_data.size(), blue_noise_usage, _blue_noise_buffer, _blue_noise_buffer_size,
     _blue_noise_buffer_descriptor_index, "blue_noise");
   if (upload_success == false) {
-    log::error("GPU RT: failed to upload blue noise table");
+    set_runtime_failure(format_diagnostic("GPU RT: failed to upload blue noise table"));
     return false;
   }
 
@@ -5406,7 +6134,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     return;
   }
   if (density_result != RHIResult::Success) {
-    set_runtime_failure("GPU UPBP density dispatch failed (" + std::to_string(static_cast<uint32_t>(density_result)) + ")", density_result);
+    set_runtime_failure("GPU UPBP density dispatch failed (" + std::string(rhi_result_name(density_result)) + ")", density_result);
     return;
   }
   double pipeline_refresh_ms = 0.0;
@@ -5441,13 +6169,19 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   };
 
   poll_preparation_tasks(ctx);
+  if (scene.energy_compensation_interface_preparation_status().state != EnergyCompensationPreparationState::Ready) {
+    return;
+  }
   if (_publish_preparation) {
-    const uint32_t pipeline_publish_batch_size = (ctx.device().backend() == RHIBackend::Vulkan) ? std::max(1u, scheduler.max_thread_count()) : kNonVulkanPipelinePublishBatchSize;
+    const uint32_t pipeline_publish_batch_size =
+      (ctx.device().backend() == RHIBackend::Vulkan) ? std::max(1u, _publish_preparation->total_pipelines) : kNonVulkanPipelinePublishBatchSize;
     advance_pipeline_publish(ctx, pipeline_publish_batch_size, false);
   }
   if (_pipeline_publish_task) {
     return;
   }
+
+  request_pending_pipeline_preparation(scene);
 
   const GPUIntegratorSelection integrator_selection = gpu_integrator_selection_from_scene(scene);
   const uint32_t new_integrator_mode = static_cast<uint32_t>(integrator_selection.mode);
@@ -5496,10 +6230,6 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (pipelines_valid() == false) {
     return;
   }
-  if (scene.energy_compensation_interface_preparation_status().state == EnergyCompensationPreparationState::Preparing) {
-    return;
-  }
-
   _last_memory_stats = device.get_memory_statistics();
 
   const SceneUpdateScope scene_update_scope = consume_scene_update_request();
@@ -5544,7 +6274,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       }
       if (full_update_requested || changes[UpdateFlags::AnyMaterials] || changes[UpdateFlags::Mediums]) {
         if (scene.ensure_energy_compensation_interfaces() == false) {
-          set_runtime_failure("Failed to ensure BSDF energy-compensation interfaces before GPU render commit");
+          const SceneDiagnostic diagnostic = scene.material_preparation_diagnostic();
+          set_runtime_failure(diagnostic.text(), diagnostic.result);
           request_scene_update();
           return;
         }
@@ -5553,6 +6284,11 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       if (refresh_hashes) {
         new_hashes = scene.data().compute_hashes();
         changes = new_hashes.compare(_current_scene_hashes);
+      }
+      if (_material_compile_mask != build_material_compile_mask(scene.data())) {
+        request_scene_update();
+        request_pipeline_preparation(scene, "committed material pipeline change", false);
+        return;
       }
     }
     scene_changed = changes.any();
@@ -5650,7 +6386,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     const auto partial_scene_update_end = std::chrono::steady_clock::now();
     partial_scene_update_ms = elapsed_ms(partial_scene_update_begin, partial_scene_update_end);
     if (update_success == false) {
-      log::error("GPU RT: partial scene update failed");
+      set_runtime_failure(format_diagnostic("GPU RT: partial scene update failed"));
       scene_data_update_success = false;
     }
   }
@@ -5660,7 +6396,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   }
 
   if (scene_changed && (scene_data_update_success == false)) {
-    log::error("GPU RT: scene data update failed, skipping frame to retry with current hashes");
+    set_runtime_failure(format_diagnostic("GPU RT: scene data update failed, skipping frame to retry with current hashes"));
     request_scene_update();
     return;
   }
@@ -5770,7 +6506,11 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     }
   }
   // VCM's light population, normalization, and spatial grid are iteration-global.
-  const bool use_wavefront_tiling = (vcm_mode == false) && (use_complete_light_history || upbp_mode);
+  const bool scene_has_coating = material_compile_mask_has(_material_compile_mask, MaterialClass::CoatedConductor);
+  const bool scene_has_area_emission = (_material_compile_mask & kMaterialCompileAreaEmitters) != 0u;
+  const bool use_wavefront_tiling =
+    (vcm_mode == false) && (use_complete_light_history || upbp_mode ||
+                             ((scene_has_coating || scene_has_area_emission) && (static_cast<GPUIntegratorMode>(_integrator_mode) == GPUIntegratorMode::PathTracing)));
   const uint64_t base_render_pixel_count_u64 = static_cast<uint64_t>(base_render_dim.x) * static_cast<uint64_t>(base_render_dim.y);
   if (base_render_pixel_count_u64 > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
     set_runtime_failure("GPU RT render window exceeds the addressable path capacity");
@@ -5800,9 +6540,15 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       const uint32_t tile_integrator_features = upbp_mode ? (_integrator_features & ~static_cast<uint32_t>(GPUIntegratorFeatures::MergeVertices)) : _integrator_features;
       const bool compact_connections =
         ((tile_integrator_features & GPUIntegratorFeatures::ConnectVertices) != 0u) && (material_compile_mask_connection_queue_count(_material_compile_mask) > 1u);
-      const uint64_t connection_queue_fixed_bytes = compact_connections ? kGPUWavefrontConnectQueueHeaderSize : 0u;
+      const uint64_t connection_queue_fixed_bytes =
+        (compact_connections ? kGPUWavefrontConnectQueueHeaderSize : 0u) + ((scene_has_coating || scene_has_area_emission) ? kGPUTransportWorkHeaderSize : 0u);
+      const uint32_t coating_path_count = static_cast<uint32_t>((tile_integrator_features & GPUIntegratorFeatures::CameraPath) != 0u) +
+                                          static_cast<uint32_t>((tile_integrator_features & GPUIntegratorFeatures::LightPath) != 0u);
+      const uint64_t coating_bytes_per_path = scene_has_coating ? static_cast<uint64_t>(coating_path_count) * kGPUCoatingRequestStride : 0u;
       const uint64_t tile_bytes_per_path =
-        wavefront_tile_bytes_per_path(tile_integrator_features, scene_has_subsurface_material, initial_light_history_bounces, upbp_mode == false, compact_connections, vcm_mode);
+        wavefront_tile_bytes_per_path(tile_integrator_features, scene_has_subsurface_material, initial_light_history_bounces, upbp_mode == false, compact_connections, vcm_mode) +
+        coating_bytes_per_path + static_cast<uint64_t>(std::max(scene_has_coating ? coating_path_count : 0u, scene_has_area_emission ? 1u : 0u)) * sizeof(uint32_t) +
+        (scene_has_area_emission ? (wavefront_emission_request_stride(scene_has_coating) + kGPUEmissionConsumerStride) : 0u);
       if (upbp_mode) {
         UPBPOptions options = {};
         const auto settings = scene.integrator_data().settings.find(Integrator::Type::UPBP);
@@ -5816,6 +6562,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         }
         const bool merge_vertices_enabled = (scene.data().options.strategy_flags & Scene::Strategy::MergeVertices) != 0u;
         const uint32_t storage_technique_mask = upbp_effective_technique_mask(options, merge_vertices_enabled);
+        const uint32_t coating_surface_path_types =
+          (scene_has_coating && ((storage_technique_mask & static_cast<uint32_t>(UPBPTechnique::Surface)) != 0u)) ? coating_path_count : 0u;
         const RHIMemoryStats planning_memory_stats = device.get_memory_statistics();
         const uint64_t working_set_budget = gpu_resident_working_set_budget_bytes(planning_memory_stats);
         const uint64_t film_pixel_count = static_cast<uint64_t>(full_dim.x) * full_dim.y;
@@ -5827,10 +6575,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                                                 connection_queue_fixed_bytes;
         const uint64_t available_path_and_cache_budget = (working_set_budget > additional_fixed_bytes) ? (working_set_budget - additional_fixed_bytes) : 0u;
         const uint64_t density_cache_reserve = upbp_density_cache_reserve_bytes(available_path_and_cache_budget, base_render_pixel_count, scene_max_path_length_for_tiling,
-          storage_technique_mask, options.maximum_bb1d_light_path_count);
+          storage_technique_mask, options.maximum_bb1d_light_path_count, scene_has_coating);
         const uint64_t path_working_set_budget = available_path_and_cache_budget - density_cache_reserve;
         const uint32_t resident_path_capacity = upbp_resident_path_capacity(path_working_set_budget, base_render_pixel_count, scene_max_path_length_for_tiling,
-          options.maximum_boundary_count, storage_technique_mask, options.maximum_bb1d_light_path_count, tile_bytes_per_path);
+          options.maximum_boundary_count, storage_technique_mask, options.maximum_bb1d_light_path_count, tile_bytes_per_path, coating_surface_path_types);
         if (resident_path_capacity == 0u) {
           set_runtime_failure("GPU UPBP available device-local memory cannot hold one resident camera/light path pair");
           return;
@@ -5840,7 +6588,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         _wavefront_tile_max_pixels = resident_path_capacity;
         if (capacity_changed) {
           const uint64_t resident_bytes = upbp_initial_resident_storage_bytes(realized_resident_path_capacity, scene_max_path_length_for_tiling, options.maximum_boundary_count,
-                                            storage_technique_mask, options.maximum_bb1d_light_path_count) +
+                                            storage_technique_mask, options.maximum_bb1d_light_path_count, coating_surface_path_types) +
                                           static_cast<uint64_t>(realized_resident_path_capacity) * tile_bytes_per_path + additional_fixed_bytes;
           log::info(
             "GPU UPBP selected %u resident camera/light paths for %u global paths; transient working set %.1f MiB, compact density reserve %.1f MiB, hardware budget %.1f MiB; "
@@ -5895,13 +6643,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       if (output_texture_result.handle.valid()) {
         device.destroy_texture(output_texture_result.handle);
       }
-      set_runtime_failure("GPU RT failed to create its output texture (" + std::to_string(static_cast<uint32_t>(output_texture_result.result)) + ")", output_texture_result.result);
+      set_runtime_failure("GPU RT failed to create its output texture (" + std::string(rhi_result_name(output_texture_result.result)) + ")", output_texture_result.result);
       return;
     }
     const RHIResult replacement_wait_result = ctx.wait_idle();
     if (replacement_wait_result != RHIResult::Success) {
       device.destroy_texture(output_texture_result.handle);
-      set_runtime_failure("GPU RT failed to synchronize before replacing its output texture (" + std::to_string(static_cast<uint32_t>(replacement_wait_result)) + ")",
+      set_runtime_failure("GPU RT failed to synchronize before replacing its output texture (" + std::string(rhi_result_name(replacement_wait_result)) + ")",
         replacement_wait_result);
       return;
     }
@@ -6013,7 +6761,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
   if (reclaim_upbp_phase_storage) {
     const RHIResult reclaim_result = ctx.wait_idle();
     if (reclaim_result != RHIResult::Success) {
-      set_runtime_failure("GPU UPBP failed to reclaim completed phase storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
+      set_runtime_failure("GPU UPBP failed to reclaim completed phase storage (" + std::string(rhi_result_name(reclaim_result)) + ")", reclaim_result);
       return;
     }
     if (prepare_upbp_light_phase) {
@@ -6121,10 +6869,11 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     };
     const auto dispatch_stage_with_connect_light_length = [&](RHICommandBuffer cmd, PipelineStage stage, uint64_t argument_buffer_offset, uint32_t path_iteration,
                                                             uint32_t connect_light_vertex_length, uint32_t connect_light_vertex_count, bool reset_light_cursor,
-                                                            bool initialize_connect_light_batch, uint32_t connect_light_cursor_slot) {
+                                                            bool initialize_connect_light_batch, uint32_t connect_light_cursor_slot, uint32_t coating_window_base) {
       GPURTConstants stage_constants = constants;
       stage_constants.path_iteration = path_iteration;
       stage_constants.connect_light_vertex_length = connect_light_vertex_length;
+      stage_constants.work_queue_index = coating_window_base;
       stage_constants.dispatch_item_count = connect_light_vertex_count;
       stage_constants.dispatch_item_offset = (reset_light_cursor ? 1u : 0u) | (initialize_connect_light_batch ? 2u : 0u) | ((connect_light_cursor_slot & 1u) << 3u);
       ctx.cmd_set_pipeline(cmd, _pipelines[static_cast<uint32_t>(stage)]);
@@ -6318,6 +7067,11 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           }
         } else if (command_wait_result != RHIResult::Success) {
           _kernel_timing_stats.dropped_dispatch_count += static_cast<uint64_t>(submitted_command.timestamp_spans.size());
+          set_runtime_failure(format_diagnostic("GPU RT command failed at bounce %u after %llu completed camera traces", _wavefront_path_iteration,
+            static_cast<unsigned long long>(_kernel_timing_accumulators[static_cast<uint32_t>(PipelineStage::TraceCamera)].dispatch_count)));
+          for (const KernelTimestampSpan& span : submitted_command.timestamp_spans) {
+            set_runtime_failure(format_diagnostic("GPU RT failed command contained stage %s", pipeline_stage_to_string(span.stage)));
+          }
         }
       }
       if (wait_result != RHIResult::Success) {
@@ -6334,10 +7088,8 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     };
     const auto record_and_submit = [&](const auto& record_commands) {
       constexpr size_t kPendingCommandLimit = 16u;
-      constexpr size_t kTimestampedPendingCommandLimit = 1u;
       const bool bound_pending_commands = capture_kernel_timings || (upbp_mode && (_wavefront_render_step == WavefrontRenderStep::UPBPEvaluateLightBatch));
-      const size_t pending_command_limit = capture_kernel_timings ? kTimestampedPendingCommandLimit : kPendingCommandLimit;
-      if (bound_pending_commands && (submitted_commands.size() >= pending_command_limit)) {
+      if (bound_pending_commands && (submitted_commands.size() >= kPendingCommandLimit)) {
         const RHIResult batch_wait_result = wait_and_destroy_submitted_commands(capture_kernel_timings ? "kernel timing batch" : "UPBP density batch");
         if (batch_wait_result != RHIResult::Success) {
           deferred_command_wait_result = batch_wait_result;
@@ -6350,6 +7102,10 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
 
       SubmittedCommand submitted_command = {};
       submitted_command.command_buffer = ctx.get_command_buffer();
+      if (submitted_command.command_buffer.valid() == false) {
+        deferred_command_wait_result = RHIResult::InvalidHandle;
+        return;
+      }
       if (capture_kernel_timings) {
         submitted_command.timestamp_spans.reserve(std::min(timestamp_query_capacity / 2u, 64u));
       }
@@ -6362,7 +7118,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       record_commands(cmd);
       active_submitted_command = nullptr;
       ctx.command_buffer_end(cmd);
-      ctx.submit_command_buffer({cmd});
+      const RHIResult submit_result = ctx.submit_command_buffer({cmd});
+      if (submit_result != RHIResult::Success) {
+        deferred_command_wait_result = submit_result;
+        submitted_command.timestamp_query_count = 0u;
+        _kernel_timing_stats.dropped_dispatch_count += static_cast<uint64_t>(submitted_command.timestamp_spans.size());
+        submitted_command.timestamp_spans.clear();
+      }
       submitted_commands.push_back(std::move(submitted_command));
     };
     const auto submit_stage_chunked = [&](PipelineStage stage, uint32_t item_count, uint32_t path_iteration, bool from_camera) {
@@ -6405,6 +7167,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
     const bool has_various_connect = material_compile_mask_has_various_connect(_material_compile_mask);
     const bool has_plastic = material_compile_mask_has(_material_compile_mask, MaterialClass::Plastic);
     const bool has_conductor = material_compile_mask_has_conductor_stage(_material_compile_mask);
+    const bool has_coating = material_compile_mask_has(_material_compile_mask, MaterialClass::CoatedConductor);
     const bool has_dielectric = material_compile_mask_has(_material_compile_mask, MaterialClass::Dielectric);
     const bool has_connectible_conductor = material_compile_mask_has_connectible_conductor(_material_compile_mask);
     const bool has_connectible_dielectric = material_compile_mask_has_connectible_dielectric(_material_compile_mask);
@@ -6418,6 +7181,168 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       }
 
       dispatch_stage_indirect(cmd, stage, from_camera ? kGPUWavefrontCameraDispatchArgsOffset : kGPUWavefrontLightDispatchArgsOffset, path_iteration);
+    };
+    const uint32_t coating_path_capacity = _wavefront_resources.path_capacity * (static_cast<uint32_t>(_wavefront_resources.camera_state_buffer != kInvalidIndex) +
+                                                                                  static_cast<uint32_t>(_wavefront_resources.light_state_buffer != kInvalidIndex));
+    const uint32_t coating_request_capacity =
+      _wavefront_resources.vcm_coating_buffer != kInvalidIndex ? std::max(kGPUVCMCoatingLaneCount, coating_path_capacity) : coating_path_capacity;
+    const auto dispatch_transport_stage = [&](RHICommandBuffer cmd, PipelineStage stage, uint32_t item_count, uint32_t path_iteration) {
+      constexpr uint32_t kMaxDispatchItems = 65535u * 64u;
+      for (uint32_t offset = 0u; offset < item_count; offset += kMaxDispatchItems) {
+        dispatch_stage_range(cmd, stage, offset, std::min(kMaxDispatchItems, item_count - offset), path_iteration, 0u);
+      }
+    };
+    const auto prepare_transport_work = [&](RHICommandBuffer cmd, uint32_t capacity, uint32_t queue_index, uint32_t path_iteration) {
+      dispatch_stage(cmd, PipelineStage::TransportWorkClear, scalar_dispatch, path_iteration);
+      barrier_wavefront_buffers(cmd);
+      constexpr uint32_t kMaxDispatchItems = 65535u * 64u;
+      for (uint32_t offset = 0u; offset < capacity; offset += kMaxDispatchItems) {
+        dispatch_stage_range(cmd, PipelineStage::TransportWorkCollect, offset, std::min(kMaxDispatchItems, capacity - offset), path_iteration, queue_index);
+      }
+      barrier_wavefront_buffers(cmd);
+      ctx.cmd_buffer_barrier(cmd, _wavefront_dispatch_args_buffer, _wavefront_dispatch_args_buffer_state, RHIResourceState::General);
+      _wavefront_dispatch_args_buffer_state = RHIResourceState::General;
+      dispatch_stage(cmd, PipelineStage::TransportWorkBuildArgs, scalar_dispatch, path_iteration);
+      ctx.cmd_buffer_barrier(cmd, _wavefront_dispatch_args_buffer, RHIResourceState::General, RHIResourceState::IndirectArgument);
+      _wavefront_dispatch_args_buffer_state = RHIResourceState::IndirectArgument;
+    };
+    const auto dispatch_coating_stage = [&](RHICommandBuffer cmd, PipelineStage stage, uint32_t path_iteration) {
+      dispatch_transport_stage(cmd, stage, coating_request_capacity, path_iteration);
+      barrier_wavefront_buffers(cmd);
+    };
+    const auto drain_coating_requests = [&](uint32_t path_iteration, uint32_t active_capacity) {
+      uint32_t pending_count = 1u;
+      bool advance_requests = false;
+      while (pending_count != 0u) {
+        record_and_submit([&](RHICommandBuffer cmd) {
+          barrier_wavefront_buffers(cmd);
+          if (advance_requests) {
+            prepare_transport_work(cmd, active_capacity, GPUTransportWorkKind::Coating, path_iteration);
+            constexpr PipelineStage stages[] = {
+              PipelineStage::CoatingDirect,
+              PipelineStage::CoatingSampleBegin,
+              PipelineStage::CoatingSampleDelta,
+              PipelineStage::CoatingSampleResolve,
+              PipelineStage::CoatingAdvance,
+              PipelineStage::CoatingPhase,
+              PipelineStage::CoatingBaseEvaluate,
+              PipelineStage::CoatingBaseSample,
+              PipelineStage::CoatingVelvet,
+              PipelineStage::CoatingExit,
+              PipelineStage::CoatingExitPdf,
+              PipelineStage::CoatingFinish,
+            };
+            for (uint32_t cycle = 0u; cycle < 8u; ++cycle) {
+              for (const PipelineStage stage : stages) {
+                if ((stage != PipelineStage::CoatingVelvet) || ((_material_compile_mask & kMaterialCompileCoatedVelvet) != 0u)) {
+                  dispatch_stage_indirect(cmd, stage, kGPUWavefrontTransportDispatchArgsOffset, path_iteration);
+                  barrier_wavefront_buffers(cmd);
+                }
+              }
+            }
+          }
+          ctx.cmd_buffer_barrier(cmd, _coating_request_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
+          ctx.cmd_buffer_barrier(cmd, _coating_count_readback_buffer, _coating_count_readback_state, RHIResourceState::TransferDst);
+          ctx.cmd_copy_buffer(cmd, _coating_request_buffer, _coating_count_readback_buffer, sizeof(uint32_t));
+          ctx.cmd_buffer_barrier(cmd, _coating_request_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
+          ctx.cmd_buffer_barrier(cmd, _coating_count_readback_buffer, RHIResourceState::TransferDst, RHIResourceState::HostRead);
+          _coating_count_readback_state = RHIResourceState::HostRead;
+        });
+        RHIResult result = wait_and_destroy_submitted_commands("coating transport");
+        if (result == RHIResult::Success) {
+          result = device.read_buffer(_coating_count_readback_buffer, &pending_count, sizeof(pending_count));
+        }
+        if (result != RHIResult::Success) {
+          set_runtime_failure("GPU RT coating transport failed (" + std::string(rhi_result_name(result)) + ")", result);
+          return false;
+        }
+        advance_requests = true;
+      }
+      return true;
+    };
+    const bool has_area_emitters = (_material_compile_mask & kMaterialCompileAreaEmitters) != 0u;
+    const auto clear_emission_requests = [&](RHICommandBuffer cmd, uint32_t path_iteration) {
+      dispatch_transport_stage(cmd, PipelineStage::EmissionClear, _wavefront_resources.path_capacity, path_iteration);
+      barrier_wavefront_buffers(cmd);
+    };
+    const auto drain_emission_requests = [&](PipelineStage resume_stage, uint32_t path_iteration, uint32_t item_offset, uint32_t item_count) {
+      uint32_t pending[2] = {1u, 1u};
+      bool advance_requests = false;
+      bool initialize_requests = true;
+      while ((pending[0] != 0u) || (pending[1] != 0u)) {
+        record_and_submit([&](RHICommandBuffer cmd) {
+          barrier_wavefront_buffers(cmd);
+          if (advance_requests) {
+            if (pending[0] != 0u) {
+              prepare_transport_work(cmd, _wavefront_resources.path_capacity, GPUTransportWorkKind::Emission, path_iteration);
+              if (initialize_requests) {
+                constexpr PipelineStage stages[] = {
+                  PipelineStage::EmissionClassify,
+                  PipelineStage::EmissionSimple,
+                  PipelineStage::EmissionFiniteConductor,
+                  PipelineStage::EmissionBegin,
+                };
+                for (const PipelineStage stage : stages) {
+                  if (wavefront_emission_stage_enabled(stage, _material_compile_mask)) {
+                    dispatch_stage_indirect(cmd, stage, kGPUWavefrontTransportDispatchArgsOffset, path_iteration);
+                    barrier_wavefront_buffers(cmd);
+                  }
+                }
+                initialize_requests = false;
+              } else {
+                constexpr PipelineStage stages[] = {
+                  PipelineStage::EmissionSampleBegin,
+                  PipelineStage::EmissionSampleDelta,
+                  PipelineStage::EmissionSampleResolve,
+                  PipelineStage::EmissionAdvance,
+                  PipelineStage::EmissionPhase,
+                  PipelineStage::EmissionBaseSample,
+                  PipelineStage::EmissionVelvetSample,
+                  PipelineStage::EmissionBaseEmission,
+                  PipelineStage::EmissionVelvetEscape,
+                  PipelineStage::EmissionBaseContinue,
+                  PipelineStage::EmissionFinish,
+                };
+                for (uint32_t cycle = 0u; cycle < 4u; ++cycle) {
+                  for (const PipelineStage stage : stages) {
+                    if (wavefront_emission_stage_enabled(stage, _material_compile_mask)) {
+                      dispatch_stage_indirect(cmd, stage, kGPUWavefrontTransportDispatchArgsOffset, path_iteration);
+                      barrier_wavefront_buffers(cmd);
+                    }
+                  }
+                }
+              }
+            } else {
+              if (resume_stage == PipelineStage::UPBPDirectHitResume) {
+                dispatch_stage_range(cmd, resume_stage, item_offset, item_count, path_iteration, 0u);
+              } else {
+                dispatch_transport_stage(cmd, resume_stage, item_count, path_iteration);
+              }
+              barrier_wavefront_buffers(cmd);
+              initialize_requests = true;
+            }
+          }
+          ctx.cmd_buffer_barrier(cmd, _emission_request_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
+          ctx.cmd_buffer_barrier(cmd, _emission_consumer_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
+          ctx.cmd_buffer_barrier(cmd, _emission_count_readback_buffer, _emission_count_readback_state, RHIResourceState::TransferDst);
+          ctx.cmd_copy_buffer(cmd, _emission_request_buffer, _emission_count_readback_buffer, sizeof(uint32_t), kGPUEmissionRequestPendingOffset, 0u);
+          ctx.cmd_copy_buffer(cmd, _emission_consumer_buffer, _emission_count_readback_buffer, sizeof(uint32_t), kGPUEmissionConsumerPendingOffset, sizeof(uint32_t));
+          ctx.cmd_buffer_barrier(cmd, _emission_request_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
+          ctx.cmd_buffer_barrier(cmd, _emission_consumer_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
+          ctx.cmd_buffer_barrier(cmd, _emission_count_readback_buffer, RHIResourceState::TransferDst, RHIResourceState::HostRead);
+          _emission_count_readback_state = RHIResourceState::HostRead;
+        });
+        RHIResult result = wait_and_destroy_submitted_commands("emission transport");
+        if (result == RHIResult::Success) {
+          result = device.read_buffer(_emission_count_readback_buffer, pending, sizeof(pending));
+        }
+        if (result != RHIResult::Success) {
+          set_runtime_failure("GPU RT emission transport failed (" + std::string(rhi_result_name(result)) + ")", result);
+          return false;
+        }
+        advance_requests = true;
+      }
+      return true;
     };
     const auto dispatch_vcm_merge_material = [&](RHICommandBuffer cmd, PipelineStage stage, uint32_t material_queue_index, uint32_t path_iteration) {
       const bool cooperative = (stage == PipelineStage::VCMMergeConductor) || (stage == PipelineStage::VCMMergeDielectric);
@@ -6472,7 +7397,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       const RHIResult finalize_result = wait_and_destroy_submitted_commands(final_tile ? "finalize sample submit" : "finish tile submit");
       if (finalize_result != RHIResult::Success) {
         set_runtime_failure(
-          std::string(final_tile ? "GPU RT finalize sample submit failed (" : "GPU RT tile completion failed (") + std::to_string(static_cast<uint32_t>(finalize_result)) + ")");
+          std::string(final_tile ? "GPU RT finalize sample submit failed (" : "GPU RT tile completion failed (") + std::string(rhi_result_name(finalize_result)) + ")");
         _wavefront_camera_queue_count = 0u;
         _wavefront_light_queue_count = 0u;
         return false;
@@ -6539,7 +7464,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
       });
       const RHIResult copy_result = wait_and_destroy_submitted_commands("UPBP compact matching light history");
       if (copy_result != RHIResult::Success) {
-        set_runtime_failure("GPU UPBP compact matching light history failed (" + std::to_string(static_cast<uint32_t>(copy_result)) + ")", copy_result);
+        set_runtime_failure("GPU UPBP compact matching light history failed (" + std::string(rhi_result_name(copy_result)) + ")", copy_result);
         return false;
       }
       _upbp.bpt_light_max_path_length = upbp_counters[GPUUPBPCounterIndex::MaximumLightPathLength];
@@ -6604,7 +7529,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
 
       const RHIResult init_result = wait_and_destroy_submitted_commands("deferred camera init submit");
       if (init_result != RHIResult::Success) {
-        set_runtime_failure("GPU RT deferred camera init submit failed (" + std::to_string(static_cast<uint32_t>(init_result)) + ")", init_result);
+        set_runtime_failure("GPU RT deferred camera init submit failed (" + std::string(rhi_result_name(init_result)) + ")", init_result);
         _wavefront_camera_queue_count = 0u;
         return false;
       }
@@ -6658,6 +7583,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             barrier_wavefront_buffers(cmd);
           }
           if (enable_light_path) {
+            if (has_area_emitters) {
+              clear_emission_requests(cmd, 0u);
+            }
             if (upbp_mode) {
               dispatch_upbp_light_init(cmd);
             } else {
@@ -6668,9 +7596,12 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
         });
         const RHIResult init_result = wait_and_destroy_submitted_commands("init sample submit");
         if (init_result != RHIResult::Success) {
-          set_runtime_failure("GPU RT init sample submit failed (" + std::to_string(static_cast<uint32_t>(init_result)) + ")", init_result);
+          set_runtime_failure("GPU RT init sample submit failed (" + std::string(rhi_result_name(init_result)) + ")", init_result);
           _wavefront_camera_queue_count = 0u;
           _wavefront_light_queue_count = 0u;
+          return;
+        }
+        if (enable_light_path && has_area_emitters && (drain_emission_requests(PipelineStage::InitLightPath0Resume, 0u, 0u, initial_light_queue_count) == false)) {
           return;
         }
         _wavefront_render_step = WavefrontRenderStep::TraceBounce;
@@ -6717,8 +7648,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::General, RHIResourceState::TransferSrc);
               ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, _upbp.counter_readback_state, RHIResourceState::TransferDst);
               ctx.cmd_copy_buffer(cmd, _upbp.counter_buffer.handle, _upbp.counter_readback_buffer.handle, static_cast<uint64_t>(GPUUPBPCounterIndex::Count) * sizeof(uint32_t));
+              ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::HostRead);
               ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::TransferSrc, RHIResourceState::General);
-              _upbp.counter_readback_state = RHIResourceState::TransferDst;
+              _upbp.counter_readback_state = RHIResourceState::HostRead;
             });
             const RHIResult history_wait = wait_and_destroy_submitted_commands("UPBP history reservation");
             uint32_t counters[GPUUPBPCounterIndex::Count] = {};
@@ -6745,7 +7677,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               if (submitted_commands.empty() == false) {
                 const RHIResult pending_result = wait_and_destroy_submitted_commands("light history growth");
                 if (pending_result != RHIResult::Success) {
-                  set_runtime_failure("GPU RT light history synchronization failed (" + std::to_string(static_cast<uint32_t>(pending_result)) + ")", pending_result);
+                  set_runtime_failure("GPU RT light history synchronization failed (" + std::string(rhi_result_name(pending_result)) + ")", pending_result);
                   _wavefront_camera_queue_count = 0u;
                   _wavefront_light_queue_count = 0u;
                   return;
@@ -6806,6 +7738,9 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             if (submit_non_dielectric_continue) {
               record_and_submit([&](RHICommandBuffer cmd) {
                 barrier_wavefront_buffers(cmd);
+                if (has_coating) {
+                  dispatch_coating_stage(cmd, PipelineStage::CoatingClear, path_iteration);
+                }
                 if (_wavefront_light_queue_count > 0u) {
                   if (has_various_continue) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::LightContinuePrepareDiffuse, false, kGPUWavefrontMaterialQueueVarious, path_iteration);
@@ -6813,8 +7748,15 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                   if (has_plastic) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::LightContinuePreparePlastic, false, kGPUWavefrontMaterialQueuePlastic, path_iteration);
                   }
-                  if (has_conductor) {
+                  if (material_compile_mask_has(_material_compile_mask, MaterialClass::Conductor)) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::LightContinuePrepareConductor, false, kGPUWavefrontMaterialQueueConductor, path_iteration);
+                    if (has_coating) {
+                      // Both conductor stages read shared path state before filtering material classes.
+                      barrier_wavefront_buffers(cmd);
+                    }
+                  }
+                  if (material_compile_mask_has(_material_compile_mask, MaterialClass::CoatedConductor)) {
+                    dispatch_stage_material_indirect(cmd, PipelineStage::LightContinuePrepareCoatedConductor, false, kGPUWavefrontMaterialQueueConductor, path_iteration);
                   }
                   if (has_thinfilm) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::LightContinuePrepareThinfilm, false, kGPUWavefrontMaterialQueueThinfilm, path_iteration);
@@ -6829,12 +7771,34 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                   if (has_plastic) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::CameraContinuePreparePlastic, true, kGPUWavefrontMaterialQueuePlastic, path_iteration);
                   }
-                  if (has_conductor) {
+                  if (material_compile_mask_has(_material_compile_mask, MaterialClass::Conductor)) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::CameraContinuePrepareConductor, true, kGPUWavefrontMaterialQueueConductor, path_iteration);
+                    if (has_coating) {
+                      barrier_wavefront_buffers(cmd);
+                    }
+                  }
+                  if (material_compile_mask_has(_material_compile_mask, MaterialClass::CoatedConductor)) {
+                    dispatch_stage_material_indirect(cmd, PipelineStage::CameraContinuePrepareCoatedConductor, true, kGPUWavefrontMaterialQueueConductor, path_iteration);
                   }
                   if (has_thinfilm) {
                     dispatch_stage_material_indirect(cmd, PipelineStage::CameraContinuePrepareThinfilm, true, kGPUWavefrontMaterialQueueThinfilm, path_iteration);
                   }
+                }
+                barrier_wavefront_buffers(cmd);
+              });
+            }
+
+            if (submit_non_dielectric_continue && has_coating) {
+              if (drain_coating_requests(path_iteration, coating_request_capacity) == false) {
+                return;
+              }
+              record_and_submit([&](RHICommandBuffer cmd) {
+                if (_wavefront_light_queue_count > 0u) {
+                  dispatch_stage_material_indirect(cmd, PipelineStage::LightContinueResolveCoatedConductor, false, kGPUWavefrontMaterialQueueConductor, path_iteration);
+                }
+                barrier_wavefront_buffers(cmd);
+                if (_wavefront_camera_queue_count > 0u) {
+                  dispatch_stage_material_indirect(cmd, PipelineStage::CameraContinueResolveCoatedConductor, true, kGPUWavefrontMaterialQueueConductor, path_iteration);
                 }
                 barrier_wavefront_buffers(cmd);
               });
@@ -6862,55 +7826,158 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           const uint32_t remaining_connect_light_vertex_length = _wavefront_connect_light_vertex_length - connect_light_vertex_count;
           const bool finish_trace_bounce = remaining_connect_light_vertex_length == 0u;
 
-          record_and_submit([&](RHICommandBuffer cmd) {
+          const bool queued_camera_connection = (connect_light_batch_in_progress == false) && has_coating && enable_connect_to_camera && (_wavefront_light_queue_count > 0u);
+          if (queued_camera_connection) {
+            record_and_submit([&](RHICommandBuffer cmd) {
+              barrier_wavefront_buffers(cmd);
+              dispatch_coating_stage(cmd, PipelineStage::CoatingClear, path_iteration);
+              barrier_wavefront_buffers(cmd);
+              dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareCoatedConductor, false, kGPUWavefrontMaterialQueueConductor, path_iteration);
+              barrier_wavefront_buffers(cmd);
+            });
+            if (drain_coating_requests(path_iteration, coating_request_capacity) == false) {
+              return;
+            }
+          }
+
+          const auto prepare_light_connections = [&](RHICommandBuffer cmd) {
+            if (_wavefront_light_queue_count > 0u) {
+              if (enable_connect_to_camera) {
+                if (has_various_connect) {
+                  dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareDiffuse, false, kGPUWavefrontMaterialQueueVarious, path_iteration);
+                }
+                if (has_thinfilm && use_material_work_queues) {
+                  dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareDiffuse, false, kGPUWavefrontMaterialQueueThinfilm, path_iteration);
+                }
+                if (has_plastic) {
+                  dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPreparePlastic, false, kGPUWavefrontMaterialQueuePlastic, path_iteration);
+                }
+                if ((_material_compile_mask & kMaterialCompileConnectibleConductor) != 0u) {
+                  dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareConductor, false, kGPUWavefrontMaterialQueueConductor, path_iteration);
+                }
+                if (queued_camera_connection) {
+                  barrier_wavefront_buffers(cmd);
+                  dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraResolveCoatedConductor, false, kGPUWavefrontMaterialQueueConductor, path_iteration);
+                  barrier_wavefront_buffers(cmd);
+                }
+                if (has_connectible_dielectric) {
+                  dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareDielectric, false, kGPUWavefrontMaterialQueueDielectric, path_iteration);
+                }
+                rebuild_dispatch_args(cmd, path_iteration);
+                dispatch_stage_indirect(cmd, PipelineStage::LightConnectCameraShadow, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueConnectCamera), path_iteration);
+                barrier_wavefront_buffers(cmd);
+                dispatch_stage_indirect(cmd, PipelineStage::LightConnectCameraAccumulate, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueConnectCamera), path_iteration);
+                barrier_wavefront_buffers(cmd);
+              }
+              if (continue_paths) {
+                dispatch_stage_indirect(cmd, PipelineStage::LightContinueFinalize, kGPUWavefrontLightDispatchArgsOffset, path_iteration);
+                barrier_wavefront_buffers(cmd);
+              }
+            }
+          };
+          const auto prepare_direct_light = [&](RHICommandBuffer cmd) {
+            if (has_area_emitters == false) {
+              dispatch_stage_indirect(cmd, PipelineStage::CameraDirectLightSample, kGPUWavefrontCameraDispatchArgsOffset, path_iteration);
+              barrier_wavefront_buffers(cmd);
+            }
+            if (has_various_connect) {
+              dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareDiffuse, true, kGPUWavefrontMaterialQueueVarious, path_iteration);
+            }
+            if (has_thinfilm && use_material_work_queues) {
+              dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareDiffuse, true, kGPUWavefrontMaterialQueueThinfilm, path_iteration);
+            }
+            if (has_plastic) {
+              dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPreparePlastic, true, kGPUWavefrontMaterialQueuePlastic, path_iteration);
+            }
+            if (has_connectible_conductor) {
+              dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareConductor, true, kGPUWavefrontMaterialQueueConductor, path_iteration);
+            }
+            if (has_connectible_dielectric) {
+              dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareDielectric, true, kGPUWavefrontMaterialQueueDielectric, path_iteration);
+            }
+            if (has_coating) {
+              dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareCoatedConductor, true, kGPUWavefrontMaterialQueueConductor, path_iteration);
+            }
+            barrier_wavefront_buffers(cmd);
+          };
+          const bool area_connections_prepared = has_area_emitters && (connect_light_batch_in_progress == false);
+          if (area_connections_prepared) {
+            const bool sample_direct_light = enable_connect_to_light && (_wavefront_camera_queue_count > 0u);
+            const bool accumulate_direct_hit = enable_direct_hit && (_wavefront_camera_queue_count > 0u);
+            record_and_submit([&](RHICommandBuffer cmd) {
+              barrier_wavefront_buffers(cmd);
+              prepare_light_connections(cmd);
+              if (sample_direct_light) {
+                clear_emission_requests(cmd, path_iteration);
+                dispatch_stage_indirect(cmd, PipelineStage::CameraDirectLightSample, kGPUWavefrontCameraDispatchArgsOffset, path_iteration);
+                barrier_wavefront_buffers(cmd);
+              }
+            });
+            if (sample_direct_light) {
+              if (drain_emission_requests(PipelineStage::CameraDirectLightSampleResume, path_iteration, 0u, _wavefront_camera_queue_count) == false) {
+                return;
+              }
+              record_and_submit([&](RHICommandBuffer cmd) {
+                barrier_wavefront_buffers(cmd);
+                if (has_coating) {
+                  dispatch_coating_stage(cmd, PipelineStage::CoatingClear, path_iteration);
+                }
+                prepare_direct_light(cmd);
+              });
+              if (has_coating && (drain_coating_requests(path_iteration, coating_request_capacity) == false)) {
+                return;
+              }
+            }
+            record_and_submit([&](RHICommandBuffer cmd) {
+              barrier_wavefront_buffers(cmd);
+              if (sample_direct_light) {
+                if (has_coating) {
+                  dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightResolveCoatedConductor, true, kGPUWavefrontMaterialQueueConductor, path_iteration);
+                  barrier_wavefront_buffers(cmd);
+                }
+                rebuild_dispatch_args(cmd, path_iteration);
+                dispatch_stage_indirect(cmd, PipelineStage::CameraDirectLightShadow, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueDirectLight), path_iteration);
+                barrier_wavefront_buffers(cmd);
+                dispatch_stage_indirect(cmd, PipelineStage::CameraDirectLightAccumulate, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueDirectLight), path_iteration);
+                barrier_wavefront_buffers(cmd);
+              }
+              if (accumulate_direct_hit) {
+                clear_emission_requests(cmd, path_iteration);
+                dispatch_stage_indirect(cmd, PipelineStage::CameraDirectHitAccumulate, kGPUWavefrontCameraDispatchArgsOffset, path_iteration);
+                barrier_wavefront_buffers(cmd);
+              }
+            });
+            if (accumulate_direct_hit && (drain_emission_requests(PipelineStage::CameraDirectHitAccumulateResume, path_iteration, 0u, _wavefront_camera_queue_count) == false)) {
+              return;
+            }
+          }
+          const bool queued_direct_light =
+            has_coating && (area_connections_prepared == false) && (connect_light_batch_in_progress == false) && enable_connect_to_light && (_wavefront_camera_queue_count > 0u);
+          if (queued_direct_light) {
+            record_and_submit([&](RHICommandBuffer cmd) {
+              barrier_wavefront_buffers(cmd);
+              prepare_light_connections(cmd);
+              dispatch_coating_stage(cmd, PipelineStage::CoatingClear, path_iteration);
+              prepare_direct_light(cmd);
+            });
+            if (drain_coating_requests(path_iteration, coating_request_capacity) == false) {
+              return;
+            }
+          }
+
+          const auto prepare_camera_connections = [&](RHICommandBuffer cmd) {
             if (connect_light_batch_in_progress == false) {
               barrier_wavefront_buffers(cmd);
-              if (_wavefront_light_queue_count > 0u) {
-                if (enable_connect_to_camera) {
-                  if (has_various_connect) {
-                    dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareDiffuse, false, kGPUWavefrontMaterialQueueVarious, path_iteration);
-                  }
-                  if (has_thinfilm && use_material_work_queues) {
-                    dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareDiffuse, false, kGPUWavefrontMaterialQueueThinfilm, path_iteration);
-                  }
-                  if (has_plastic) {
-                    dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPreparePlastic, false, kGPUWavefrontMaterialQueuePlastic, path_iteration);
-                  }
-                  if (has_connectible_conductor) {
-                    dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareConductor, false, kGPUWavefrontMaterialQueueConductor, path_iteration);
-                  }
-                  if (has_connectible_dielectric) {
-                    dispatch_stage_material_indirect(cmd, PipelineStage::LightConnectCameraPrepareDielectric, false, kGPUWavefrontMaterialQueueDielectric, path_iteration);
-                  }
-                  rebuild_dispatch_args(cmd, path_iteration);
-                  dispatch_stage_indirect(cmd, PipelineStage::LightConnectCameraShadow, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueConnectCamera), path_iteration);
-                  barrier_wavefront_buffers(cmd);
-                  dispatch_stage_indirect(cmd, PipelineStage::LightConnectCameraAccumulate, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueConnectCamera), path_iteration);
-                  barrier_wavefront_buffers(cmd);
-                }
-                if (continue_paths) {
-                  dispatch_stage_indirect(cmd, PipelineStage::LightContinueFinalize, kGPUWavefrontLightDispatchArgsOffset, path_iteration);
-                  barrier_wavefront_buffers(cmd);
-                }
+              if ((queued_direct_light == false) && (area_connections_prepared == false)) {
+                prepare_light_connections(cmd);
               }
               if (_wavefront_camera_queue_count > 0u) {
-                if (enable_connect_to_light) {
-                  dispatch_stage_indirect(cmd, PipelineStage::CameraDirectLightSample, kGPUWavefrontCameraDispatchArgsOffset, path_iteration);
-                  barrier_wavefront_buffers(cmd);
-                  if (has_various_connect) {
-                    dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareDiffuse, true, kGPUWavefrontMaterialQueueVarious, path_iteration);
-                  }
-                  if (has_thinfilm && use_material_work_queues) {
-                    dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareDiffuse, true, kGPUWavefrontMaterialQueueThinfilm, path_iteration);
-                  }
-                  if (has_plastic) {
-                    dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPreparePlastic, true, kGPUWavefrontMaterialQueuePlastic, path_iteration);
-                  }
-                  if (has_connectible_conductor) {
-                    dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareConductor, true, kGPUWavefrontMaterialQueueConductor, path_iteration);
-                  }
-                  if (has_connectible_dielectric) {
-                    dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightPrepareDielectric, true, kGPUWavefrontMaterialQueueDielectric, path_iteration);
+                if (enable_connect_to_light && (area_connections_prepared == false)) {
+                  if (queued_direct_light) {
+                    dispatch_stage_material_indirect(cmd, PipelineStage::CameraDirectLightResolveCoatedConductor, true, kGPUWavefrontMaterialQueueConductor, path_iteration);
+                    barrier_wavefront_buffers(cmd);
+                  } else {
+                    prepare_direct_light(cmd);
                   }
                   rebuild_dispatch_args(cmd, path_iteration);
                   dispatch_stage_indirect(cmd, PipelineStage::CameraDirectLightShadow, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueDirectLight), path_iteration);
@@ -6918,7 +7985,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                   dispatch_stage_indirect(cmd, PipelineStage::CameraDirectLightAccumulate, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueDirectLight), path_iteration);
                   barrier_wavefront_buffers(cmd);
                 }
-                if (enable_direct_hit) {
+                if (enable_direct_hit && (area_connections_prepared == false)) {
                   dispatch_stage_indirect(cmd, PipelineStage::CameraDirectHitAccumulate, kGPUWavefrontCameraDispatchArgsOffset, path_iteration);
                   barrier_wavefront_buffers(cmd);
                 }
@@ -6932,7 +7999,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                   if (has_plastic) {
                     dispatch_vcm_merge_material(cmd, PipelineStage::VCMMergePlastic, kGPUWavefrontMaterialQueuePlastic, path_iteration);
                   }
-                  if (has_connectible_conductor) {
+                  if ((_material_compile_mask & kMaterialCompileConnectibleConductor) != 0u) {
                     dispatch_vcm_merge_material(cmd, PipelineStage::VCMMergeConductor, kGPUWavefrontMaterialQueueConductor, path_iteration);
                   }
                   if (has_connectible_dielectric) {
@@ -6941,77 +8008,86 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                 }
               }
             }
-            if (connect_light_vertex_count > 0u) {
-              const bool reset_light_cursor = _wavefront_connect_light_vertex_length == _wavefront_connect_light_history_bounces;
-              const uint32_t connect_light_batch_index =
-                (_wavefront_connect_light_history_bounces - _wavefront_connect_light_vertex_length) / kGPUWavefrontConnectDispatchArgsCount;
-              const uint32_t connect_light_cursor_slot = connect_light_batch_index & 1u;
-              const uint64_t connect_light_argument_buffer_offset =
-                kGPUWavefrontConnectDispatchArgsOffset + static_cast<uint64_t>(connect_light_vertex_count - 1u) * kGPUWavefrontDispatchArgsStride;
-              const uint32_t connect_light_prepare_stage_count = static_cast<uint32_t>(has_various_connect) + static_cast<uint32_t>(has_plastic) +
-                                                                 static_cast<uint32_t>(has_connectible_conductor) + static_cast<uint32_t>(has_connectible_dielectric);
-              const bool compact_connections = connect_light_prepare_stage_count > 1u;
-              if (compact_connections) {
-                dispatch_stage_mode(cmd, PipelineStage::CameraConnectLightCompact, scalar_dispatch, path_iteration, 0u);
-                barrier_wavefront_buffers(cmd);
-                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightClassify, connect_light_argument_buffer_offset, path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor, true, connect_light_cursor_slot);
-                barrier_wavefront_buffers(cmd);
-                ctx.cmd_buffer_barrier(cmd, _wavefront_dispatch_args_buffer, _wavefront_dispatch_args_buffer_state, RHIResourceState::General);
-                _wavefront_dispatch_args_buffer_state = RHIResourceState::General;
-                dispatch_stage_mode(cmd, PipelineStage::CameraConnectLightCompact, scalar_dispatch, path_iteration, 1u);
-                ctx.cmd_buffer_barrier(cmd, _wavefront_dispatch_args_buffer, RHIResourceState::General, RHIResourceState::IndirectArgument);
-                _wavefront_dispatch_args_buffer_state = RHIResourceState::IndirectArgument;
-                barrier_wavefront_buffers(cmd);
-                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightClassify, connect_light_argument_buffer_offset, path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
-                barrier_wavefront_buffers(cmd);
+          };
+          const bool queued_vcm_merge = has_coating && enable_merge_vertices && (connect_light_batch_in_progress == false) && (_wavefront_camera_queue_count > 0u);
+          if (queued_vcm_merge) {
+            uint32_t query_total = _wavefront_camera_queue_count;
+            record_and_submit([&](RHICommandBuffer cmd) {
+              prepare_camera_connections(cmd);
+              if (use_material_work_queues) {
+                const uint64_t queue_stride = kGPUWavefrontQueueHeaderSize + static_cast<uint64_t>(_wavefront_resources.path_capacity) * sizeof(uint32_t);
+                const uint64_t count_offset = kGPUWavefrontMaterialQueueConductor * queue_stride + kGPUWavefrontQueueCountOffset;
+                ctx.cmd_buffer_barrier(cmd, _material_queue_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
+                ctx.cmd_buffer_barrier(cmd, _coating_count_readback_buffer, _coating_count_readback_state, RHIResourceState::TransferDst);
+                ctx.cmd_copy_buffer(cmd, _material_queue_buffer, _coating_count_readback_buffer, sizeof(uint32_t), count_offset, 0u);
+                ctx.cmd_buffer_barrier(cmd, _material_queue_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
+                ctx.cmd_buffer_barrier(cmd, _coating_count_readback_buffer, RHIResourceState::TransferDst, RHIResourceState::HostRead);
+                _coating_count_readback_state = RHIResourceState::HostRead;
               }
-              bool initialize_connect_light_batch = true;
-              const auto connection_arguments = [&](uint32_t queue) {
-                return compact_connections ? (kGPUWavefrontConnectQueueDispatchArgsOffset + static_cast<uint64_t>(queue) * kGPUWavefrontDispatchArgsStride)
-                                           : connect_light_argument_buffer_offset;
-              };
-              const auto dispatch_connect_light_prepare = [&](PipelineStage stage, uint32_t queue) {
-                const bool initialize_batch = initialize_connect_light_batch && (compact_connections == false);
-                dispatch_stage_with_connect_light_length(cmd, stage, connection_arguments(queue), path_iteration, _wavefront_connect_light_vertex_length,
-                  connect_light_vertex_count, reset_light_cursor && initialize_batch, initialize_batch, connect_light_cursor_slot);
-                initialize_connect_light_batch = false;
-              };
-              if (has_various_connect) {
-                dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPrepareDiffuse, 0u);
+            });
+            if (use_material_work_queues) {
+              RHIResult result = wait_and_destroy_submitted_commands("VCM coating query count");
+              if (result == RHIResult::Success) {
+                result = device.read_buffer(_coating_count_readback_buffer, &query_total, sizeof(query_total));
               }
-              if (has_plastic) {
-                dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPreparePlastic, 1u);
+              if (result != RHIResult::Success) {
+                set_runtime_failure("GPU VCM failed to read the coating material queue count", result);
+                return;
               }
-              if (has_connectible_conductor) {
-                dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPrepareConductor, 2u);
+              if (query_total > _wavefront_camera_queue_count) {
+                set_runtime_failure("GPU VCM coating material queue count exceeds its camera queue count");
+                return;
               }
-              if (has_connectible_dielectric) {
-                dispatch_connect_light_prepare(PipelineStage::CameraConnectLightPrepareDielectric, 3u);
-              }
-              barrier_wavefront_buffers(cmd);
-              if (has_various_connect) {
-                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveDiffuse, connection_arguments(4u), path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
-              }
-              if (has_plastic) {
-                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolvePlastic, connection_arguments(5u), path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
-              }
-              if (has_connectible_conductor) {
-                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveConductor, connection_arguments(6u), path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
-              }
-              if (has_connectible_dielectric) {
-                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveDielectric, connection_arguments(7u), path_iteration,
-                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u);
-              }
-              rebuild_dispatch_args(cmd, path_iteration);
-              barrier_wavefront_buffers(cmd);
-              dispatch_stage_indirect(cmd, PipelineStage::CameraConnectLightShadow, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueConnectLight), path_iteration);
-              barrier_wavefront_buffers(cmd);
             }
+            const uint32_t query_capacity = std::min(coating_request_capacity / kGPUVCMCoatingLaneCount, kDensityQueryGroupDispatchChunkSize);
+            for (uint32_t query_offset = 0u; query_offset < query_total; query_offset += query_capacity) {
+              const uint32_t query_count = std::min(query_capacity, query_total - query_offset);
+              record_and_submit([&](RHICommandBuffer cmd) {
+                barrier_wavefront_buffers(cmd);
+                dispatch_transport_stage(cmd, PipelineStage::CoatingClear, query_count * kGPUVCMCoatingLaneCount, path_iteration);
+                dispatch_stage(cmd, PipelineStage::VCMCoatingClear, scalar_dispatch, path_iteration);
+                barrier_wavefront_buffers(cmd);
+                dispatch_stage_query_groups(cmd, PipelineStage::VCMMergeCoatedConductor, query_offset, query_count, path_iteration, kGPUWavefrontMaterialQueueConductor);
+                barrier_wavefront_buffers(cmd);
+              });
+              uint32_t pending_lanes = 1u;
+              while (pending_lanes != 0u) {
+                if (drain_coating_requests(path_iteration, query_count * kGPUVCMCoatingLaneCount) == false) {
+                  return;
+                }
+                record_and_submit([&](RHICommandBuffer cmd) {
+                  barrier_wavefront_buffers(cmd);
+                  dispatch_stage_query_groups(cmd, PipelineStage::VCMCoatingContinue, query_offset, query_count, path_iteration, kGPUWavefrontMaterialQueueConductor);
+                  barrier_wavefront_buffers(cmd);
+                  ctx.cmd_buffer_barrier(cmd, _vcm_coating_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
+                  ctx.cmd_buffer_barrier(cmd, _coating_count_readback_buffer, _coating_count_readback_state, RHIResourceState::TransferDst);
+                  ctx.cmd_copy_buffer(cmd, _vcm_coating_buffer, _coating_count_readback_buffer, sizeof(uint32_t));
+                  ctx.cmd_buffer_barrier(cmd, _vcm_coating_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
+                  ctx.cmd_buffer_barrier(cmd, _coating_count_readback_buffer, RHIResourceState::TransferDst, RHIResourceState::HostRead);
+                  _coating_count_readback_state = RHIResourceState::HostRead;
+                });
+                RHIResult result = wait_and_destroy_submitted_commands("VCM coating merge");
+                if (result == RHIResult::Success) {
+                  result = device.read_buffer(_coating_count_readback_buffer, &pending_lanes, sizeof(pending_lanes));
+                }
+                if (result != RHIResult::Success) {
+                  set_runtime_failure("GPU RT VCM coating merge failed (" + std::string(rhi_result_name(result)) + ")", result);
+                  return;
+                }
+              }
+              record_and_submit([&](RHICommandBuffer cmd) {
+                barrier_wavefront_buffers(cmd);
+                dispatch_stage_query_groups(cmd, PipelineStage::VCMCoatingFinish, query_offset, query_count, path_iteration, kGPUWavefrontMaterialQueueConductor);
+                barrier_wavefront_buffers(cmd);
+              });
+            }
+          }
+          const auto prepare_camera_connections_once = [&](RHICommandBuffer cmd) {
+            if (queued_vcm_merge == false) {
+              prepare_camera_connections(cmd);
+            }
+          };
+          const auto finish_trace_commands = [&](RHICommandBuffer cmd) {
             if (finish_trace_bounce && (_wavefront_camera_queue_count > 0u) && continue_paths) {
               dispatch_stage_indirect(cmd, PipelineStage::CameraContinueFinalize, kGPUWavefrontCameraDispatchArgsOffset, path_iteration);
               barrier_wavefront_buffers(cmd);
@@ -7025,26 +8101,171 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                   ctx.cmd_buffer_barrier(cmd, next_camera_queue_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
                   ctx.cmd_buffer_barrier(cmd, _camera_queue_count_readback_buffer, _camera_queue_count_readback_state, RHIResourceState::TransferDst);
                   ctx.cmd_copy_buffer(cmd, next_camera_queue_buffer, _camera_queue_count_readback_buffer, kGPUWavefrontQueueHeaderSize);
+                  ctx.cmd_buffer_barrier(cmd, _camera_queue_count_readback_buffer, RHIResourceState::TransferDst, RHIResourceState::HostRead);
                   ctx.cmd_buffer_barrier(cmd, next_camera_queue_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
-                  _camera_queue_count_readback_state = RHIResourceState::TransferDst;
+                  _camera_queue_count_readback_state = RHIResourceState::HostRead;
                 }
                 if ((enable_light_path) && (_wavefront_light_queue_count > 0u)) {
                   ctx.cmd_buffer_barrier(cmd, next_light_queue_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
                   ctx.cmd_buffer_barrier(cmd, _light_queue_count_readback_buffer, _light_queue_count_readback_state, RHIResourceState::TransferDst);
                   ctx.cmd_copy_buffer(cmd, next_light_queue_buffer, _light_queue_count_readback_buffer, kGPUWavefrontQueueHeaderSize);
+                  ctx.cmd_buffer_barrier(cmd, _light_queue_count_readback_buffer, RHIResourceState::TransferDst, RHIResourceState::HostRead);
                   ctx.cmd_buffer_barrier(cmd, next_light_queue_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
-                  _light_queue_count_readback_state = RHIResourceState::TransferDst;
+                  _light_queue_count_readback_state = RHIResourceState::HostRead;
                 }
               }
               if (finish_trace_bounce && copy_light_vertex_count) {
                 ctx.cmd_buffer_barrier(cmd, _light_vertex_counter_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
                 ctx.cmd_buffer_barrier(cmd, _light_vertex_counter_readback_buffer, _light_vertex_counter_readback_state, RHIResourceState::TransferDst);
                 ctx.cmd_copy_buffer(cmd, _light_vertex_counter_buffer, _light_vertex_counter_readback_buffer, kWavefrontLightVertexCounterSize);
+                ctx.cmd_buffer_barrier(cmd, _light_vertex_counter_readback_buffer, RHIResourceState::TransferDst, RHIResourceState::HostRead);
                 ctx.cmd_buffer_barrier(cmd, _light_vertex_counter_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
-                _light_vertex_counter_readback_state = RHIResourceState::TransferDst;
+                _light_vertex_counter_readback_state = RHIResourceState::HostRead;
               }
             }
-          });
+          };
+          if (connect_light_vertex_count == 0u) {
+            record_and_submit([&](RHICommandBuffer cmd) {
+              prepare_camera_connections_once(cmd);
+              finish_trace_commands(cmd);
+            });
+          } else {
+            const bool reset_light_cursor = _wavefront_connect_light_vertex_length == _wavefront_connect_light_history_bounces;
+            const uint32_t connect_light_batch_index = (_wavefront_connect_light_history_bounces - _wavefront_connect_light_vertex_length) / kGPUWavefrontConnectDispatchArgsCount;
+            const uint32_t connect_light_cursor_slot = connect_light_batch_index & 1u;
+            const uint64_t connect_light_argument_buffer_offset =
+              kGPUWavefrontConnectDispatchArgsOffset + static_cast<uint64_t>(connect_light_vertex_count - 1u) * kGPUWavefrontDispatchArgsStride;
+            const uint32_t connect_light_prepare_stage_count = static_cast<uint32_t>(has_various_connect) + static_cast<uint32_t>(has_plastic) +
+                                                               static_cast<uint32_t>(has_connectible_conductor) + static_cast<uint32_t>(has_connectible_dielectric);
+            const bool compact_connections = connect_light_prepare_stage_count > 1u;
+            bool initialize_connect_light_batch = true;
+            const auto connection_arguments = [&](uint32_t queue) {
+              return compact_connections ? (kGPUWavefrontConnectQueueDispatchArgsOffset + static_cast<uint64_t>(queue) * kGPUWavefrontDispatchArgsStride)
+                                         : connect_light_argument_buffer_offset;
+            };
+            const auto dispatch_connect_light_prepare = [&](RHICommandBuffer cmd, PipelineStage stage, uint32_t queue, uint32_t coating_window_base) {
+              const bool initialize_batch = initialize_connect_light_batch && (compact_connections == false);
+              dispatch_stage_with_connect_light_length(cmd, stage, connection_arguments(queue), path_iteration, _wavefront_connect_light_vertex_length, connect_light_vertex_count,
+                reset_light_cursor && initialize_batch, initialize_batch, connect_light_cursor_slot, coating_window_base);
+              initialize_connect_light_batch = false;
+            };
+            const auto prepare_connection_candidates = [&](RHICommandBuffer cmd) {
+              if (compact_connections) {
+                dispatch_stage_mode(cmd, PipelineStage::CameraConnectLightCompact, scalar_dispatch, path_iteration, 0u);
+                barrier_wavefront_buffers(cmd);
+                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightClassify, connect_light_argument_buffer_offset, path_iteration,
+                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, reset_light_cursor, true, connect_light_cursor_slot, 0u);
+                barrier_wavefront_buffers(cmd);
+                ctx.cmd_buffer_barrier(cmd, _wavefront_dispatch_args_buffer, _wavefront_dispatch_args_buffer_state, RHIResourceState::General);
+                _wavefront_dispatch_args_buffer_state = RHIResourceState::General;
+                dispatch_stage_mode(cmd, PipelineStage::CameraConnectLightCompact, scalar_dispatch, path_iteration, 1u);
+                ctx.cmd_buffer_barrier(cmd, _wavefront_dispatch_args_buffer, RHIResourceState::General, RHIResourceState::IndirectArgument);
+                _wavefront_dispatch_args_buffer_state = RHIResourceState::IndirectArgument;
+                barrier_wavefront_buffers(cmd);
+                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightClassify, connect_light_argument_buffer_offset, path_iteration,
+                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u, 0u);
+                barrier_wavefront_buffers(cmd);
+              }
+              if (has_various_connect) {
+                dispatch_connect_light_prepare(cmd, PipelineStage::CameraConnectLightPrepareDiffuse, 0u, 0u);
+              }
+              if (has_plastic) {
+                dispatch_connect_light_prepare(cmd, PipelineStage::CameraConnectLightPreparePlastic, 1u, 0u);
+              }
+              if ((_material_compile_mask & kMaterialCompileConnectibleConductor) != 0u) {
+                dispatch_connect_light_prepare(cmd, PipelineStage::CameraConnectLightPrepareConductor, 2u, 0u);
+                if ((compact_connections == false) && material_compile_mask_has(_material_compile_mask, MaterialClass::CoatedConductor)) {
+                  // The first prepare stage initializes candidates for both conductor classes.
+                  barrier_wavefront_buffers(cmd);
+                }
+              }
+              if (has_connectible_dielectric) {
+                dispatch_connect_light_prepare(cmd, PipelineStage::CameraConnectLightPrepareDielectric, 3u, 0u);
+              }
+            };
+            const auto resolve_connection_candidates = [&](RHICommandBuffer cmd) {
+              barrier_wavefront_buffers(cmd);
+              if (has_various_connect) {
+                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveDiffuse, connection_arguments(4u), path_iteration,
+                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u, 0u);
+              }
+              if (has_plastic) {
+                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolvePlastic, connection_arguments(5u), path_iteration,
+                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u, 0u);
+              }
+              if ((_material_compile_mask & kMaterialCompileConnectibleConductor) != 0u) {
+                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveConductor, connection_arguments(6u), path_iteration,
+                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u, 0u);
+              }
+              if (has_connectible_dielectric) {
+                dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveDielectric, connection_arguments(7u), path_iteration,
+                  _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u, 0u);
+              }
+            };
+            const auto finish_connection_candidates = [&](RHICommandBuffer cmd) {
+              rebuild_dispatch_args(cmd, path_iteration);
+              barrier_wavefront_buffers(cmd);
+              dispatch_stage_indirect(cmd, PipelineStage::CameraConnectLightShadow, shadow_dispatch_args_offset(kGPUWavefrontShadowQueueConnectLight), path_iteration);
+              barrier_wavefront_buffers(cmd);
+            };
+            if (has_coating) {
+              record_and_submit([&](RHICommandBuffer cmd) {
+                prepare_camera_connections_once(cmd);
+                prepare_connection_candidates(cmd);
+              });
+              const uint32_t candidate_capacity = connect_light_vertex_count * _wavefront_resources.path_capacity;
+              for (uint32_t window_base = 0u; window_base < candidate_capacity; window_base += coating_request_capacity) {
+                record_and_submit([&](RHICommandBuffer cmd) {
+                  barrier_wavefront_buffers(cmd);
+                  dispatch_coating_stage(cmd, PipelineStage::CoatingClear, path_iteration);
+                  dispatch_connect_light_prepare(cmd, PipelineStage::CameraConnectLightPrepareCoatedConductor, 2u, window_base);
+                  barrier_wavefront_buffers(cmd);
+                });
+                if (drain_coating_requests(path_iteration, coating_request_capacity) == false) {
+                  return;
+                }
+                record_and_submit([&](RHICommandBuffer cmd) {
+                  barrier_wavefront_buffers(cmd);
+                  dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightPrepareCoatedConductorResume, connection_arguments(2u), path_iteration,
+                    _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u, window_base);
+                  barrier_wavefront_buffers(cmd);
+                });
+              }
+              record_and_submit([&](RHICommandBuffer cmd) {
+                resolve_connection_candidates(cmd);
+              });
+              for (uint32_t window_base = 0u; window_base < candidate_capacity; window_base += coating_request_capacity) {
+                record_and_submit([&](RHICommandBuffer cmd) {
+                  barrier_wavefront_buffers(cmd);
+                  dispatch_coating_stage(cmd, PipelineStage::CoatingClear, path_iteration);
+                  dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveCoatedConductor, connection_arguments(6u), path_iteration,
+                    _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u, window_base);
+                  barrier_wavefront_buffers(cmd);
+                });
+                if (drain_coating_requests(path_iteration, coating_request_capacity) == false) {
+                  return;
+                }
+                record_and_submit([&](RHICommandBuffer cmd) {
+                  barrier_wavefront_buffers(cmd);
+                  dispatch_stage_with_connect_light_length(cmd, PipelineStage::CameraConnectLightResolveCoatedConductorResume, connection_arguments(6u), path_iteration,
+                    _wavefront_connect_light_vertex_length, connect_light_vertex_count, false, false, 0u, window_base);
+                  barrier_wavefront_buffers(cmd);
+                });
+              }
+              record_and_submit([&](RHICommandBuffer cmd) {
+                finish_connection_candidates(cmd);
+                finish_trace_commands(cmd);
+              });
+            } else {
+              record_and_submit([&](RHICommandBuffer cmd) {
+                prepare_camera_connections_once(cmd);
+                prepare_connection_candidates(cmd);
+                resolve_connection_candidates(cmd);
+                finish_connection_candidates(cmd);
+                finish_trace_commands(cmd);
+              });
+            }
+          }
           if ((connect_light_batch_in_progress == false) && store_complete_light_history && (_wavefront_light_queue_count > 0u)) {
             _wavefront_light_vertex_reserved_count += _wavefront_light_queue_count;
           }
@@ -7057,7 +8278,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           }
 
           if (trace_step_result != RHIResult::Success) {
-            set_runtime_failure("GPU RT trace bounce submit failed (" + std::to_string(static_cast<uint32_t>(trace_step_result)) + ")", trace_step_result);
+            set_runtime_failure("GPU RT trace bounce submit failed (" + std::string(rhi_result_name(trace_step_result)) + ")", trace_step_result);
             _wavefront_camera_queue_count = 0u;
             _wavefront_light_queue_count = 0u;
             return;
@@ -7075,7 +8296,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               GPUWavefrontQueueHeader queue_header = {};
               const RHIResult read_result = device.read_buffer(_camera_queue_count_readback_buffer, &queue_header, static_cast<uint64_t>(sizeof(queue_header)));
               if (read_result != RHIResult::Success) {
-                set_runtime_failure("GPU RT failed to read the camera queue count (" + std::to_string(static_cast<uint32_t>(read_result)) + ")", read_result);
+                set_runtime_failure("GPU RT failed to read the camera queue count (" + std::string(rhi_result_name(read_result)) + ")", read_result);
                 _wavefront_camera_queue_count = 0u;
                 _wavefront_light_queue_count = 0u;
                 return;
@@ -7095,7 +8316,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               GPUWavefrontQueueHeader queue_header = {};
               const RHIResult read_result = device.read_buffer(_light_queue_count_readback_buffer, &queue_header, static_cast<uint64_t>(sizeof(queue_header)));
               if (read_result != RHIResult::Success) {
-                set_runtime_failure("GPU RT failed to read the light queue count (" + std::to_string(static_cast<uint32_t>(read_result)) + ")", read_result);
+                set_runtime_failure("GPU RT failed to read the light queue count (" + std::string(rhi_result_name(read_result)) + ")", read_result);
                 _wavefront_camera_queue_count = 0u;
                 _wavefront_light_queue_count = 0u;
                 return;
@@ -7118,7 +8339,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             uint32_t light_vertex_count = 0u;
             const RHIResult counter_read_result = device.read_buffer(_light_vertex_counter_readback_buffer, &light_vertex_count, kWavefrontLightVertexCounterSize);
             if (counter_read_result != RHIResult::Success) {
-              set_runtime_failure("GPU RT failed to read compact light history size (" + std::to_string(static_cast<uint32_t>(counter_read_result)) + ")", counter_read_result);
+              set_runtime_failure("GPU RT failed to read compact light history size (" + std::string(rhi_result_name(counter_read_result)) + ")", counter_read_result);
               _wavefront_camera_queue_count = 0u;
               _wavefront_light_queue_count = 0u;
               return;
@@ -7151,18 +8372,19 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::General, RHIResourceState::TransferSrc);
           ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, _upbp.counter_readback_state, RHIResourceState::TransferDst);
           ctx.cmd_copy_buffer(cmd, _upbp.counter_buffer.handle, _upbp.counter_readback_buffer.handle, static_cast<uint64_t>(GPUUPBPCounterIndex::Count) * sizeof(uint32_t));
+          ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::HostRead);
           ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::TransferSrc, RHIResourceState::General);
-          _upbp.counter_readback_state = RHIResourceState::TransferDst;
+          _upbp.counter_readback_state = RHIResourceState::HostRead;
         });
         const RHIResult validation_result = wait_and_destroy_submitted_commands("UPBP batch validation");
         if (validation_result != RHIResult::Success) {
-          set_runtime_failure("GPU UPBP batch validation failed (" + std::to_string(static_cast<uint32_t>(validation_result)) + ")", validation_result);
+          set_runtime_failure("GPU UPBP batch validation failed (" + std::string(rhi_result_name(validation_result)) + ")", validation_result);
           return;
         }
         uint32_t upbp_counters[GPUUPBPCounterIndex::Count] = {};
         const RHIResult counter_result = device.read_buffer(_upbp.counter_readback_buffer.handle, upbp_counters, sizeof(upbp_counters));
         if (counter_result != RHIResult::Success) {
-          set_runtime_failure("GPU UPBP failed to read batch counters (" + std::to_string(static_cast<uint32_t>(counter_result)) + ")", counter_result);
+          set_runtime_failure("GPU UPBP failed to read batch counters (" + std::string(rhi_result_name(counter_result)) + ")", counter_result);
           return;
         }
         const uint32_t overflow_flags = upbp_counters[GPUUPBPCounterIndex::OverflowFlags];
@@ -7284,17 +8506,18 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::General, RHIResourceState::TransferSrc);
             ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, _upbp.counter_readback_state, RHIResourceState::TransferDst);
             ctx.cmd_copy_buffer(cmd, _upbp.counter_buffer.handle, _upbp.counter_readback_buffer.handle, static_cast<uint64_t>(GPUUPBPCounterIndex::Count) * sizeof(uint32_t));
+            ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::HostRead);
             ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::TransferSrc, RHIResourceState::General);
-            _upbp.counter_readback_state = RHIResourceState::TransferDst;
+            _upbp.counter_readback_state = RHIResourceState::HostRead;
           });
           const RHIResult compact_result = wait_and_destroy_submitted_commands("UPBP compact density batch");
           if (compact_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP compact density batch failed (" + std::to_string(static_cast<uint32_t>(compact_result)) + ")", compact_result);
+            set_runtime_failure("GPU UPBP compact density batch failed (" + std::string(rhi_result_name(compact_result)) + ")", compact_result);
             return;
           }
           const RHIResult compact_counter_result = device.read_buffer(_upbp.counter_readback_buffer.handle, upbp_counters, sizeof(upbp_counters));
           if (compact_counter_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP failed to read compact density counts (" + std::to_string(static_cast<uint32_t>(compact_counter_result)) + ")", compact_counter_result);
+            set_runtime_failure("GPU UPBP failed to read compact density counts (" + std::string(rhi_result_name(compact_counter_result)) + ")", compact_counter_result);
             return;
           }
           density_batch.surface_point_count = upbp_counters[GPUUPBPCounterIndex::DensitySurfacePoint];
@@ -7316,7 +8539,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           if (released_resident_bytes > 0u) {
             const RHIResult reclaim_result = ctx.wait_idle();
             if (reclaim_result != RHIResult::Success) {
-              set_runtime_failure("GPU UPBP failed to reclaim resident light-path storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
+              set_runtime_failure("GPU UPBP failed to reclaim resident light-path storage (" + std::string(rhi_result_name(reclaim_result)) + ")", reclaim_result);
               return;
             }
             log::info("GPU UPBP released %.2f MiB of resident light-path storage before density-cache consolidation",
@@ -7452,7 +8675,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           });
           const RHIResult point_copy_result = wait_and_destroy_submitted_commands("UPBP consolidated density storage");
           if (point_copy_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP failed to consolidate point storage (" + std::to_string(static_cast<uint32_t>(point_copy_result)) + ")", point_copy_result);
+            set_runtime_failure("GPU UPBP failed to consolidate point storage (" + std::string(rhi_result_name(point_copy_result)) + ")", point_copy_result);
             return;
           }
           {
@@ -7467,7 +8690,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             if (released_bytes > 0u) {
               const RHIResult reclaim_result = ctx.wait_idle();
               if (reclaim_result != RHIResult::Success) {
-                set_runtime_failure("GPU UPBP failed to reclaim copied density point storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
+                set_runtime_failure("GPU UPBP failed to reclaim copied density point storage (" + std::string(rhi_result_name(reclaim_result)) + ")", reclaim_result);
                 return;
               }
             }
@@ -7507,7 +8730,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           });
           const RHIResult point_bounds_result = wait_and_destroy_submitted_commands("UPBP consolidated point bounds");
           if (point_bounds_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP failed to generate consolidated point bounds (" + std::to_string(static_cast<uint32_t>(point_bounds_result)) + ")", point_bounds_result);
+            set_runtime_failure("GPU UPBP failed to generate consolidated point bounds (" + std::string(rhi_result_name(point_bounds_result)) + ")", point_bounds_result);
             return;
           }
           const auto ensure_compact_point_blas_capacity = [&device](const UPBPBuffer& aabb_buffer, uint32_t offset, uint32_t count, RHIBindlessHandle& result, uint32_t& capacity) {
@@ -7686,18 +8909,19 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::General, RHIResourceState::TransferSrc);
               ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, _upbp.counter_readback_state, RHIResourceState::TransferDst);
               ctx.cmd_copy_buffer(cmd, _upbp.counter_buffer.handle, _upbp.counter_readback_buffer.handle, static_cast<uint64_t>(GPUUPBPCounterIndex::Count) * sizeof(uint32_t));
+              ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::HostRead);
               ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::TransferSrc, RHIResourceState::General);
-              _upbp.counter_readback_state = RHIResourceState::TransferDst;
+              _upbp.counter_readback_state = RHIResourceState::HostRead;
             });
             const RHIResult instance_generation_result = wait_and_destroy_submitted_commands("UPBP compact beam instance generation");
             if (instance_generation_result != RHIResult::Success) {
-              set_runtime_failure("GPU UPBP compact beam instance generation failed (" + std::to_string(static_cast<uint32_t>(instance_generation_result)) + ")",
+              set_runtime_failure("GPU UPBP compact beam instance generation failed (" + std::string(rhi_result_name(instance_generation_result)) + ")",
                 instance_generation_result);
               return;
             }
             const RHIResult instance_counter_result = device.read_buffer(_upbp.counter_readback_buffer.handle, upbp_counters, sizeof(upbp_counters));
             if (instance_counter_result != RHIResult::Success) {
-              set_runtime_failure("GPU UPBP failed to validate GPU-authored compact beam instances (" + std::to_string(static_cast<uint32_t>(instance_counter_result)) + ")",
+              set_runtime_failure("GPU UPBP failed to validate GPU-authored compact beam instances (" + std::string(rhi_result_name(instance_counter_result)) + ")",
                 instance_counter_result);
               return;
             }
@@ -7719,7 +8943,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           if (released_beam_bytes > 0u) {
             const RHIResult reclaim_result = ctx.wait_idle();
             if (reclaim_result != RHIResult::Success) {
-              set_runtime_failure("GPU UPBP failed to reclaim compacted density beam storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
+              set_runtime_failure("GPU UPBP failed to reclaim compacted density beam storage (" + std::string(rhi_result_name(reclaim_result)) + ")", reclaim_result);
               return;
             }
             log::info("GPU UPBP released %.2f MiB of compacted density beam storage before beam indexing", static_cast<double>(released_beam_bytes) / (1024.0 * 1024.0));
@@ -7985,7 +9209,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           });
           const RHIResult tlas_build_result = wait_and_destroy_submitted_commands("UPBP compact density TLAS build");
           if (tlas_build_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP compact density TLAS build failed (" + std::to_string(static_cast<uint32_t>(tlas_build_result)) + ")", tlas_build_result);
+            set_runtime_failure("GPU UPBP compact density TLAS build failed (" + std::string(rhi_result_name(tlas_build_result)) + ")", tlas_build_result);
             return;
           }
           {
@@ -8005,7 +9229,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             if (released_build_bytes > 0u) {
               const RHIResult reclaim_result = ctx.wait_idle();
               if (reclaim_result != RHIResult::Success) {
-                set_runtime_failure("GPU UPBP failed to reclaim density-index build storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
+                set_runtime_failure("GPU UPBP failed to reclaim density-index build storage (" + std::string(rhi_result_name(reclaim_result)) + ")", reclaim_result);
                 return;
               }
               log::info("GPU UPBP released %.2f MiB of density acceleration-structure build inputs", static_cast<double>(released_build_bytes) / (1024.0 * 1024.0));
@@ -8023,7 +9247,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             const auto build_gpu_beam_grid = [&](uint32_t grid_type, uint32_t beam_count, const UPBPBuffer& source, UPBPBeamGridResources& output, const char* name) {
               const auto fail = [&](std::string detail) {
                 beam_grid_failure_reason = std::string("GPU UPBP ") + name + " " + std::move(detail);
-                log::error("%s", beam_grid_failure_reason.c_str());
+                set_runtime_failure(format_diagnostic("%s", beam_grid_failure_reason.c_str()));
                 return false;
               };
               output.beam_index_count = 0u;
@@ -8065,17 +9289,18 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                 ctx.cmd_buffer_barrier(cmd, _upbp.density_beam_grid_metadata_readback_buffer.handle, _upbp.density_beam_grid_metadata_readback_state,
                   RHIResourceState::TransferDst);
                 ctx.cmd_copy_buffer(cmd, output.metadata_buffer.handle, _upbp.density_beam_grid_metadata_readback_buffer.handle, kGPUUPBPBeamGridMetadataStride);
+                ctx.cmd_buffer_barrier(cmd, _upbp.density_beam_grid_metadata_readback_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::HostRead);
                 ctx.cmd_buffer_barrier(cmd, output.metadata_buffer.handle, RHIResourceState::TransferSrc, RHIResourceState::General);
-                _upbp.density_beam_grid_metadata_readback_state = RHIResourceState::TransferDst;
+                _upbp.density_beam_grid_metadata_readback_state = RHIResourceState::HostRead;
               });
               RHIResult build_result = wait_and_destroy_submitted_commands("UPBP beam-grid description");
               if (build_result != RHIResult::Success) {
-                return fail("description dispatch failed (" + std::to_string(static_cast<uint32_t>(build_result)) + ")");
+                return fail("description dispatch failed (" + std::string(rhi_result_name(build_result)) + ")");
               }
               GPUUPBPBeamGridMetadata metadata = {};
               const RHIResult description_read_result = device.read_buffer(_upbp.density_beam_grid_metadata_readback_buffer.handle, &metadata, sizeof(metadata));
               if (description_read_result != RHIResult::Success) {
-                return fail("failed to read its description (" + std::to_string(static_cast<uint32_t>(description_read_result)) + ")");
+                return fail("failed to read its description (" + std::string(rhi_result_name(description_read_result)) + ")");
               }
               if ((metadata.reserved0 != GPUUPBPBeamGridBuildFailure::None) || (metadata.beam_count != beam_count) || (metadata.cell_count == 0u) ||
                   (metadata.cell_count > (kUPBPBeamGridMaximumResolution * kUPBPBeamGridMaximumResolution * kUPBPBeamGridMaximumResolution))) {
@@ -8122,11 +9347,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                     device.destroy_buffer(create_result.handle);
                   }
                   const RHIMemoryStats memory_stats = device.get_memory_statistics();
-                  log::error("GPU RT: failed to create '%s' storage buffer (%u): required=%llu bytes (%.2fMB), preferred=%llu bytes (%.2fMB), device-local=%.2f/%.2fMB",
-                    buffer_name, static_cast<uint32_t>(create_result.result), static_cast<unsigned long long>(required_size),
-                    static_cast<double>(required_size) / (1024.0 * 1024.0), static_cast<unsigned long long>(preferred_size),
-                    static_cast<double>(preferred_size) / (1024.0 * 1024.0), static_cast<double>(memory_stats.gpu_device_local_allocated_bytes) / (1024.0 * 1024.0),
-                    static_cast<double>(memory_stats.gpu_device_local_budget_bytes) / (1024.0 * 1024.0));
+                  set_runtime_failure(
+                    format_diagnostic("GPU RT: failed to create '%s' storage buffer (%s): required=%llu bytes (%.2fMB), preferred=%llu bytes (%.2fMB), device-local=%.2f/%.2fMB",
+                      buffer_name, rhi_result_name(create_result.result), static_cast<unsigned long long>(required_size), static_cast<double>(required_size) / (1024.0 * 1024.0),
+                      static_cast<unsigned long long>(preferred_size), static_cast<double>(preferred_size) / (1024.0 * 1024.0),
+                      static_cast<double>(memory_stats.gpu_device_local_allocated_bytes) / (1024.0 * 1024.0),
+                      static_cast<double>(memory_stats.gpu_device_local_budget_bytes) / (1024.0 * 1024.0)),
+                    create_result.result);
                   return false;
                 }
                 buffer.handle = create_result.handle;
@@ -8171,16 +9398,17 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                 ctx.cmd_buffer_barrier(cmd, _upbp.density_beam_grid_metadata_readback_buffer.handle, _upbp.density_beam_grid_metadata_readback_state,
                   RHIResourceState::TransferDst);
                 ctx.cmd_copy_buffer(cmd, output.metadata_buffer.handle, _upbp.density_beam_grid_metadata_readback_buffer.handle, kGPUUPBPBeamGridMetadataStride);
+                ctx.cmd_buffer_barrier(cmd, _upbp.density_beam_grid_metadata_readback_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::HostRead);
                 ctx.cmd_buffer_barrier(cmd, output.metadata_buffer.handle, RHIResourceState::TransferSrc, RHIResourceState::General);
-                _upbp.density_beam_grid_metadata_readback_state = RHIResourceState::TransferDst;
+                _upbp.density_beam_grid_metadata_readback_state = RHIResourceState::HostRead;
               });
               build_result = wait_and_destroy_submitted_commands("UPBP beam-grid count and prefix");
               if (build_result != RHIResult::Success) {
-                return fail("count/prefix dispatch failed (" + std::to_string(static_cast<uint32_t>(build_result)) + ")");
+                return fail("count/prefix dispatch failed (" + std::string(rhi_result_name(build_result)) + ")");
               }
               const RHIResult count_read_result = device.read_buffer(_upbp.density_beam_grid_metadata_readback_buffer.handle, &metadata, sizeof(metadata));
               if (count_read_result != RHIResult::Success) {
-                return fail("failed to read count/prefix results (" + std::to_string(static_cast<uint32_t>(count_read_result)) + ")");
+                return fail("failed to read count/prefix results (" + std::string(rhi_result_name(count_read_result)) + ")");
               }
               if ((metadata.reserved0 != GPUUPBPBeamGridBuildFailure::None) || (metadata.entry_count == 0u)) {
                 return fail("count/prefix failed: " + std::string(upbp_beam_grid_failure_to_string(metadata.reserved0)) + " (status " + std::to_string(metadata.reserved0) +
@@ -8210,16 +9438,17 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
                 ctx.cmd_buffer_barrier(cmd, _upbp.density_beam_grid_metadata_readback_buffer.handle, _upbp.density_beam_grid_metadata_readback_state,
                   RHIResourceState::TransferDst);
                 ctx.cmd_copy_buffer(cmd, output.metadata_buffer.handle, _upbp.density_beam_grid_metadata_readback_buffer.handle, kGPUUPBPBeamGridMetadataStride);
+                ctx.cmd_buffer_barrier(cmd, _upbp.density_beam_grid_metadata_readback_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::HostRead);
                 ctx.cmd_buffer_barrier(cmd, output.metadata_buffer.handle, RHIResourceState::TransferSrc, RHIResourceState::General);
-                _upbp.density_beam_grid_metadata_readback_state = RHIResourceState::TransferDst;
+                _upbp.density_beam_grid_metadata_readback_state = RHIResourceState::HostRead;
               });
               build_result = wait_and_destroy_submitted_commands("UPBP beam-grid scatter");
               if (build_result != RHIResult::Success) {
-                return fail("scatter/validation dispatch failed (" + std::to_string(static_cast<uint32_t>(build_result)) + ")");
+                return fail("scatter/validation dispatch failed (" + std::string(rhi_result_name(build_result)) + ")");
               }
               const RHIResult scatter_read_result = device.read_buffer(_upbp.density_beam_grid_metadata_readback_buffer.handle, &metadata, sizeof(metadata));
               if (scatter_read_result != RHIResult::Success) {
-                return fail("failed to read scatter/validation results (" + std::to_string(static_cast<uint32_t>(scatter_read_result)) + ")");
+                return fail("failed to read scatter/validation results (" + std::string(rhi_result_name(scatter_read_result)) + ")");
               }
               if (metadata.reserved0 != GPUUPBPBeamGridBuildFailure::None) {
                 return fail(
@@ -8237,6 +9466,79 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               return;
             }
           }
+          if (has_coating && gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::UPBPSurface) && (_upbp.density_surface_point_count > 0u)) {
+            const uint32_t cell_count = wavefront_vcm_grid_head_count(_upbp.density_surface_point_count);
+            const uint64_t range_bytes = wavefront_vcm_grid_storage_size(cell_count);
+            const uint64_t index_bytes = static_cast<uint64_t>(_upbp.density_surface_point_count) * sizeof(uint32_t);
+            const RHIBufferUsage usage = RHIBufferUsage::Storage;
+            if ((range_bytes > kWavefrontMaxAddressableBufferSize) || (index_bytes > kWavefrontMaxAddressableBufferSize) ||
+                (ensure_storage_buffer_capacity(device, range_bytes, usage, _upbp.density_surface_grid_ranges_buffer.handle, _upbp.density_surface_grid_ranges_buffer.size,
+                   _upbp.density_surface_grid_ranges_buffer.descriptor_index, "upbp_surface_grid_ranges") == false) ||
+                (ensure_storage_buffer_capacity(device, index_bytes, usage, _upbp.density_surface_grid_indices_buffer.handle, _upbp.density_surface_grid_indices_buffer.size,
+                   _upbp.density_surface_grid_indices_buffer.descriptor_index, "upbp_surface_grid_indices") == false)) {
+              set_runtime_failure("GPU UPBP failed to allocate the coated surface photon index");
+              return;
+            }
+            const RHIResult pending_result = wait_and_destroy_submitted_commands("UPBP surface grid resources");
+            if (pending_result != RHIResult::Success) {
+              set_runtime_failure("GPU UPBP surface grid preparation failed", pending_result);
+              return;
+            }
+            _upbp.density_surface_grid_mask = cell_count - 1u;
+            _upbp.resources.surface_grid_ranges_buffer = _upbp.density_surface_grid_ranges_buffer.descriptor_index;
+            _upbp.resources.surface_grid_indices_buffer = _upbp.density_surface_grid_indices_buffer.descriptor_index;
+            _upbp.resources.surface_grid_mask = _upbp.density_surface_grid_mask;
+            const RHIResult bind_result = device.update_buffer(_upbp.resources_buffer.handle, &_upbp.resources, kGPUUPBPResourcesStride);
+            if (bind_result != RHIResult::Success) {
+              set_runtime_failure("GPU UPBP failed to bind the coated surface photon index", bind_result);
+              return;
+            }
+            const float previous_radius = constants.vcm_radius;
+            const uint32_t previous_mask = constants.vcm_grid_mask;
+            constants.vcm_radius = _upbp.resources.iteration.surface_radius;
+            constants.vcm_grid_mask = _upbp.density_surface_grid_mask;
+            record_and_submit([&](RHICommandBuffer cmd) {
+              ctx.cmd_buffer_barrier(cmd, _upbp.density_surface_grid_ranges_buffer.handle, RHIResourceState::Undefined, RHIResourceState::General);
+              ctx.cmd_buffer_barrier(cmd, _upbp.density_surface_grid_indices_buffer.handle, RHIResourceState::Undefined, RHIResourceState::General);
+              const uint32_t clear_groups = divide_round_up(cell_count, 256u);
+              const uint32_t build_groups = divide_round_up(_upbp.density_surface_point_count, 256u);
+              const RHIDispatchDesc clear_dispatch = {.group_count_x = std::min(clear_groups, 65535u), .group_count_y = divide_round_up(clear_groups, 65535u), .group_count_z = 1u};
+              const RHIDispatchDesc build_dispatch = {.group_count_x = std::min(build_groups, 65535u), .group_count_y = divide_round_up(build_groups, 65535u), .group_count_z = 1u};
+              dispatch_stage(cmd, PipelineStage::VCMGridClear, clear_dispatch, 0u);
+              barrier_wavefront_buffers(cmd);
+              dispatch_stage(cmd, PipelineStage::VCMGridBuild, build_dispatch, 0u);
+              barrier_wavefront_buffers(cmd);
+              uint32_t scan_offset = 0u;
+              uint32_t scan_count = cell_count;
+              for (;;) {
+                GPURTConstants scan_constants = constants;
+                scan_constants.dispatch_item_offset = scan_offset;
+                scan_constants.dispatch_item_count = scan_count;
+                const uint32_t scan_groups = divide_round_up(scan_count, 64u);
+                ctx.cmd_set_pipeline(cmd, _pipelines[static_cast<uint32_t>(PipelineStage::VCMGridPrefix)]);
+                ctx.cmd_push_constants(cmd, &scan_constants, sizeof(scan_constants));
+                const uint32_t timing_end_query = begin_kernel_timing(cmd, PipelineStage::VCMGridPrefix);
+                ctx.cmd_dispatch(cmd, {.group_count_x = std::min(scan_groups, 65535u), .group_count_y = divide_round_up(scan_groups, 65535u), .group_count_z = 1u});
+                end_kernel_timing(cmd, timing_end_query);
+                barrier_wavefront_buffers(cmd);
+                if (scan_groups == 1u) {
+                  break;
+                }
+                scan_offset = (scan_offset == 0u) ? (3u * scan_count) : (scan_offset + scan_count);
+                scan_count = scan_groups;
+              }
+              dispatch_stage(cmd, PipelineStage::VCMGridScatter, build_dispatch, 0u);
+              barrier_wavefront_buffers(cmd);
+            });
+            constants.vcm_radius = previous_radius;
+            constants.vcm_grid_mask = previous_mask;
+            const RHIResult build_result = wait_and_destroy_submitted_commands("UPBP surface photon index");
+            if (build_result != RHIResult::Success) {
+              set_runtime_failure("GPU UPBP surface photon indexing failed", build_result);
+              return;
+            }
+          }
+
           _upbp.density_cache_ready = true;
           bind_upbp_density_cache_resources();
           if (update_upbp_iteration_resources(device, scene, upbp_global_path_count) == false) {
@@ -8261,17 +9563,18 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::General, RHIResourceState::TransferSrc);
             ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, _upbp.counter_readback_state, RHIResourceState::TransferDst);
             ctx.cmd_copy_buffer(cmd, _upbp.counter_buffer.handle, _upbp.counter_readback_buffer.handle, static_cast<uint64_t>(GPUUPBPCounterIndex::Count) * sizeof(uint32_t));
+            ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::HostRead);
             ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::TransferSrc, RHIResourceState::General);
-            _upbp.counter_readback_state = RHIResourceState::TransferDst;
+            _upbp.counter_readback_state = RHIResourceState::HostRead;
           });
           const RHIResult compact_result = wait_and_destroy_submitted_commands("UPBP camera density query compaction");
           if (compact_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP camera density query compaction failed (" + std::to_string(static_cast<uint32_t>(compact_result)) + ")", compact_result);
+            set_runtime_failure("GPU UPBP camera density query compaction failed (" + std::string(rhi_result_name(compact_result)) + ")", compact_result);
             return;
           }
           const RHIResult compact_counter_result = device.read_buffer(_upbp.counter_readback_buffer.handle, upbp_counters, sizeof(upbp_counters));
           if (compact_counter_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP failed to read compact camera density query counts (" + std::to_string(static_cast<uint32_t>(compact_counter_result)) + ")",
+            set_runtime_failure("GPU UPBP failed to read compact camera density query counts (" + std::string(rhi_result_name(compact_counter_result)) + ")",
               compact_counter_result);
             return;
           }
@@ -8302,6 +9605,65 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
               camera_medium_vertex_query_count, camera_vertex_count, camera_medium_interval_query_count, camera_interval_count);
           }
         }
+        if (evaluating_upbp_camera_phase && _upbp.density_cache_ready && has_coating && gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::UPBPSurface) &&
+            (_upbp.density_surface_point_count > 0u)) {
+          const uint32_t query_total = camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Conductor];
+          const uint32_t query_mode = camera_surface_queries_compacted ? GPUUPBPDensityQueryMode::Compacted : GPUUPBPDensityQueryMode::Raw;
+          const uint32_t request_capacity =
+            std::max(kGPUVCMCoatingLaneCount, _wavefront_resources.path_capacity * (static_cast<uint32_t>(_wavefront_resources.camera_state_buffer != kInvalidIndex) +
+                                                                                     static_cast<uint32_t>(_wavefront_resources.light_state_buffer != kInvalidIndex)));
+          const uint32_t query_capacity = std::min(request_capacity / kGPUVCMCoatingLaneCount, kDensityQueryGroupDispatchChunkSize);
+          const uint32_t previous_mask = constants.vcm_grid_mask;
+          constants.vcm_grid_mask = _upbp.density_surface_grid_mask;
+          for (uint32_t query_offset = 0u; query_offset < query_total; query_offset += query_capacity) {
+            const uint32_t query_count = std::min(query_capacity, query_total - query_offset);
+            record_and_submit([&](RHICommandBuffer cmd) {
+              barrier_wavefront_buffers(cmd);
+              dispatch_transport_stage(cmd, PipelineStage::CoatingClear, query_count * kGPUVCMCoatingLaneCount, 0u);
+              dispatch_stage(cmd, PipelineStage::VCMCoatingClear, scalar_dispatch, 0u);
+              barrier_wavefront_buffers(cmd);
+              dispatch_stage_query_groups(cmd, PipelineStage::VCMMergeCoatedConductor, query_offset, query_count, 0u, query_mode);
+              barrier_wavefront_buffers(cmd);
+            });
+            uint32_t pending_lanes = 1u;
+            while (pending_lanes != 0u) {
+              if (drain_coating_requests(0u, query_count * kGPUVCMCoatingLaneCount) == false) {
+                return;
+              }
+              record_and_submit([&](RHICommandBuffer cmd) {
+                barrier_wavefront_buffers(cmd);
+                dispatch_stage_query_groups(cmd, PipelineStage::VCMCoatingContinue, query_offset, query_count, 0u, query_mode);
+                barrier_wavefront_buffers(cmd);
+                ctx.cmd_buffer_barrier(cmd, _vcm_coating_buffer, RHIResourceState::General, RHIResourceState::TransferSrc);
+                ctx.cmd_buffer_barrier(cmd, _coating_count_readback_buffer, _coating_count_readback_state, RHIResourceState::TransferDst);
+                ctx.cmd_copy_buffer(cmd, _vcm_coating_buffer, _coating_count_readback_buffer, sizeof(uint32_t));
+                ctx.cmd_buffer_barrier(cmd, _vcm_coating_buffer, RHIResourceState::TransferSrc, RHIResourceState::General);
+                ctx.cmd_buffer_barrier(cmd, _coating_count_readback_buffer, RHIResourceState::TransferDst, RHIResourceState::HostRead);
+                _coating_count_readback_state = RHIResourceState::HostRead;
+              });
+              RHIResult result = wait_and_destroy_submitted_commands("UPBP coating surface merge");
+              if (result == RHIResult::Success) {
+                result = device.read_buffer(_coating_count_readback_buffer, &pending_lanes, sizeof(pending_lanes));
+              }
+              if (result != RHIResult::Success) {
+                set_runtime_failure("GPU UPBP coating surface merge failed", result);
+                return;
+              }
+            }
+            record_and_submit([&](RHICommandBuffer cmd) {
+              barrier_wavefront_buffers(cmd);
+              dispatch_stage_query_groups(cmd, PipelineStage::VCMCoatingFinish, query_offset, query_count, 0u, query_mode);
+              barrier_wavefront_buffers(cmd);
+            });
+          }
+          constants.vcm_grid_mask = previous_mask;
+          const RHIResult result = wait_and_destroy_submitted_commands("UPBP coating surface accumulation");
+          if (result != RHIResult::Success) {
+            set_runtime_failure("GPU UPBP coating surface accumulation failed", result);
+            return;
+          }
+        }
+
         _upbp.density_query_work.clear();
         _upbp.density_query_work_index = 0u;
         _upbp.density_query_offset = 0u;
@@ -8321,11 +9683,28 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           };
           submit_surface_queries(PipelineStage::VCMMergeDiffuse, camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Various], has_various_continue);
           submit_surface_queries(PipelineStage::VCMMergePlastic, camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Plastic], has_plastic);
-          submit_surface_queries(PipelineStage::VCMMergeConductor, camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Conductor], has_connectible_conductor);
+          submit_surface_queries(PipelineStage::VCMMergeConductor, camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Conductor],
+            (_material_compile_mask & kMaterialCompileConnectibleConductor) != 0u);
           submit_surface_queries(PipelineStage::VCMMergeDielectric, camera_surface_query_counts[GPUUPBPSurfaceQueryFamily::Dielectric], has_connectible_dielectric || has_thinfilm);
         }
         if (_upbp.density_cache_ready && (camera_vertex_count > 0u)) {
-          enqueue_density_queries(PipelineStage::UPBPDirectHit, camera_vertex_count, GPUUPBPDensityQueryMode::Raw, false, 0u);
+          if (has_area_emitters) {
+            const uint32_t chunk_capacity = std::min(kUPBPDensityLinearDispatchChunkSize, _wavefront_resources.path_capacity);
+            for (uint32_t offset = 0u; offset < camera_vertex_count; offset += chunk_capacity) {
+              const uint32_t count = std::min(chunk_capacity, camera_vertex_count - offset);
+              record_and_submit([&](RHICommandBuffer cmd) {
+                barrier_wavefront_buffers(cmd);
+                clear_emission_requests(cmd, 0u);
+                dispatch_stage_range(cmd, PipelineStage::UPBPDirectHit, offset, count, 0u, GPUUPBPDensityQueryMode::Raw);
+                barrier_wavefront_buffers(cmd);
+              });
+              if (drain_emission_requests(PipelineStage::UPBPDirectHitResume, 0u, offset, count) == false) {
+                return;
+              }
+            }
+          } else {
+            enqueue_density_queries(PipelineStage::UPBPDirectHit, camera_vertex_count, GPUUPBPDensityQueryMode::Raw, false, 0u);
+          }
         }
         if (_upbp.density_cache_ready && (_upbp.density_medium_point_count > 0u) && _upbp.density_medium_point_tlas.valid() && (camera_vertex_count > 0u) &&
             gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::UPBPPP3D)) {
@@ -8368,17 +9747,18 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::General, RHIResourceState::TransferSrc);
           ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, _upbp.counter_readback_state, RHIResourceState::TransferDst);
           ctx.cmd_copy_buffer(cmd, _upbp.counter_buffer.handle, _upbp.counter_readback_buffer.handle, static_cast<uint64_t>(GPUUPBPCounterIndex::Count) * sizeof(uint32_t));
+          ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::HostRead);
           ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::TransferSrc, RHIResourceState::General);
-          _upbp.counter_readback_state = RHIResourceState::TransferDst;
+          _upbp.counter_readback_state = RHIResourceState::HostRead;
         });
         const RHIResult grid_result = wait_and_destroy_submitted_commands("UPBP density evaluation");
         if (grid_result != RHIResult::Success) {
-          set_runtime_failure("GPU UPBP density evaluation failed (" + std::to_string(static_cast<uint32_t>(grid_result)) + ")", grid_result);
+          set_runtime_failure("GPU UPBP density evaluation failed (" + std::string(rhi_result_name(grid_result)) + ")", grid_result);
           return;
         }
         const RHIResult grid_counter_result = device.read_buffer(_upbp.counter_readback_buffer.handle, upbp_counters, sizeof(upbp_counters));
         if (grid_counter_result != RHIResult::Success) {
-          set_runtime_failure("GPU UPBP failed to validate its streamed beam grid (" + std::to_string(static_cast<uint32_t>(grid_counter_result)) + ")", grid_counter_result);
+          set_runtime_failure("GPU UPBP failed to validate its streamed beam grid (" + std::string(rhi_result_name(grid_counter_result)) + ")", grid_counter_result);
           return;
         }
         if ((upbp_counters[GPUUPBPCounterIndex::OverflowFlags] & GPUUPBPOverflowFlags::BeamInstance) != 0u) {
@@ -8413,12 +9793,18 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             barrier_wavefront_buffers(cmd);
             dispatch_stage_mode(cmd, PipelineStage::PrepareSample, scalar_dispatch, 0u, 1u);
             barrier_wavefront_buffers(cmd);
+            if (has_area_emitters) {
+              clear_emission_requests(cmd, 0u);
+            }
             dispatch_upbp_light_init(cmd);
             barrier_wavefront_buffers(cmd);
           });
           const RHIResult init_result = wait_and_destroy_submitted_commands("UPBP light batch init");
           if (init_result != RHIResult::Success) {
-            set_runtime_failure("GPU UPBP light batch initialization failed (" + std::to_string(static_cast<uint32_t>(init_result)) + ")", init_result);
+            set_runtime_failure("GPU UPBP light batch initialization failed (" + std::string(rhi_result_name(init_result)) + ")", init_result);
+            return;
+          }
+          if (has_area_emitters && (drain_emission_requests(PipelineStage::InitLightPath0Resume, 0u, 0u, _upbp.light_batch_count) == false)) {
             return;
           }
           _wavefront_render_step = WavefrontRenderStep::TraceBounce;
@@ -8432,7 +9818,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           if (released_wavefront_bytes > 0u) {
             const RHIResult reclaim_result = ctx.wait_idle();
             if (reclaim_result != RHIResult::Success) {
-              set_runtime_failure("GPU UPBP failed to reclaim completed light-phase storage (" + std::to_string(static_cast<uint32_t>(reclaim_result)) + ")", reclaim_result);
+              set_runtime_failure("GPU UPBP failed to reclaim completed light-phase storage (" + std::string(rhi_result_name(reclaim_result)) + ")", reclaim_result);
               return;
             }
           }
@@ -8456,7 +9842,7 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
             const bool connect_to_light = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::ConnectToLight);
             const bool connect_to_camera = gpu_integrator_feature_enabled(_integrator_features, GPUIntegratorFeatures::ConnectToCamera);
             camera_resident_capacity = upbp_camera_resident_path_capacity(available_camera_bytes, wavefront_path_capacity, scene_max_path_length, options.maximum_boundary_count,
-              storage_technique_mask, connect_to_light, connect_to_camera, scene_has_subsurface_material);
+              storage_technique_mask, connect_to_light, connect_to_camera, scene_has_subsurface_material, has_coating, has_area_emitters);
             if (camera_resident_capacity == 0u) {
               set_runtime_failure("GPU UPBP density cache leaves insufficient device-local memory for one camera path");
               return;
@@ -8531,12 +9917,13 @@ void GPURaytracingRenderer::render(RHIContext& ctx, SceneRepresentation& scene, 
           ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::General, RHIResourceState::TransferSrc);
           ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, _upbp.counter_readback_state, RHIResourceState::TransferDst);
           ctx.cmd_copy_buffer(cmd, _upbp.counter_buffer.handle, _upbp.counter_readback_buffer.handle, static_cast<uint64_t>(GPUUPBPCounterIndex::Count) * sizeof(uint32_t));
+          ctx.cmd_buffer_barrier(cmd, _upbp.counter_readback_buffer.handle, RHIResourceState::TransferDst, RHIResourceState::HostRead);
           ctx.cmd_buffer_barrier(cmd, _upbp.counter_buffer.handle, RHIResourceState::TransferSrc, RHIResourceState::General);
-          _upbp.counter_readback_state = RHIResourceState::TransferDst;
+          _upbp.counter_readback_state = RHIResourceState::HostRead;
         });
         const RHIResult result = wait_and_destroy_submitted_commands("UPBP density evaluation");
         if (result != RHIResult::Success) {
-          set_runtime_failure("GPU UPBP density evaluation failed (" + std::to_string(static_cast<uint32_t>(result)) + ")", result);
+          set_runtime_failure("GPU UPBP density evaluation failed (" + std::string(rhi_result_name(result)) + ")", result);
           return;
         }
         uint32_t counters[GPUUPBPCounterIndex::Count] = {};
@@ -8725,6 +10112,8 @@ void GPURaytracingRenderer::cleanup(RHIContext& ctx) {
   invalidate_output();
   _preparation_canceled = false;
   _recovery_blocked = false;
+  _pending_pipeline_reload = false;
+  _pending_pipeline_force_reload = false;
   reset_runtime_failure();
   _runtime_warning.clear();
   set_preparation_ready();
@@ -8741,8 +10130,17 @@ void GPURaytracingRenderer::on_scene_changed(SceneRepresentation& scene) {
 
 void GPURaytracingRenderer::on_camera_changed(SceneRepresentation& scene) {
   if (thermal_medium_binding_valid(scene.data(), scene.camera().medium_index) == false) {
-    set_configuration_failure(kThermalCameraBindingFailure);
-  } else if ((_runtime_failure_reason == kThermalCameraBindingFailure) || (_runtime_failure_reason == Raytracing::kMediumEmissionFailure)) {
+    uint32_t camera_index = kInvalidIndex;
+    for (uint32_t index = 0u; index < scene.data().cameras.size(); ++index) {
+      if (scene.data().cameras[index].active) {
+        camera_index = index;
+        break;
+      }
+    }
+    set_configuration_failure("Camera medium #" + std::to_string(scene.camera().medium_index) +
+                                " has conflicting interior temperatures or optical coefficients. Bind the camera to a distinct authored medium.",
+      RendererRecovery::EditCamera, camera_index);
+  } else if ((_configuration_failed && (_configuration_recovery == RendererRecovery::EditCamera)) || (_runtime_failure_reason == Raytracing::kMediumEmissionFailure)) {
     reset_runtime_failure();
     set_preparation_ready();
   }
@@ -8794,7 +10192,7 @@ bool GPURaytracingRenderer::refit_top_level_acceleration_structure(RHIContext& c
   const uint64_t upload_size = _tlas_instance_staging.size() * sizeof(RHIAccelerationStructureInstance);
   const RHIResult upload_result = device.update_buffer(_tlas_instance_buffer, _tlas_instance_staging.data(), upload_size);
   if (upload_result != RHIResult::Success) {
-    log::error("GPU RT: failed to upload TLAS refit instances (%u)", static_cast<uint32_t>(upload_result));
+    set_runtime_failure(format_diagnostic("GPU RT: failed to upload TLAS refit instances (%s)", rhi_result_name(upload_result)), upload_result);
     return false;
   }
 
@@ -8814,11 +10212,11 @@ bool GPURaytracingRenderer::refit_top_level_acceleration_structure(RHIContext& c
   ctx.command_buffer_begin(command_buffer);
   ctx.cmd_build_acceleration_structure(command_buffer, build_desc, _as_scratch_buffer, 0u);
   ctx.command_buffer_end(command_buffer);
-  ctx.submit_command_buffer({command_buffer});
-  const RHIResult wait_result = ctx.wait_for_command_buffer(command_buffer);
+  const RHIResult submit_result = ctx.submit_command_buffer({command_buffer});
+  const RHIResult wait_result = submit_result == RHIResult::Success ? ctx.wait_for_command_buffer(command_buffer) : submit_result;
   ctx.destroy_command_buffer(command_buffer);
   if (wait_result != RHIResult::Success) {
-    log::error("GPU RT: TLAS refit failed (%u)", static_cast<uint32_t>(wait_result));
+    set_runtime_failure(format_diagnostic("GPU RT: TLAS refit failed (%s)", rhi_result_name(wait_result)), wait_result);
     return false;
   }
   return true;
@@ -8882,13 +10280,13 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     vb_desc.usage = RHIBufferUsage::Vertex | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::TransferDst;
     vb_res = device.create_buffer(vb_desc);
     if ((vb_res.result != RHIResult::Success) || (vb_res.handle.valid() == false)) {
-      log::error("GPU RT: failed to create vertex buffer for BLAS (%u)", static_cast<uint32_t>(vb_res.result));
+      set_runtime_failure(format_diagnostic("GPU RT: failed to create vertex buffer for BLAS (%s)", rhi_result_name(vb_res.result)), vb_res.result);
       cleanup_failed_build();
       return false;
     }
     const RHIResult vb_update_result = device.update_buffer(vb_res.handle, s.vertices.pos.data(), vb_desc.size);
     if (vb_update_result != RHIResult::Success) {
-      log::error("GPU RT: failed to upload vertex buffer for BLAS (%u)", static_cast<uint32_t>(vb_update_result));
+      set_runtime_failure(format_diagnostic("GPU RT: failed to upload vertex buffer for BLAS (%s)", rhi_result_name(vb_update_result)), vb_update_result);
       device.destroy_buffer(vb_res.handle);
       cleanup_failed_build();
       return false;
@@ -8908,13 +10306,13 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     ib_desc.usage = RHIBufferUsage::Index | RHIBufferUsage::AccelerationStructureBuild | RHIBufferUsage::ShaderDeviceAddress | RHIBufferUsage::TransferDst;
     ib_res = device.create_buffer(ib_desc);
     if ((ib_res.result != RHIResult::Success) || (ib_res.handle.valid() == false)) {
-      log::error("GPU RT: failed to create index buffer for BLAS (%u)", static_cast<uint32_t>(ib_res.result));
+      set_runtime_failure(format_diagnostic("GPU RT: failed to create index buffer for BLAS (%s)", rhi_result_name(ib_res.result)), ib_res.result);
       cleanup_failed_build();
       return false;
     }
     const RHIResult ib_update_result = device.update_buffer(ib_res.handle, indices.data(), ib_desc.size);
     if (ib_update_result != RHIResult::Success) {
-      log::error("GPU RT: failed to upload index buffer for BLAS (%u)", static_cast<uint32_t>(ib_update_result));
+      set_runtime_failure(format_diagnostic("GPU RT: failed to upload index buffer for BLAS (%s)", rhi_result_name(ib_update_result)), ib_update_result);
       device.destroy_buffer(ib_res.handle);
       cleanup_failed_build();
       return false;
@@ -8942,7 +10340,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     }
     const Mesh& mesh = s.meshes[mesh_index];
     if ((mesh.triangle_count == 0u) || ((mesh.triangle_offset + mesh.triangle_count) > s.triangles.size())) {
-      log::error("GPU RT: mesh %u has an invalid triangle range", mesh_index);
+      set_runtime_failure(format_diagnostic("GPU RT: mesh %u has an invalid triangle range", mesh_index));
       cleanup_failed_build();
       return false;
     }
@@ -8965,7 +10363,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     blas_desc.geometries = &geometry;
     const RHICreateBindlessResult blas_result = device.create_acceleration_structure(blas_desc);
     if ((blas_result.result != RHIResult::Success) || (blas_result.handle.valid() == false)) {
-      log::error("GPU RT: failed to create BLAS for mesh %u (%u)", mesh_index, static_cast<uint32_t>(blas_result.result));
+      set_runtime_failure(format_diagnostic("GPU RT: failed to create BLAS for mesh %u (%s)", mesh_index, rhi_result_name(blas_result.result)), blas_result.result);
       cleanup_failed_build();
       return false;
     }
@@ -8981,7 +10379,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   blas_create_ms = elapsed_ms(blas_create_begin, blas_create_end);
 
   if (s.hierarchy.mesh_instances.empty()) {
-    log::error("GPU RT: scene hierarchy contains no renderable mesh instances");
+    set_runtime_failure(format_diagnostic("GPU RT: scene hierarchy contains no renderable mesh instances"));
     cleanup_failed_build();
     return false;
   }
@@ -8994,12 +10392,12 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
       continue;
     }
     if (resolved.mesh_index >= new_blas.size()) {
-      log::error("GPU RT: instance %u references invalid mesh %u", instance_index, resolved.mesh_index);
+      set_runtime_failure(format_diagnostic("GPU RT: instance %u references invalid mesh %u", instance_index, resolved.mesh_index));
       cleanup_failed_build();
       return false;
     }
     if (instance_index > 0x00ffffffu) {
-      log::error("GPU RT: TLAS instance count exceeds the 24-bit custom-index limit");
+      set_runtime_failure(format_diagnostic("GPU RT: TLAS instance count exceeds the 24-bit custom-index limit"));
       cleanup_failed_build();
       return false;
     }
@@ -9019,13 +10417,13 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   const auto tlas_instance_upload_begin = std::chrono::steady_clock::now();
   auto inst_res = device.create_buffer(inst_buf_desc);
   if ((inst_res.result != RHIResult::Success) || (inst_res.handle.valid() == false)) {
-    log::error("GPU RT: failed to create TLAS instance buffer (%u)", static_cast<uint32_t>(inst_res.result));
+    set_runtime_failure(format_diagnostic("GPU RT: failed to create TLAS instance buffer (%s)", rhi_result_name(inst_res.result)), inst_res.result);
     cleanup_failed_build();
     return false;
   }
   const RHIResult inst_update_result = rhi_instances.empty() ? RHIResult::Success : device.update_buffer(inst_res.handle, rhi_instances.data(), inst_buf_desc.size);
   if (inst_update_result != RHIResult::Success) {
-    log::error("GPU RT: failed to upload TLAS instance buffer (%u)", static_cast<uint32_t>(inst_update_result));
+    set_runtime_failure(format_diagnostic("GPU RT: failed to upload TLAS instance buffer (%s)", rhi_result_name(inst_update_result)), inst_update_result);
     device.destroy_buffer(inst_res.handle);
     cleanup_failed_build();
     return false;
@@ -9044,7 +10442,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   const auto tlas_create_end = std::chrono::steady_clock::now();
   tlas_create_ms = elapsed_ms(tlas_create_begin, tlas_create_end);
   if ((tlas_result.result != RHIResult::Success) || (tlas_result.handle.valid() == false)) {
-    log::error("GPU RT: failed to create TLAS (%u)", static_cast<uint32_t>(tlas_result.result));
+    set_runtime_failure(format_diagnostic("GPU RT: failed to create TLAS (%s)", rhi_result_name(tlas_result.result)), tlas_result.result);
     cleanup_failed_build();
     return false;
   }
@@ -9057,7 +10455,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     }
     const uint64_t required_size = device.get_acceleration_structure_build_scratch_size(blas);
     if (required_size == 0u) {
-      log::error("GPU RT: failed to query BLAS scratch size");
+      set_runtime_failure(format_diagnostic("GPU RT: failed to query BLAS scratch size"));
       cleanup_failed_build();
       return false;
     }
@@ -9066,7 +10464,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
 
   const uint64_t tlas_scratch_size = device.get_acceleration_structure_build_scratch_size(new_tlas);
   if (tlas_scratch_size == 0u) {
-    log::error("GPU RT: failed to query TLAS scratch size");
+    set_runtime_failure(format_diagnostic("GPU RT: failed to query TLAS scratch size"));
     cleanup_failed_build();
     return false;
   }
@@ -9080,7 +10478,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   const auto scratch_create_end = std::chrono::steady_clock::now();
   scratch_create_ms = elapsed_ms(scratch_create_begin, scratch_create_end);
   if ((scratch_res.result != RHIResult::Success) || (scratch_res.handle.valid() == false)) {
-    log::error("GPU RT: failed to create AS scratch buffer (%u)", static_cast<uint32_t>(scratch_res.result));
+    set_runtime_failure(format_diagnostic("GPU RT: failed to create AS scratch buffer (%s)", rhi_result_name(scratch_res.result)), scratch_res.result);
     cleanup_failed_build();
     return false;
   }
@@ -9095,11 +10493,12 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
 
   auto cmd = ctx.get_command_buffer();
   if (cmd.valid() == false) {
-    log::error("GPU RT: failed to get command buffer for AS build");
+    set_runtime_failure(format_diagnostic("GPU RT: failed to get command buffer for AS build"));
     cleanup_failed_build();
     return false;
   }
   const auto build_submit_begin = std::chrono::steady_clock::now();
+  RHIResult as_submit_result = RHIResult::Success;
   {
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_build_blas");
     ctx.command_buffer_begin(cmd);
@@ -9113,17 +10512,17 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
     ETX_PROFILER_NAMED_SCOPE("gpu_rt_build_tlas");
     ctx.cmd_build_acceleration_structure(cmd, tlas_build_desc, scratch_res.handle, 0);
     ctx.command_buffer_end(cmd);
-    ctx.submit_command_buffer({cmd});
+    as_submit_result = ctx.submit_command_buffer({cmd});
   }
   const auto build_submit_end = std::chrono::steady_clock::now();
   build_submit_ms = elapsed_ms(build_submit_begin, build_submit_end);
 
   const auto build_wait_begin = std::chrono::steady_clock::now();
-  const RHIResult as_wait_result = ctx.wait_for_command_buffer(cmd);
+  const RHIResult as_wait_result = as_submit_result == RHIResult::Success ? ctx.wait_for_command_buffer(cmd) : as_submit_result;
   const auto build_wait_end = std::chrono::steady_clock::now();
   build_wait_ms = elapsed_ms(build_wait_begin, build_wait_end);
   if (as_wait_result != RHIResult::Success) {
-    log::error("GPU RT: failed to wait for AS build completion (%u)", static_cast<uint32_t>(as_wait_result));
+    set_runtime_failure(format_diagnostic("GPU RT: failed to wait for AS build completion (%s)", rhi_result_name(as_wait_result)), as_wait_result);
     ctx.destroy_command_buffer(cmd);
     cleanup_failed_build();
     return false;
@@ -9153,7 +10552,7 @@ bool GPURaytracingRenderer::build_acceleration_structures(RHIContext& ctx, Scene
   const auto scene_upload_end = std::chrono::steady_clock::now();
   scene_upload_ms = elapsed_ms(scene_upload_begin, scene_upload_end);
   if (upload_success == false) {
-    log::error("GPU RT: failed to upload scene data after AS build");
+    set_runtime_failure(format_diagnostic("GPU RT: failed to upload scene data after AS build"));
   }
   return upload_success;
 }
@@ -9237,8 +10636,9 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, const SceneRepres
     upload_success =
       upload.upload(transport_materials.data(), transport_materials.size(), scene_buffer_usage, _materials_buffer, _materials_buffer_size, _gpu_scene.materials, "materials") &&
       upload_success;
+    const std::vector<uint8_t> spectrum_buffer = build_spectrum_buffer(data);
     upload_success =
-      upload.upload(data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer, _spectrums_buffer_size, _gpu_scene.spectrums, "spectrums") &&
+      upload.upload(spectrum_buffer.data(), spectrum_buffer.size(), scene_buffer_usage, _spectrums_buffer, _spectrums_buffer_size, _gpu_scene.spectrums, "spectrums") &&
       upload.upload(data.energy_compensation_interfaces.data(), data.energy_compensation_interfaces.size(), scene_buffer_usage, _energy_compensation_interfaces_buffer,
         _energy_compensation_interfaces_buffer_size, _gpu_scene.energy_compensation_interfaces, "energy_compensation_interfaces") &&
       upload_success;
@@ -9257,7 +10657,7 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, const SceneRepres
       }
       upload_success = image_upload_success && upload_success;
     } else {
-      log::error("GPU RT: failed to build packed image blob");
+      set_runtime_failure(format_diagnostic("GPU RT: failed to build packed image blob"));
       upload_success = false;
     }
     const auto images_end = std::chrono::steady_clock::now();
@@ -9275,7 +10675,7 @@ bool GPURaytracingRenderer::upload_scene_data(RHIContext& ctx, const SceneRepres
       }
       upload_success = medium_upload_success && upload_success;
     } else {
-      log::error("GPU RT: failed to build packed medium blob");
+      set_runtime_failure(format_diagnostic("GPU RT: failed to build packed medium blob"));
       upload_success = false;
     }
     const auto mediums_end = std::chrono::steady_clock::now();
@@ -9370,8 +10770,9 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
         upload_success;
     }
     if (changes[UpdateFlags::Spectra]) {
+      const std::vector<uint8_t> spectrum_buffer = build_spectrum_buffer(data);
       upload_success =
-        upload.upload(data.spectrum_values.data(), data.spectrum_values.size(), scene_buffer_usage, _spectrums_buffer, _spectrums_buffer_size, _gpu_scene.spectrums, "spectrums") &&
+        upload.upload(spectrum_buffer.data(), spectrum_buffer.size(), scene_buffer_usage, _spectrums_buffer, _spectrums_buffer_size, _gpu_scene.spectrums, "spectrums") &&
         upload_success;
     }
     if (changes[UpdateFlags::EnergyCompensationInterfaces]) {
@@ -9389,7 +10790,7 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
         }
         upload_success = image_upload_success && upload_success;
       } else {
-        log::error("GPU RT: failed to build packed image blob");
+        set_runtime_failure(format_diagnostic("GPU RT: failed to build packed image blob"));
         upload_success = false;
       }
     }
@@ -9402,7 +10803,7 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
         }
         upload_success = medium_upload_success && upload_success;
       } else {
-        log::error("GPU RT: failed to build packed medium blob");
+        set_runtime_failure(format_diagnostic("GPU RT: failed to build packed medium blob"));
         upload_success = false;
       }
     }
@@ -9474,345 +10875,5 @@ bool GPURaytracingRenderer::update_scene_data_partial(RHIContext& ctx, SceneRepr
 
   return upload_success;
 }
-
-#if defined(ETX_ENABLE_SHADER_PACKAGER) && ETX_ENABLE_SHADER_PACKAGER
-bool build_raytracer_shader_package(const std::filesystem::path& output_path, const std::filesystem::path& source_root, RHIBackend backend,
-  RaytracerShaderPackageStatistics& statistics, std::string& error_message) {
-  statistics = {};
-  error_message.clear();
-
-  std::map<uint64_t, ShaderPackageRequest> unique_requests = {};
-  auto add_request = [&](const char* source_name, const char* entry_point, RHIShaderStage stage, const std::unordered_map<std::string, std::string>& defines) -> bool {
-    ShaderPackageRequest request = {
-      .source_name = source_name,
-      .entry_point = entry_point,
-      .stage = stage,
-      .backend = backend,
-      .defines = std::map<std::string, std::string>(defines.begin(), defines.end()),
-    };
-    const uint64_t request_hash = shader_package_request_hash(request);
-    const auto [iterator, inserted] = unique_requests.emplace(request_hash, request);
-    if (inserted) {
-      return true;
-    }
-    if ((iterator->second.source_name != request.source_name) || (iterator->second.entry_point != request.entry_point) || (iterator->second.stage != request.stage) ||
-        (iterator->second.backend != request.backend) || (iterator->second.defines != request.defines)) {
-      error_message = "Shader package request hash collision detected while building the inventory.";
-      return false;
-    }
-    return true;
-  };
-
-  constexpr uint32_t all_camera_features = GPUIntegratorFeatures::CameraPath | GPUIntegratorFeatures::DirectHit | GPUIntegratorFeatures::ConnectToLight;
-  constexpr uint32_t all_light_features = GPUIntegratorFeatures::LightPath | GPUIntegratorFeatures::ConnectToCamera;
-  constexpr uint32_t all_upbp_features = GPUIntegratorFeatures::UPBPMis | GPUIntegratorFeatures::UPBPSurface | GPUIntegratorFeatures::UPBPPP3D | GPUIntegratorFeatures::UPBPPB2D |
-                                         GPUIntegratorFeatures::UPBPBP2D | GPUIntegratorFeatures::UPBPBB1D;
-  struct PackageIntegratorConfiguration {
-    GPUIntegratorMode mode = GPUIntegratorMode::PathTracing;
-    uint32_t features = 0u;
-  };
-  constexpr PackageIntegratorConfiguration integrator_configurations[] = {
-    {GPUIntegratorMode::PathTracing, all_camera_features},
-    {GPUIntegratorMode::LightTracing, all_light_features | GPUIntegratorFeatures::CameraPath | GPUIntegratorFeatures::DirectHit},
-    {GPUIntegratorMode::BDPTFast, all_camera_features | all_light_features},
-    {GPUIntegratorMode::BDPTFull, all_camera_features | all_light_features | GPUIntegratorFeatures::ConnectVertices},
-    {GPUIntegratorMode::VCM,
-      all_camera_features | all_light_features | GPUIntegratorFeatures::ConnectVertices | GPUIntegratorFeatures::MergeVertices | GPUIntegratorFeatures::VCMMis},
-    {GPUIntegratorMode::UPBP, all_camera_features | all_light_features | GPUIntegratorFeatures::ConnectVertices | GPUIntegratorFeatures::MergeVertices | all_upbp_features},
-  };
-  constexpr uint32_t material_mask_count = 1u << MaterialClass::Count;
-  constexpr uint32_t open_pbr_bit = 1u << MaterialClass::OpenPBR;
-  constexpr uint32_t spectral_modes[] = {static_cast<uint32_t>(GPUSpectralMode::RGB), static_cast<uint32_t>(GPUSpectralMode::Spectral)};
-
-  for (const PackageIntegratorConfiguration& configuration : integrator_configurations) {
-    for (uint32_t material_mask = 0u; material_mask < material_mask_count; ++material_mask) {
-      if ((material_mask & open_pbr_bit) != 0u) {
-        continue;
-      }
-      const uint32_t package_material_mask = material_mask | (material_compile_mask_has(material_mask, MaterialClass::Conductor) ? kMaterialCompileConnectibleConductor : 0u) |
-                                             (material_compile_mask_has(material_mask, MaterialClass::Dielectric) ? kMaterialCompileConnectibleDielectric : 0u);
-      for (const uint32_t spectral_mode : spectral_modes) {
-        for (const WavefrontStage& stage : kWavefrontStages) {
-          if (wavefront_stage_enabled(stage.stage, configuration.mode, configuration.features, package_material_mask, spectral_mode) == false) {
-            continue;
-          }
-          const auto defines = wavefront_stage_defines(stage, configuration.mode, package_material_mask, spectral_mode);
-          if (add_request(stage.source_file, stage.entry_point, RHIShaderStage::Compute, defines) == false) {
-            return false;
-          }
-        }
-      }
-    }
-  }
-
-  const std::unordered_map<std::string, std::string> no_defines = {};
-  const std::unordered_map<std::string, std::string> presentation_srgb_defines = {{"ETX_PRESENT_SRGB_TARGET", "1"}};
-  const std::unordered_map<std::string, std::string> imgui_srgb_defines = {{"ETX_IMGUI_SRGB_TARGET", "1"}};
-  const std::pair<const char*, RHIShaderStage> presentation_entry_points[] = {
-    {"vertex_main", RHIShaderStage::Vertex},
-    {"fragment_main", RHIShaderStage::Fragment},
-  };
-  const std::pair<const char*, RHIShaderStage> imgui_entry_points[] = {
-    {"vs_main", RHIShaderStage::Vertex},
-    {"ps_main", RHIShaderStage::Fragment},
-  };
-  for (const auto& [entry_point, stage] : presentation_entry_points) {
-    if ((add_request("shaders/render.hlsl", entry_point, stage, no_defines) == false) ||
-        (add_request("shaders/render.hlsl", entry_point, stage, presentation_srgb_defines) == false)) {
-      return false;
-    }
-  }
-  for (const auto& [entry_point, stage] : imgui_entry_points) {
-    if ((add_request("shaders/imgui.hlsl", entry_point, stage, no_defines) == false) || (add_request("shaders/imgui.hlsl", entry_point, stage, imgui_srgb_defines) == false)) {
-      return false;
-    }
-  }
-  if ((add_request("shaders/atmosphere_optical_depth.hlsl", "optical_depth_main", RHIShaderStage::Compute, no_defines) == false) ||
-      (add_request("shaders/atmosphere_sky.hlsl", "sky_raw_main", RHIShaderStage::Compute, no_defines) == false) ||
-      (add_request("shaders/atmosphere_sky.hlsl", "sky_finalize_main", RHIShaderStage::Compute, no_defines) == false) ||
-      (add_request("shaders/atmosphere_sun.hlsl", "sun_main", RHIShaderStage::Compute, no_defines) == false) ||
-      (add_request("shaders/bsdf_energy_compensation.hlsl", "main", RHIShaderStage::Compute, no_defines) == false)) {
-    return false;
-  }
-
-  struct PackageCompileGroup {
-    std::string source_name = {};
-    std::map<std::string, std::string> defines = {};
-    std::vector<ShaderPackageRequest> requests = {};
-  };
-  std::map<std::string, PackageCompileGroup> groups = {};
-  for (const auto& [request_hash, request] : unique_requests) {
-    static_cast<void>(request_hash);
-    std::string group_key = request.source_name;
-    for (const auto& [name, value] : request.defines) {
-      group_key += '\0';
-      group_key += name;
-      group_key += '\0';
-      group_key += value;
-    }
-    PackageCompileGroup& group = groups[group_key];
-    group.source_name = request.source_name;
-    group.defines = request.defines;
-    group.requests.push_back(request);
-  }
-
-  auto& compiler = ShaderCompiler::instance();
-  compiler.set_runtime_compilation_allowed(true);
-  compiler.set_shader_package_lookup_allowed(false);
-  const RHIResult initialization_result = compiler.initialize();
-  if (initialization_result != RHIResult::Success) {
-    error_message = "Failed to initialize the shader compiler for package generation.";
-    return false;
-  }
-  compiler.reset_statistics();
-  std::vector<ShaderPackageBuildEntry> package_entries = {};
-  package_entries.reserve(unique_requests.size());
-  const auto compile_begin = std::chrono::steady_clock::now();
-  const std::filesystem::path metal_library_cache_directory = output_path.parent_path() / "shader-package-cache";
-# if defined(ETX_SHADER_PACKAGE_MACOS_DEPLOYMENT_TARGET)
-  const std::string minimum_macos_version = ETX_SHADER_PACKAGE_MACOS_DEPLOYMENT_TARGET;
-# else
-  const std::string minimum_macos_version = {};
-# endif
-  std::vector<const PackageCompileGroup*> compile_groups = {};
-  compile_groups.reserve(groups.size());
-  for (const auto& [group_key, group] : groups) {
-    static_cast<void>(group_key);
-    compile_groups.push_back(&group);
-  }
-
-  const uint32_t available_threads = std::max(1u, std::thread::hardware_concurrency());
-  const uint32_t worker_count = std::min<uint32_t>(static_cast<uint32_t>(compile_groups.size()), std::min(available_threads, 6u));
-  const uint32_t total_variant_count = static_cast<uint32_t>(unique_requests.size());
-  const uint32_t total_group_count = static_cast<uint32_t>(compile_groups.size());
-  std::atomic<size_t> next_group_index = 0u;
-  std::atomic<uint32_t> completed_variants = 0u;
-  std::atomic<uint32_t> completed_groups = 0u;
-  std::atomic<bool> compilation_failed = false;
-  std::atomic<bool> compilation_finished = false;
-  std::mutex package_entries_mutex = {};
-  std::mutex error_mutex = {};
-  std::mutex progress_mutex = {};
-  std::condition_variable progress_condition = {};
-  auto report_failure = [&](std::string message) {
-    bool expected = false;
-    if (compilation_failed.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-      std::lock_guard<std::mutex> error_lock(error_mutex);
-      error_message = std::move(message);
-    }
-  };
-  auto compile_group = [&]() {
-    while (compilation_failed.load(std::memory_order_acquire) == false) {
-      const size_t group_index = next_group_index.fetch_add(1u);
-      if (group_index >= compile_groups.size()) {
-        return;
-      }
-      const PackageCompileGroup& group = *compile_groups[group_index];
-      const std::filesystem::path source_path = source_root / group.source_name;
-      std::string read_error = {};
-      const std::string source = compiler.read_file_content(source_path.string(), read_error);
-      if (read_error.empty() == false) {
-        report_failure("Failed to read shader source '" + group.source_name + "': " + read_error);
-        return;
-      }
-
-      std::vector<ShaderCompiler::ShaderEntryPoint> entry_points = {};
-      entry_points.reserve(group.requests.size());
-      for (const ShaderPackageRequest& request : group.requests) {
-        entry_points.push_back({request.entry_point, request.stage});
-      }
-      const std::unordered_map<std::string, std::string> defines(group.defines.begin(), group.defines.end());
-      ShaderCompiler::MultiShaderCompilationResult compilation = compiler.compile(source, source_path.string(), entry_points, defines, backend);
-      if ((compilation.result != RHIResult::Success) || (compilation.binaries.size() != group.requests.size())) {
-        std::string variant = group.source_name;
-        for (const auto& entry : entry_points) {
-          variant += " entry=" + entry.entry_point;
-        }
-        for (const auto& [name, value] : group.defines) {
-          variant += " " + name + "=" + value;
-        }
-        report_failure("Failed to compile shader package group '" + variant + "': " + compilation.error_message);
-        return;
-      }
-
-      std::vector<ShaderPackageBuildEntry> group_entries = {};
-      group_entries.reserve(compilation.binaries.size());
-      for (size_t binary_index = 0u; binary_index < compilation.binaries.size(); ++binary_index) {
-        const RHIShaderBinary& compiled_binary = compilation.binaries[binary_index];
-        ShaderPackageBuildEntry package_entry = {
-          .request = group.requests[binary_index],
-        };
-        package_entry.binary.local_size_x = compiled_binary.local_size_x;
-        package_entry.binary.local_size_y = compiled_binary.local_size_y;
-        package_entry.binary.local_size_z = compiled_binary.local_size_z;
-        package_entry.binary.metal_metadata = compiled_binary.metal_metadata;
-        if (backend == RHIBackend::Metal) {
-          package_entry.binary.format = RHIShaderBinaryFormat::MetalLibrary;
-          std::string metal_error = {};
-          if (compile_metal_shader_library(compiled_binary.spirv_data, compiled_binary.spirv_size, metal_library_cache_directory, minimum_macos_version, package_entry.binary.data,
-                metal_error) == false) {
-            report_failure("Failed to build Metal library for '" + group.requests[binary_index].entry_point + "': " + metal_error);
-            return;
-          }
-        } else {
-          package_entry.binary.format = RHIShaderBinaryFormat::SpirV;
-          package_entry.binary.data.assign(compiled_binary.spirv_data, compiled_binary.spirv_data + compiled_binary.spirv_size);
-        }
-        group_entries.push_back(std::move(package_entry));
-      }
-
-      const uint32_t group_variant_count = static_cast<uint32_t>(group_entries.size());
-      {
-        std::lock_guard<std::mutex> entries_lock(package_entries_mutex);
-        package_entries.insert(package_entries.end(), std::make_move_iterator(group_entries.begin()), std::make_move_iterator(group_entries.end()));
-      }
-      completed_variants.fetch_add(group_variant_count);
-      completed_groups.fetch_add(1u);
-    }
-  };
-
-  auto format_duration = [](const double seconds) {
-    const uint64_t rounded_seconds = static_cast<uint64_t>(std::ceil(std::max(0.0, seconds)));
-    const uint64_t hours = rounded_seconds / 3600u;
-    const uint64_t minutes = (rounded_seconds % 3600u) / 60u;
-    const uint64_t remaining_seconds = rounded_seconds % 60u;
-    char buffer[64] = {};
-    if (hours > 0u) {
-      snprintf(buffer, sizeof(buffer), "%lluh %02llum %02llus", static_cast<unsigned long long>(hours), static_cast<unsigned long long>(minutes),
-        static_cast<unsigned long long>(remaining_seconds));
-    } else if (minutes > 0u) {
-      snprintf(buffer, sizeof(buffer), "%llum %02llus", static_cast<unsigned long long>(minutes), static_cast<unsigned long long>(remaining_seconds));
-    } else {
-      snprintf(buffer, sizeof(buffer), "%llus", static_cast<unsigned long long>(remaining_seconds));
-    }
-    return std::string{buffer};
-  };
-  auto report_progress = [&]() {
-    const uint32_t completed_variant_count = completed_variants.load(std::memory_order_acquire);
-    const uint32_t completed_group_count = completed_groups.load(std::memory_order_acquire);
-    const uint32_t claimed_group_count = std::min<uint32_t>(static_cast<uint32_t>(next_group_index.load(std::memory_order_acquire)), total_group_count);
-    const uint32_t active_group_count = claimed_group_count > completed_group_count ? claimed_group_count - completed_group_count : 0u;
-    const double elapsed_seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - compile_begin).count();
-    const double progress = total_variant_count > 0u ? static_cast<double>(completed_variant_count) / static_cast<double>(total_variant_count) : 1.0;
-    std::string estimated_remaining = "estimating";
-    if (compilation_finished.load(std::memory_order_acquire)) {
-      estimated_remaining = compilation_failed.load(std::memory_order_acquire) ? "unavailable" : "0s";
-    } else if (completed_variant_count > 0u) {
-      estimated_remaining = format_duration(elapsed_seconds * (1.0 - progress) / progress);
-    }
-    log::info("Shader package compile progress: %u/%u variants (%.1f%%), groups %u/%u (%u active), elapsed %s, approximate remaining %s", completed_variant_count,
-      total_variant_count, progress * 100.0, completed_group_count, total_group_count, active_group_count, format_duration(elapsed_seconds).c_str(), estimated_remaining.c_str());
-    fflush(stdout);
-  };
-
-  log::info("Shader package compilation started: backend=%s variants=%u groups=%u workers=%u; progress updates every 10 seconds", backend == RHIBackend::Metal ? "metal" : "vulkan",
-    total_variant_count, total_group_count, worker_count);
-  fflush(stdout);
-  std::thread progress_thread([&]() {
-    while (true) {
-      std::unique_lock<std::mutex> progress_lock(progress_mutex);
-      progress_condition.wait_for(progress_lock, std::chrono::seconds(10), [&]() {
-        return compilation_finished.load(std::memory_order_acquire);
-      });
-      progress_lock.unlock();
-      report_progress();
-      if (compilation_finished.load(std::memory_order_acquire)) {
-        return;
-      }
-    }
-  });
-
-  std::vector<std::thread> workers = {};
-  workers.reserve(worker_count);
-  for (uint32_t worker_index = 0u; worker_index < worker_count; ++worker_index) {
-    workers.emplace_back(compile_group);
-  }
-  for (std::thread& worker : workers) {
-    worker.join();
-  }
-  compilation_finished.store(true, std::memory_order_release);
-  progress_condition.notify_one();
-  progress_thread.join();
-  if (compilation_failed.load(std::memory_order_acquire)) {
-    return false;
-  }
-  const auto compile_end = std::chrono::steady_clock::now();
-  statistics.compile_time_ms = elapsed_ms(compile_begin, compile_end);
-  compiler.log_statistics("shader-package");
-  log::info("Shader compilation complete; writing and verifying the production package");
-  fflush(stdout);
-
-  ShaderPackageBuildStatistics package_statistics = {};
-  const auto package_begin = std::chrono::steady_clock::now();
-  if (write_shader_package(output_path, std::move(package_entries), package_statistics, error_message) == false) {
-    return false;
-  }
-
-  ShaderPackage verification_package = {};
-  if (verification_package.load(output_path, backend, error_message) == false) {
-    error_message = "Generated shader package verification failed: " + error_message;
-    return false;
-  }
-  if (verification_package.entry_count() != unique_requests.size()) {
-    error_message = "Generated shader package contains an unexpected number of variants.";
-    return false;
-  }
-  for (const auto& [request_hash, request] : unique_requests) {
-    static_cast<void>(request_hash);
-    ShaderPackageBinary verification_binary = {};
-    if (verification_package.read(request, verification_binary, error_message) == false) {
-      error_message = "Generated shader package entry verification failed: " + error_message;
-      return false;
-    }
-  }
-  const auto package_end = std::chrono::steady_clock::now();
-
-  statistics.variant_count = package_statistics.entry_count;
-  statistics.binary_size_bytes = package_statistics.binary_size_bytes;
-  statistics.package_size_bytes = package_statistics.package_size_bytes;
-  statistics.package_time_ms = elapsed_ms(package_begin, package_end);
-  return true;
-}
-#endif
 
 }  // namespace etx

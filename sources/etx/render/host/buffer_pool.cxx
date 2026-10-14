@@ -22,8 +22,7 @@ BufferHandle BufferPool::create(uint64_t initial_capacity, const char* debug_nam
   slot.alive = true;
   slot.used = 0u;
   slot.name = (debug_name != nullptr) ? debug_name : "";
-  slot.bytes.clear();
-  slot.bytes.resize(static_cast<size_t>(initial_capacity));
+  slot.bytes = std::make_shared<std::vector<uint8_t>>(static_cast<size_t>(initial_capacity));
 
   return BufferHandle{index, slot.generation};
 }
@@ -36,7 +35,7 @@ void BufferPool::destroy(BufferHandle handle) {
 
   slot->alive = false;
   slot->used = 0u;
-  std::vector<uint8_t>().swap(slot->bytes);
+  slot->bytes.reset();
   slot->name.clear();
   slot->generation += 1u;
 
@@ -62,9 +61,9 @@ BufferView BufferPool::allocate(BufferHandle handle, uint64_t byte_size, uint64_
     return {};
   }
 
-  if (required_size > slot->bytes.size()) {
-    const uint64_t new_capacity = next_capacity(required_size, slot->bytes.size());
-    slot->bytes.resize(static_cast<size_t>(new_capacity));
+  if (required_size > slot->bytes->size()) {
+    const uint64_t new_capacity = next_capacity(required_size, slot->bytes->size());
+    writable_bytes(*slot).resize(static_cast<size_t>(new_capacity));
   }
 
   slot->used = required_size;
@@ -88,11 +87,11 @@ bool BufferPool::write(BufferView view, const void* src, uint64_t byte_size, uin
 
   const uint64_t dst_offset = view.byte_offset + write_offset;
   const uint64_t dst_end = dst_offset + byte_size;
-  if ((dst_end > slot->bytes.size()) || (dst_end > slot->used)) {
+  if ((dst_offset < view.byte_offset) || (dst_end < dst_offset) || (dst_end > slot->bytes->size()) || (dst_end > slot->used)) {
     return false;
   }
 
-  memcpy(slot->bytes.data() + dst_offset, src, static_cast<size_t>(byte_size));
+  memcpy(writable_bytes(*slot).data() + dst_offset, src, static_cast<size_t>(byte_size));
   return true;
 }
 
@@ -102,12 +101,12 @@ void* BufferPool::map(BufferView view) {
     return nullptr;
   }
 
-  if ((view.byte_size == 0u) || (view.byte_offset > slot->used) || (view.byte_size > (slot->used - view.byte_offset)) || (view.byte_offset > slot->bytes.size()) ||
-      (view.byte_size > (slot->bytes.size() - view.byte_offset))) {
+  if ((view.byte_size == 0u) || (view.byte_offset > slot->used) || (view.byte_size > (slot->used - view.byte_offset)) || (view.byte_offset > slot->bytes->size()) ||
+      (view.byte_size > (slot->bytes->size() - view.byte_offset))) {
     return nullptr;
   }
 
-  return slot->bytes.data() + view.byte_offset;
+  return writable_bytes(*slot).data() + view.byte_offset;
 }
 
 const void* BufferPool::map(BufferView view) const {
@@ -116,12 +115,12 @@ const void* BufferPool::map(BufferView view) const {
     return nullptr;
   }
 
-  if ((view.byte_size == 0u) || (view.byte_offset > slot->used) || (view.byte_size > (slot->used - view.byte_offset)) || (view.byte_offset > slot->bytes.size()) ||
-      (view.byte_size > (slot->bytes.size() - view.byte_offset))) {
+  if ((view.byte_size == 0u) || (view.byte_offset > slot->used) || (view.byte_size > (slot->used - view.byte_offset)) || (view.byte_offset > slot->bytes->size()) ||
+      (view.byte_size > (slot->bytes->size() - view.byte_offset))) {
     return nullptr;
   }
 
-  return slot->bytes.data() + view.byte_offset;
+  return slot->bytes->data() + view.byte_offset;
 }
 
 void BufferPool::reset(BufferHandle handle) {
@@ -144,7 +143,7 @@ uint64_t BufferPool::used_bytes(BufferHandle handle) const {
 
 uint64_t BufferPool::capacity_bytes(BufferHandle handle) const {
   const Slot* slot = resolve(handle);
-  return (slot != nullptr) ? static_cast<uint64_t>(slot->bytes.size()) : 0u;
+  return (slot != nullptr) ? static_cast<uint64_t>(slot->bytes->size()) : 0u;
 }
 
 BufferPool::Stats BufferPool::stats() const {
@@ -155,7 +154,7 @@ BufferPool::Stats BufferPool::stats() const {
     }
     result.buffer_count += 1u;
     result.used_bytes += slot.used;
-    result.capacity_bytes += static_cast<uint64_t>(slot.bytes.size());
+    result.capacity_bytes += static_cast<uint64_t>(slot.bytes->size());
   }
   return result;
 }
@@ -190,6 +189,13 @@ const BufferPool::Slot* BufferPool::resolve(BufferHandle handle) const {
   }
 
   return &slot;
+}
+
+std::vector<uint8_t>& BufferPool::writable_bytes(Slot& slot) {
+  if (slot.bytes.use_count() != 1) {
+    slot.bytes = std::make_shared<std::vector<uint8_t>>(*slot.bytes);
+  }
+  return *slot.bytes;
 }
 
 uint64_t BufferPool::align_up(uint64_t value, uint64_t alignment) {

@@ -4,6 +4,7 @@
 #include <etx/core/log.hxx>
 #include <etx/core/environment.hxx>
 #include <etx/render/host/scene_representation.hxx>
+#include <etx/render/host/scene_loader_utils.hxx>
 #include <etx/render/shared/ior_database.hxx>
 #include <atomic>
 #include <chrono>
@@ -105,6 +106,112 @@ bool inside_directory(const std::filesystem::path& path, const std::filesystem::
 
 bool terminated(const char* buffer, size_t capacity) {
   return std::memchr(buffer, 0, capacity) != nullptr;
+}
+
+bool remove_degenerate_geometry(SceneData& data) {
+  const size_t triangle_count = data.triangles.size();
+  const size_t vertex_count = data.vertices.pos.size();
+  std::vector<uint32_t> triangle_offsets(triangle_count + 1u);
+  std::vector<uint32_t> vertex_mapping(vertex_count, kInvalidIndex);
+  uint32_t retained_triangles = 0u;
+  for (size_t index = 0u; index < triangle_count; ++index) {
+    triangle_offsets[index] = retained_triangles;
+    Triangle triangle = data.triangles[index];
+    if (validate_triangle(triangle, data.vertices.pos) == false)
+      continue;
+    data.triangles[retained_triangles++] = triangle;
+    for (uint32_t vertex : triangle.i)
+      vertex_mapping[vertex] = 0u;
+  }
+  triangle_offsets[triangle_count] = retained_triangles;
+  data.triangles.resize(retained_triangles);
+
+  uint32_t retained_vertices = 0u;
+  for (auto& index : vertex_mapping) {
+    if (index != kInvalidIndex)
+      index = retained_vertices++;
+  }
+  const bool has_empty_meshes = std::any_of(data.meshes.begin(), data.meshes.end(), [](const Mesh& mesh) {
+    return mesh.triangle_count == 0u;
+  });
+  if ((retained_triangles == triangle_count) && (retained_vertices == vertex_count) && (has_empty_meshes == false))
+    return false;
+
+  std::vector<uint32_t> mesh_mapping(data.meshes.size(), kInvalidIndex);
+  uint32_t retained_meshes = 0u;
+  for (size_t index = 0u; index < data.meshes.size(); ++index) {
+    Mesh mesh = data.meshes[index];
+    const uint64_t end = static_cast<uint64_t>(mesh.triangle_offset) + mesh.triangle_count;
+    if (end > triangle_count)
+      throw std::runtime_error("Imported mesh has an invalid triangle range.");
+    mesh.triangle_count = triangle_offsets[end] - triangle_offsets[mesh.triangle_offset];
+    mesh.triangle_offset = triangle_offsets[mesh.triangle_offset];
+    if (mesh.triangle_count == 0u)
+      continue;
+    mesh.bbox_min = {kMaxFloat, kMaxFloat, kMaxFloat};
+    mesh.bbox_max = {-kMaxFloat, -kMaxFloat, -kMaxFloat};
+    for (uint32_t triangle = mesh.triangle_offset; triangle < (mesh.triangle_offset + mesh.triangle_count); ++triangle) {
+      for (uint32_t vertex : data.triangles[triangle].i) {
+        mesh.bbox_min = min(mesh.bbox_min, data.vertices.pos[vertex]);
+        mesh.bbox_max = max(mesh.bbox_max, data.vertices.pos[vertex]);
+      }
+    }
+    mesh_mapping[index] = retained_meshes;
+    data.meshes[retained_meshes++] = mesh;
+  }
+  data.meshes.resize(retained_meshes);
+  for (auto iterator = data.mesh_mapping.begin(); iterator != data.mesh_mapping.end();) {
+    const uint32_t index = mesh_mapping.at(iterator->second);
+    if (index == kInvalidIndex)
+      iterator = data.mesh_mapping.erase(iterator);
+    else {
+      iterator->second = index;
+      ++iterator;
+    }
+  }
+  std::vector<SceneAttachment> attachments;
+  attachments.reserve(data.hierarchy.attachments.size());
+  for (auto& node : data.hierarchy.nodes) {
+    const uint32_t end = node.attachment_offset + node.attachment_count;
+    const uint32_t offset = static_cast<uint32_t>(attachments.size());
+    for (uint32_t index = node.attachment_offset; index < end; ++index) {
+      SceneAttachment attachment = data.hierarchy.attachments.at(index);
+      if (attachment.type == SceneAttachment::Type::Mesh) {
+        attachment.resource_index = mesh_mapping.at(attachment.resource_index);
+        if (attachment.resource_index == kInvalidIndex)
+          continue;
+      }
+      attachments.push_back(attachment);
+    }
+    node.attachment_offset = offset;
+    node.attachment_count = static_cast<uint32_t>(attachments.size()) - offset;
+  }
+  data.hierarchy.attachments = std::move(attachments);
+
+  const auto compact = [&](auto& values) {
+    if ((values.empty() == false) && (values.size() != vertex_count))
+      throw std::runtime_error("Imported vertex attributes have inconsistent counts.");
+    values.resize(vertex_count);
+    for (size_t index = 0u; index < vertex_count; ++index) {
+      if (vertex_mapping[index] != kInvalidIndex)
+        values[vertex_mapping[index]] = values[index];
+    }
+    values.resize(retained_vertices);
+  };
+  compact(data.vertices.pos);
+  compact(data.vertices.nrm);
+  compact(data.vertices.tex);
+  compact(data.vertices.tan);
+  compact(data.vertices.btn);
+  for (auto& triangle : data.triangles) {
+    for (auto& index : triangle.i)
+      index = vertex_mapping[index];
+  }
+  if (data.resolve_hierarchy() == false)
+    throw std::runtime_error("Imported geometry cleanup produced an invalid hierarchy.");
+  log::info("Import cleanup: removed %zu triangles, %zu unused vertices, and %zu empty meshes", triangle_count - retained_triangles, vertex_count - retained_vertices,
+    mesh_mapping.size() - retained_meshes);
+  return true;
 }
 
 }  // namespace
@@ -386,8 +493,14 @@ std::shared_ptr<ImportArtifact> ImportService::convert(const std::filesystem::pa
     error = "Importer output failed native document validation.";
     return {};
   }
-  const auto& data = validation.data();
+  auto& data = validation.data();
   bool package_required = data.owns_assets == false;
+  try {
+    package_required |= remove_degenerate_geometry(data);
+  } catch (const std::exception& failure) {
+    error = failure.what();
+    return {};
+  }
   for (const auto* reference : {&data.geometry_file_name, &data.materials_file_name}) {
     package_required |= (reference->empty() == false) && (inside_directory(std::filesystem::u8path(*reference), artifact->directory) == false);
   }

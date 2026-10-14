@@ -16,6 +16,8 @@ struct MediumPool {
   void init(uint32_t capacity);
   void cleanup();
   void swap_contents(MediumPool& other);
+  void copy_contents(const MediumPool& other);
+  void refresh_density_views();
 
   uint32_t add(Medium::Class cls, const std::string&, const char* volume, uint32_t absorption_index, uint32_t scattering_index, float anisotropy, bool explicit_connections);
 

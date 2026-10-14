@@ -95,7 +95,12 @@ struct ETX_ALIGNED Scene {
     uint32_t probability_lut = kInvalidIndex;
     float spectral_shortest_wavelength = 0.0f;
     float spectral_longest_wavelength = 0.0f;
+    uint32_t coating_slice_count = 1u;
+    uint32_t terminal_source_lut = kInvalidIndex;
   };
+
+  static_assert(sizeof(EnergyCompensationInterface) == 56u);
+  static_assert(offsetof(EnergyCompensationInterface, terminal_source_lut) == 52u);
 
   ArrayView<EnergyCompensationInterface> energy_compensation_interfaces ETX_EMPTY_INIT;
 
@@ -401,7 +406,7 @@ ETX_SHARED_INLINE Intersection make_intersection(const Scene& scene, const float
   result_intersection.triangle_index = base.triangle_index;
   result_intersection.w_i = w_i;
   result_intersection.t = base.t;
-  result_intersection.material_index = tri.material_index;
+  result_intersection.material_index = base.material_index == kInvalidIndex ? tri.material_index : base.material_index;
   result_intersection.emitter_index = scene_instance_emitter_index(scene, base.instance_index, base.triangle_index);
   result_intersection.instance_index = base.instance_index;
 

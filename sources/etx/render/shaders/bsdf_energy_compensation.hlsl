@@ -1,7 +1,7 @@
 #include "bindless.hlsl"
 
 #include <interop/bsdf_energy_compensation_constants_shared.hxx>
-#include <interop/bsdf_external_shared.hxx>
+#include <interop/bsdf_terminal_source_shared.hxx>
 #include <interop/sampler.hxx>
 
 struct EnergyCompensationPushConstants {
@@ -24,7 +24,7 @@ struct EnergyCompensationParams {
   uint sample_count;
   uint multisample_count;
   uint spectral_channel;
-  uint pad1;
+  uint terminal_source_enabled;
   float4 ext_eta;
   float4 ext_k;
   float4 int_eta;
@@ -36,10 +36,15 @@ struct EnergyCompensationParams {
   uint film_cls;
   float thinfilm_weight;
   uint pad3;
+  float4 coating_eta;
+  float4 coating_k;
+  float coating_thickness_nm;
+  uint coating_cls;
 };
 
 struct EnergyCompensationDirectionalResult {
   float4 albedo;
+  float4 terminal_source;
   float visible_probability;
   float geometric_albedo;
 };
@@ -82,7 +87,7 @@ EnergyCompensationParams load_params() {
   result.sample_count = load_u32(buffer, 48u);
   result.multisample_count = load_u32(buffer, 52u);
   result.spectral_channel = load_u32(buffer, 56u);
-  result.pad1 = load_u32(buffer, 60u);
+  result.terminal_source_enabled = load_u32(buffer, 60u);
   result.ext_eta = load_f32x4(buffer, 64u);
   result.ext_k = load_f32x4(buffer, 80u);
   result.int_eta = load_f32x4(buffer, 96u);
@@ -94,6 +99,10 @@ EnergyCompensationParams load_params() {
   result.film_cls = load_u32(buffer, 180u);
   result.thinfilm_weight = load_f32(buffer, 184u);
   result.pad3 = load_u32(buffer, 188u);
+  result.coating_eta = load_f32x4(buffer, 192u);
+  result.coating_k = load_f32x4(buffer, 208u);
+  result.coating_thickness_nm = load_f32(buffer, 224u);
+  result.coating_cls = load_u32(buffer, 228u);
   return result;
 }
 
@@ -205,10 +214,11 @@ RefractiveIndexSample ec_select_refractive_index(bool use_first, RefractiveIndex
 ThinfilmEval ec_thinfilm(EnergyCompensationParams params, SpectralQuery spect, uint channel) {
   ThinfilmEval result = (ThinfilmEval)0;
   result.ior = ec_refractive_index(params.film_eta, params.film_k, params.film_cls, spect, channel);
-  result.ior.k = spectral_response_make(spect, 0.0f);
   result.rgb_wavelengths = kRGBWavelengths;
   result.thickness = params.thinfilm_thickness;
   result.weight = params.thinfilm_weight;
+  result.coating_ior = ec_refractive_index(params.coating_eta, params.coating_k, params.coating_cls, spect, channel);
+  result.coating_thickness_nm = params.coating_thickness_nm;
   return result;
 }
 
@@ -217,21 +227,7 @@ bool ec_spectral_response_finite(SpectralResponse value) {
 }
 
 SpectralResponse ec_average_fresnel(SpectralQuery spect, RefractiveIndexSample ext_ior, RefractiveIndexSample int_ior, ThinfilmEval thinfilm) {
-  const float nodes[8] = {
-    1.98550718e-2f, 1.01666761e-1f, 2.37233795e-1f, 4.08282679e-1f,
-    5.91717321e-1f, 7.62766205e-1f, 8.98333239e-1f, 9.80144928e-1f,
-  };
-  const float weights[8] = {
-    5.06142681e-2f, 1.11190517e-1f, 1.56853323e-1f, 1.81341892e-1f,
-    1.81341892e-1f, 1.56853323e-1f, 1.11190517e-1f, 5.06142681e-2f,
-  };
-  SpectralResponse result = spectral_response_make(spect, 0.0f);
-  for (uint i = 0u; i < 8u; ++i) {
-    float mu = nodes[i];
-    SpectralResponse fresnel = bsdf_fresnel_calculate(spect, mu, ext_ior, int_ior, thinfilm);
-    result = spectral_response_add(result, spectral_response_mul(fresnel, 2.0f * weights[i] * mu));
-  }
-  return result;
+  return bsdf_fresnel_average(spect, ext_ior, int_ior, thinfilm);
 }
 
 SpectralResponse ec_conductor_fms(SpectralQuery spect, RefractiveIndexSample ext_ior, RefractiveIndexSample int_ior, ThinfilmEval thinfilm, float average_albedo) {
@@ -245,6 +241,14 @@ SpectralResponse ec_conductor_fms(SpectralQuery spect, RefractiveIndexSample ext
     return spectral_response_make(spect, 0.0f);
   }
   return spectral_response_div(numerator, spectral_response_max(denominator, kEpsilon));
+}
+
+SpectralResponse ec_conductor_terminal_ms(SpectralQuery spect, RefractiveIndexSample ext_ior, RefractiveIndexSample int_ior, ThinfilmEval optics, float average_albedo) {
+  SpectralResponse reflection = ec_average_fresnel(spect, ext_ior, int_ior, optics);
+  SpectralResponse terminal = bsdf_fresnel_terminal_source_average(spect, ext_ior, int_ior, optics);
+  SpectralResponse numerator = spectral_response_mul(terminal, spectral_response_add(spectral_response_make(spect, 1.0f), spectral_response_mul(reflection, average_albedo)));
+  SpectralResponse denominator = spectral_response_sub(spectral_response_make(spect, 1.0f), spectral_response_mul(reflection, 1.0f - average_albedo));
+  return spectral_response_div(numerator, denominator);
 }
 
 EnergyCompensationDirectionalResult ec_integrate_conductor_directional(EnergyCompensationParams params, uint channel, float mu_i, float alpha) {
@@ -274,6 +278,11 @@ EnergyCompensationDirectionalResult ec_integrate_conductor_directional(EnergyCom
       SpectralResponse fresnel = bsdf_fresnel_calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
       float3 albedo = spectral_response_is_spectral(fresnel) ? float3(fresnel.value, 0.0f, 0.0f) : fresnel.integrated;
       result.albedo += float4(albedo * geometric_weight, 0.0f);
+      if (params.terminal_source_enabled != 0u) {
+        SpectralResponse terminal = bsdf_terminal_source_normal_sample(spect, ext_ior, int_ior, thinfilm, w_i, m, alpha, geometric_weight);
+        float3 terminal_value = spectral_response_is_spectral(terminal) ? float3(terminal.value, 0.0f, 0.0f) : terminal.integrated;
+        result.terminal_source += float4(terminal_value, 0.0f);
+      }
       result.geometric_albedo += geometric_weight;
       if (g1_i > kEpsilon) {
         result.visible_probability += 1.0f;
@@ -281,8 +290,17 @@ EnergyCompensationDirectionalResult ec_integrate_conductor_directional(EnergyCom
     }
   }
 
+  if (params.terminal_source_enabled != 0u) {
+    for (uint sample_index = 0u; sample_index < params.sample_count; ++sample_index) {
+      SpectralResponse terminal = bsdf_terminal_source_guided_sample(spect, ext_ior, int_ior, thinfilm, w_i, alpha, ec_hammersley(sample_index, params.sample_count));
+      float3 terminal_value = spectral_response_is_spectral(terminal) ? float3(terminal.value, 0.0f, 0.0f) : terminal.integrated;
+      result.terminal_source += float4(terminal_value, 0.0f);
+    }
+  }
+
   float inv_sample_count = 1.0f / float(params.sample_count);
   result.albedo = ec_saturate4(result.albedo * inv_sample_count);
+  result.terminal_source *= inv_sample_count;
   result.geometric_albedo = ec_saturate(result.geometric_albedo * inv_sample_count);
   result.visible_probability = ec_saturate(result.visible_probability * inv_sample_count);
   return result;
@@ -296,6 +314,28 @@ uint ec_dielectric_branch_index(uint incident_side, uint outgoing_side) {
   return incident_side * 2u + outgoing_side;
 }
 
+bool ec_dielectric_values_valid(float4 value) {
+  return all(isfinite(value)) && all(value >= 0.0f);
+}
+
+bool ec_dielectric_ray_finite(BSDFExternalRayInfo ray) {
+  return isfinite(ray.h) && all(isfinite(ray.w)) && isfinite(ray.Lambda) && isfinite(ray.C1) && isfinite(ray.G1);
+}
+
+void ec_invalid_dielectric_average(EnergyCompensationParams params, uint alpha_index) {
+  for (uint column = 0u; column < kBSDFEnergyCompensationDielectricAverageWidth; ++column) {
+    store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + column, float4(-1.0f, -1.0f, -1.0f, -1.0f));
+  }
+}
+
+EnergyCompensationDielectricResult ec_invalid_dielectric_result() {
+  EnergyCompensationDielectricResult result = (EnergyCompensationDielectricResult)0;
+  result.branch_albedo[0] = float4(-1.0f, -1.0f, -1.0f, -1.0f);
+  result.branch_albedo[1] = result.branch_albedo[0];
+  result.visible_probability = -1.0f;
+  return result;
+}
+
 EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCompensationParams params, uint channel, bool multiscatter, bool incident_outside, float mu_i,
   float alpha) {
   EnergyCompensationDielectricResult result = (EnergyCompensationDielectricResult)0;
@@ -305,14 +345,14 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
   SpectralQuery spect = ec_query(params, channel);
   RefractiveIndexSample ext_ior = ec_refractive_index(params.ext_eta, params.ext_k, SpectralDistribution::Dielectric, spect, channel);
   RefractiveIndexSample int_ior = ec_refractive_index(params.int_eta, params.int_k, SpectralDistribution::Dielectric, spect, channel);
-  ThinfilmEval thinfilm = ec_thinfilm(params, spect, channel);
+  ThinfilmEval thinfilm = bsdf_fresnel_orient_coherent_interface(ec_thinfilm(params, spect, channel), incident_outside);
   RefractiveIndexSample source_ior = ec_select_refractive_index(incident_outside, ext_ior, int_ior);
   RefractiveIndexSample target_ior = ec_select_refractive_index(incident_outside, int_ior, ext_ior);
-  float eta = spectral_response_monochromatic(spectral_response_div(target_ior.eta, source_ior.eta));
   uint incident_side = ec_dielectric_side(incident_outside);
   uint opposite_side = 1u - incident_side;
-  bool no_thinfilm = (thinfilm.weight <= 0.0f) || (thinfilm.thickness <= 0.0f) || spectral_response_is_zero(thinfilm.ior.eta);
-  if ((no_thinfilm) && (abs(eta - 1.0f) <= (16.0f * kEpsilon))) {
+  bool no_thinfilm = (thinfilm.coating_thickness_nm <= 0.0f) &&
+                     ((thinfilm.weight <= 0.0f) || (thinfilm.thickness <= 0.0f) || (spectral_response_is_zero(thinfilm.ior.eta) && spectral_response_is_zero(thinfilm.ior.k)));
+  if (no_thinfilm && bsdf_fresnel_equal_indices(source_ior, target_ior)) {
     if (multiscatter == false) {
       result.branch_albedo[opposite_side] = float4(1.0f, 1.0f, 1.0f, 1.0f);
       result.branch_visible_probability[opposite_side] = 1.0f;
@@ -331,8 +371,9 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
         continue;
       }
       SpectralResponse fresnel = bsdf_fresnel_calculate(spect, i_dot_m, source_ior, target_ior, thinfilm);
+      SpectralResponse transmission = bsdf_fresnel_transmission_calculate(spect, i_dot_m, source_ior, target_ior, thinfilm);
       float fresnel_probability = spectral_response_monochromatic(fresnel);
-      float cos_theta_t2 = 1.0f - (1.0f - i_dot_m * i_dot_m) / (eta * eta);
+      float cos_theta_t = bsdf_external_transmitted_cosine(i_dot_m, source_ior, target_ior);
       float3 w_o_r = -w_i + 2.0f * m * i_dot_m;
       if (w_o_r.z > kEpsilon) {
         result.branch_visible_probability[incident_side] += fresnel_probability;
@@ -343,15 +384,14 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
         float3 albedo = spectral_response_is_spectral(fresnel) ? float3(fresnel.value, 0.0f, 0.0f) : fresnel.integrated;
         result.branch_albedo[incident_side] += float4(albedo * weight, 0.0f);
       }
-      if ((fresnel_probability < 1.0f) && (cos_theta_t2 > 0.0f)) {
-        const float3 w_o_t = normalize(bsdf_external_refract(w_i, m, eta));
+      if ((spectral_response_is_zero(transmission) == false) && (cos_theta_t > 0.0f)) {
+        const float3 w_o_t = normalize(bsdf_external_refract(w_i, m, source_ior, target_ior));
         if (w_o_t.z < -kEpsilon) {
-          result.branch_visible_probability[opposite_side] += 1.0f - fresnel_probability;
+          result.branch_visible_probability[opposite_side] += spectral_response_monochromatic(transmission);
         }
         if (w_o_t.z < -kEpsilon) {
           float lambda_o = bsdf_external_ray_info_make(-w_o_t, float2(alpha, alpha)).Lambda;
           float weight = (1.0f + lambda_i) * bsdf_external_beta(1.0f + lambda_i, 1.0f + lambda_o);
-          SpectralResponse transmission = spectral_response_sub(spectral_response_make(spect, 1.0f), fresnel);
           float3 albedo = spectral_response_is_spectral(transmission) ? float3(transmission.value, 0.0f, 0.0f) : transmission.integrated;
           result.branch_albedo[opposite_side] += float4(albedo * weight, 0.0f);
         }
@@ -366,7 +406,11 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
       bool valid = true;
       uint scattering_order = 0u;
       uint random_state = sampler_random_seed(sample_index, 0u);
+      SpectralResponse throughput = spectral_response_make(spect, 1.0f);
       while (valid) {
+        if ((ec_dielectric_ray_finite(ray) == false) || (bsdf_external_response_finite(throughput) == false)) {
+          return ec_invalid_dielectric_result();
+        }
         float sampled_height = bsdf_external_sample_height(ray, min(1.0f - kEpsilon, max(kEpsilon, sampler_next_random(random_state))));
         if (sampled_height == kMaxFloat) {
           break;
@@ -375,10 +419,22 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
         const float rnd_slope_x = min(1.0f - kEpsilon, max(kEpsilon, sampler_next_random(random_state)));
         const float rnd_slope_y = min(1.0f - kEpsilon, max(kEpsilon, sampler_next_random(random_state)));
         const float2 rnd_slope = float2(rnd_slope_x, rnd_slope_y);
-        float rnd_reflection = min(1.0f - kEpsilon, max(kEpsilon, sampler_next_random(random_state)));
+        float rnd_reflection = sampler_next_random(random_state);
         RefractiveIndexSample phase_ext_ior = ec_select_refractive_index(ray_outside, source_ior, target_ior);
         RefractiveIndexSample phase_int_ior = ec_select_refractive_index(ray_outside, target_ior, source_ior);
-        BSDFExternalDielectricSample sample = bsdf_external_sample_phase_function_dielectric(spect, rnd_slope, rnd_reflection, -ray.w, alpha2, phase_ext_ior, phase_int_ior, thinfilm);
+        BSDFExternalDielectricSample sample = bsdf_external_sample_phase_function_dielectric(spect, rnd_slope, rnd_reflection, -ray.w, alpha2, phase_ext_ior, phase_int_ior,
+          bsdf_fresnel_orient_coherent_interface(thinfilm, incident_outside == ray_outside));
+        if (sample.numerical_failure) {
+          return ec_invalid_dielectric_result();
+        }
+        if (dot(sample.w_o, sample.w_o) == 0.0f) {
+          valid = false;
+          break;
+        }
+        throughput = spectral_response_mul(throughput, sample.weight);
+        if (bsdf_external_response_finite(throughput) == false) {
+          return ec_invalid_dielectric_result();
+        }
         if (sample.reflection) {
           ray = bsdf_external_ray_info_update_direction(ray, sample.w_o, alpha2);
           ray = bsdf_external_ray_info_update_height(ray, ray.h);
@@ -388,8 +444,22 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
           ray = bsdf_external_ray_info_update_height(ray, -ray.h);
         }
         scattering_order += 1u;
-        if ((scattering_order > kBSDFExternalScatteringOrderMax) || (ray.h != ray.h) || (ray.w.x != ray.w.x)) {
-          valid = false;
+        if (ec_dielectric_ray_finite(ray) == false) {
+          return ec_invalid_dielectric_result();
+        }
+        if (scattering_order > 1u) {
+          const float continuation_probability = bsdf_external_continuation_probability(throughput);
+          if (continuation_probability == 0.0f) {
+            valid = false;
+            break;
+          }
+          if (continuation_probability < 1.0f) {
+            if (sampler_next_random(random_state) >= continuation_probability) {
+              valid = false;
+              break;
+            }
+            throughput = spectral_response_mul(throughput, 1.0f / continuation_probability);
+          }
         }
       }
       if ((valid == false) || (scattering_order <= 1u)) {
@@ -397,18 +467,26 @@ EnergyCompensationDielectricResult ec_integrate_dielectric_directional(EnergyCom
       }
       float3 local_w_o = ray_outside ? ray.w : -ray.w;
       uint outgoing_side = (local_w_o.z > 0.0f) ? incident_side : opposite_side;
-      result.branch_albedo[outgoing_side] += float4(1.0f, 1.0f, 1.0f, 1.0f);
-      result.visible_probability += 1.0f;
+      const float3 albedo = spectral_response_is_spectral(throughput) ? float3(throughput.value, 0.0f, 0.0f) : throughput.integrated;
+      result.branch_albedo[outgoing_side] += float4(albedo, 0.0f);
+      result.visible_probability += spectral_response_monochromatic(throughput);
+      if ((ec_dielectric_values_valid(result.branch_albedo[outgoing_side]) == false) || (isfinite(result.visible_probability) == false)) {
+        return ec_invalid_dielectric_result();
+      }
     }
   }
 
   float inv_sample_count = multiscatter ? (1.0f / float(params.multisample_count)) : (1.0f / float(params.sample_count));
-  result.branch_albedo[0] = ec_saturate4(result.branch_albedo[0] * inv_sample_count);
-  result.branch_albedo[1] = ec_saturate4(result.branch_albedo[1] * inv_sample_count);
+  result.branch_albedo[0] *= inv_sample_count;
+  result.branch_albedo[1] *= inv_sample_count;
+  if (multiscatter == false) {
+    result.branch_albedo[0] = ec_saturate4(result.branch_albedo[0]);
+    result.branch_albedo[1] = ec_saturate4(result.branch_albedo[1]);
+  }
   result.branch_visible_probability[0] = ec_saturate(result.branch_visible_probability[0] * inv_sample_count);
   result.branch_visible_probability[1] = ec_saturate(result.branch_visible_probability[1] * inv_sample_count);
   result.visible_probability =
-    multiscatter ? ec_saturate(result.visible_probability * inv_sample_count) : ec_saturate(result.branch_visible_probability[0] + result.branch_visible_probability[1]);
+    multiscatter ? (result.visible_probability * inv_sample_count) : ec_saturate(result.branch_visible_probability[0] + result.branch_visible_probability[1]);
   return result;
 }
 
@@ -435,9 +513,12 @@ float4 ec_integrate_dielectric_branch_average(uint buffer_index, uint alpha_inde
     float2 weights = bsdf_energy_compensated_dielectric_average_weights(mu_index, kBSDFEnergyCompensationDielectricLutSize);
     float4 value_0 = load_float4(buffer_index, row_offset + branch_offset + mu_index);
     float4 value_1 = load_float4(buffer_index, row_offset + branch_offset + mu_index + 1u);
+    if ((ec_dielectric_values_valid(value_0) == false) || (ec_dielectric_values_valid(value_1) == false)) {
+      return float4(-1.0f, -1.0f, -1.0f, -1.0f);
+    }
     total += value_0 * weights.x + value_1 * weights.y;
   }
-  return ec_saturate4(total);
+  return ec_dielectric_values_valid(total) ? total : float4(-1.0f, -1.0f, -1.0f, -1.0f);
 }
 
 float ec_integrate_geometric_average(uint buffer_index, uint alpha_index) {
@@ -454,10 +535,6 @@ float ec_integrate_geometric_average(uint buffer_index, uint alpha_index) {
   return ec_saturate(total);
 }
 
-float4 ec_residual_coefficient(float4 residual_average, float4 side_residual_a, float4 side_residual_b) {
-  return max(float4(0.0f, 0.0f, 0.0f, 0.0f), residual_average / max(float4(kEpsilon, kEpsilon, kEpsilon, kEpsilon), side_residual_a * side_residual_b));
-}
-
 [numthreads(8, 8, 1)]
 void main(uint3 id : SV_DispatchThreadID) {
   EnergyCompensationParams params = load_params();
@@ -469,6 +546,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float mu = ec_mu_parameter(id.x, kBSDFEnergyCompensationConductorLutSize);
     float alpha = ec_alpha_parameter(id.y, kBSDFEnergyCompensationConductorLutSize);
     float4 image = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 terminal = float4(0.0f, 0.0f, 0.0f, 0.0f);
     float4 geometric = float4(0.0f, 0.0f, 0.0f, 1.0f);
     if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
       uint channel = params.spectral_channel;
@@ -477,6 +555,12 @@ void main(uint3 id : SV_DispatchThreadID) {
         image = load_float4(params.output_directional_index, index);
       }
       ec_set_channel(image, channel, value.albedo.x);
+      if (params.terminal_source_enabled != 0u) {
+        if (channel > 0u) {
+          terminal = load_float4(params.output_total_index, index);
+        }
+        ec_set_channel(terminal, channel, value.terminal_source.x);
+      }
       if (channel == 0u) {
         geometric.x = value.geometric_albedo;
         geometric.y = value.visible_probability;
@@ -484,9 +568,13 @@ void main(uint3 id : SV_DispatchThreadID) {
     } else {
       EnergyCompensationDirectionalResult value = ec_integrate_conductor_directional(params, 0u, mu, alpha);
       image = float4(value.albedo.x, value.albedo.y, value.albedo.z, value.visible_probability);
+      terminal = value.terminal_source;
       geometric = float4(value.geometric_albedo, value.visible_probability, 0.0f, 1.0f);
     }
     store_float4(params.output_directional_index, index, image);
+    if (params.terminal_source_enabled != 0u) {
+      store_float4(params.output_total_index, index, terminal);
+    }
     if ((params.cache_mode != kBSDFEnergyCompensationCacheModeSpectralScalar) || (params.spectral_channel == 0u)) {
       store_float4(params.output_geometric_index, index, geometric);
     }
@@ -502,6 +590,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float geometric_average = ec_integrate_geometric_average(params.output_geometric_index, alpha_index);
     float alpha = ec_alpha_parameter(alpha_index, kBSDFEnergyCompensationConductorLutSize);
     float4 conductor_fms = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    float4 terminal_ms = float4(0.0f, 0.0f, 0.0f, 0.0f);
     if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
       for (uint channel = 0u; channel < kBSDFEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
         SpectralQuery spect = ec_query(params, channel);
@@ -510,6 +599,9 @@ void main(uint3 id : SV_DispatchThreadID) {
         ThinfilmEval thinfilm = ec_thinfilm(params, spect, channel);
         SpectralResponse fms = ec_conductor_fms(spect, ext_ior, int_ior, thinfilm, geometric_average);
         ec_set_channel(conductor_fms, channel, spectral_response_monochromatic(fms));
+        if (params.terminal_source_enabled != 0u) {
+          ec_set_channel(terminal_ms, channel, ec_conductor_terminal_ms(spect, ext_ior, int_ior, thinfilm, geometric_average).value);
+        }
       }
     } else {
       SpectralQuery spect = ec_query(params, 0u);
@@ -518,6 +610,9 @@ void main(uint3 id : SV_DispatchThreadID) {
       ThinfilmEval thinfilm = ec_thinfilm(params, spect, 0u);
       SpectralResponse fms = ec_conductor_fms(spect, ext_ior, int_ior, thinfilm, geometric_average);
       conductor_fms = float4(fms.integrated, 1.0f);
+      if (params.terminal_source_enabled != 0u) {
+        terminal_ms = float4(ec_conductor_terminal_ms(spect, ext_ior, int_ior, thinfilm, geometric_average).integrated, 0.0f);
+      }
     }
     if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
       store_float4(params.output_average_index, alpha_index, average);
@@ -526,6 +621,9 @@ void main(uint3 id : SV_DispatchThreadID) {
     }
     store_float4(params.output_geometric_average_index, alpha_index, float4(geometric_average, 0.0f, 0.0f, 1.0f));
     store_float4(params.output_conductor_fms_index, alpha_index, conductor_fms);
+    if (params.terminal_source_enabled != 0u) {
+      store_float4(params.output_total_index, kBSDFEnergyCompensationConductorLutSize * kBSDFEnergyCompensationConductorLutSize + alpha_index, terminal_ms);
+    }
     return;
   }
 
@@ -590,12 +688,17 @@ void main(uint3 id : SV_DispatchThreadID) {
     float4 single_average[kBSDFEnergyCompensationDielectricBranchCount];
     float4 multiscatter_average[kBSDFEnergyCompensationDielectricBranchCount];
     float4 residual_average[kBSDFEnergyCompensationDielectricBranchCount];
-    float4 residual_coefficient[kBSDFEnergyCompensationDielectricBranchCount];
     for (uint incident_side = 0u; incident_side < 2u; ++incident_side) {
       for (uint outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
         uint branch = ec_dielectric_branch_index(incident_side, outgoing_side);
         single_average[branch] = ec_integrate_dielectric_branch_average(params.output_directional_index, alpha_index, branch);
         multiscatter_average[branch] = ec_integrate_dielectric_branch_average(params.output_total_index, alpha_index, branch);
+      }
+    }
+    for (uint branch = 0u; branch < kBSDFEnergyCompensationDielectricBranchCount; ++branch) {
+      if ((ec_dielectric_values_valid(single_average[branch]) == false) || (ec_dielectric_values_valid(multiscatter_average[branch]) == false)) {
+        ec_invalid_dielectric_average(params, alpha_index);
+        return;
       }
     }
     float4 side_residual[2];
@@ -611,29 +714,60 @@ void main(uint3 id : SV_DispatchThreadID) {
         residual_average[branch] = multiscatter_average[branch];
       }
     }
-    for (uint incident_side = 0u; incident_side < 2u; ++incident_side) {
-      uint branch_0 = ec_dielectric_branch_index(incident_side, 0u);
-      uint branch_1 = ec_dielectric_branch_index(incident_side, 1u);
-      float4 residual_sum = residual_average[branch_0] + residual_average[branch_1];
-      float4 scale = min(float4(1.0f, 1.0f, 1.0f, 1.0f), side_residual[incident_side] / max(float4(kEpsilon, kEpsilon, kEpsilon, kEpsilon), residual_sum));
-      residual_average[branch_0] *= scale;
-      residual_average[branch_1] *= scale;
+    float4 epsilon = float4(kEpsilon, kEpsilon, kEpsilon, kEpsilon);
+    float4 outside_transmission = residual_average[1] * side_residual[0] / max(epsilon, residual_average[0] + residual_average[1]);
+    float4 inside_transmission = residual_average[2] * side_residual[1] / max(epsilon, residual_average[2] + residual_average[3]);
+    float4 eta;
+    if (params.cache_mode == kBSDFEnergyCompensationCacheModeIntegratedRGB) {
+      float scalar_eta = luminance(params.int_eta.xyz / params.ext_eta.xyz);
+      eta = float4(scalar_eta, scalar_eta, scalar_eta, scalar_eta);
+    } else {
+      eta = params.int_eta / params.ext_eta;
     }
-    for (uint incident_side = 0u; incident_side < 2u; ++incident_side) {
-      for (uint outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
-        uint branch = ec_dielectric_branch_index(incident_side, outgoing_side);
-        residual_coefficient[branch] = ec_residual_coefficient(residual_average[branch], side_residual[incident_side], side_residual[outgoing_side]);
+    float4 eta_squared = eta * eta;
+    if ((all(isfinite(eta_squared)) == false) || any(eta_squared <= 0.0f)) {
+      ec_invalid_dielectric_average(params, alpha_index);
+      return;
+    }
+    const bool film_enabled = (params.thinfilm_weight > 0.0f) && (params.thinfilm_thickness > 0.0f);
+    const bool coating_enabled = params.coating_thickness_nm > 0.0f;
+    const bool4 absorbing_channels = or (and(film_enabled, (params.film_eta * params.film_k) > 0.0f), and(coating_enabled, (params.coating_eta * params.coating_k) > 0.0f));
+    if (any(absorbing_channels)) {
+      float4 reflection_0 = min(residual_average[0], side_residual[0]);
+      float4 reflection_1 = min(residual_average[3], side_residual[1]);
+      float4 transmission =
+        min(0.5f * (residual_average[1] + eta_squared * residual_average[2]), min(side_residual[0] - reflection_0, eta_squared * (side_residual[1] - reflection_1)));
+      const float4 lossless_transmission = min(0.5f * (outside_transmission + eta_squared * inside_transmission), min(side_residual[0], eta_squared * side_residual[1]));
+      const bool4 absorbing = params.cache_mode == kBSDFEnergyCompensationCacheModeIntegratedRGB ? bool4(true, true, true, true) : absorbing_channels;
+      residual_average[0] = select(absorbing, reflection_0, side_residual[0] - lossless_transmission);
+      residual_average[1] = select(absorbing, transmission, lossless_transmission);
+      residual_average[2] = residual_average[1] / eta_squared;
+      residual_average[3] = select(absorbing, reflection_1, side_residual[1] - residual_average[2]);
+    } else {
+      float4 transmission = min(0.5f * (outside_transmission + eta_squared * inside_transmission), min(side_residual[0], eta_squared * side_residual[1]));
+      residual_average[0] = side_residual[0] - transmission;
+      residual_average[1] = transmission;
+      residual_average[2] = transmission / eta_squared;
+      residual_average[3] = side_residual[1] - residual_average[2];
+    }
+    for (uint branch = 0u; branch < kBSDFEnergyCompensationDielectricBranchCount; ++branch) {
+      if (all(isfinite(residual_average[branch])) == false) {
+        ec_invalid_dielectric_average(params, alpha_index);
+        return;
       }
     }
     for (uint branch = 0u; branch < kBSDFEnergyCompensationDielectricBranchCount; ++branch) {
       if (params.cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
         store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + branch, ec_saturate4(single_average[branch]));
-        store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + 4u + branch, max(float4(0.0f, 0.0f, 0.0f, 0.0f), residual_coefficient[branch]));
+        store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + 4u + branch,
+          max(float4(0.0f, 0.0f, 0.0f, 0.0f), residual_average[branch]));
       } else {
         float4 single_value = ec_saturate4(single_average[branch]);
-        float4 residual_value = max(float4(0.0f, 0.0f, 0.0f, 0.0f), residual_coefficient[branch]);
-        store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + branch, float4(single_value.x, single_value.y, single_value.z, 1.0f));
-        store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + 4u + branch, float4(residual_value.x, residual_value.y, residual_value.z, 1.0f));
+        float4 residual_value = max(float4(0.0f, 0.0f, 0.0f, 0.0f), residual_average[branch]);
+        store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + branch,
+          float4(single_value.x, single_value.y, single_value.z, 1.0f));
+        store_float4(params.output_average_index, alpha_index * kBSDFEnergyCompensationDielectricAverageWidth + 4u + branch,
+          float4(residual_value.x, residual_value.y, residual_value.z, 1.0f));
       }
     }
   }

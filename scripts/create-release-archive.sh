@@ -38,19 +38,16 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     ditto "$APP_BUNDLE" "$RELEASE_DIR/ETX Tracer.app"
 else
     PLATFORM="linux"
-    echo "Copying runtime data and compiled shader package..."
+    echo "Copying runtime data and shader sources..."
     cd "$PROJECT_ROOT/bin"
     for item in *; do
         if [[ "$item" == "assets" || "$item" == "fonts" || "$item" == "spectrum" ||
-              "$item" == "shaders.etxpack" ]]; then
+              "$item" == "shaders" || "$item" == "interop" || "$item" == "access" ]]; then
             echo "  Copying: $item"
             cp -r "$item" "$RELEASE_DIR/"
         fi
     done
-    if [[ ! -f "$RELEASE_DIR/shaders.etxpack" ]]; then
-        echo "Error: shaders.etxpack was not generated"
-        exit 1
-    fi
+    cp "$PROJECT_ROOT/bin/libdxcompiler.so" "$RELEASE_DIR/"
     if [[ ! -f "$PROJECT_ROOT/bin/raytracer" ]]; then
         echo "Error: raytracer was not built"
         exit 1

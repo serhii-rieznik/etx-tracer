@@ -165,7 +165,7 @@ struct IntegratorThread {
   void request_scene_check(SceneUpdateScope scope);
   void suppress_next_scene_commit_run();
   bool scene_changes_pending() const;
-  const char* scene_failure_reason() const;
+  std::string scene_failure_reason() const;
   uint64_t scene_revision() const;
 
  private:

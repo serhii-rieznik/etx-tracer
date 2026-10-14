@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bsdf_conductor_shared.hxx"
+#include "bsdf_coated_conductor_shared.hxx"
 #include "bsdf_dielectric_shared.hxx"
 #include "bsdf_diffraction_grating_shared.hxx"
 #include "bsdf_energy_compensated_shared.hxx"
@@ -15,6 +16,7 @@ ETX_SHARED_INLINE bool bsdf_gpu_supported_class(uint32_t material_class) {
     case MaterialClass::Translucent:
     case MaterialClass::Mirror:
     case MaterialClass::Conductor:
+    case MaterialClass::CoatedConductor:
     case MaterialClass::Dielectric:
     case MaterialClass::Plastic:
     case MaterialClass::Thinfilm:
@@ -41,6 +43,8 @@ ETX_SHARED_INLINE BSDFSample bsdf_sample(ETX_IN(BSDFResourceContext, context), E
       return bsdf_translucent_sample(context, data, effective_material, sampler);
     case MaterialClass::Conductor:
       return bsdf_conductor_energy_compensated_sample(context, data, effective_material, sampler);
+    case MaterialClass::CoatedConductor:
+      return bsdf_coated_conductor_sample(context, data, effective_material, sampler);
     case MaterialClass::Dielectric:
       return bsdf_dielectric_energy_compensated_sample(context, data, effective_material, sampler);
     case MaterialClass::Plastic:
@@ -74,6 +78,8 @@ ETX_SHARED_INLINE BSDFEval bsdf_evaluate(ETX_IN(BSDFResourceContext, context), E
       return bsdf_translucent_evaluate(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Conductor:
       return bsdf_conductor_energy_compensated_evaluate(context, data, outgoing_direction, effective_material, sampler);
+    case MaterialClass::CoatedConductor:
+      return bsdf_coated_conductor_evaluate(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Dielectric:
       return bsdf_dielectric_energy_compensated_evaluate(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Plastic:
@@ -107,6 +113,8 @@ ETX_SHARED_INLINE float bsdf_pdf(ETX_IN(BSDFResourceContext, context), ETX_IN(BS
       return bsdf_translucent_pdf(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Conductor:
       return bsdf_conductor_energy_compensated_pdf(context, data, outgoing_direction, effective_material, sampler);
+    case MaterialClass::CoatedConductor:
+      return bsdf_coated_conductor_pdf(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Dielectric:
       return bsdf_dielectric_energy_compensated_pdf(context, data, outgoing_direction, effective_material, sampler);
     case MaterialClass::Plastic:
@@ -151,6 +159,10 @@ ETX_SHARED_INLINE bool bsdf_is_delta(ETX_IN(Material, material), ETX_IN(float2, 
       return bsdf_translucent_is_delta(material, tex, sampler);
     case MaterialClass::Conductor:
       return bsdf_conductor_is_delta(material, tex, sampler);
+    case MaterialClass::CoatedConductor:
+      return (material.roughness.value.x == 0.0f) && (material.roughness.value.y == 0.0f) && (material.roughness.image_index == kInvalidIndex) &&
+             (material.coating.roughness.value.x == 0.0f) && (material.coating.roughness.value.y == 0.0f) && (material.coating.roughness.image_index == kInvalidIndex) &&
+             (material.coating.scattering.spectrum_index == kInvalidIndex) && (material.coating.scattering.image_index == kInvalidIndex);
     case MaterialClass::Dielectric:
       return bsdf_dielectric_is_delta(material, tex, sampler);
     case MaterialClass::Plastic:
@@ -183,6 +195,8 @@ ETX_SHARED_INLINE bool bsdf_is_delta_with_context(ETX_IN(BSDFResourceContext, co
       return bsdf_translucent_is_delta(effective_material, tex, sampler);
     case MaterialClass::Conductor:
       return bsdf_conductor_energy_compensated_is_delta_with_context(context, effective_material, tex);
+    case MaterialClass::CoatedConductor:
+      return bsdf_coated_conductor_is_delta_with_context(context, effective_material, tex);
     case MaterialClass::Dielectric:
       return bsdf_dielectric_energy_compensated_is_delta_with_context(context, effective_material, tex);
     case MaterialClass::Plastic:
@@ -216,6 +230,13 @@ ETX_SHARED_INLINE SpectralResponse bsdf_albedo(ETX_IN(BSDFResourceContext, conte
       return bsdf_translucent_albedo(context, data, effective_material, sampler);
     case MaterialClass::Conductor:
       return bsdf_conductor_energy_compensated_albedo(context, data, effective_material, sampler);
+    case MaterialClass::CoatedConductor: {
+      const uint32_t base_class = material_coating_base_class(effective_material);
+      if ((base_class == MaterialClass::Diffuse) || (base_class == MaterialClass::Mirror)) {
+        return bsdf_resource_apply_image(context, data.spectrum_sample, effective_material.scattering, data.tex);
+      }
+      return bsdf_resource_apply_image(context, data.spectrum_sample, effective_material.reflectance, data.tex);
+    }
     case MaterialClass::Dielectric:
       return bsdf_dielectric_energy_compensated_albedo(context, data, effective_material, sampler);
     case MaterialClass::Plastic:

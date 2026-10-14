@@ -15,6 +15,8 @@ struct ImagePool {
   void init(uint32_t capacity);
   void cleanup();
   void swap_contents(ImagePool& other);
+  void copy_contents(const ImagePool& other);
+  void refresh_pixel_views();
 
   uint32_t add_copy(const Image& image, const std::string& path);
   uint32_t add_copy(const Image& img);
@@ -34,6 +36,7 @@ struct ImagePool {
   void add_options(uint32_t, uint32_t);
   void load_images(TaskScheduler& scheduler);
   bool loading_succeeded() const;
+  std::string loading_error() const;
   void rebuild_sampling_table(uint32_t index, TaskScheduler& scheduler);
 
   const Image& get(uint32_t) const;

@@ -255,6 +255,10 @@ ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBP2DBeamAccelerationStructuresOffset 
 ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBP2DBeamGridOffset = 688u;
 ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBB1DBeamGridOffset = 720u;
 ETX_STATIC_CONST uint32_t kGPUUPBPResourcesBeamIndexModeOffset = 752u;
+ETX_STATIC_CONST uint32_t kGPUUPBPResourcesSurfaceGridRangesBufferOffset = 756u;
+ETX_STATIC_CONST uint32_t kGPUUPBPResourcesSurfaceGridIndicesBufferOffset = 760u;
+ETX_STATIC_CONST uint32_t kGPUUPBPResourcesSurfaceGridMaskOffset = 764u;
+ETX_STATIC_CONST uint32_t kGPUUPBPCoatingSubtotalOffset = 16u;
 
 ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesMetadataBufferOffset = 0u;
 ETX_STATIC_CONST uint32_t kGPUUPBPBeamGridResourcesCellOffsetsBufferOffset = 4u;

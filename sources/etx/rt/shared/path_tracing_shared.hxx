@@ -97,7 +97,7 @@ ETX_SHARED_INLINE GatherResult gather(SpectralQuery spect, const Scene& scene, c
     Intersection local_i;
     Ray exit_ray = ray;
     exit_ray.max_t = kMaxFloat;
-    if (rt.trace_material(scene, exit_ray, in_intersection.material_index, local_i, smp) == false) {
+    if (rt.trace_material(scene, exit_ray, scene.triangles[in_intersection.triangle_index].material_index, in_intersection.material_index, local_i, smp) == false) {
       return GatherResult::Failed;
     }
     SpectralResponse channel_weight = albedo;
@@ -290,10 +290,13 @@ ETX_SHARED_INLINE void handle_direct_emitter(const Scene& scene, const Triangle&
     .target_position = intersection.pos,
     .uv = intersection.tex,
     .shading_normal = intersection.nrm,
+    .shading_tangent = intersection.tan,
+    .shading_bitangent = intersection.btn,
+    .material_index = intersection.material_index,
     .directly_visible = payload.path_length == 1,
   };
 
-  auto e = emitter_get_radiance(emitter_instance, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out);
+  auto e = emitter_get_radiance(emitter_instance, payload.spect, q, payload.smp, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out);
 
   if (pdf_emitter_dir > 0.0f) {
     auto tr = rt.trace_transmittance(payload.spect, scene, payload.ray.o, intersection.pos, {.index = payload.medium}, payload.smp);
@@ -440,7 +443,7 @@ ETX_SHARED_INLINE void handle_missed_ray(const Scene& scene, PTRayPayload& paylo
       .direction = payload.ray.d,
       .directly_visible = payload.path_length == 1,
     };
-    auto e = emitter_get_radiance(emitter_instance, payload.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out);
+    auto e = emitter_get_radiance(emitter_instance, payload.spect, q, payload.smp, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out);
     ETX_VALIDATE(e);
     if ((pdf_emitter_dir > 0) && (e.is_zero() == false)) {
       float pdf_emitter_discrete = emitter_discrete_pdf(emitter_instance);

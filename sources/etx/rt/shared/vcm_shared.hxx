@@ -308,7 +308,7 @@ ETX_SHARED_INLINE MediumInstance vcm_connection_medium(const Scene& scene, const
         material_has_diffuse_subsurface_boundary(material)) {
       return (dot(geometric_normal, direction) < 0.0f) ? state.subsurface_medium : MediumInstance{.index = material.ext_medium};
     }
-    if (material.cls == MaterialClass::Dielectric) {
+    if (material_supports_surface_transmission(material)) {
       return {.index = (dot(geometric_normal, direction) < 0.0f) ? material.int_medium : material.ext_medium};
     }
   }
@@ -403,7 +403,7 @@ ETX_SHARED_INLINE bool vcm_next_ray(const Scene& scene, const PathSource path_so
   return true;
 }
 
-ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Emitter& emitter, const VCMPathState& state, const VCMOptions& options, const VCMIteration& iteration,
+ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Emitter& emitter, VCMPathState& state, const VCMOptions& options, const VCMIteration& iteration,
   const Intersection& intersection) {
   float pdf_emitter_area = 0.0f;
   float pdf_emitter_dir = 0.0f;
@@ -415,10 +415,13 @@ ETX_SHARED_INLINE SpectralResponse vcm_get_radiance(const Emitter& emitter, cons
     .direction = state.ray.d,
     .uv = intersection.tex,
     .shading_normal = intersection.nrm,
+    .shading_tangent = intersection.tan,
+    .shading_bitangent = intersection.btn,
+    .material_index = intersection.material_index,
     .directly_visible = state.total_path_depth == 1,
   };
 
-  SpectralResponse radiance = emitter_get_radiance(emitter, state.spect, q, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out);
+  SpectralResponse radiance = emitter_get_radiance(emitter, state.spect, q, state.sampler, pdf_emitter_area, pdf_emitter_dir, pdf_emitter_dir_out);
 
   if (pdf_emitter_dir <= kEpsilon) {
     return {state.spect, 0.0f};
@@ -751,7 +754,7 @@ ETX_SHARED_INLINE void vcm_cam_handle_miss(const VCMOptions& options, const VCMI
     float pdf_area = 0.0f;
     float pdf_dir = 0.0f;
     float pdf_dir_out = 0.0f;
-    SpectralResponse value = emitter_get_radiance(emitter_instance, state.spect, q, pdf_area, pdf_dir, pdf_dir_out);
+    SpectralResponse value = emitter_get_radiance(emitter_instance, state.spect, q, state.sampler, pdf_area, pdf_dir, pdf_dir_out);
     ETX_VALIDATE(value);
 
     if (pdf_dir > kEpsilon) {
@@ -1256,13 +1259,13 @@ ETX_SHARED_INLINE bool vcm_camera_step(const Scene& scene, const VCMIteration& i
   // Use fixed sample allocation for BSDF sampling
   state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
   auto bsdf_sample = bsdf::sample(bsdf_data, mat, state.sampler);
-  bool is_connectible = (bsdf_sample.properties & BSDFSample::Delta) == 0;  // Store connectibility like BDPT
   state.sampler.pop_fixed();
+  const bool is_connectible = bsdf::is_delta(mat, intersection.tex, state.sampler) == false;
 
   vcm_update_camera_vcm(scene, intersection, state);
   vcm_handle_direct_hit(scene, options, iteration, intersection, state);
 
-  if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler
+  if (is_connectible) {
     state.gathered += vcm_connect_to_light_path(scene, iteration, light_paths, light_vertices, options, false, &intersection, {}, rt, state);
     state.sampler.push_fixed(rnd_connection.x, rnd_connection.y, rnd_support.y);
     state.gathered += vcm_connect_to_light(scene, iteration, options, false, &intersection, {}, rt, state);
@@ -1400,13 +1403,13 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
   // Use fixed sample allocation for BSDF sampling
   state.sampler.push_fixed(rnd_bsdf.x, rnd_bsdf.y, rnd_support.x);
   auto bsdf_sample = bsdf::sample(bsdf_data, mat, state.sampler);
-  bool is_connectible = (bsdf_sample.properties & BSDFSample::Delta) == 0;  // Store connectibility like BDPT
   state.sampler.pop_fixed();
+  const bool is_connectible = bsdf::is_delta(mat, intersection.tex, state.sampler) == false;
   ETX_VALIDATE(bsdf_sample.weight);
 
   vcm_update_light_vcm(scene, intersection, state);
 
-  if (is_connectible) {  // Use stored connectibility instead of calling is_delta with live sampler
+  if (is_connectible) {
     result.add_vertex = true;
     result.vertex_to_add = {state, intersection, path_index};
     if (((mat.cls == MaterialClass::Plastic) && (mat.subsurface_cls != SubsurfaceMaterial::Disabled)) || material_has_incident_subsurface_boundary(mat) ||

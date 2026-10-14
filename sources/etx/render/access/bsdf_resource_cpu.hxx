@@ -149,6 +149,8 @@ ETX_SHARED_INLINE bool bsdf_resource_energy_compensation_interface_try_load(ETX_
   interface_data.probability_lut = source.probability_lut;
   interface_data.spectral_shortest_wavelength = source.spectral_shortest_wavelength;
   interface_data.spectral_longest_wavelength = source.spectral_longest_wavelength;
+  interface_data.coating_slice_count = source.coating_slice_count;
+  interface_data.terminal_source_lut = source.terminal_source_lut;
   return true;
 }
 

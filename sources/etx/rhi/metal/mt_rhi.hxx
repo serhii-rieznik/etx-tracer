@@ -117,7 +117,7 @@ struct MTDevice {
   RHICreatePipelineResult create_graphics_pipeline(const RHIGraphicsPipelineDesc& desc);
   RHICreatePipelineResult create_compute_pipeline(const RHIComputePipelineDesc& desc);
   std::vector<RHICreatePipelineBatchEntry> create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency,
-    const RHIPipelineBatchProgressCallback& progress_callback);
+    const RHIPipelineBatchProgressCallback& progress_callback, const std::function<bool()>& should_continue);
   void persist_pipeline_cache();
 
   RHIResult destroy_buffer(RHIBuffer buffer);

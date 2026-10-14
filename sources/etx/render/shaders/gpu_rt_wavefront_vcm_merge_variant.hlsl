@@ -6,10 +6,11 @@
 # include <interop/image_filter_shared.hxx>
 # include <access/bsdf_resource_gpu.hxx>
 
-# define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE    1
-# define ETX_WAVEFRONT_BSDF_KIND_PLASTIC    2
-# define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR  3
-# define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC 4
+# define ETX_WAVEFRONT_BSDF_KIND_DIFFUSE          1
+# define ETX_WAVEFRONT_BSDF_KIND_PLASTIC          2
+# define ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR        3
+# define ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC       4
+# define ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR 6
 
 # if (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIFFUSE)
 #  if ETX_ENABLE_VELVET_STAGE
@@ -34,6 +35,10 @@
 #  endif
 #  define ETX_STAGE_BSDF_EVAL wavefront_vcm_merge_conductor_eval
 #  define ETX_STAGE_BSDF_PDF  wavefront_vcm_merge_conductor_pdf
+# elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+#  include <interop/bsdf_coated_conductor_shared.hxx>
+#  define ETX_STAGE_BSDF_EVAL bsdf_coated_conductor_evaluate
+#  define ETX_STAGE_BSDF_PDF  bsdf_coated_conductor_pdf
 # elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC)
 #  include <interop/bsdf_energy_compensated_shared.hxx>
 #  define ETX_STAGE_BSDF_EVAL bsdf_dielectric_energy_compensated_evaluate
@@ -108,9 +113,11 @@ float wavefront_vcm_merge_conductor_pdf(BSDFResourceContext context, BSDFData da
 }
 # endif
 
+# if ETX_BSDF_KIND != ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
 BSDFEval wavefront_vcm_merge_stage_bsdf_eval(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   return ETX_STAGE_BSDF_EVAL(context, data, outgoing_direction, material, sampler);
 }
+# endif
 float wavefront_vcm_merge_stage_reverse_pdf(BSDFResourceContext context, BSDFData data, float3 outgoing_direction, Material material, inout Sampler sampler) {
   float3 reverse_outgoing = -data.w_i;
   data.w_i = -outgoing_direction;
@@ -129,11 +136,13 @@ bool wavefront_vcm_merge_stage_matches_material(uint material_class) {
 #  endif
     ;
 # elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR)
+  return (material_class == MaterialClass::Conductor)
 #  if ETX_ENABLE_OPENPBR_STAGE
-  return (material_class == MaterialClass::Conductor) || (material_class == MaterialClass::OpenPBR);
-#  else
-  return material_class == MaterialClass::Conductor;
+         || (material_class == MaterialClass::OpenPBR)
 #  endif
+    ;
+# elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR)
+  return material_class == MaterialClass::CoatedConductor;
 # elif (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_PLASTIC)
   return material_class == MaterialClass::Plastic;
 # else
@@ -141,10 +150,13 @@ bool wavefront_vcm_merge_stage_matches_material(uint material_class) {
 # endif
 }
 
-# define ETX_VCM_COOPERATIVE_MERGE ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC))
+# define ETX_VCM_COOPERATIVE_MERGE \
+   ((ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR) || (ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_DIELECTRIC))
 # include "gpu_rt_wavefront_vcm_merge_common.hlsl"
 
-# if ETX_VCM_COOPERATIVE_MERGE
+# if ETX_BSDF_KIND == ETX_WAVEFRONT_BSDF_KIND_COATED_CONDUCTOR
+#  include "gpu_rt_wavefront_vcm_coating.hlsl"
+# elif ETX_VCM_COOPERATIVE_MERGE
 [numthreads(64, 1, 1)] void ETX_STAGE_ENTRY(uint3 group_id : SV_GroupID, uint lane_index : SV_GroupIndex) {
   wavefront_vcm_merge_group(group_id.x, lane_index);
 }

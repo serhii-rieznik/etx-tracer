@@ -88,11 +88,18 @@ enum class RendererRecovery : uint32_t {
   Restart,
   ChangeSettings,
   RestartApplication,
+  EditMaterial,
+  EditCamera,
+  EditMedium,
+  RetryMaterialPreparation,
 };
 
 struct RendererDiagnostic {
   RendererDiagnosticSeverity severity = RendererDiagnosticSeverity::None;
   RendererRecovery recovery = RendererRecovery::None;
+  std::string title;
+  std::string consequence;
+  uint32_t resource_index = kInvalidIndex;
 };
 
 enum class RendererProgressKind : uint32_t {

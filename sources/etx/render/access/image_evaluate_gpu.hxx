@@ -32,25 +32,18 @@ float4 image_evaluate_gpu_load_pixel(ByteAddressBuffer payload_buffer, uint form
   return float4(1.0f, 1.0f, 1.0f, 1.0f);
 }
 
-bool image_evaluate_gpu_pixel_offset_valid(ImageAccessGPUDesc image_access, uint byte_offset, uint byte_count) {
-  if ((byte_offset < image_access.pixel_data_offset) || (byte_count == 0u)) {
-    return false;
-  }
-
-  const uint relative_offset = byte_offset - image_access.pixel_data_offset;
-  if (relative_offset > image_access.data_size) {
-    return false;
-  }
-
-  return byte_count <= (image_access.data_size - relative_offset);
+bool image_evaluate_gpu_pixel_offset_valid(uint pixel_data_offset, uint data_size, uint byte_offset, uint byte_count) {
+  const uint relative_offset = byte_offset - pixel_data_offset;
+  // Evaluate the pure bounds predicates together to avoid per-pixel control-flow joins.
+  return all(bool4(byte_offset >= pixel_data_offset, byte_count != 0u, relative_offset <= data_size, byte_count <= (data_size - relative_offset)));
 }
 
-float4 image_evaluate_gpu_load_pixel_checked(ByteAddressBuffer payload_buffer, ImageAccessGPUDesc image_access, uint byte_offset) {
-  if (image_evaluate_gpu_pixel_offset_valid(image_access, byte_offset, image_access.pixel_data_stride) == false) {
+float4 image_evaluate_gpu_load_pixel_checked(ByteAddressBuffer payload_buffer, uint format, uint pixel_data_offset, uint data_size, uint pixel_data_stride, uint byte_offset) {
+  if (image_evaluate_gpu_pixel_offset_valid(pixel_data_offset, data_size, byte_offset, pixel_data_stride) == false) {
     return float4(0.0f, 0.0f, 0.0f, 0.0f);
   }
 
-  return image_evaluate_gpu_load_pixel(payload_buffer, image_access.format, byte_offset);
+  return image_evaluate_gpu_load_pixel(payload_buffer, format, byte_offset);
 }
 
 float4 image_evaluate_gpu_rgba(ImageEvaluateGPUContext context, uint image_index, float2 uv) {
@@ -70,10 +63,14 @@ float4 image_evaluate_gpu_rgba(ImageEvaluateGPUContext context, uint image_index
   uint pixel_offset_10 = image_access.pixel_data_offset + ((sample.row_1 * image_access.size.x + sample.col_0) * image_access.pixel_data_stride);
   uint pixel_offset_11 = image_access.pixel_data_offset + ((sample.row_1 * image_access.size.x + sample.col_1) * image_access.pixel_data_stride);
 
-  float4 p00 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_00);
-  float4 p01 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_01);
-  float4 p10 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_10);
-  float4 p11 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_11);
+  float4 p00 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_00);
+  float4 p01 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_01);
+  float4 p10 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_10);
+  float4 p11 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_11);
   return image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
 }
 
@@ -90,11 +87,12 @@ bool image_evaluate_gpu_try_height_gradient(ImageEvaluateGPUContext context, uin
   const ImageFilterSharedAddress address = image_filter_shared_address(uv, image.fsize.xy, image.size.xy, image.options);
   const uint row0 = image.pixel_data_offset + address.row_0 * image.size.x * image.pixel_data_stride;
   const uint row1 = image.pixel_data_offset + address.row_1 * image.size.x * image.pixel_data_stride;
-  bump_mapping_shared_sample(image_evaluate_gpu_load_pixel_checked(payload, image, row0 + address.col_0 * image.pixel_data_stride),
-    image_evaluate_gpu_load_pixel_checked(payload, image, row0 + address.col_1 * image.pixel_data_stride),
-    image_evaluate_gpu_load_pixel_checked(payload, image, row1 + address.col_0 * image.pixel_data_stride),
-    image_evaluate_gpu_load_pixel_checked(payload, image, row1 + address.col_1 * image.pixel_data_stride), address, uv, image.fsize.xy, image.uv_scale.xy, image.options, channel,
-    height, gradient);
+  bump_mapping_shared_sample(
+    image_evaluate_gpu_load_pixel_checked(payload, image.format, image.pixel_data_offset, image.data_size, image.pixel_data_stride, row0 + address.col_0 * image.pixel_data_stride),
+    image_evaluate_gpu_load_pixel_checked(payload, image.format, image.pixel_data_offset, image.data_size, image.pixel_data_stride, row0 + address.col_1 * image.pixel_data_stride),
+    image_evaluate_gpu_load_pixel_checked(payload, image.format, image.pixel_data_offset, image.data_size, image.pixel_data_stride, row1 + address.col_0 * image.pixel_data_stride),
+    image_evaluate_gpu_load_pixel_checked(payload, image.format, image.pixel_data_offset, image.data_size, image.pixel_data_stride, row1 + address.col_1 * image.pixel_data_stride),
+    address, uv, image.fsize.xy, image.uv_scale.xy, image.options, channel, height, gradient);
   return true;
 }
 
@@ -130,10 +128,14 @@ bool image_evaluate_gpu_try_rgba(ImageEvaluateGPUContext context, uint image_ind
   uint pixel_offset_10 = image_access.pixel_data_offset + ((sample.row_1 * image_access.size.x + sample.col_0) * image_access.pixel_data_stride);
   uint pixel_offset_11 = image_access.pixel_data_offset + ((sample.row_1 * image_access.size.x + sample.col_1) * image_access.pixel_data_stride);
 
-  float4 p00 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_00);
-  float4 p01 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_01);
-  float4 p10 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_10);
-  float4 p11 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_11);
+  float4 p00 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_00);
+  float4 p01 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_01);
+  float4 p10 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_10);
+  float4 p11 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_11);
   image_value = image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
 
   if (image_access.normalization > 0.0f) {
@@ -166,10 +168,14 @@ bool image_evaluate_gpu_try_rgba_no_pdf(ImageEvaluateGPUContext context, uint im
   uint pixel_offset_10 = image_access.pixel_data_offset + ((sample.row_1 * image_access.size.x + sample.col_0) * image_access.pixel_data_stride);
   uint pixel_offset_11 = image_access.pixel_data_offset + ((sample.row_1 * image_access.size.x + sample.col_1) * image_access.pixel_data_stride);
 
-  float4 p00 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_00);
-  float4 p01 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_01);
-  float4 p10 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_10);
-  float4 p11 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_11);
+  float4 p00 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_00);
+  float4 p01 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_01);
+  float4 p10 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_10);
+  float4 p11 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_11);
   image_value = image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
   return true;
 }
@@ -201,10 +207,14 @@ bool image_evaluate_gpu_try_rgba_layer_no_pdf(ImageEvaluateGPUContext context, u
   uint pixel_offset_10 = image_access.pixel_data_offset + ((slice_offset + row_offset_1 + sample.col_0) * image_access.pixel_data_stride);
   uint pixel_offset_11 = image_access.pixel_data_offset + ((slice_offset + row_offset_1 + sample.col_1) * image_access.pixel_data_stride);
 
-  float4 p00 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_00);
-  float4 p01 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_01);
-  float4 p10 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_10);
-  float4 p11 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_11);
+  float4 p00 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_00);
+  float4 p01 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_01);
+  float4 p10 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_10);
+  float4 p11 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_11);
   image_value = image_filter_shared_bilinear(p00, p01, p10, p11, sample.dx, sample.dy);
   return true;
 }
@@ -240,14 +250,22 @@ bool image_evaluate_gpu_try_rgba_3d(ImageEvaluateGPUContext context, uint image_
   uint pixel_offset_110 = image_access.pixel_data_offset + ((slice_offset_1 + row_offset_1 + sample.col_0) * image_access.pixel_data_stride);
   uint pixel_offset_111 = image_access.pixel_data_offset + ((slice_offset_1 + row_offset_1 + sample.col_1) * image_access.pixel_data_stride);
 
-  float4 p000 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_000);
-  float4 p001 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_001);
-  float4 p010 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_010);
-  float4 p011 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_011);
-  float4 p100 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_100);
-  float4 p101 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_101);
-  float4 p110 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_110);
-  float4 p111 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access, pixel_offset_111);
+  float4 p000 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_000);
+  float4 p001 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_001);
+  float4 p010 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_010);
+  float4 p011 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_011);
+  float4 p100 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_100);
+  float4 p101 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_101);
+  float4 p110 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_110);
+  float4 p111 = image_evaluate_gpu_load_pixel_checked(payload_buffer, image_access.format, image_access.pixel_data_offset, image_access.data_size, image_access.pixel_data_stride,
+    pixel_offset_111);
   image_value = image_filter_shared_trilinear(p000, p001, p010, p011, p100, p101, p110, p111, sample.dx, sample.dy, sample.dz);
   return true;
 }

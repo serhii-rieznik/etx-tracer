@@ -180,11 +180,40 @@ const ImVec4 kMaterialHeaderPrimaryColor(0.96f, 0.79f, 0.45f, 1.0f);
 const ImVec4 kMaterialHeaderSpecializedColor(0.54f, 0.80f, 0.98f, 1.0f);
 const ImVec4 kMaterialHeaderInterfacesColor(0.88f, 0.68f, 0.97f, 1.0f);
 
-enum MaterialBatchChangedField : uint32_t {
+enum MaterialBatchChangedField : uint64_t {
   MaterialBatchChangedClass = 1u << 0u,
+  MaterialBatchChangedBSDF = 1u << 5u,
+  MaterialBatchChangedCoatingEnabled = 1u << 6u,
+  MaterialBatchChangedThinfilmEnabled = 1u << 7u,
+  MaterialBatchChangedSubsurfaceClass = 1u << 8u,
+  MaterialBatchChangedReflectanceImage = 1ull << 9u,
+  MaterialBatchChangedScatteringImage = 1ull << 10u,
+  MaterialBatchChangedEmissionImage = 1ull << 11u,
+  MaterialBatchChangedNormalImage = 1ull << 12u,
+  MaterialBatchChangedCoatingThicknessNmImage = 1ull << 13u,
+  MaterialBatchChangedCoatingAbsorptionImage = 1ull << 14u,
+  MaterialBatchChangedCoatingScatteringImage = 1ull << 15u,
+  MaterialBatchChangedThinfilmThicknessImage = 1ull << 16u,
+  MaterialBatchChangedRoughnessImage = 1ull << 17u,
+  MaterialBatchChangedMetalnessImage = 1ull << 18u,
+  MaterialBatchChangedTransmissionImage = 1ull << 19u,
+  MaterialBatchChangedAlphaMaskImage = 1ull << 20u,
+  MaterialBatchChangedBumpImage = 1ull << 21u,
+  MaterialBatchChangedMixAmountImage = 1ull << 22u,
+  MaterialBatchChangedCoatingRoughnessImage = 1ull << 23u,
+  MaterialBatchChangedCoatingThicknessImage = 1ull << 24u,
+  MaterialBatchChangedRoughnessChannel = 1ull << 25u,
+  MaterialBatchChangedMetalnessChannel = 1ull << 26u,
+  MaterialBatchChangedTransmissionChannel = 1ull << 27u,
+  MaterialBatchChangedAlphaMaskChannel = 1ull << 28u,
+  MaterialBatchChangedBumpChannel = 1ull << 29u,
+  MaterialBatchChangedMixAmountChannel = 1ull << 30u,
+  MaterialBatchChangedCoatingRoughnessChannel = 1ull << 31u,
+  MaterialBatchChangedCoatingThicknessChannel = 1ull << 32u,
   MaterialBatchChangedIntIOR = 1u << 1u,
   MaterialBatchChangedExtIOR = 1u << 2u,
   MaterialBatchChangedThinfilmIOR = 1u << 3u,
+  MaterialBatchChangedCoatingIOR = 1u << 4u,
 };
 
 inline void decrease_exposure(ViewParameters& o) {
@@ -556,7 +585,7 @@ void sort_memory_allocation_rows(std::vector<MemoryAllocationRow>& rows, const I
   });
 }
 
-const char* material_class_display_name(const Material::Class cls) {
+const char* material_class_display_name(const MaterialDescription::Class cls) {
   switch (cls) {
     case MaterialClass::Diffuse:
       return "Diffuse";
@@ -566,6 +595,10 @@ const char* material_class_display_name(const Material::Class cls) {
       return "Coated diffuse";
     case MaterialClass::Conductor:
       return "Conductor";
+    case MaterialClass::CoatedConductor:
+      return "Coated conductor";
+    case MaterialClass::Mix:
+      return "Mix";
     case MaterialClass::Dielectric:
       return "Dielectric";
     case MaterialClass::Thinfilm:
@@ -895,6 +928,7 @@ void UI::request_node_deletion(uint32_t node_index) {
 
 void UI::select_resource_edit_result(SelectionKind kind, const SceneResourceEditResult& result) {
   _resource_edit_status = result.status;
+  _resource_edit_error = result.diagnostic.text();
   _resource_edit_status_kind = kind;
   if (result.succeeded() == false) {
     return;
@@ -976,7 +1010,9 @@ void UI::request_resource_deletion(SelectionKind kind, uint32_t resource_index) 
 
 void UI::build_resource_edit_feedback(SelectionKind kind) const {
   if ((_resource_edit_status_kind == kind) && (_resource_edit_status != SceneResourceEditStatus::Success)) {
-    ImGui::TextColored(kErrorTextColor, "%s", scene_resource_edit_status_message(_resource_edit_status));
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextColored(kErrorTextColor, "%s", _resource_edit_error.empty() ? scene_resource_edit_status_message(_resource_edit_status) : _resource_edit_error.c_str());
+    ImGui::PopTextWrapPos();
   }
 }
 
@@ -1186,7 +1222,7 @@ std::vector<uint32_t> UI::selected_material_indices(SceneRepresentation& scene_r
   for (const int32_t position : _selected_material_positions) {
     if ((position >= 0) && (static_cast<uint64_t>(position) < _material_mapping.size())) {
       const uint32_t material_index = _material_mapping.at(position);
-      if (material_index < scene_rep.data().materials.size()) {
+      if (material_index < scene_rep.data().material_descriptions.size()) {
         result.push_back(material_index);
       }
     }
@@ -1194,7 +1230,49 @@ std::vector<uint32_t> UI::selected_material_indices(SceneRepresentation& scene_r
   return result;
 }
 
-void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vector<uint32_t>& material_indices, const Material& before, const Material& after) const {
+void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vector<uint32_t>& material_indices, const MaterialDescription& before, const MaterialDescription& after,
+  uint64_t changed_fields) const {
+  const bool bsdf_selected = (changed_fields & MaterialBatchChangedBSDF) != 0u;
+  const bool base_selected = ((changed_fields & MaterialBatchChangedClass) != 0u) && (bsdf_selected == false);
+  if (bsdf_selected || base_selected) {
+    uint32_t mix_child = kInvalidIndex;
+    const bool select_mix = bsdf_selected ? after.layers.bsdf == MaterialClass::Mix : after.cls == MaterialClass::Mix;
+    if (select_mix && std::any_of(material_indices.begin(), material_indices.end(), [&](uint32_t index) {
+          return (index < scene_rep.data().material_descriptions.size()) && (scene_rep.data().material_descriptions[index].cls != MaterialClass::Mix);
+        })) {
+      for (uint32_t index = 0u; index < scene_rep.data().material_descriptions.size(); ++index) {
+        if ((scene_rep.data().material_descriptions[index].cls != MaterialClass::Mix) &&
+            (std::find(material_indices.begin(), material_indices.end(), index) == material_indices.end())) {
+          mix_child = index;
+          break;
+        }
+      }
+      if (mix_child == kInvalidIndex) {
+        mix_child = scene_rep.create_material("Mix child").resource_index;
+      }
+    }
+    for (const uint32_t material_index : material_indices) {
+      if (material_index < scene_rep.data().material_descriptions.size()) {
+        MaterialDescription& selected = scene_rep.data().material_descriptions[material_index];
+        const uint32_t previous_class = selected.cls;
+        configure_material_bsdf(selected, bsdf_selected ? after.layers.bsdf : MaterialClass::Undefined);
+        if (base_selected) {
+          configure_material_base(selected, after.cls);
+        }
+        if ((selected.cls == MaterialClass::Mix) && (previous_class != MaterialClass::Mix)) {
+          selected.mix.first = selected.mix.second = mix_child;
+        }
+      }
+    }
+  }
+  if ((after.layers.explicit_layers != 0u) && ((before.layers.explicit_layers != after.layers.explicit_layers) || (before.layers.coating_enabled != after.layers.coating_enabled) ||
+                                                (before.layers.thinfilm_enabled != after.layers.thinfilm_enabled) || (before.cls != after.cls))) {
+    for (const uint32_t material_index : material_indices) {
+      if (material_index < scene_rep.data().material_descriptions.size()) {
+        scene_rep.data().author_material_layers(material_index);
+      }
+    }
+  }
   auto bytes_equal = [](const auto& a, const auto& b) {
     return std::memcmp(&a, &b, sizeof(a)) == 0;
   };
@@ -1205,125 +1283,210 @@ void UI::apply_material_changes(SceneRepresentation& scene_rep, const std::vecto
     }
 
     for (const uint32_t material_index : material_indices) {
-      if (material_index < scene_rep.data().materials.size()) {
-        setter(scene_rep.data().materials[material_index], after_value);
+      if (material_index < scene_rep.data().material_descriptions.size()) {
+        setter(scene_rep.data().material_descriptions[material_index], after_value);
       }
     }
     return true;
   };
 
-  const auto apply_spectral_image = [&](const SpectralImage& before_value, const SpectralImage& after_value, auto member) {
-    apply_field(before_value.image_index, after_value.image_index, [member](Material& material, const uint32_t value) {
-      (material.*member).image_index = value;
+  const auto apply_texture_field = [&](const auto& before_value, const auto& after_value, uint64_t field, auto setter) {
+    if (((changed_fields & field) == 0u) && bytes_equal(before_value, after_value)) {
+      return;
+    }
+    for (const uint32_t index : material_indices) {
+      setter(scene_rep.data().material_descriptions[index], after_value);
+    }
+  };
+  const auto apply_spectral_image = [&](const SpectralImage& before_value, const SpectralImage& after_value, uint64_t image_field, auto member) {
+    apply_texture_field(before_value.image_index, after_value.image_index, image_field, [member](MaterialDescription& material, const uint32_t value) {
+      member(material).image_index = value;
     });
   };
-  apply_spectral_image(before.reflectance, after.reflectance, &Material::reflectance);
-  apply_spectral_image(before.scattering, after.scattering, &Material::scattering);
-  apply_spectral_image(before.emission, after.emission, &Material::emission);
-  apply_spectral_image(before.subsurface, after.subsurface, &Material::subsurface);
+  apply_spectral_image(before.reflectance, after.reflectance, MaterialBatchChangedReflectanceImage, [](MaterialDescription& material) -> auto& {
+    return material.reflectance;
+  });
+  apply_spectral_image(before.scattering, after.scattering, MaterialBatchChangedScatteringImage, [](MaterialDescription& material) -> auto& {
+    return material.scattering;
+  });
+  apply_spectral_image(before.emission, after.emission, MaterialBatchChangedEmissionImage, [](MaterialDescription& material) -> auto& {
+    return material.emission;
+  });
+  apply_spectral_image(before.subsurface, after.subsurface, 0u, [](MaterialDescription& material) -> auto& {
+    return material.subsurface;
+  });
 
-  const auto apply_sampled_image = [&](const SampledImage& before_value, const SampledImage& after_value, auto member) {
-    apply_field(before_value.value.x, after_value.value.x, [member](Material& material, const float value) {
-      (material.*member).value.x = value;
+  const auto apply_sampled_image = [&](const SampledImage& before_value, const SampledImage& after_value, uint64_t image_field, uint64_t channel_field, auto member) {
+    apply_field(before_value.value.x, after_value.value.x, [member](MaterialDescription& material, const float value) {
+      member(material).value.x = value;
     });
-    apply_field(before_value.value.y, after_value.value.y, [member](Material& material, const float value) {
-      (material.*member).value.y = value;
+    apply_field(before_value.value.y, after_value.value.y, [member](MaterialDescription& material, const float value) {
+      member(material).value.y = value;
     });
-    apply_field(before_value.value.z, after_value.value.z, [member](Material& material, const float value) {
-      (material.*member).value.z = value;
+    apply_field(before_value.value.z, after_value.value.z, [member](MaterialDescription& material, const float value) {
+      member(material).value.z = value;
     });
-    apply_field(before_value.value.w, after_value.value.w, [member](Material& material, const float value) {
-      (material.*member).value.w = value;
+    apply_field(before_value.value.w, after_value.value.w, [member](MaterialDescription& material, const float value) {
+      member(material).value.w = value;
     });
-    apply_field(before_value.image_index, after_value.image_index, [member](Material& material, const uint32_t value) {
-      (material.*member).image_index = value;
+    apply_texture_field(before_value.image_index, after_value.image_index, image_field, [member](MaterialDescription& material, const uint32_t value) {
+      member(material).image_index = value;
     });
-    apply_field(before_value.channel, after_value.channel, [member](Material& material, const uint32_t value) {
-      (material.*member).channel = value;
+    apply_texture_field(before_value.channel, after_value.channel, channel_field, [member](MaterialDescription& material, const uint32_t value) {
+      member(material).channel = value;
     });
   };
-  apply_sampled_image(before.roughness, after.roughness, &Material::roughness);
-  apply_sampled_image(before.metalness, after.metalness, &Material::metalness);
-  apply_sampled_image(before.transmission, after.transmission, &Material::transmission);
-  apply_sampled_image(before.alpha_mask, after.alpha_mask, &Material::alpha_mask);
-  apply_sampled_image(before.bump, after.bump, &Material::bump);
-  apply_field(before.thinfilm.ior.cls, after.thinfilm.ior.cls, [](Material& material, const uint32_t value) {
+  apply_sampled_image(before.roughness, after.roughness, MaterialBatchChangedRoughnessImage, MaterialBatchChangedRoughnessChannel, [](MaterialDescription& material) -> auto& {
+    return material.roughness;
+  });
+  apply_sampled_image(before.metalness, after.metalness, MaterialBatchChangedMetalnessImage, MaterialBatchChangedMetalnessChannel, [](MaterialDescription& material) -> auto& {
+    return material.metalness;
+  });
+  apply_sampled_image(before.transmission, after.transmission, MaterialBatchChangedTransmissionImage, MaterialBatchChangedTransmissionChannel,
+    [](MaterialDescription& material) -> auto& {
+      return material.transmission;
+    });
+  apply_sampled_image(before.alpha_mask, after.alpha_mask, MaterialBatchChangedAlphaMaskImage, MaterialBatchChangedAlphaMaskChannel, [](MaterialDescription& material) -> auto& {
+    return material.alpha_mask;
+  });
+  apply_sampled_image(before.bump, after.bump, MaterialBatchChangedBumpImage, MaterialBatchChangedBumpChannel, [](MaterialDescription& material) -> auto& {
+    return material.bump;
+  });
+  if ((bsdf_selected == false) && (base_selected == false)) {
+    apply_field(before.mix.first, after.mix.first, [](MaterialDescription& material, const uint32_t value) {
+      material.mix.first = value;
+    });
+    apply_field(before.mix.second, after.mix.second, [](MaterialDescription& material, const uint32_t value) {
+      material.mix.second = value;
+    });
+    apply_sampled_image(before.mix.amount, after.mix.amount, MaterialBatchChangedMixAmountImage, MaterialBatchChangedMixAmountChannel, [](MaterialDescription& material) -> auto& {
+      return material.mix.amount;
+    });
+  }
+  if (bsdf_selected == false) {
+    for (const uint32_t material_index : material_indices) {
+      if (material_index >= scene_rep.data().material_descriptions.size()) {
+        continue;
+      }
+      MaterialLayerSettings& layers = scene_rep.data().material_descriptions[material_index].layers;
+      if ((changed_fields & MaterialBatchChangedCoatingEnabled) != 0u) {
+        layers.coating_enabled = after.layers.coating_enabled;
+      }
+      if ((changed_fields & MaterialBatchChangedThinfilmEnabled) != 0u) {
+        layers.thinfilm_enabled = after.layers.thinfilm_enabled;
+      }
+    }
+  }
+  apply_sampled_image(before.coating.roughness, after.coating.roughness, MaterialBatchChangedCoatingRoughnessImage, MaterialBatchChangedCoatingRoughnessChannel,
+    [](MaterialDescription& material) -> auto& {
+      return material.coating.roughness;
+    });
+  apply_sampled_image(before.coating.thickness, after.coating.thickness, MaterialBatchChangedCoatingThicknessImage, MaterialBatchChangedCoatingThicknessChannel,
+    [](MaterialDescription& material) -> auto& {
+      return material.coating.thickness;
+    });
+  apply_field(before.coating.min_thickness_nm, after.coating.min_thickness_nm, [](MaterialDescription& material, const float value) {
+    material.coating.min_thickness_nm = value;
+  });
+  apply_field(before.coating.max_thickness_nm, after.coating.max_thickness_nm, [](MaterialDescription& material, const float value) {
+    material.coating.max_thickness_nm = value;
+  });
+  apply_texture_field(before.coating.thickness_nm_image, after.coating.thickness_nm_image, MaterialBatchChangedCoatingThicknessNmImage,
+    [](MaterialDescription& material, const uint32_t value) {
+      material.coating.thickness_nm_image = value;
+    });
+  apply_field(before.coating.anisotropy, after.coating.anisotropy, [](MaterialDescription& material, const float value) {
+    material.coating.anisotropy = value;
+  });
+  apply_field(before.coating.ior.cls, after.coating.ior.cls, [](MaterialDescription& material, const uint32_t value) {
+    material.coating.ior.cls = value;
+  });
+  apply_texture_field(before.coating.absorption.image_index, after.coating.absorption.image_index, MaterialBatchChangedCoatingAbsorptionImage,
+    [](MaterialDescription& material, const uint32_t value) {
+      material.coating.absorption.image_index = value;
+    });
+  apply_texture_field(before.coating.scattering.image_index, after.coating.scattering.image_index, MaterialBatchChangedCoatingScatteringImage,
+    [](MaterialDescription& material, const uint32_t value) {
+      material.coating.scattering.image_index = value;
+    });
+  apply_field(before.thinfilm.ior.cls, after.thinfilm.ior.cls, [](MaterialDescription& material, const uint32_t value) {
     material.thinfilm.ior.cls = value;
   });
-  apply_field(before.thinfilm.thinkness_image, after.thinfilm.thinkness_image, [](Material& material, const uint32_t value) {
-    material.thinfilm.thinkness_image = value;
-  });
-  apply_field(before.thinfilm.min_thickness, after.thinfilm.min_thickness, [](Material& material, const float value) {
+  apply_texture_field(before.thinfilm.thinkness_image, after.thinfilm.thinkness_image, MaterialBatchChangedThinfilmThicknessImage,
+    [](MaterialDescription& material, const uint32_t value) {
+      material.thinfilm.thinkness_image = value;
+    });
+  apply_field(before.thinfilm.min_thickness, after.thinfilm.min_thickness, [](MaterialDescription& material, const float value) {
     material.thinfilm.min_thickness = value;
   });
-  apply_field(before.thinfilm.max_thickness, after.thinfilm.max_thickness, [](Material& material, const float value) {
+  apply_field(before.thinfilm.max_thickness, after.thinfilm.max_thickness, [](MaterialDescription& material, const float value) {
     material.thinfilm.max_thickness = value;
   });
-  apply_field(before.thinfilm.weight, after.thinfilm.weight, [](Material& material, const float value) {
+  apply_field(before.thinfilm.weight, after.thinfilm.weight, [](MaterialDescription& material, const float value) {
     material.thinfilm.weight = value;
   });
-  apply_field(before.diffraction_grating.period_nm, after.diffraction_grating.period_nm, [](Material& material, const float value) {
+  apply_field(before.diffraction_grating.period_nm, after.diffraction_grating.period_nm, [](MaterialDescription& material, const float value) {
     material.diffraction_grating.period_nm = value;
   });
-  apply_field(before.diffraction_grating.optical_path_difference_nm, after.diffraction_grating.optical_path_difference_nm, [](Material& material, const float value) {
+  apply_field(before.diffraction_grating.optical_path_difference_nm, after.diffraction_grating.optical_path_difference_nm, [](MaterialDescription& material, const float value) {
     material.diffraction_grating.optical_path_difference_nm = value;
   });
-  apply_field(before.diffraction_grating.duty_cycle, after.diffraction_grating.duty_cycle, [](Material& material, const float value) {
+  apply_field(before.diffraction_grating.duty_cycle, after.diffraction_grating.duty_cycle, [](MaterialDescription& material, const float value) {
     material.diffraction_grating.duty_cycle = value;
   });
-  apply_field(before.diffraction_grating.rotation, after.diffraction_grating.rotation, [](Material& material, const float value) {
+  apply_field(before.diffraction_grating.rotation, after.diffraction_grating.rotation, [](MaterialDescription& material, const float value) {
     material.diffraction_grating.rotation = value;
   });
-  apply_field(before.ext_ior.cls, after.ext_ior.cls, [](Material& material, const uint32_t value) {
-    material.ext_ior.cls = value;
-  });
-  apply_field(before.int_ior.cls, after.int_ior.cls, [](Material& material, const uint32_t value) {
-    material.int_ior.cls = value;
-  });
-  apply_field(before.subsurface_cls, after.subsurface_cls, [](Material& material, const uint32_t value) {
-    material.subsurface_cls = value;
-  });
-  apply_field(before.subsurface_path, after.subsurface_path, [](Material& material, const uint32_t value) {
+  if ((bsdf_selected == false) && (base_selected == false)) {
+    apply_field(before.ext_ior.cls, after.ext_ior.cls, [](MaterialDescription& material, const uint32_t value) {
+      material.ext_ior.cls = value;
+    });
+    apply_field(before.int_ior.cls, after.int_ior.cls, [](MaterialDescription& material, const uint32_t value) {
+      material.int_ior.cls = value;
+    });
+  }
+  if ((changed_fields & MaterialBatchChangedSubsurfaceClass) != 0u) {
+    for (const uint32_t index : material_indices) {
+      scene_rep.data().material_descriptions[index].subsurface_cls = after.subsurface_cls;
+    }
+  }
+  apply_field(before.subsurface_path, after.subsurface_path, [](MaterialDescription& material, const uint32_t value) {
     material.subsurface_path = value;
   });
-  apply_field(before.subsurface_packing, after.subsurface_packing, [](Material& material, const float value) {
+  apply_field(before.subsurface_packing, after.subsurface_packing, [](MaterialDescription& material, const float value) {
     material.subsurface_packing = value;
   });
-  apply_field(before.subsurface_anisotropy, after.subsurface_anisotropy, [](Material& material, const float value) {
+  apply_field(before.subsurface_anisotropy, after.subsurface_anisotropy, [](MaterialDescription& material, const float value) {
     material.subsurface_anisotropy = value;
   });
-  apply_field(before.cls, after.cls, [](Material& material, const uint32_t value) {
-    material.cls = value;
-    if (value == MaterialClass::Diffuse) {
-      material.roughness.value.y = material.roughness.value.x;
-    }
-  });
-  apply_field(before.int_medium, after.int_medium, [](Material& material, const uint32_t value) {
+  if ((bsdf_selected == false) && (base_selected == false)) {
+    apply_field(before.cls, after.cls, [](MaterialDescription& material, const uint32_t value) {
+      material.cls = value;
+    });
+  }
+  apply_field(before.int_medium, after.int_medium, [](MaterialDescription& material, const uint32_t value) {
     material.int_medium = value;
   });
-  apply_field(before.ext_medium, after.ext_medium, [](Material& material, const uint32_t value) {
+  apply_field(before.ext_medium, after.ext_medium, [](MaterialDescription& material, const uint32_t value) {
     material.ext_medium = value;
   });
-  apply_field(before.normal_image_index, after.normal_image_index, [](Material& material, const uint32_t value) {
+  apply_texture_field(before.normal_image_index, after.normal_image_index, MaterialBatchChangedNormalImage, [](MaterialDescription& material, const uint32_t value) {
     material.normal_image_index = value;
   });
-  apply_field(before.two_sided, after.two_sided, [](Material& material, const uint32_t value) {
+  apply_field(before.two_sided, after.two_sided, [](MaterialDescription& material, const uint32_t value) {
     material.two_sided = value;
   });
-  apply_field(before.normal_scale, after.normal_scale, [](Material& material, const float value) {
+  apply_field(before.normal_scale, after.normal_scale, [](MaterialDescription& material, const float value) {
     material.normal_scale = value;
   });
-  apply_field(before.opacity, after.opacity, [](Material& material, const float value) {
+  apply_field(before.opacity, after.opacity, [](MaterialDescription& material, const float value) {
     material.opacity = value;
   });
-  apply_field(before.emission_collimation, after.emission_collimation, [](Material& material, const float value) {
+  apply_field(before.emission_collimation, after.emission_collimation, [](MaterialDescription& material, const float value) {
     material.emission_collimation = value;
   });
-  apply_field(before.temperature_kelvin, after.temperature_kelvin, [](Material& material, const float value) {
+  apply_field(before.temperature_kelvin, after.temperature_kelvin, [](MaterialDescription& material, const float value) {
     material.temperature_kelvin = value;
-  });
-  apply_field(before.energy_compensation_interface_index, after.energy_compensation_interface_index, [](Material& material, const uint32_t value) {
-    material.energy_compensation_interface_index = value;
   });
 }
 
@@ -1520,15 +1683,17 @@ bool UI::angle_editor(const char* label, float2& angles, float min_azimuth, floa
   return changed;
 }
 
-bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveIndex& ior, const FrameData& data, bool mixed, bool dielectric_only,
-  SpectrumTarget::Channel eta_channel, SpectrumTarget::Channel k_channel) {
+bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveIndex& ior, const FrameData& data, bool mixed, SpectralDistribution::Class required_class,
+  SpectrumTarget::Channel eta_channel, SpectrumTarget::Channel k_channel, bool edit_k) {
   bool load_from_file = false;
-  const auto queue = [&](const SpectralDistribution& spectrum, SpectrumTarget::Channel channel, uint32_t index, const std::string& title, const std::string& path) {
+  const auto queue = [&](const SpectralDistribution& spectrum, SpectrumTarget::Channel channel, uint32_t index, const std::string& title, const std::string& path,
+                       SpectralDistribution::Class cls) {
     auto& state = _spectrum_controls[index];
     state = {};
     state.initialized = true;
     state.observed = scene.data().spectrum_values[index];
     state.source.kind = SpectrumSource::Kind::IOR;
+    state.source.classification = cls == SpectralDistribution::Conductor ? "conductor" : "dielectric";
     state.source.base = spectrum;
     state.source.title = title;
     state.source.path = path;
@@ -1602,10 +1767,32 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
   std::string button_label = std::string(preview_text) + "##ior_" + name;
   const std::string popup_id = format_string("ior_popup##%s", name);
 
-  if (ImGui::Button(button_label.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+  const float more_width = ImGui::CalcTextSize("...").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+  const float picker_width = std::max(1.0f, ImGui::GetContentRegionAvail().x - more_width - ImGui::GetStyle().ItemInnerSpacing.x);
+  if (ImGui::Button(button_label.c_str(), ImVec2(picker_width, 0.0f))) {
     ImGui::OpenPopup(popup_id.c_str());
   }
   draw_ior_tooltip(name, tooltip_title, tooltip_class, eta_rgb, k_rgb);
+  ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+  ImGui::PushID(name);
+  if (ImGui::Button("...##ior_curves", ImVec2(more_width, 0.0f))) {
+    ImGui::OpenPopup("##ior_curves_menu");
+  }
+  draw_item_tooltip("Edit IOR spectra", ImGuiHoveredFlags_DelayNormal);
+  if (ImGui::BeginPopup("##ior_curves_menu")) {
+    ImGui::TextDisabled("%s", name);
+    if (ior.eta_index >= scene.data().spectrum_values.size()) {
+      ImGui::TextDisabled("Choose an IOR source first.");
+    }
+    if (ImGui::MenuItem("Refractive index (eta)", nullptr, false, ior.eta_index < scene.data().spectrum_values.size())) {
+      open_ior_spectrum(scene, format_string("%s: eta", name).c_str(), eta_channel);
+    }
+    if (edit_k && ImGui::MenuItem("Absorption (k)", nullptr, false, ior.k_index < scene.data().spectrum_values.size())) {
+      open_ior_spectrum(scene, format_string("%s: k", name).c_str(), k_channel);
+    }
+    ImGui::EndPopup();
+  }
+  ImGui::PopID();
 
   const float popup_width = std::min(ImGui::GetFontSize() * 32.0f, ImGui::GetMainViewport()->WorkSize.x - ImGui::GetStyle().WindowPadding.x * 2.0f);
   ImGui::SetNextWindowSize(ImVec2(popup_width, 0.0f), ImGuiCond_Always);
@@ -1618,11 +1805,11 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
 
       std::vector<ColumnInfo> columns;
       const auto& conductors = data.ior_database.class_entries(SpectralDistribution::Conductor);
-      if ((dielectric_only == false) && (conductors.empty() == false)) {
+      if (((required_class == SpectralDistribution::Invalid) || (required_class == SpectralDistribution::Conductor)) && (conductors.empty() == false)) {
         columns.push_back({SpectralDistribution::Conductor, "Conductors"});
       }
       const auto& dielectrics = data.ior_database.class_entries(SpectralDistribution::Dielectric);
-      if (dielectrics.empty() == false) {
+      if (((required_class == SpectralDistribution::Invalid) || (required_class == SpectralDistribution::Dielectric)) && (dielectrics.empty() == false)) {
         columns.push_back({SpectralDistribution::Dielectric, "Dielectrics"});
       }
 
@@ -1648,8 +1835,8 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
             bool is_current = (matched_index == def_index);
             if (ImGui::Selectable(def.title.c_str(), is_current)) {
               matched_index = def_index;
-              queue(def.eta, eta_channel, ior.eta_index, def.title + " eta", def.filename);
-              queue(def.k, k_channel, ior.k_index, def.title + " k", def.filename);
+              queue(def.eta, eta_channel, ior.eta_index, def.title + " eta", def.filename, def.cls);
+              queue(def.k, k_channel, ior.k_index, def.title + " k", def.filename, def.cls);
               ImGui::CloseCurrentPopup();
             }
             if (is_current) {
@@ -1689,11 +1876,14 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
     SpectralDistribution t_eta = {};
     SpectralDistribution t_k = {};
     auto cls = SpectralDistribution::load_refractive_index(filename.c_str(), t_eta, t_k, title);
-    if ((cls != SpectralDistribution::Invalid) && ((dielectric_only == false) || (cls == SpectralDistribution::Dielectric))) {
-      queue(t_eta, eta_channel, ior.eta_index, title + " eta", filename);
-      queue(t_k, k_channel, ior.k_index, title + " k", filename);
+    if ((cls != SpectralDistribution::Invalid) && ((required_class == SpectralDistribution::Invalid) || (cls == required_class))) {
+      queue(t_eta, eta_channel, ior.eta_index, title + " eta", filename, cls);
+      queue(t_k, k_channel, ior.k_index, title + " k", filename, cls);
     } else if (filename.empty() == false) {
-      _spectrum_controls[ior.eta_index].error = "Could not load this IOR file. Choose a valid paired IOR spectrum of the required type.";
+      _spectrum_controls[ior.eta_index].error =
+        cls == SpectralDistribution::Invalid ? "Cannot read paired IOR data from " + filename
+                                             : filename + " contains " + (cls == SpectralDistribution::Conductor ? "conductor" : "dielectric") +
+                                                 " IOR data; this property requires " + (required_class == SpectralDistribution::Conductor ? "conductor" : "dielectric") + " data.";
     }
   }
 
@@ -1721,7 +1911,7 @@ bool UI::ior_picker(SceneRepresentation& scene, const char* name, RefractiveInde
     if (enabled_changed || hold_endpoints_changed) {
       if (_editing_material_indices != nullptr) {
         for (const uint32_t material_index : *_editing_material_indices) {
-          const RefractiveIndex& target_ior = scene.data().materials[material_index].int_ior;
+          const RefractiveIndex& target_ior = scene.data().material_descriptions[material_index].int_ior;
           for (uint32_t component = 0u; component < 2u; ++component) {
             const uint32_t index = component == 0u ? target_ior.eta_index : target_ior.k_index;
             const auto source = scene.data().spectrum_sources.find(index);
@@ -1785,6 +1975,15 @@ bool UI::medium_dropdown(const char* label, uint32_t& medium) {
 }
 
 bool UI::image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options) {
+  return image_picker(scene_rep, label, image_index, image_options, 0u);
+}
+
+bool UI::image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options, uint64_t changed_field) {
+  bool assigned = false;
+  return image_picker(scene_rep, label, image_index, image_options, changed_field, assigned);
+}
+
+bool UI::image_picker(SceneRepresentation& scene_rep, const char* label, uint32_t& image_index, uint32_t image_options, uint64_t changed_field, bool& assigned) {
   auto image_label = [&](uint32_t index) -> std::string {
     if (index >= scene_rep.data().images_vector.size()) {
       return "None";
@@ -1808,7 +2007,8 @@ bool UI::image_picker(SceneRepresentation& scene_rep, const char* label, uint32_
 
   bool changed = false;
   bool load_from_file = false;
-  const std::string current = (image_index == kInvalidIndex) ? std::string("None") : image_label(image_index);
+  const bool mixed = (ImGui::GetCurrentContext()->CurrentItemFlags & ImGuiItemFlags_MixedValue) != 0u;
+  const std::string current = mixed ? std::string("Mixed") : (image_index == kInvalidIndex) ? std::string("None") : image_label(image_index);
   char buffer[256] = {};
   snprintf(buffer, sizeof(buffer), "##picker_%s", label);
   if (ImGui::BeginCombo(buffer, current.c_str())) {
@@ -1856,61 +2056,135 @@ bool UI::image_picker(SceneRepresentation& scene_rep, const char* label, uint32_
     }
   }
 
+  assigned = changed;
   if (image_index != kInvalidIndex) {
     const Image image = scene_rep.data().images.get(image_index);
     uint32_t options = image.options & ~Image::Committed;
+    uint32_t addressing_axes = 0u;
     bool addressing_changed = false;
     ImGui::PushID(label);
+    const auto image_slot = [&](MaterialDescription& material) -> uint32_t* {
+      switch (changed_field) {
+        case MaterialBatchChangedReflectanceImage:
+          return &material.reflectance.image_index;
+        case MaterialBatchChangedScatteringImage:
+          return &material.scattering.image_index;
+        case MaterialBatchChangedEmissionImage:
+          return &material.emission.image_index;
+        case MaterialBatchChangedNormalImage:
+          return &material.normal_image_index;
+        case MaterialBatchChangedCoatingThicknessNmImage:
+          return &material.coating.thickness_nm_image;
+        case MaterialBatchChangedCoatingAbsorptionImage:
+          return &material.coating.absorption.image_index;
+        case MaterialBatchChangedCoatingScatteringImage:
+          return &material.coating.scattering.image_index;
+        case MaterialBatchChangedThinfilmThicknessImage:
+          return &material.thinfilm.thinkness_image;
+        case MaterialBatchChangedRoughnessImage:
+          return &material.roughness.image_index;
+        case MaterialBatchChangedMetalnessImage:
+          return &material.metalness.image_index;
+        case MaterialBatchChangedTransmissionImage:
+          return &material.transmission.image_index;
+        case MaterialBatchChangedAlphaMaskImage:
+          return &material.alpha_mask.image_index;
+        case MaterialBatchChangedBumpImage:
+          return &material.bump.image_index;
+        case MaterialBatchChangedMixAmountImage:
+          return &material.mix.amount.image_index;
+        case MaterialBatchChangedCoatingRoughnessImage:
+          return &material.coating.roughness.image_index;
+        case MaterialBatchChangedCoatingThicknessImage:
+          return &material.coating.thickness.image_index;
+      }
+      return nullptr;
+    };
     const auto addressing = [&](const char* axis, uint32_t repeat, uint32_t reflect) {
-      int mode = (options & reflect) != 0u ? 2 : ((options & repeat) != 0u ? 0 : 1);
-      if (ImGui::Combo(axis, &mode, "Repeat\0Clamp\0Reflect\0")) {
-        options &= ~(repeat | reflect);
-        options |= mode == 0 ? repeat : (mode == 2 ? reflect : 0u);
-        addressing_changed = true;
+      const uint32_t mode = (options & reflect) != 0u ? 2u : ((options & repeat) != 0u ? 0u : 1u);
+      const char* modes[] = {"Repeat", "Clamp", "Reflect"};
+      const bool mixed_addressing =
+        (_editing_material_indices != nullptr) && (_editing_material_indices->size() > 1u) &&
+        std::any_of(_editing_material_indices->begin(), _editing_material_indices->end(), [&](uint32_t material_index) {
+          const uint32_t* slot = image_slot(scene_rep.data().material_descriptions[material_index]);
+          return (slot != nullptr) && (*slot != kInvalidIndex) && ((scene_rep.data().images.get(*slot).options & (repeat | reflect)) != (options & (repeat | reflect)));
+        });
+      if (ImGui::BeginCombo(axis, mixed_addressing ? "Mixed" : modes[mode])) {
+        for (uint32_t selected_mode = 0u; selected_mode < 3u; ++selected_mode) {
+          if (ImGui::Selectable(modes[selected_mode], selected_mode == mode)) {
+            options &= ~(repeat | reflect);
+            options |= selected_mode == 0u ? repeat : (selected_mode == 2u ? reflect : 0u);
+            addressing_axes |= repeat | reflect;
+            addressing_changed = true;
+          }
+        }
+        ImGui::EndCombo();
       }
     };
     addressing("U addressing", Image::RepeatU, Image::ReflectU);
     addressing("V addressing", Image::RepeatV, Image::ReflectV);
     ImGui::PopID();
     if (addressing_changed) {
-      const std::string path = scene_rep.data().images.path(image_index);
-      if (path.empty() || path.starts_with("##")) {
-        Image copy = image;
-        copy.options = options;
-        image_index = scene_rep.data().add_image(copy);
+      const auto addressed_image = [&](uint32_t index) {
+        const Image source = scene_rep.data().images.get(index);
+        const uint32_t addressed_options = (source.options & ~(Image::Committed | addressing_axes)) | (options & addressing_axes);
+        const std::string path = scene_rep.data().images.path(index);
+        if (path.empty() || path.starts_with("##")) {
+          Image copy = source;
+          copy.options = addressed_options;
+          return scene_rep.data().add_image(copy);
+        }
+        return scene_rep.data().add_image(path.c_str(), addressed_options, {source.offset.x, source.offset.y}, {source.scale.x, source.scale.y});
+      };
+      if ((_editing_material_indices != nullptr) && (_editing_material_indices->size() > 1u) && (changed_field != 0u) && (changed == false)) {
+        for (const uint32_t material_index : *_editing_material_indices) {
+          uint32_t* slot = image_slot(scene_rep.data().material_descriptions[material_index]);
+          if ((slot != nullptr) && (*slot != kInvalidIndex)) {
+            *slot = addressed_image(*slot);
+          }
+        }
       } else {
-        image_index = scene_rep.data().add_image(path.c_str(), options, {image.offset.x, image.offset.y}, {image.scale.x, image.scale.y});
+        image_index = addressed_image(image_index);
       }
       changed = true;
     }
   }
 
+  if (assigned) {
+    _material_batch_changed_fields |= changed_field;
+  }
   return changed;
 }
 
 bool UI::sampled_image_picker(SceneRepresentation& scene_rep, const char* label, SampledImage& image, uint32_t image_options) {
-  bool changed = image_picker(scene_rep, label, image.image_index, image_options);
+  return sampled_image_picker(scene_rep, label, image, image_options, 0u, 0u);
+}
+
+bool UI::sampled_image_picker(SceneRepresentation& scene_rep, const char* label, SampledImage& image, uint32_t image_options, uint64_t image_field, uint64_t channel_field) {
+  bool assigned = false;
+  bool changed = image_picker(scene_rep, label, image.image_index, image_options, image_field, assigned);
   if (image.image_index == kInvalidIndex) {
-    if (image.channel != kInvalidIndex) {
-      image.channel = kInvalidIndex;
-      changed = true;
-    }
     return changed;
   }
 
-  if (image.channel > 4u) {
+  if (assigned && (image.channel > 4u)) {
     image.channel = 0u;
-    changed = true;
+    _material_batch_changed_fields |= channel_field;
   }
 
   const char* channel_names[] = {"R", "G", "B", "A", "RGB average"};
-  int32_t channel_index = static_cast<int32_t>(image.channel);
   property_label("Texture channel");
   full_width_item();
   const std::string channel_label = std::string("##channel_") + label;
-  if (ImGui::Combo(channel_label.c_str(), &channel_index, channel_names, 5)) {
-    image.channel = static_cast<uint32_t>(channel_index);
-    changed = true;
+  if (ImGui::BeginCombo(channel_label.c_str(), image.channel < 5u ? channel_names[image.channel] : "Choose channel...")) {
+    for (uint32_t channel = 0u; channel < 5u; ++channel) {
+      if (ImGui::Selectable(channel_names[channel], image.channel == channel)) {
+        image.channel = channel;
+        _material_batch_changed_fields |= channel_field;
+        changed = true;
+      }
+    }
+    ImGui::EndCombo();
   }
 
   return changed;
@@ -2702,24 +2976,24 @@ void UI::load_image() const {
   }
 }
 
-bool UI::build_material(SceneRepresentation& scene_rep, Material& material, const FrameData& data) {
+bool UI::build_material(SceneRepresentation& scene_rep, MaterialDescription& material, const FrameData& data) {
   auto material_values_mixed = [&](auto getter) -> bool {
     if ((_editing_material_indices == nullptr) || (_editing_material_indices->size() <= 1u)) {
       return false;
     }
 
     const uint32_t first_index = _editing_material_indices->front();
-    if (first_index >= scene_rep.data().materials.size()) {
+    if (first_index >= scene_rep.data().material_descriptions.size()) {
       return false;
     }
 
-    const auto first_value = getter(scene_rep.data().materials[first_index]);
+    const auto first_value = getter(scene_rep.data().material_descriptions[first_index]);
     for (const uint32_t material_index : *_editing_material_indices) {
-      if (material_index >= scene_rep.data().materials.size()) {
+      if (material_index >= scene_rep.data().material_descriptions.size()) {
         continue;
       }
 
-      const auto value = getter(scene_rep.data().materials[material_index]);
+      const auto value = getter(scene_rep.data().material_descriptions[material_index]);
       if (std::memcmp(&first_value, &value, sizeof(first_value)) != 0) {
         return true;
       }
@@ -2764,17 +3038,17 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
     }
 
     const uint32_t first_index = _editing_material_indices->front();
-    if (first_index >= scene_rep.data().materials.size()) {
+    if (first_index >= scene_rep.data().material_descriptions.size()) {
       return false;
     }
 
-    const RefractiveIndex first_value = getter(scene_rep.data().materials[first_index]);
+    const RefractiveIndex first_value = getter(scene_rep.data().material_descriptions[first_index]);
     for (const uint32_t material_index : *_editing_material_indices) {
-      if (material_index >= scene_rep.data().materials.size()) {
+      if (material_index >= scene_rep.data().material_descriptions.size()) {
         continue;
       }
 
-      const RefractiveIndex value = getter(scene_rep.data().materials[material_index]);
+      const RefractiveIndex value = getter(scene_rep.data().material_descriptions[material_index]);
       if (refractive_indices_equal(first_value, value) == false) {
         return true;
       }
@@ -2795,408 +3069,874 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
     return result;
   };
 
-  const bool class_mixed = material_values_mixed([](const Material& value) {
-    return value.cls;
+  bool changed = false;
+  const bool bsdf_mixed = material_values_mixed([](const MaterialDescription& value) {
+    return value.layers.explicit_layers != 0u ? value.layers.bsdf : value.cls;
   });
-  bool changed = mixed_control(class_mixed, [&]() {
-    return build_material_class_selector(material, class_mixed);
-  });
-  if (changed) {
-    _material_batch_changed_fields |= MaterialBatchChangedClass;
-  }
-  if (class_mixed) {
-    ImGui::TextDisabled("Mixed material classes");
-  }
-
-  if ((material.cls == MaterialClass::OpenPBR) && ((_editing_material_indices == nullptr) || (_editing_material_indices->size() <= 1u))) {
-    if (ImGui::Button("Load OpenPBR MaterialX...", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
-      const std::string selected_file = open_file("mtlx");
-      if (selected_file.empty() == false) {
-        changed = load_openpbr_material_file(selected_file, scene_rep.data(), material) || changed;
+  {
+    const uint32_t previous_class = material.cls;
+    const bool bsdf_changed = mixed_control(bsdf_mixed, [&]() {
+      return build_material_class_selector(material, bsdf_mixed, true);
+    });
+    changed |= bsdf_changed;
+    if (bsdf_changed) {
+      _material_batch_changed_fields |= MaterialBatchChangedBSDF;
+    }
+    const bool class_mixed = material_values_mixed([](const MaterialDescription& value) {
+      return value.cls;
+    });
+    bool base_changed = false;
+    if ((material.layers.explicit_layers != 0u) && (material.layers.bsdf == MaterialClass::Undefined)) {
+      ImGui::BeginDisabled(bsdf_mixed);
+      base_changed = mixed_control(class_mixed, [&]() {
+        return build_material_class_selector(material, class_mixed, false);
+      });
+      changed |= base_changed;
+      ImGui::EndDisabled();
+    }
+    if (base_changed || (previous_class != material.cls)) {
+      _material_batch_changed_fields |= MaterialBatchChangedClass;
+      if ((material.cls == MaterialClass::Mix) && (previous_class != material.cls)) {
+        uint32_t child = kInvalidIndex;
+        for (uint64_t position = 0u; position < _material_mapping.size(); ++position) {
+          const uint32_t index = _material_mapping.at(position);
+          const bool editing =
+            (_editing_material_indices != nullptr) && (std::find(_editing_material_indices->begin(), _editing_material_indices->end(), index) != _editing_material_indices->end());
+          if ((editing == false) && (scene_rep.data().material_descriptions[index].cls != MaterialClass::Mix)) {
+            child = index;
+            break;
+          }
+        }
+        if (child == kInvalidIndex) {
+          material.mix.first = material.mix.second = static_cast<uint32_t>(scene_rep.data().material_descriptions.size());
+          // Appending can invalidate the edited material reference.
+          scene_rep.create_material("Mix child");
+          return true;
+        }
+        material.mix.first = material.mix.second = child;
       }
     }
-  }
 
-  const auto uses_surface_spectra = [&]() -> bool {
-    return (material.cls != MaterialClass::Boundary) && (material.cls != MaterialClass::Void);
-  };
-
-  const auto uses_roughness = [&]() -> bool {
-    switch (material.cls) {
-      case MaterialClass::Diffuse:
-      case MaterialClass::Plastic:
-      case MaterialClass::Conductor:
-      case MaterialClass::Dielectric:
-      case MaterialClass::Velvet:
-      case MaterialClass::OpenPBR:
-        return true;
-      default:
-        return false;
+    if (class_mixed) {
+      ImGui::TextDisabled("Mixed material classes");
     }
-  };
 
-  const auto uses_interface_ior = [&]() -> bool {
-    switch (material.cls) {
-      case MaterialClass::Plastic:
-      case MaterialClass::Conductor:
-      case MaterialClass::Dielectric:
-      case MaterialClass::Thinfilm:
-      case MaterialClass::OpenPBR:
-        return true;
-      default:
-        return false;
+    if (material.cls == MaterialClass::Mix) {
+      const auto pick_child = [&](const char* label, uint32_t& child) {
+        property_label(label);
+        full_width_item();
+        const char* preview = _material_mapping.name_for(child);
+        bool selected = false;
+        if (ImGui::BeginCombo(label, preview != nullptr ? preview : "Select material")) {
+          for (uint64_t position = 0u; position < _material_mapping.size(); ++position) {
+            const uint32_t index = _material_mapping.at(position);
+            const bool editing = (_editing_material_indices != nullptr) &&
+                                 (std::find(_editing_material_indices->begin(), _editing_material_indices->end(), index) != _editing_material_indices->end());
+            bool cyclic = editing;
+            std::vector<uint8_t> visited(scene_rep.data().material_descriptions.size(), 0u);
+            std::vector<uint32_t> pending = {index};
+            while ((pending.empty() == false) && (cyclic == false)) {
+              const uint32_t candidate = pending.back();
+              pending.pop_back();
+              if ((candidate >= scene_rep.data().material_descriptions.size()) || (visited[candidate] != 0u))
+                continue;
+              visited[candidate] = 1u;
+              cyclic = (_editing_material_indices != nullptr) &&
+                       (std::find(_editing_material_indices->begin(), _editing_material_indices->end(), candidate) != _editing_material_indices->end());
+              if (scene_rep.data().material_descriptions[candidate].cls == MaterialClass::Mix) {
+                pending.push_back(scene_rep.data().material_descriptions[candidate].mix.first);
+                pending.push_back(scene_rep.data().material_descriptions[candidate].mix.second);
+              }
+            }
+            if (cyclic)
+              continue;
+            if (ImGui::Selectable(_material_mapping.name(position), child == index)) {
+              child = index;
+              selected = true;
+            }
+          }
+          ImGui::EndCombo();
+        }
+        return selected;
+      };
+      changed |= pick_child("First material", material.mix.first);
+      changed |= pick_child("Second material", material.mix.second);
+      property_label("Second material amount");
+      full_width_item();
+      changed |= ImGui::SliderFloat("##mix_amount", &material.mix.amount.value.x, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+      changed |= sampled_image_picker(scene_rep, "Amount texture##mix_amount_texture", material.mix.amount, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion,
+        MaterialBatchChangedMixAmountImage, MaterialBatchChangedMixAmountChannel);
     }
-  };
 
-  const auto uses_subsurface = [&]() -> bool {
-    return (material.cls == MaterialClass::Diffuse) || (material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::OpenPBR);
-  };
+    if (material.cls != MaterialClass::Mix) {
+      const bool layer_authored = material.layers.explicit_layers != 0u;
+      if ((material.cls == MaterialClass::OpenPBR) && ((_editing_material_indices == nullptr) || (_editing_material_indices->size() <= 1u))) {
+        if (ImGui::Button("Load OpenPBR MaterialX...", ImVec2(ImGui::GetContentRegionAvail().x, 0.0f))) {
+          const std::string selected_file = open_file("mtlx");
+          if (selected_file.empty() == false) {
+            const bool loaded = load_openpbr_material_file(selected_file, scene_rep.data(), material, _material_load_error);
+            changed |= loaded;
+            if (loaded == false) {
+              ImGui::OpenPopup("MaterialX load failed");
+            }
+          }
+        }
+        if (ImGui::BeginPopupModal("MaterialX load failed", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+          ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
+          ImGui::TextUnformatted(_material_load_error.c_str());
+          ImGui::PopTextWrapPos();
+          if (ImGui::Button("Close")) {
+            ImGui::CloseCurrentPopup();
+          }
+          ImGui::EndPopup();
+        }
+      }
 
-  const auto with_section = [&](int section, const char* title, auto&& body, bool default_open) {
-    const PropertySection categories[] = {PropertySection::Surface, PropertySection::Surface, PropertySection::Optics, PropertySection::Subsurface, PropertySection::Emission};
-    if ((section == 4) && _auto_open_emission_section) {
-      ImGui::SetNextItemOpen(true, ImGuiCond_Always);
-      default_open = false;
-    }
-    const char* summary = nullptr;
-    std::string emission_summary;
-    if (section == 3) {
-      summary = material.subsurface_cls == SubsurfaceMaterial::Disabled ? "Off" : "Random walk";
-    } else if ((section == 4) && (material.temperature_kelvin > 0.0f)) {
-      emission_summary = format_string("%.0f K", material.temperature_kelvin);
-      summary = emission_summary.c_str();
-    }
-    if (property_section(categories[section], title, summary, default_open)) {
-      body();
-    }
-  };
+      const auto uses_surface_spectra = [&]() -> bool {
+        return (material.cls != MaterialClass::Boundary) && (material.cls != MaterialClass::Void);
+      };
 
-  if (uses_surface_spectra()) {
-    with_section(
-      0, "Surface",
-      [&]() {
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
-          return value.reflectance.spectrum_index;
-        }),
-          [&]() {
-            return material_spectrum_control(scene_rep, "Reflectance", SpectrumTarget::Channel::Reflectance, SpectrumSource::Kind::Reflectance);
-          });
+      const auto uses_roughness = [&]() -> bool {
+        switch (material.cls) {
+          case MaterialClass::Diffuse:
+          case MaterialClass::Plastic:
+          case MaterialClass::Conductor:
+          case MaterialClass::CoatedConductor:
+          case MaterialClass::Dielectric:
+          case MaterialClass::Velvet:
+          case MaterialClass::OpenPBR:
+            return true;
+          default:
+            return false;
+        }
+      };
 
-        if (material.cls != MaterialClass::DiffractionGrating) {
-          ImGui::Spacing();
+      const bool uses_film_support_ior =
+        layer_authored && (material.layers.coating_enabled == 0u) && ((material.cls == MaterialClass::Diffuse) || (material.cls == MaterialClass::Velvet));
+      const bool uses_coated_translucent_ior = layer_authored && (material.layers.coating_enabled != 0u) && (material.cls == MaterialClass::Translucent);
+      const auto uses_interface_ior = [&]() -> bool {
+        return uses_surface_spectra();
+      };
 
-          changed |= mixed_control(material_values_mixed([](const Material& value) {
-            return value.scattering.spectrum_index;
+      const bool subsurface_mixed = material_values_mixed([](const MaterialDescription& value) {
+        return value.subsurface_cls;
+      });
+      const bool diffuse_base = (material.cls == MaterialClass::Diffuse) || (material.cls == MaterialClass::Plastic);
+      const bool subsurface_available =
+        diffuse_base && ((_editing_material_indices == nullptr) || std::all_of(_editing_material_indices->begin(), _editing_material_indices->end(), [&](uint32_t index) {
+          const uint32_t cls = scene_rep.data().material_descriptions[index].cls;
+          return (cls == MaterialClass::Diffuse) || (cls == MaterialClass::Plastic);
+        }));
+      const auto uses_subsurface = [&]() -> bool {
+        return diffuse_base || subsurface_mixed || (material.subsurface_cls != SubsurfaceMaterial::Disabled);
+      };
+
+      const auto with_parameters = [&](PropertySection section, const char* title, bool default_open, auto&& body) {
+        if (property_section(section, title, nullptr, default_open)) {
+          body();
+        }
+      };
+
+      if (uses_surface_spectra()) {
+        with_parameters(PropertySection::Surface, "Surface", true, [&]() {
+          changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return value.reflectance.spectrum_index;
           }),
             [&]() {
-              return material_spectrum_control(scene_rep, "Scattering", SpectrumTarget::Channel::Scattering, SpectrumSource::Kind::Reflectance);
+              return material_spectrum_control(scene_rep, "Reflectance", SpectrumTarget::Channel::Reflectance, SpectrumSource::Kind::Reflectance);
             });
-        }
-        ImGui::Spacing();
-        const bool opacity_mixed = material_values_mixed([](const Material& value) {
-          return value.opacity;
-        });
-        property_label("Opacity");
-        full_width_item();
-        changed |= mixed_control(opacity_mixed, [&]() {
-          return ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, opacity_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-        });
-        if (uses_roughness()) {
-          ImGui::Spacing();
-          float& rough_u = material.roughness.value.x;
-          float& rough_v = material.roughness.value.y;
 
-          std::string material_key = "material";
-          if (_editing_material_indices != nullptr) {
-            for (const uint32_t material_index : *_editing_material_indices) {
-              material_key += ":" + std::to_string(material_index);
+          if ((material.cls != MaterialClass::DiffractionGrating) && (material.cls != MaterialClass::CoatedConductor)) {
+            ImGui::Spacing();
+
+            changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+              return value.scattering.spectrum_index;
+            }),
+              [&]() {
+                return material_spectrum_control(scene_rep, "Scattering", SpectrumTarget::Channel::Scattering, SpectrumSource::Kind::Reflectance);
+              });
+          }
+          ImGui::Spacing();
+          const bool opacity_mixed = material_values_mixed([](const MaterialDescription& value) {
+            return value.opacity;
+          });
+          property_label("Opacity");
+          full_width_item();
+          changed |= mixed_control(opacity_mixed, [&]() {
+            return ImGui::SliderFloat("##opacity", &material.opacity, 0.0f, 1.0f, opacity_mixed ? "mixed" : "%.3f",
+              ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+          });
+          if (uses_roughness()) {
+            ImGui::Spacing();
+            float& rough_u = material.roughness.value.x;
+            float& rough_v = material.roughness.value.y;
+
+            std::string material_key = "material";
+            if (_editing_material_indices != nullptr) {
+              for (const uint32_t material_index : *_editing_material_indices) {
+                material_key += ":" + std::to_string(material_index);
+              }
+            }
+
+            auto aniso_insert = _material_anisotropy.emplace(material_key, std::fabs(rough_u - rough_v) > 1.0e-4f);
+            auto aniso_entry = aniso_insert.first;
+            bool anisotropic = aniso_entry->second;
+            const bool force_isotropic_roughness = material.cls == MaterialClass::Diffuse;
+
+            if (force_isotropic_roughness) {
+              anisotropic = false;
+            } else {
+              property_label("Anisotropic");
+              if (ImGui::Checkbox("##rough_aniso", &anisotropic)) {
+                aniso_entry->second = anisotropic;
+                if (anisotropic == false) {
+                  rough_v = rough_u;
+                  changed = true;
+                }
+              }
+              ImGui::Spacing();
+            }
+
+            const bool rough_u_mixed = material_values_mixed([](const MaterialDescription& value) {
+              return value.roughness.value.x;
+            });
+            property_label(anisotropic ? "Roughness U" : "Roughness");
+            full_width_item();
+            const bool rough_u_changed = mixed_control(rough_u_mixed, [&]() {
+              return ImGui::SliderFloat("##rough_u", &rough_u, 0.0f, 1.0f, rough_u_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+            });
+            if (rough_u_changed) {
+              if (anisotropic == false) {
+                rough_v = rough_u;
+                aniso_entry->second = false;
+              }
+              changed = true;
+            }
+
+            if (anisotropic) {
+              const bool rough_v_mixed = material_values_mixed([](const MaterialDescription& value) {
+                return value.roughness.value.y;
+              });
+              property_label("Roughness V");
+              full_width_item();
+              const bool rough_v_changed = mixed_control(rough_v_mixed, [&]() {
+                return ImGui::SliderFloat("##rough_v", &rough_v, 0.0f, 1.0f, rough_v_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+              });
+              if (rough_v_changed) {
+                changed = true;
+              }
+            }
+
+            ImGui::Spacing();
+          }
+          if (material.cls == MaterialClass::OpenPBR) {
+            ImGui::Spacing();
+            float metal = material.metalness.value.x;
+            const bool metalness_mixed = material_values_mixed([](const MaterialDescription& value) {
+              return value.metalness.value.x;
+            });
+            property_label("Metalness");
+            full_width_item();
+            const bool metalness_changed = mixed_control(metalness_mixed, [&]() {
+              return ImGui::SliderFloat("##metalness", &metal, 0.0f, 1.0f, metalness_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+            });
+            if (metalness_changed) {
+              material.metalness.value = {metal, metal, metal, metal};
+              changed = true;
+            }
+
+            float trans = material.transmission.value.x;
+            const bool transmission_mixed = material_values_mixed([](const MaterialDescription& value) {
+              return value.transmission.value.x;
+            });
+            property_label("Transmission");
+            full_width_item();
+            const bool transmission_changed = mixed_control(transmission_mixed, [&]() {
+              return ImGui::SliderFloat("##transmission", &trans, 0.0f, 1.0f, transmission_mixed ? "mixed" : "%.3f",
+                ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+            });
+            if (transmission_changed) {
+              material.transmission.value = {trans, trans, trans, trans};
+              changed = true;
             }
           }
 
-          auto aniso_insert = _material_anisotropy.emplace(material_key, std::fabs(rough_u - rough_v) > 1.0e-4f);
-          auto aniso_entry = aniso_insert.first;
-          bool anisotropic = aniso_entry->second;
-          const bool force_isotropic_roughness = material.cls == MaterialClass::Diffuse;
+          ImGui::Spacing();
+        });
+      }
 
-          if (force_isotropic_roughness) {
-            anisotropic = false;
-            aniso_entry->second = false;
-            if (rough_v != rough_u) {
-              rough_v = rough_u;
+      if ((uses_interface_ior()) || (_medium_mapping.empty() == false)) {
+        if (property_section(PropertySection::Optics, "Optics & media", nullptr, false)) {
+          if (uses_interface_ior()) {
+            if ((uses_roughness()) || (material.cls == MaterialClass::OpenPBR)) {
+              ImGui::Spacing();
+            }
+            {
+              const bool int_ior_mixed = material_ior_values_mixed([](const MaterialDescription& value) {
+                return value.int_ior;
+              });
+              const bool dielectric_support_ior = (material.cls == MaterialClass::Thinfilm) || (uses_film_support_ior && (material.layers.thinfilm_enabled != 0u) &&
+                                                                                                 (material.thinfilm.weight > 0.0f) && (material.thinfilm.max_thickness > 0.0f));
+              uint32_t required_ior = SpectralDistribution::Invalid;
+              if ((material.cls == MaterialClass::Conductor) || (material.cls == MaterialClass::CoatedConductor)) {
+                required_ior = SpectralDistribution::Conductor;
+              } else if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Plastic) || dielectric_support_ior) {
+                required_ior = SpectralDistribution::Dielectric;
+              }
+              const bool int_ior_changed = mixed_control(int_ior_mixed, [&]() {
+                return ior_picker(scene_rep, "Base IOR", material.int_ior, data, int_ior_mixed, required_ior, SpectrumTarget::Channel::InsideEta, SpectrumTarget::Channel::InsideK,
+                  true);
+              });
+              if (int_ior_changed) {
+                _material_batch_changed_fields |= MaterialBatchChangedIntIOR;
+                changed = true;
+              }
+              ImGui::Spacing();
+            }
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            const bool ext_ior_mixed = material_ior_values_mixed([](const MaterialDescription& value) {
+              return value.ext_ior;
+            });
+            const bool dielectric_exterior = (material.cls == MaterialClass::Conductor) || (material.cls == MaterialClass::Dielectric) ||
+                                             (material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::CoatedConductor) ||
+                                             (material.cls == MaterialClass::Thinfilm) || (layer_authored && (material.layers.coating_enabled != 0u)) || uses_film_support_ior ||
+                                             uses_coated_translucent_ior;
+            const bool ext_ior_changed = mixed_control(ext_ior_mixed, [&]() {
+              return ior_picker(scene_rep, "Outside IOR", material.ext_ior, data, ext_ior_mixed,
+                dielectric_exterior ? SpectralDistribution::Dielectric : SpectralDistribution::Invalid, SpectrumTarget::Channel::OutsideEta, SpectrumTarget::Channel::OutsideK,
+                (uses_film_support_ior == false) && (uses_coated_translucent_ior == false));
+            });
+            if (ext_ior_changed) {
+              _material_batch_changed_fields |= MaterialBatchChangedExtIOR;
               changed = true;
             }
-          } else {
-            property_label("Anisotropic");
-            if (ImGui::Checkbox("##rough_aniso", &anisotropic)) {
-              aniso_entry->second = anisotropic;
-              if (anisotropic == false) {
-                rough_v = rough_u;
-                changed = true;
+          }
+          if (_medium_mapping.empty() == false) {
+            changed |= labeled_control("Internal medium", [&]() {
+              return mixed_control(material_values_mixed([](const MaterialDescription& value) {
+                return value.int_medium;
+              }),
+                [&]() {
+                  return medium_dropdown("##internal_medium", material.int_medium);
+                });
+            });
+            changed |= labeled_control("External medium", [&]() {
+              return mixed_control(material_values_mixed([](const MaterialDescription& value) {
+                return value.ext_medium;
+              }),
+                [&]() {
+                  return medium_dropdown("##external_medium", material.ext_medium);
+                });
+            });
+          }
+        }
+      }
+
+      if (uses_surface_spectra() && property_section(PropertySection::Textures, "Textures & masks", nullptr, false)) {
+        changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+          return value.reflectance.image_index;
+        }),
+          [&]() {
+            property_label("Reflectance map");
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            return image_picker(scene_rep, "Reflectance Texture##reflectance_texture", material.reflectance.image_index, Image::RepeatU | Image::RepeatV,
+              MaterialBatchChangedReflectanceImage);
+          });
+        if ((material.cls != MaterialClass::DiffractionGrating) && (material.cls != MaterialClass::CoatedConductor)) {
+          changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return value.scattering.image_index;
+          }),
+            [&]() {
+              property_label("Scattering map");
+              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+              return image_picker(scene_rep, "Scattering Texture##scattering_texture", material.scattering.image_index, Image::RepeatU | Image::RepeatV,
+                MaterialBatchChangedScatteringImage);
+            });
+        }
+        if (uses_roughness()) {
+          changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return uint2{value.roughness.image_index, value.roughness.channel};
+          }),
+            [&]() {
+              property_label("Roughness map");
+              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+              return sampled_image_picker(scene_rep, "Roughness Texture##roughness_texture", material.roughness, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion,
+                MaterialBatchChangedRoughnessImage, MaterialBatchChangedRoughnessChannel);
+            });
+        }
+        if (material.cls == MaterialClass::OpenPBR) {
+          changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return uint2{value.metalness.image_index, value.metalness.channel};
+          }),
+            [&]() {
+              property_label("Metalness map");
+              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+              return sampled_image_picker(scene_rep, "Metalness Texture##metalness_texture", material.metalness, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion,
+                MaterialBatchChangedMetalnessImage, MaterialBatchChangedMetalnessChannel);
+            });
+          changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return uint2{value.transmission.image_index, value.transmission.channel};
+          }),
+            [&]() {
+              property_label("Transmission map");
+              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+              return sampled_image_picker(scene_rep, "Transmission Texture##transmission_texture", material.transmission,
+                Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, MaterialBatchChangedTransmissionImage, MaterialBatchChangedTransmissionChannel);
+            });
+        }
+        property_label("Alpha mask");
+        full_width_item();
+        const bool alpha_mask_mixed = material_values_mixed([](const MaterialDescription& value) {
+          return value.alpha_mask.image_index;
+        }) || material_values_mixed([](const MaterialDescription& value) {
+          return value.alpha_mask.channel;
+        });
+        changed |= mixed_control(alpha_mask_mixed, [&]() {
+          return sampled_image_picker(scene_rep, "Alpha mask##alpha_mask", material.alpha_mask, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion,
+            MaterialBatchChangedAlphaMaskImage, MaterialBatchChangedAlphaMaskChannel);
+        });
+        const bool alpha_strength_mixed = material_values_mixed([](const MaterialDescription& value) {
+          return value.alpha_mask.value.x;
+        });
+        property_label("Mask strength");
+        full_width_item();
+        changed |= mixed_control(alpha_strength_mixed, [&]() {
+          return ImGui::DragFloat("##alpha_mask_strength", &material.alpha_mask.value.x, 0.01f, 0.0f, kMaxFloat, alpha_strength_mixed ? "mixed" : "%.3f",
+            ImGuiSliderFlags_AlwaysClamp);
+        });
+
+        property_label("Bump map");
+        full_width_item();
+        changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+          return uint2{value.bump.image_index, value.bump.channel};
+        }),
+          [&]() {
+            const uint32_t previous_image = material.bump.image_index;
+            const bool picked = sampled_image_picker(scene_rep, "Bump map##bump_map", material.bump, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion,
+              MaterialBatchChangedBumpImage, MaterialBatchChangedBumpChannel);
+            if (picked && (previous_image == kInvalidIndex) && (material.bump.image_index != kInvalidIndex) && (material.bump.value.x == 0.0f))
+              material.bump.value.x = 1.0f;
+            return picked;
+          });
+        property_label("Bump strength");
+        full_width_item();
+        changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+          return value.bump.value.x;
+        }),
+          [&]() {
+            return ImGui::DragFloat("##bump_strength", &material.bump.value.x, 0.001f, -kMaxFloat, kMaxFloat, "%.4f");
+          });
+        if ((material.normal_image_index != kInvalidIndex) && (material.normal_scale > kEpsilon) && (material.bump.value.x != 0.0f))
+          ImGui::TextDisabled("Normal map takes precedence over bump.");
+
+        property_label("Normal map");
+        changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+          return value.normal_image_index;
+        }),
+          [&]() {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            return image_picker(scene_rep, "Normal Texture##normal_texture", material.normal_image_index, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion,
+              MaterialBatchChangedNormalImage);
+          });
+        if (material.normal_image_index != kInvalidIndex) {
+          changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return value.normal_scale;
+          }),
+            [&]() {
+              property_label("Scale");
+              full_width_item();
+              return ImGui::SliderFloat("##normal_scale", &material.normal_scale, 0.0f, 4.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+            });
+        }
+      }
+
+      if (material.cls == MaterialClass::DiffractionGrating) {
+        with_parameters(PropertySection::Optics, "Diffraction grating", true, [&]() {
+          const float previous_period_nm = material.diffraction_grating.period_nm;
+          const bool period_changed = mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return value.diffraction_grating.period_nm;
+          }),
+            [&]() {
+              property_label("Period (nm)");
+              full_width_item();
+              return ImGui::InputFloat("##diffraction_period", &material.diffraction_grating.period_nm, 0.0f, 0.0f, "%.3f");
+            });
+          if (period_changed) {
+            material.diffraction_grating.period_nm = std::isfinite(material.diffraction_grating.period_nm)
+                                                       ? clamp(material.diffraction_grating.period_nm, kDiffractionGratingMinimumPeriodNm, kDiffractionGratingMaximumPeriodNm)
+                                                       : previous_period_nm;
+            changed = true;
+          }
+
+          ImGui::Spacing();
+          const float previous_optical_path_difference_nm = material.diffraction_grating.optical_path_difference_nm;
+          const bool optical_path_difference_changed = mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return value.diffraction_grating.optical_path_difference_nm;
+          }),
+            [&]() {
+              property_label("Optical Path Difference (nm)");
+              full_width_item();
+              return ImGui::InputFloat("##diffraction_optical_path_difference", &material.diffraction_grating.optical_path_difference_nm, 0.0f, 0.0f, "%.3f");
+            });
+          if (optical_path_difference_changed) {
+            material.diffraction_grating.optical_path_difference_nm = std::isfinite(material.diffraction_grating.optical_path_difference_nm)
+                                                                        ? clamp(material.diffraction_grating.optical_path_difference_nm,
+                                                                            kDiffractionGratingMinimumOpticalPathDifferenceNm, kDiffractionGratingMaximumOpticalPathDifferenceNm)
+                                                                        : previous_optical_path_difference_nm;
+            changed = true;
+          }
+
+          ImGui::Spacing();
+          changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return value.diffraction_grating.duty_cycle;
+          }),
+            [&]() {
+              property_label("Duty Cycle");
+              full_width_item();
+              return ImGui::SliderFloat("##diffraction_duty", &material.diffraction_grating.duty_cycle, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+            });
+
+          ImGui::Spacing();
+          const float previous_rotation = material.diffraction_grating.rotation;
+          float rotation_degrees = previous_rotation * 180.0f / kPi;
+          const bool rotation_changed = mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return value.diffraction_grating.rotation;
+          }),
+            [&]() {
+              property_label("Rotation (degrees)");
+              full_width_item();
+              return ImGui::InputFloat("##diffraction_rotation", &rotation_degrees, 0.0f, 0.0f, "%.3f");
+            });
+          if (rotation_changed) {
+            material.diffraction_grating.rotation = std::isfinite(rotation_degrees) ? fmodf(rotation_degrees * kPi / 180.0f, kDoublePi) : previous_rotation;
+            changed = true;
+          }
+        });
+      }
+
+      if (uses_subsurface()) {
+        with_parameters(PropertySection::Subsurface, "Subsurface scattering", false, [&]() {
+          if (uses_subsurface()) {
+            property_label("Subsurface");
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            const char* preview = subsurface_mixed ? "Mixed" : (material.subsurface_cls == SubsurfaceMaterial::Disabled ? "Disabled" : "Random walk");
+            if (ImGui::BeginCombo("##sssclass", preview)) {
+              const auto choice = [&](const char* label, uint32_t cls, bool available) {
+                if (ImGui::Selectable(label, (subsurface_mixed == false) && (material.subsurface_cls == cls),
+                      available ? ImGuiSelectableFlags_None : ImGuiSelectableFlags_Disabled)) {
+                  material.subsurface_cls = cls;
+                  _material_batch_changed_fields |= MaterialBatchChangedSubsurfaceClass;
+                  changed = true;
+                }
+              };
+              choice("Disabled", SubsurfaceMaterial::Disabled, true);
+              choice("Random walk", SubsurfaceMaterial::RandomWalk, subsurface_available);
+              ImGui::EndCombo();
+            }
+            if (subsurface_available == false) {
+              ImGui::TextWrapped("Random-walk SSS requires diffuse or coated-diffuse bases throughout the selection.");
+            }
+            if ((material.subsurface_cls != SubsurfaceMaterial::Disabled) && subsurface_available) {
+              if (material.cls != MaterialClass::Plastic) {
+                property_label("Boundary");
+                ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+                changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+                  return value.subsurface_path;
+                }),
+                  [&]() {
+                    return ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface_path), "Diffuse Transmittance\0Incident Direction\0");
+                  });
+              }
+              changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+                return value.subsurface.spectrum_index;
+              }),
+                [&]() {
+                  return material_spectrum_control(scene_rep, "Scattering Distance", SpectrumTarget::Channel::Subsurface, SpectrumSource::Kind::Coefficient);
+                });
+              if (material.subsurface.image_index != kInvalidIndex) {
+                ImGui::TextDisabled("Unused Distance Texture");
+                if (ImGui::Button("Remove##subsurface_distance_texture")) {
+                  material.subsurface.image_index = kInvalidIndex;
+                  changed = true;
+                }
+              }
+
+              changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+                return value.subsurface_packing;
+              }),
+                [&]() {
+                  int model = material.subsurface_packing > 0.0f ? 1 : 0;
+                  property_label("Free-Path Sampling");
+                  full_width_item();
+                  if (ImGui::Combo("##sss_free_paths", &model, "Exponential\0Exclusion\0")) {
+                    material.subsurface_packing = model == 0 ? 0.0f : 0.5f;
+                    return true;
+                  }
+                  return false;
+                });
+              if (material.subsurface_packing > 0.0f) {
+                changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+                  return value.subsurface_packing;
+                }),
+                  [&]() {
+                    property_label("Packing");
+                    full_width_item();
+                    return ImGui::SliderFloat("##packing_sss", &material.subsurface_packing, 0.001f, 0.99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                  });
+              }
+              if (material.int_medium == kInvalidIndex) {
+                changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+                  return value.subsurface_anisotropy;
+                }),
+                  [&]() {
+                    property_label("Anisotropy");
+                    full_width_item();
+                    return ImGui::SliderFloat("##anisotropy_sss", &material.subsurface_anisotropy, -0.99f, 0.99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+                  });
+              } else {
+                const bool anisotropy_mixed = (material_values_mixed([](const MaterialDescription& value) {
+                  return value.int_medium;
+                })) || (material_values_mixed([&](const MaterialDescription& value) {
+                  return (value.int_medium < scene_rep.data().mediums_vector.size()) ? scene_rep.data().mediums.get(value.int_medium).phase_function_g
+                                                                                     : value.subsurface_anisotropy;
+                }));
+                if (anisotropy_mixed) {
+                  ImGui::TextDisabled("Anisotropy: Mixed (Medium)");
+                } else if (material.int_medium < scene_rep.data().mediums_vector.size()) {
+                  ImGui::TextDisabled("Anisotropy: %.3f (Medium)", scene_rep.data().mediums.get(material.int_medium).phase_function_g);
+                } else {
+                  ImGui::TextColored(kErrorTextColor, "Invalid Internal Medium");
+                }
               }
             }
             ImGui::Spacing();
           }
+        });
+      }
 
-          const bool rough_u_mixed = material_values_mixed([](const Material& value) {
-            return value.roughness.value.x;
+      if (_auto_open_emission_section) {
+        ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+      }
+      with_parameters(PropertySection::Emission, "Emission", false, [&]() {
+        bool two_sided = material.two_sided != 0u;
+        if (mixed_control(material_values_mixed([](const MaterialDescription& value) {
+              return value.two_sided;
+            }),
+              [&]() {
+                return ImGui::Checkbox("Two-sided emission", &two_sided);
+              })) {
+          material.two_sided = two_sided ? 1u : 0u;
+          changed = true;
+        }
+        float temperature_kelvin = material.temperature_kelvin;
+        const bool temperature_mixed = material_values_mixed([](const MaterialDescription& value) {
+          return value.temperature_kelvin;
+        });
+        property_label("Thermal (K)");
+        full_width_item();
+        if (mixed_control(temperature_mixed, [&]() {
+              return ImGui::DragFloat("##material_temperature_kelvin", &temperature_kelvin, 1.0f, 0.0f, 40000.0f, temperature_mixed ? "mixed" : "%.1f",
+                ImGuiSliderFlags_AlwaysClamp);
+            })) {
+          material.temperature_kelvin = temperature_kelvin;
+          changed = true;
+        }
+        if (ImGui::IsItemHovered()) {
+          ImGui::SetTooltip(
+            "0 disables thermal emission. Planck radiance is scaled by absorption: a perfectly reflective material emits nothing. "
+            "Glass emits through absorption in its internal medium.");
+        }
+
+        float collimation = material.emission_collimation;
+        const bool collimation_mixed = material_values_mixed([](const MaterialDescription& value) {
+          return value.emission_collimation;
+        });
+        property_label("Collimation");
+        full_width_item();
+        const bool collimation_changed = mixed_control(collimation_mixed, [&]() {
+          return ImGui::SliderFloat("##material_emission_collimation", &collimation, 0.0f, 1.0f, collimation_mixed ? "mixed" : "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        });
+        if (collimation_changed) {
+          material.emission_collimation = std::clamp(collimation, 0.0f, 1.0f);
+          changed = true;
+        }
+
+        std::string preset_id = "material_emission_" + std::to_string(material.emission.spectrum_index);
+        changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+          return value.emission.spectrum_index;
+        }),
+          [&]() {
+            return material_spectrum_control(scene_rep, "Emission", SpectrumTarget::Channel::Emission, SpectrumSource::Kind::Emission);
           });
-          property_label(anisotropic ? "Roughness U" : "Roughness");
-          full_width_item();
-          const bool rough_u_changed = mixed_control(rough_u_mixed, [&]() {
-            return ImGui::SliderFloat("##rough_u", &rough_u, 0.0f, 1.0f, rough_u_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+        changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+          return value.emission.image_index;
+        }),
+          [&]() {
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+            property_label("Emission texture");
+            full_width_item();
+            return image_picker(scene_rep, "Emission Texture##emission_texture", material.emission.image_index, Image::BuildSamplingTable | Image::RepeatU | Image::RepeatV,
+              MaterialBatchChangedEmissionImage);
           });
-          if (rough_u_changed) {
-            if (anisotropic == false) {
-              rough_v = rough_u;
-              aniso_entry->second = false;
-            }
-            changed = true;
+      });
+    }
+  }
+
+  const bool layer_authored = material.layers.explicit_layers != 0u;
+  const bool coating_active =
+    layer_authored ? material.layers.coating_enabled != 0u : ((material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::CoatedConductor));
+  const bool coating_mixed = material_values_mixed([](const MaterialDescription& value) {
+    return value.layers.explicit_layers != 0u ? value.layers.coating_enabled : ((value.cls == MaterialClass::Plastic) || (value.cls == MaterialClass::CoatedConductor) ? 1u : 0u);
+  });
+  if (property_section(PropertySection::Optics, "Coating", coating_mixed ? "Mixed" : (coating_active ? "Enabled" : "Off"), false)) {
+    if (material.cls != MaterialClass::Mix) {
+      bool coating_changed = false;
+      {
+        bool enabled = layer_authored ? material.layers.coating_enabled != 0u : ((material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::CoatedConductor));
+        ImGui::BeginDisabled(bsdf_mixed || (layer_authored && (material.layers.bsdf != MaterialClass::Undefined)));
+        if (mixed_control(material_values_mixed([](const MaterialDescription& value) {
+              return value.layers.explicit_layers != 0u ? value.layers.coating_enabled
+                                                        : ((value.cls == MaterialClass::Plastic) || (value.cls == MaterialClass::CoatedConductor) ? 1u : 0u);
+            }),
+              [&]() {
+                return ImGui::Checkbox("Enabled##coating", &enabled);
+              })) {
+          if (layer_authored == false) {
+            configure_material_bsdf(material, MaterialClass::Undefined);
           }
-
-          if (anisotropic) {
-            const bool rough_v_mixed = material_values_mixed([](const Material& value) {
-              return value.roughness.value.y;
+          material.layers.coating_enabled = enabled ? 1u : 0u;
+          _material_batch_changed_fields |= MaterialBatchChangedCoatingEnabled;
+          coating_changed = true;
+        }
+        ImGui::EndDisabled();
+        if (bsdf_mixed || (layer_authored && (material.layers.bsdf != MaterialClass::Undefined))) {
+          draw_item_tooltip("Select Custom layers in Model to change the coating state.", ImGuiHoveredFlags_AllowWhenDisabled);
+        }
+      }
+      const bool coating_enabled = material.layers.explicit_layers != 0u ? material.layers.coating_enabled != 0u
+                                                                         : ((material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::CoatedConductor));
+      if (coating_enabled) {
+        const bool coating_ior_mixed = material_ior_values_mixed([](const MaterialDescription& value) {
+          return value.coating.ior;
+        });
+        const bool coating_ior_changed = ior_picker(scene_rep, "Coating IOR", material.coating.ior, data, coating_ior_mixed, SpectralDistribution::Invalid,
+          SpectrumTarget::Channel::CoatingEta, SpectrumTarget::Channel::CoatingK, material.coating.ior.cls == SpectralDistribution::Conductor);
+        coating_changed |= coating_ior_changed;
+        if (coating_ior_changed) {
+          _material_batch_changed_fields |= MaterialBatchChangedCoatingIOR;
+        }
+        const bool metallic_coating = (material.coating.ior.cls == SpectralDistribution::Conductor);
+        if (metallic_coating) {
+          if (material.cls == MaterialClass::Conductor) {
+            ImGui::TextWrapped("Metal coating and base use the coating surface roughness. Base roughness is retained for coating disabled.");
+          } else if ((material.cls == MaterialClass::Diffuse) || (material.cls == MaterialClass::Velvet)) {
+            ImGui::TextWrapped("Metal coating and base have independent roughness. The underlying support is index matched to preserve the uncoated base.");
+          }
+        }
+        property_label("Coating roughness U / V");
+        full_width_item();
+        coating_changed |= ImGui::SliderFloat2("##coating_roughness", &material.coating.roughness.value.x, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        property_label("Roughness map");
+        full_width_item();
+        coating_changed |= sampled_image_picker(scene_rep, "Coating roughness texture", material.coating.roughness, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion,
+          MaterialBatchChangedCoatingRoughnessImage, MaterialBatchChangedCoatingRoughnessChannel);
+        if (metallic_coating) {
+          property_label("Coating thickness minimum / maximum (nm)");
+          full_width_item();
+          coating_changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return float2{value.coating.min_thickness_nm, value.coating.max_thickness_nm};
+          }),
+            [&]() {
+              return ImGui::DragFloatRange2("##coating_optical_thickness", &material.coating.min_thickness_nm, &material.coating.max_thickness_nm, 1.0f, 0.0f, FLT_MAX, "%.4g",
+                "%.4g", ImGuiSliderFlags_AlwaysClamp);
             });
-            property_label("Roughness V");
-            full_width_item();
-            const bool rough_v_changed = mixed_control(rough_v_mixed, [&]() {
-              return ImGui::SliderFloat("##rough_v", &rough_v, 0.0f, 1.0f, rough_v_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
+          coating_changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
+            return value.coating.thickness_nm_image;
+          }),
+            [&]() {
+              property_label("Thickness map");
+              full_width_item();
+              return image_picker(scene_rep, "Coating thickness texture", material.coating.thickness_nm_image, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion,
+                MaterialBatchChangedCoatingThicknessNmImage);
             });
-            if (rough_v_changed) {
-              changed = true;
-            }
-          }
-
-          ImGui::Spacing();
+        } else {
+          property_label("Coating thickness");
+          full_width_item();
+          coating_changed |= ImGui::DragFloat("##coating_thickness", &material.coating.thickness.value.x, 0.001f, 0.0f, FLT_MAX, "%.4g", ImGuiSliderFlags_AlwaysClamp);
+          property_label("Thickness map");
+          full_width_item();
+          coating_changed |= sampled_image_picker(scene_rep, "Coating thickness texture", material.coating.thickness, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion,
+            MaterialBatchChangedCoatingThicknessImage, MaterialBatchChangedCoatingThicknessChannel);
         }
-        if (material.cls == MaterialClass::OpenPBR) {
-          ImGui::Spacing();
-          float metal = material.metalness.value.x;
-          const bool metalness_mixed = material_values_mixed([](const Material& value) {
-            return value.metalness.value.x;
-          });
-          property_label("Metalness");
-          full_width_item();
-          const bool metalness_changed = mixed_control(metalness_mixed, [&]() {
-            return ImGui::SliderFloat("##metalness", &metal, 0.0f, 1.0f, metalness_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-          });
-          if (metalness_changed) {
-            material.metalness.value = {metal, metal, metal, metal};
-            changed = true;
-          }
-
-          float trans = material.transmission.value.x;
-          const bool transmission_mixed = material_values_mixed([](const Material& value) {
-            return value.transmission.value.x;
-          });
-          property_label("Transmission");
-          full_width_item();
-          const bool transmission_changed = mixed_control(transmission_mixed, [&]() {
-            return ImGui::SliderFloat("##transmission", &trans, 0.0f, 1.0f, transmission_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
-          });
-          if (transmission_changed) {
-            material.transmission.value = {trans, trans, trans, trans};
-            changed = true;
-          }
+        if (metallic_coating) {
+          ImGui::TextWrapped("Metal absorption uses the coating IOR. Additional volume absorption and scattering are not supported.");
         }
-
-        ImGui::Spacing();
-      },
-      true);
-  }
-
-  if (uses_surface_spectra() && property_section(PropertySection::Textures, "Textures & masks", nullptr, false)) {
-    changed |= mixed_control(material_values_mixed([](const Material& value) {
-      return value.reflectance.image_index;
-    }),
-      [&]() {
-        property_label("Reflectance map");
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        return image_picker(scene_rep, "Reflectance Texture##reflectance_texture", material.reflectance.image_index, Image::RepeatU | Image::RepeatV);
-      });
-    if (material.cls != MaterialClass::DiffractionGrating) {
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.scattering.image_index;
-      }),
-        [&]() {
-          property_label("Scattering map");
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          return image_picker(scene_rep, "Scattering Texture##scattering_texture", material.scattering.image_index, Image::RepeatU | Image::RepeatV);
-        });
-    }
-    if (uses_roughness()) {
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return uint2{value.roughness.image_index, value.roughness.channel};
-      }),
-        [&]() {
-          property_label("Roughness map");
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          return sampled_image_picker(scene_rep, "Roughness Texture##roughness_texture", material.roughness, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
-        });
-    }
-    if (material.cls == MaterialClass::OpenPBR) {
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return uint2{value.metalness.image_index, value.metalness.channel};
-      }),
-        [&]() {
-          property_label("Metalness map");
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          return sampled_image_picker(scene_rep, "Metalness Texture##metalness_texture", material.metalness, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
-        });
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return uint2{value.transmission.image_index, value.transmission.channel};
-      }),
-        [&]() {
-          property_label("Transmission map");
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          return sampled_image_picker(scene_rep, "Transmission Texture##transmission_texture", material.transmission, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
-        });
-    }
-    property_label("Alpha mask");
-    full_width_item();
-    const bool alpha_mask_mixed = material_values_mixed([](const Material& value) {
-      return value.alpha_mask.image_index;
-    }) || material_values_mixed([](const Material& value) {
-      return value.alpha_mask.channel;
-    });
-    changed |= mixed_control(alpha_mask_mixed, [&]() {
-      return sampled_image_picker(scene_rep, "Alpha mask##alpha_mask", material.alpha_mask, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
-    });
-    const bool alpha_strength_mixed = material_values_mixed([](const Material& value) {
-      return value.alpha_mask.value.x;
-    });
-    property_label("Mask strength");
-    full_width_item();
-    changed |= mixed_control(alpha_strength_mixed, [&]() {
-      return ImGui::DragFloat("##alpha_mask_strength", &material.alpha_mask.value.x, 0.01f, 0.0f, kMaxFloat, alpha_strength_mixed ? "mixed" : "%.3f", ImGuiSliderFlags_AlwaysClamp);
-    });
-
-    property_label("Bump map");
-    full_width_item();
-    changed |= mixed_control(material_values_mixed([](const Material& value) {
-      return uint2{value.bump.image_index, value.bump.channel};
-    }),
-      [&]() {
-        const uint32_t previous_image = material.bump.image_index;
-        const bool picked = sampled_image_picker(scene_rep, "Bump map##bump_map", material.bump, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
-        if (picked && (previous_image == kInvalidIndex) && (material.bump.image_index != kInvalidIndex) && (material.bump.value.x == 0.0f))
-          material.bump.value.x = 1.0f;
-        return picked;
-      });
-    property_label("Bump strength");
-    full_width_item();
-    changed |= mixed_control(material_values_mixed([](const Material& value) {
-      return value.bump.value.x;
-    }),
-      [&]() {
-        return ImGui::DragFloat("##bump_strength", &material.bump.value.x, 0.001f, -kMaxFloat, kMaxFloat, "%.4f");
-      });
-    if ((material.normal_image_index != kInvalidIndex) && (material.normal_scale > kEpsilon) && (material.bump.value.x != 0.0f))
-      ImGui::TextDisabled("Normal map takes precedence over bump.");
-
-    property_label("Normal map");
-    changed |= mixed_control(material_values_mixed([](const Material& value) {
-      return value.normal_image_index;
-    }),
-      [&]() {
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        return image_picker(scene_rep, "Normal Texture##normal_texture", material.normal_image_index, Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
-      });
-    if (material.normal_image_index != kInvalidIndex) {
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.normal_scale;
-      }),
-        [&]() {
-          property_label("Scale");
-          full_width_item();
-          return ImGui::SliderFloat("##normal_scale", &material.normal_scale, 0.0f, 4.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-        });
+        ImGui::BeginDisabled(metallic_coating);
+        coating_changed |= material_spectrum_control(scene_rep, "Coating absorption", SpectrumTarget::Channel::CoatingAbsorption, SpectrumSource::Kind::Coefficient);
+        property_label("Absorption map");
+        full_width_item();
+        coating_changed |= image_picker(scene_rep, "Coating absorption texture", material.coating.absorption.image_index,
+          Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, MaterialBatchChangedCoatingAbsorptionImage);
+        coating_changed |= material_spectrum_control(scene_rep, "Coating scattering", SpectrumTarget::Channel::CoatingScattering, SpectrumSource::Kind::Coefficient);
+        property_label("Scattering map");
+        full_width_item();
+        coating_changed |= image_picker(scene_rep, "Coating scattering texture", material.coating.scattering.image_index,
+          Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, MaterialBatchChangedCoatingScatteringImage);
+        property_label("Coating anisotropy");
+        full_width_item();
+        coating_changed |= ImGui::SliderFloat("##coating_anisotropy", &material.coating.anisotropy, -0.99f, 0.99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::EndDisabled();
+      }
+      if (coating_changed && (material.layers.explicit_layers == 0u)) {
+        configure_material_bsdf(material, MaterialClass::Undefined);
+      }
+      changed |= coating_changed;
+    } else {
+      ImGui::TextDisabled("Coating is configured on the Mix children.");
     }
   }
 
-  if (material.cls == MaterialClass::DiffractionGrating) {
-    with_section(
-      1, "Diffraction Grating",
-      [&]() {
-        const float previous_period_nm = material.diffraction_grating.period_nm;
-        const bool period_changed = mixed_control(material_values_mixed([](const Material& value) {
-          return value.diffraction_grating.period_nm;
-        }),
-          [&]() {
-            property_label("Period (nm)");
-            full_width_item();
-            return ImGui::InputFloat("##diffraction_period", &material.diffraction_grating.period_nm, 0.0f, 0.0f, "%.3f");
-          });
-        if (period_changed) {
-          material.diffraction_grating.period_nm = std::isfinite(material.diffraction_grating.period_nm)
-                                                     ? clamp(material.diffraction_grating.period_nm, kDiffractionGratingMinimumPeriodNm, kDiffractionGratingMaximumPeriodNm)
-                                                     : previous_period_nm;
+  const bool thinfilm_active =
+    layer_authored ? material.layers.thinfilm_enabled != 0u : ((material.thinfilm.max_thickness > 0.0f) || (material.thinfilm.thinkness_image != kInvalidIndex));
+  const bool thinfilm_mixed = material_values_mixed([](const MaterialDescription& value) {
+    return value.layers.explicit_layers != 0u ? value.layers.thinfilm_enabled
+                                              : (((value.thinfilm.max_thickness > 0.0f) || (value.thinfilm.thinkness_image != kInvalidIndex)) ? 1u : 0u);
+  });
+  if (property_section(PropertySection::Optics, "Thin film", thinfilm_mixed ? "Mixed" : (thinfilm_active ? "Enabled" : "Off"), false)) {
+    if ((material.cls != MaterialClass::DiffractionGrating) && (material.cls != MaterialClass::Mix)) {
+      property_label("Thin film");
+      {
+        bool enabled = material.layers.explicit_layers != 0u ? material.layers.thinfilm_enabled != 0u
+                                                             : ((material.thinfilm.max_thickness > 0.0f) || (material.thinfilm.thinkness_image != kInvalidIndex));
+        ImGui::BeginDisabled(bsdf_mixed || ((material.layers.explicit_layers != 0u) && (material.layers.bsdf != MaterialClass::Undefined)));
+        if (mixed_control(material_values_mixed([](const MaterialDescription& value) {
+              return value.layers.explicit_layers != 0u ? value.layers.thinfilm_enabled
+                                                        : (((value.thinfilm.max_thickness > 0.0f) || (value.thinfilm.thinkness_image != kInvalidIndex)) ? 1u : 0u);
+            }),
+              [&]() {
+                return ImGui::Checkbox("Enabled##thinfilm", &enabled);
+              })) {
+          if (material.layers.explicit_layers == 0u) {
+            configure_material_bsdf(material, MaterialClass::Undefined);
+          }
+          material.layers.thinfilm_enabled = enabled ? 1u : 0u;
+          _material_batch_changed_fields |= MaterialBatchChangedThinfilmEnabled;
           changed = true;
         }
-
-        ImGui::Spacing();
-        const float previous_optical_path_difference_nm = material.diffraction_grating.optical_path_difference_nm;
-        const bool optical_path_difference_changed = mixed_control(material_values_mixed([](const Material& value) {
-          return value.diffraction_grating.optical_path_difference_nm;
-        }),
-          [&]() {
-            property_label("Optical Path Difference (nm)");
-            full_width_item();
-            return ImGui::InputFloat("##diffraction_optical_path_difference", &material.diffraction_grating.optical_path_difference_nm, 0.0f, 0.0f, "%.3f");
-          });
-        if (optical_path_difference_changed) {
-          material.diffraction_grating.optical_path_difference_nm =
-            std::isfinite(material.diffraction_grating.optical_path_difference_nm)
-              ? clamp(material.diffraction_grating.optical_path_difference_nm, kDiffractionGratingMinimumOpticalPathDifferenceNm, kDiffractionGratingMaximumOpticalPathDifferenceNm)
-              : previous_optical_path_difference_nm;
-          changed = true;
+        ImGui::EndDisabled();
+        if (bsdf_mixed || ((material.layers.explicit_layers != 0u) && (material.layers.bsdf != MaterialClass::Undefined))) {
+          draw_item_tooltip("Select Custom layers in Model to change the thin-film state.", ImGuiHoveredFlags_AllowWhenDisabled);
         }
-
-        ImGui::Spacing();
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
-          return value.diffraction_grating.duty_cycle;
-        }),
-          [&]() {
-            property_label("Duty Cycle");
-            full_width_item();
-            return ImGui::SliderFloat("##diffraction_duty", &material.diffraction_grating.duty_cycle, 0.0f, 1.0f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-          });
-
-        ImGui::Spacing();
-        const float previous_rotation = material.diffraction_grating.rotation;
-        float rotation_degrees = previous_rotation * 180.0f / kPi;
-        const bool rotation_changed = mixed_control(material_values_mixed([](const Material& value) {
-          return value.diffraction_grating.rotation;
-        }),
-          [&]() {
-            property_label("Rotation (degrees)");
-            full_width_item();
-            return ImGui::InputFloat("##diffraction_rotation", &rotation_degrees, 0.0f, 0.0f, "%.3f");
-          });
-        if (rotation_changed) {
-          material.diffraction_grating.rotation = std::isfinite(rotation_degrees) ? fmodf(rotation_degrees * kPi / 180.0f, kDoublePi) : previous_rotation;
-          changed = true;
-        }
-      },
-      true);
-  }
-
-  if (material.cls != MaterialClass::DiffractionGrating) {
-    with_section(
-      2, "Thin Film",
-      [&]() {
-        const bool thinfilm_ior_mixed = material_ior_values_mixed([](const Material& value) {
+      }
+      const bool thinfilm_enabled = material.layers.explicit_layers != 0u ? material.layers.thinfilm_enabled != 0u : thinfilm_active;
+      if (thinfilm_enabled) {
+        const bool thinfilm_ior_mixed = material_ior_values_mixed([](const MaterialDescription& value) {
           return value.thinfilm.ior;
         });
         const bool thinfilm_ior_changed = mixed_control(thinfilm_ior_mixed, [&]() {
-          return ior_picker(scene_rep, "Thinfilm IoR", material.thinfilm.ior, data, thinfilm_ior_mixed, true, SpectrumTarget::Channel::ThinfilmEta,
-            SpectrumTarget::Channel::ThinfilmK);
+          return ior_picker(scene_rep, "Thinfilm IOR", material.thinfilm.ior, data, thinfilm_ior_mixed, SpectralDistribution::Invalid, SpectrumTarget::Channel::ThinfilmEta,
+            SpectrumTarget::Channel::ThinfilmK, true);
         });
-        property_label("Curves");
-        const float editor_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-        edit_spectrum_button(scene_rep, "Edit eta##thinfilm", SpectrumTarget::Channel::ThinfilmEta, material.thinfilm.ior.eta_index, editor_width);
-        ImGui::SameLine();
-        edit_spectrum_button(scene_rep, "Edit k##thinfilm", SpectrumTarget::Channel::ThinfilmK, material.thinfilm.ior.k_index, editor_width);
         if (thinfilm_ior_changed) {
           _material_batch_changed_fields |= MaterialBatchChangedThinfilmIOR;
           changed = true;
@@ -3205,7 +3945,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
         ImGui::Spacing();
         property_label("Weight");
         ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
+        changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
           return value.thinfilm.weight;
         }),
           [&]() {
@@ -3214,257 +3954,36 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
 
         ImGui::Spacing();
         property_label("Thickness (nm)");
-        const float avail = ImGui::GetContentRegionAvail().x;
-        const float spacing = ImGui::GetStyle().ItemSpacing.x;
-        const float dash_width = ImGui::CalcTextSize(" - ").x;
-        const float field_width = max((avail - dash_width - spacing * 2.0f) * 0.5f, 0.0f);
-        ImGui::SetNextItemWidth(field_width);
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
-          return value.thinfilm.min_thickness;
+        full_width_item();
+        const float2 previous_thickness = {material.thinfilm.min_thickness, material.thinfilm.max_thickness};
+        const bool thickness_changed = mixed_control(material_values_mixed([](const MaterialDescription& value) {
+          return float2{value.thinfilm.min_thickness, value.thinfilm.max_thickness};
         }),
           [&]() {
-            const float previous_value = material.thinfilm.min_thickness;
-            const bool edited = ImGui::InputFloat("##tftmin", &material.thinfilm.min_thickness);
-            if (edited && (std::isfinite(material.thinfilm.min_thickness) == false)) {
-              material.thinfilm.min_thickness = previous_value;
-              return false;
-            }
-            return edited;
+            return ImGui::DragFloatRange2("##thinfilm_thickness", &material.thinfilm.min_thickness, &material.thinfilm.max_thickness, 1.0f, 0.0f, FLT_MAX, "Min %.1f", "Max %.1f",
+              ImGuiSliderFlags_AlwaysClamp | ImGuiSliderFlags_NoRoundToFormat);
           });
-        ImGui::SameLine();
-        ImGui::Text(" - ");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(field_width);
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
-          return value.thinfilm.max_thickness;
-        }),
-          [&]() {
-            const float previous_value = material.thinfilm.max_thickness;
-            const bool edited = ImGui::InputFloat("##tftmax", &material.thinfilm.max_thickness);
-            if (edited && (std::isfinite(material.thinfilm.max_thickness) == false)) {
-              material.thinfilm.max_thickness = previous_value;
-              return false;
-            }
-            return edited;
-          });
+        if (thickness_changed) {
+          if (std::isfinite(material.thinfilm.min_thickness) && std::isfinite(material.thinfilm.max_thickness)) {
+            changed = true;
+          } else {
+            material.thinfilm.min_thickness = previous_thickness.x;
+            material.thinfilm.max_thickness = previous_thickness.y;
+          }
+        }
         ImGui::Spacing();
-        changed |= mixed_control(material_values_mixed([](const Material& value) {
+        changed |= mixed_control(material_values_mixed([](const MaterialDescription& value) {
           return value.thinfilm.thinkness_image;
         }),
           [&]() {
             property_label("Texture");
             ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
             return image_picker(scene_rep, "Thickness Texture##thinfilm_thickness_texture", material.thinfilm.thinkness_image,
-              Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion);
+              Image::RepeatU | Image::RepeatV | Image::SkipSRGBConversion, MaterialBatchChangedThinfilmThicknessImage);
           });
-      },
-      material.cls == MaterialClass::Thinfilm);
-  }
-
-  if (uses_subsurface()) {
-    with_section(
-      3, "Subsurface scattering",
-      [&]() {
-        if (uses_subsurface()) {
-          property_label("Subsurface");
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          changed |= mixed_control(material_values_mixed([](const Material& value) {
-            return value.subsurface_cls;
-          }),
-            [&]() {
-              return ImGui::Combo("##sssclass", reinterpret_cast<int*>(&material.subsurface_cls), "Disabled\0Random Walk\0");
-            });
-          if ((material.cls != MaterialClass::Diffuse) && (material.cls != MaterialClass::Plastic) && (material.subsurface_cls != SubsurfaceMaterial::Disabled)) {
-            ImGui::TextColored(kErrorTextColor, "Unsupported SSS material");
-          }
-          if (material.subsurface_cls != SubsurfaceMaterial::Disabled) {
-            if (material.cls != MaterialClass::Plastic) {
-              property_label("Boundary");
-              ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-              changed |= mixed_control(material_values_mixed([](const Material& value) {
-                return value.subsurface_path;
-              }),
-                [&]() {
-                  return ImGui::Combo("##ssspath", reinterpret_cast<int*>(&material.subsurface_path), "Diffuse Transmittance\0Incident Direction\0");
-                });
-            }
-            changed |= mixed_control(material_values_mixed([](const Material& value) {
-              return value.subsurface.spectrum_index;
-            }),
-              [&]() {
-                return material_spectrum_control(scene_rep, "Scattering Distance", SpectrumTarget::Channel::Subsurface, SpectrumSource::Kind::Coefficient);
-              });
-            if (material.subsurface.image_index != kInvalidIndex) {
-              ImGui::TextDisabled("Unused Distance Texture");
-              if (ImGui::Button("Remove##subsurface_distance_texture")) {
-                material.subsurface.image_index = kInvalidIndex;
-                changed = true;
-              }
-            }
-
-            changed |= mixed_control(material_values_mixed([](const Material& value) {
-              return value.subsurface_packing;
-            }),
-              [&]() {
-                int model = material.subsurface_packing > 0.0f ? 1 : 0;
-                property_label("Free-Path Sampling");
-                full_width_item();
-                if (ImGui::Combo("##sss_free_paths", &model, "Exponential\0Exclusion\0")) {
-                  material.subsurface_packing = model == 0 ? 0.0f : 0.5f;
-                  return true;
-                }
-                return false;
-              });
-            if (material.subsurface_packing > 0.0f) {
-              changed |= mixed_control(material_values_mixed([](const Material& value) {
-                return value.subsurface_packing;
-              }),
-                [&]() {
-                  property_label("Packing");
-                  full_width_item();
-                  return ImGui::SliderFloat("##packing_sss", &material.subsurface_packing, 0.001f, 0.99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-                });
-            }
-            if (material.int_medium == kInvalidIndex) {
-              changed |= mixed_control(material_values_mixed([](const Material& value) {
-                return value.subsurface_anisotropy;
-              }),
-                [&]() {
-                  property_label("Anisotropy");
-                  full_width_item();
-                  return ImGui::SliderFloat("##anisotropy_sss", &material.subsurface_anisotropy, -0.99f, 0.99f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
-                });
-            } else {
-              const bool anisotropy_mixed = (material_values_mixed([](const Material& value) {
-                return value.int_medium;
-              })) || (material_values_mixed([&](const Material& value) {
-                return (value.int_medium < scene_rep.data().mediums_vector.size()) ? scene_rep.data().mediums.get(value.int_medium).phase_function_g : value.subsurface_anisotropy;
-              }));
-              if (anisotropy_mixed) {
-                ImGui::TextDisabled("Anisotropy: Mixed (Medium)");
-              } else if (material.int_medium < scene_rep.data().mediums_vector.size()) {
-                ImGui::TextDisabled("Anisotropy: %.3f (Medium)", scene_rep.data().mediums.get(material.int_medium).phase_function_g);
-              } else {
-                ImGui::TextColored(kErrorTextColor, "Invalid Internal Medium");
-              }
-            }
-          }
-          ImGui::Spacing();
-        }
-      },
-      false);
-  }
-
-  with_section(
-    4, "Emission",
-    [&]() {
-      float temperature_kelvin = material.temperature_kelvin;
-      const bool temperature_mixed = material_values_mixed([](const Material& value) {
-        return value.temperature_kelvin;
-      });
-      property_label("Thermal (K)");
-      full_width_item();
-      if (mixed_control(temperature_mixed, [&]() {
-            return ImGui::DragFloat("##material_temperature_kelvin", &temperature_kelvin, 1.0f, 0.0f, 40000.0f, temperature_mixed ? "mixed" : "%.1f", ImGuiSliderFlags_AlwaysClamp);
-          })) {
-        material.temperature_kelvin = temperature_kelvin;
-        changed = true;
       }
-      if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(
-          "0 disables thermal emission. Planck radiance is scaled by absorption: a perfectly reflective material emits nothing. "
-          "Glass emits through absorption in its internal medium.");
-      }
-
-      float collimation = material.emission_collimation;
-      const bool collimation_mixed = material_values_mixed([](const Material& value) {
-        return value.emission_collimation;
-      });
-      property_label("Collimation");
-      full_width_item();
-      const bool collimation_changed = mixed_control(collimation_mixed, [&]() {
-        return ImGui::SliderFloat("##material_emission_collimation", &collimation, 0.0f, 1.0f, collimation_mixed ? "mixed" : "%.2f", ImGuiSliderFlags_AlwaysClamp);
-      });
-      if (collimation_changed) {
-        material.emission_collimation = std::clamp(collimation, 0.0f, 1.0f);
-        changed = true;
-      }
-
-      std::string preset_id = "material_emission_" + std::to_string(material.emission.spectrum_index);
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.emission.spectrum_index;
-      }),
-        [&]() {
-          return material_spectrum_control(scene_rep, "Emission", SpectrumTarget::Channel::Emission, SpectrumSource::Kind::Emission);
-        });
-      changed |= mixed_control(material_values_mixed([](const Material& value) {
-        return value.emission.image_index;
-      }),
-        [&]() {
-          ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-          property_label("Emission texture");
-          full_width_item();
-          return image_picker(scene_rep, "Emission Texture##emission_texture", material.emission.image_index, Image::BuildSamplingTable | Image::RepeatU | Image::RepeatV);
-        });
-    },
-    _auto_open_emission_section);
-
-  if ((uses_interface_ior()) || (_medium_mapping.empty() == false)) {
-    if (property_section(PropertySection::Optics, "Optics & media", nullptr, false)) {
-      if (uses_interface_ior()) {
-        if ((uses_roughness()) || (material.cls == MaterialClass::OpenPBR)) {
-          ImGui::Spacing();
-        }
-        const bool int_ior_mixed = material_ior_values_mixed([](const Material& value) {
-          return value.int_ior;
-        });
-        const bool int_ior_changed = mixed_control(int_ior_mixed, [&]() {
-          return ior_picker(scene_rep, "Inside IOR", material.int_ior, data, int_ior_mixed, false, SpectrumTarget::Channel::InsideEta, SpectrumTarget::Channel::InsideK);
-        });
-        property_label("Curves");
-        const float editor_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-        edit_spectrum_button(scene_rep, "Edit eta##inside", SpectrumTarget::Channel::InsideEta, material.int_ior.eta_index, editor_width);
-        ImGui::SameLine();
-        edit_spectrum_button(scene_rep, "Edit k##inside", SpectrumTarget::Channel::InsideK, material.int_ior.k_index, editor_width);
-        if (int_ior_changed) {
-          _material_batch_changed_fields |= MaterialBatchChangedIntIOR;
-          changed = true;
-        }
-        ImGui::Spacing();
-        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-        const bool ext_ior_mixed = material_ior_values_mixed([](const Material& value) {
-          return value.ext_ior;
-        });
-        const bool ext_ior_changed = mixed_control(ext_ior_mixed, [&]() {
-          return ior_picker(scene_rep, "Outside IOR", material.ext_ior, data, ext_ior_mixed, false, SpectrumTarget::Channel::OutsideEta, SpectrumTarget::Channel::OutsideK);
-        });
-        property_label("Curves");
-        edit_spectrum_button(scene_rep, "Edit eta##outside", SpectrumTarget::Channel::OutsideEta, material.ext_ior.eta_index, editor_width);
-        ImGui::SameLine();
-        edit_spectrum_button(scene_rep, "Edit k##outside", SpectrumTarget::Channel::OutsideK, material.ext_ior.k_index, editor_width);
-        if (ext_ior_changed) {
-          _material_batch_changed_fields |= MaterialBatchChangedExtIOR;
-          changed = true;
-        }
-      }
-      if (_medium_mapping.empty() == false) {
-        changed |= labeled_control("Internal medium", [&]() {
-          return mixed_control(material_values_mixed([](const Material& value) {
-            return value.int_medium;
-          }),
-            [&]() {
-              return medium_dropdown("##internal_medium", material.int_medium);
-            });
-        });
-        changed |= labeled_control("External medium", [&]() {
-          return mixed_control(material_values_mixed([](const Material& value) {
-            return value.ext_medium;
-          }),
-            [&]() {
-              return medium_dropdown("##external_medium", material.ext_medium);
-            });
-        });
-      }
+    } else {
+      ImGui::TextDisabled("Thin film is unavailable for this base.");
     }
   }
 
@@ -3473,7 +3992,7 @@ bool UI::build_material(SceneRepresentation& scene_rep, Material& material, cons
   return changed;
 }
 
-bool UI::build_material(SceneRepresentation& scene_rep, Material& material, const FrameData& data, const std::vector<uint32_t>& material_indices) {
+bool UI::build_material(SceneRepresentation& scene_rep, MaterialDescription& material, const FrameData& data, const std::vector<uint32_t>& material_indices) {
   const std::vector<uint32_t>* previous_indices = _editing_material_indices;
   _editing_material_indices = &material_indices;
   const bool changed = build_material(scene_rep, material, data);
@@ -3654,6 +4173,9 @@ void UI::reset_scene_state() {
   _gizmo_captures_mouse = false;
   _gizmo_was_using = false;
   _resource_filter[0] = 0;
+  _scene_filter[0] = 0;
+  _scene_tree_matches.clear();
+  _material_load_error.clear();
 }
 
 void UI::reload_geometry() {
@@ -3730,10 +4252,10 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
         menu_item(MenuCommand::ReloadScene);
         menu_item(MenuCommand::ReloadGeometry);
 #if defined(ETX_PLATFORM_WINDOWS)
-      ImGui::Separator();
-      menu_item(MenuCommand::Quit);
+        ImGui::Separator();
+        menu_item(MenuCommand::Quit);
 #endif
-      ImGui::EndMenu();
+        ImGui::EndMenu();
       }
 
       if (ImGui::BeginMenu("View")) {
@@ -3764,17 +4286,17 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
         ImGui::EndMenu();
       }
 
-    if (ImGui::BeginMenu("Render")) {
-      menu_item(MenuCommand::RunRenderer);
-      menu_item(MenuCommand::FinishRenderer);
-      menu_item(MenuCommand::StopRenderer);
-      menu_item(MenuCommand::RestartRenderer);
-      ImGui::Separator();
-      if (ImGui::BeginMenu(menu_command_info(MenuCommand::SelectIntegrator).label, menu_command_available(MenuCommand::SelectIntegrator))) {
-        const uint32_t raster_argument = render_configuration_argument(RendererMode::Rasterization, kInvalidIndex);
-        if (ImGui::MenuItem("Raster Preview", nullptr, render_configuration_selected(raster_argument))) {
-          execute_menu_command(MenuCommand::SelectIntegrator, raster_argument);
-        }
+      if (ImGui::BeginMenu("Render")) {
+        menu_item(MenuCommand::RunRenderer);
+        menu_item(MenuCommand::FinishRenderer);
+        menu_item(MenuCommand::StopRenderer);
+        menu_item(MenuCommand::RestartRenderer);
+        ImGui::Separator();
+        if (ImGui::BeginMenu(menu_command_info(MenuCommand::SelectIntegrator).label, menu_command_available(MenuCommand::SelectIntegrator))) {
+          const uint32_t raster_argument = render_configuration_argument(RendererMode::Rasterization, kInvalidIndex);
+          if (ImGui::MenuItem("Raster Preview", nullptr, render_configuration_selected(raster_argument))) {
+            execute_menu_command(MenuCommand::SelectIntegrator, raster_argument);
+          }
 
           ImGui::SeparatorText("CPU");
           for (uint64_t i = 0u; i < _integrators.count; ++i) {
@@ -3820,19 +4342,19 @@ void UI::build_main_menu_bar(const std::vector<std::string>& recent_files) {
         ImGui::EndMenu();
       }
 
-    if (ImGui::BeginMenu("Tools")) {
-      menu_item(MenuCommand::ImportPlugins);
-      ImGui::EndMenu();
-    }
+      if (ImGui::BeginMenu("Tools")) {
+        menu_item(MenuCommand::ImportPlugins);
+        ImGui::EndMenu();
+      }
 
-    if (ImGui::BeginMenu("Help")) {
-      menu_item(MenuCommand::KeyboardShortcuts);
-      menu_item(MenuCommand::About);
-      ImGui::EndMenu();
-    }
-    if (compact_menu) {
-      ImGui::EndMenu();
-    }
+      if (ImGui::BeginMenu("Help")) {
+        menu_item(MenuCommand::KeyboardShortcuts);
+        menu_item(MenuCommand::About);
+        ImGui::EndMenu();
+      }
+      if (compact_menu) {
+        ImGui::EndMenu();
+      }
     }
 
 #if defined(ETX_PLATFORM_WINDOWS)
@@ -4374,66 +4896,86 @@ void UI::request_quit_confirmation() {
 
 void UI::build_renderer_diagnostic(const BuildContext& ctx) {
   const RendererStatus& status = _current_renderer_status;
-  if ((status.diagnostic.severity == RendererDiagnosticSeverity::None) || status.message.empty()) {
-    _renderer_diagnostic_details = false;
+  if ((status.diagnostic.severity == RendererDiagnosticSeverity::None) || status.message.empty())
     return;
-  }
   ImGuiViewport* const viewport = ImGui::GetMainViewport();
   const bool error = status.diagnostic.severity == RendererDiagnosticSeverity::Error;
   const bool warning = status.diagnostic.severity == RendererDiagnosticSeverity::Warning;
-  const char* title = (status.diagnostic.recovery == RendererRecovery::RestartApplication) ? "Application Restart Required"
-                      : (status.state == RendererStatusState::Blocked)                     ? "Unsupported Settings"
-                      : (status.action_failure.empty() == false)                           ? "Action Failed"
-                                                                                           : (error ? "Render Interrupted" : (warning ? "Warning" : "Canceled"));
+  const bool dismissable = (error == false) && (status.state != RendererStatusState::Blocked);
+  const RendererRecovery recovery = status.diagnostic.recovery;
+  const char* title = status.diagnostic.title.empty() == false           ? status.diagnostic.title.c_str()
+                      : recovery == RendererRecovery::RestartApplication ? "Application restart required"
+                      : status.state == RendererStatusState::Blocked     ? "Configuration unsupported"
+                      : error                                            ? "Renderer interrupted"
+                      : warning                                          ? "Warning"
+                                                                         : "Preparation canceled";
+  std::string body = status.message;
+  if (status.diagnostic.consequence.empty() == false)
+    body += "\n" + status.diagnostic.consequence;
+  if (status.action_failure.empty() == false)
+    body += "\nAction failed: " + status.action_failure;
   const float text_width = std::max(1.0f, viewport->WorkSize.x - 2.0f * ctx.wpadding.x - ImGui::GetStyle().ScrollbarSize);
-  const bool show_details = _renderer_diagnostic_details;
+  const float body_height =
+    std::min(ImGui::CalcTextSize(body.c_str(), nullptr, false, text_width).y + ctx.wpadding.y, std::max(ImGui::GetTextLineHeightWithSpacing(), viewport->WorkSize.y * 0.25f));
+  const char* action_label = recovery == RendererRecovery::Restart                    ? "Restart renderer"
+                             : recovery == RendererRecovery::RetryMaterialPreparation ? "Retry material preparation"
+                             : recovery == RendererRecovery::EditMaterial             ? "Select material"
+                             : recovery == RendererRecovery::EditCamera               ? "Select camera"
+                             : recovery == RendererRecovery::EditMedium               ? "Select medium"
+                                                                                      : nullptr;
+  const auto button_width = [&](const char* label) {
+    return std::min(text_width, ImGui::CalcTextSize(label).x + 2.0f * ImGui::GetStyle().FramePadding.x);
+  };
+  const float action_width = recovery == RendererRecovery::ChangeSettings ? std::min(230.0f, text_width) : action_label != nullptr ? button_width(action_label) : 0.0f;
+  const float copy_width = button_width("Copy diagnostic");
   const float spacing = ImGui::GetStyle().ItemSpacing.x;
-  const float details_width = ImGui::CalcTextSize("Details").x + 2.0f * ImGui::GetStyle().FramePadding.x;
-  const float action_width = (status.diagnostic.recovery == RendererRecovery::ChangeSettings) ? std::min(230.0f, text_width)
-                             : (status.diagnostic.recovery == RendererRecovery::Restart)      ? ImGui::CalcTextSize("Restart").x + 2.0f * ImGui::GetStyle().FramePadding.x
-                                                                                              : 0.0f;
-  const bool wrap_action = (action_width > 0.0f) && ((ImGui::CalcTextSize(title).x + action_width + details_width + 2.0f * spacing) > text_width);
-  const bool wrap_details = wrap_action ? ((action_width + details_width + spacing) > text_width)
-                                        : ((ImGui::CalcTextSize(title).x + action_width + details_width + ((action_width > 0.0f) ? 2.0f : 1.0f) * spacing) > text_width);
-  const float text_height =
-    show_details ? ImGui::CalcTextSize(status.message.c_str(), nullptr, false, text_width).y + ctx.wpadding.y +
-                     (status.action_failure.empty() ? 0.0f : ImGui::CalcTextSize(status.action_failure.c_str(), nullptr, false, text_width).y + ImGui::GetStyle().ItemSpacing.y)
-                 : 0.0f;
-  const float row_count = 1.0f + (wrap_action ? 1.0f : 0.0f) + (wrap_details ? 1.0f : 0.0f);
-  const float height = row_count * ImGui::GetFrameHeightWithSpacing() + std::min(text_height, std::max(ctx.text_size, viewport->WorkSize.y * 0.25f)) + 2.0f * ctx.wpadding.y;
+  const bool copy_same_line = (action_width > 0.0f) && ((action_width + spacing + copy_width) <= text_width);
+  const float copy_row_width = copy_same_line ? action_width + spacing + copy_width : copy_width;
+  const bool dismiss_same_line = dismissable && ((copy_row_width + spacing + button_width("Dismiss")) <= text_width);
+  const float action_rows = 1.0f + (((action_width > 0.0f) && (copy_same_line == false)) ? 1.0f : 0.0f) + ((dismissable && (dismiss_same_line == false)) ? 1.0f : 0.0f);
+  const float height = ImGui::CalcTextSize(title, nullptr, false, text_width).y + body_height + action_rows * ImGui::GetFrameHeightWithSpacing() + 3.0f * ctx.wpadding.y;
   if (ImGui::BeginViewportSideBar("##renderer_diagnostic", viewport, ImGuiDir_Up, height, ImGuiWindowFlags_NoDecoration)) {
-    const ImVec4 color = error ? ImVec4(0.9f, 0.3f, 0.3f, 1.0f) : (warning ? ImVec4(0.9f, 0.65f, 0.15f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Text));
-    ImGui::AlignTextToFramePadding();
+    const ImVec4 color = error ? ImVec4(0.9f, 0.3f, 0.3f, 1.0f) : warning ? ImVec4(0.9f, 0.65f, 0.15f, 1.0f) : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextColored(color, "%s", title);
-    if ((action_width > 0.0f) && (wrap_action == false)) {
-      ImGui::SameLine();
-    }
-    if (status.diagnostic.recovery == RendererRecovery::Restart) {
+    ImGui::PopTextWrapPos();
+    if (ImGui::BeginChild("##diagnostic_message", ImVec2(0.0f, body_height)))
+      ImGui::TextWrapped("%s", body.c_str());
+    ImGui::EndChild();
+    bool action_drawn = false;
+    if ((recovery == RendererRecovery::Restart) || (recovery == RendererRecovery::RetryMaterialPreparation)) {
       ImGui::BeginDisabled(_current_renderer_controls.can_restart == false);
-      if (ImGui::Button("Restart") && callbacks.restart_selected) {
+      if (ImGui::Button(action_label, ImVec2(action_width, 0.0f)) && callbacks.restart_selected)
         callbacks.restart_selected();
+      ImGui::EndDisabled();
+      action_drawn = true;
+    } else if (recovery == RendererRecovery::ChangeSettings) {
+      ImGui::SetNextItemWidth(std::min(230.0f, text_width));
+      build_render_configuration_selector("##diagnostic_configuration");
+      action_drawn = true;
+    } else if ((recovery == RendererRecovery::EditMaterial) || (recovery == RendererRecovery::EditCamera) || (recovery == RendererRecovery::EditMedium)) {
+      ImGui::BeginDisabled(status.diagnostic.resource_index == kInvalidIndex);
+      if (ImGui::Button(action_label, ImVec2(action_width, 0.0f))) {
+        _pending_selection = {recovery == RendererRecovery::EditMaterial ? SelectionKind::Material
+                              : recovery == RendererRecovery::EditCamera ? SelectionKind::Camera
+                                                                         : SelectionKind::Medium,
+          status.diagnostic.resource_index, true};
+        _ui_setup |= UIObjects | UIProperties;
       }
       ImGui::EndDisabled();
-    } else if (status.diagnostic.recovery == RendererRecovery::ChangeSettings) {
-      ImGui::SetNextItemWidth(action_width);
-      build_render_configuration_selector("##diagnostic_configuration");
+      action_drawn = true;
     }
-    if (wrap_details == false) {
+    if (action_drawn && copy_same_line)
       ImGui::SameLine();
+    if (ImGui::Button("Copy diagnostic", ImVec2(copy_width, 0.0f))) {
+      const std::string copied = std::string(title) + "\n" + body;
+      ImGui::SetClipboardText(copied.c_str());
     }
-    if (ImGui::Button("Details")) {
-      _renderer_diagnostic_details = (show_details == false);
-    }
-    if (show_details) {
-      if (ImGui::BeginChild("##diagnostic_message", ImVec2(0.0f, 0.0f))) {
-        ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextUnformatted(status.message.c_str());
-        if (status.action_failure.empty() == false) {
-          ImGui::TextColored(ImVec4(0.9f, 0.65f, 0.15f, 1.0f), "%s", status.action_failure.c_str());
-        }
-        ImGui::PopTextWrapPos();
-      }
-      ImGui::EndChild();
+    if (dismissable) {
+      if (dismiss_same_line)
+        ImGui::SameLine();
+      if (ImGui::Button("Dismiss", ImVec2(button_width("Dismiss"), 0.0f)) && callbacks.dismiss_diagnostic)
+        callbacks.dismiss_diagnostic();
     }
   }
   ImGui::End();
@@ -5006,8 +5548,8 @@ void UI::build_memory_diagnostics_content(SceneRepresentation& scene_rep, const 
                                     scene_data.vertices.tan.capacity() * sizeof(float3) + scene_data.vertices.btn.capacity() * sizeof(float3) +
                                     scene_data.vertices.tex.capacity() * sizeof(float2) + scene_data.triangles.capacity() * sizeof(Triangle) +
                                     scene_data.meshes.capacity() * sizeof(Mesh);
-    const uint64_t shading_bytes = scene_data.materials.capacity() * sizeof(Material) + scene_data.spectrum_values.capacity() * sizeof(SpectralDistribution) +
-                                   scene_data.emitter_profiles.capacity() * sizeof(EmitterProfile) +
+    const uint64_t shading_bytes = scene_data.material_descriptions.capacity() * sizeof(MaterialDescription) +
+                                   scene_data.spectrum_values.capacity() * sizeof(SpectralDistribution) + scene_data.emitter_profiles.capacity() * sizeof(EmitterProfile) +
                                    scene_data.energy_compensation_interfaces.capacity() * sizeof(Scene::EnergyCompensationInterface);
     const uint64_t descriptor_bytes =
       scene_data.images_vector.capacity() * sizeof(Image) + scene_data.mediums_vector.capacity() * sizeof(Medium) + scene_data.cameras.capacity() * sizeof(SceneData::CameraInfo);
@@ -5232,6 +5774,13 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
       if (ImGui::MenuItem("Material", nullptr, false, material_add_available) && material_add_available) {
         select_resource_edit_result(SelectionKind::Material, callbacks.material_added());
       }
+      const bool material_load_available = static_cast<bool>(callbacks.material_file_loaded);
+      if (ImGui::MenuItem("Load Material...", nullptr, false, material_load_available) && material_load_available) {
+        const std::string filename = open_file("json");
+        if (filename.empty() == false) {
+          select_resource_edit_result(SelectionKind::Material, callbacks.material_file_loaded(filename));
+        }
+      }
       const bool medium_add_available = static_cast<bool>(callbacks.medium_added);
       if (ImGui::MenuItem("Medium", nullptr, false, medium_add_available) && medium_add_available) {
         select_resource_edit_result(SelectionKind::Medium, callbacks.medium_added());
@@ -5262,7 +5811,7 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
     const bool filter_active = _resource_filter[0] != '\0';
     const SceneData& scene_data = scene_rep.data();
     std::vector<uint8_t> used_meshes(scene_data.meshes.size(), 0u);
-    std::vector<uint8_t> used_materials(scene_data.materials.size(), 0u);
+    std::vector<uint8_t> used_materials(scene_data.material_descriptions.size(), 0u);
     std::vector<uint8_t> used_media(scene_data.mediums_vector.size(), 0u);
     std::vector<uint8_t> used_cameras(scene_data.cameras.size(), 0u);
     std::vector<uint8_t> used_emitters(scene_data.emitter_profiles.size(), 0u);
@@ -5294,11 +5843,27 @@ void UI::build_scene_objects_window(SceneRepresentation& scene_rep, const BuildC
         mark_used(used_materials, material_index);
       }
     }
-    for (uint32_t i = 0u; i < scene_data.materials.size(); ++i) {
+    std::vector<uint32_t> material_dependencies;
+    for (uint32_t index = 0u; index < used_materials.size(); ++index) {
+      if (used_materials[index] != 0u)
+        material_dependencies.push_back(index);
+    }
+    for (size_t position = 0u; position < material_dependencies.size(); ++position) {
+      const MaterialDescription& material = scene_data.material_descriptions[material_dependencies[position]];
+      if (material.cls != MaterialClass::Mix)
+        continue;
+      for (uint32_t child : {material.mix.first, material.mix.second}) {
+        if ((child < used_materials.size()) && (used_materials[child] == 0u)) {
+          used_materials[child] = 1u;
+          material_dependencies.push_back(child);
+        }
+      }
+    }
+    for (uint32_t i = 0u; i < scene_data.material_descriptions.size(); ++i) {
       if (used_materials[i] == 0u)
         continue;
-      mark_used(used_media, scene_data.materials[i].int_medium);
-      mark_used(used_media, scene_data.materials[i].ext_medium);
+      mark_used(used_media, scene_data.material_descriptions[i].int_medium);
+      mark_used(used_media, scene_data.material_descriptions[i].ext_medium);
       if (const auto found = scene_data.material_to_emitter_profile.find(i); found != scene_data.material_to_emitter_profile.end()) {
         mark_used(used_emitters, found->second);
       }
@@ -5504,6 +6069,24 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
       ImGui::TextColored(kErrorTextColor, "%s", scene_edit_status_message(_scene_edit_status));
     }
 
+    full_width_item();
+    ImGui::InputTextWithHint("##scene_filter", "Search objects", _scene_filter, sizeof(_scene_filter));
+    const bool filtering = _scene_filter[0] != '\0';
+    if (filtering) {
+      _scene_tree_matches.assign(hierarchy.nodes.size(), 0u);
+      for (size_t position = hierarchy.evaluation_order.size(); position > 0u; --position) {
+        const uint32_t index = hierarchy.evaluation_order[position - 1u];
+        const char* name = index < hierarchy.node_names.size() ? hierarchy.node_names[index].c_str() : nullptr;
+        if (contains_case_insensitive(((name != nullptr) && (name[0] != '\0')) ? name : format_string("Node %u", index).c_str(), _scene_filter)) {
+          _scene_tree_matches[index] = 1u;
+        }
+        const uint32_t parent = hierarchy.nodes[index].parent_index;
+        if ((_scene_tree_matches[index] != 0u) && (parent != kInvalidIndex)) {
+          _scene_tree_matches[parent] = 1u;
+        }
+      }
+    }
+
     auto invalid_drop_target = [&](uint32_t source_index, uint32_t target_index) {
       if ((source_index >= hierarchy.nodes.size()) || (target_index >= hierarchy.nodes.size())) {
         return true;
@@ -5522,8 +6105,13 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
     if (ImGui::BeginChild("##scene_tree", ImVec2(-FLT_MIN, -FLT_MIN), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
       if (hierarchy.nodes.empty() || hierarchy.evaluation_order.empty()) {
         ImGui::TextDisabled("No scene nodes");
+      } else if (filtering && (std::find(_scene_tree_matches.begin(), _scene_tree_matches.end(), 1u) == _scene_tree_matches.end())) {
+        ImGui::TextDisabled("No matching objects");
       } else {
-        if (_scene_tree_reveal_node != kInvalidIndex) {
+        if (filtering) {
+          ImGui::SetNextItemStorageID(ImGui::GetID("##filtered_scene_root"));
+        }
+        if ((_scene_tree_reveal_node != kInvalidIndex) || filtering) {
           ImGui::SetNextItemOpen(true);
         }
         const ImGuiTreeNodeFlags scene_flags = ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
@@ -5568,6 +6156,10 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
               continue;
             }
             const SceneNode& node = hierarchy.nodes[node_index];
+            if (filtering && (_scene_tree_matches[node_index] == 0u)) {
+              order_position = hierarchy.subtree_end_position[node_index];
+              continue;
+            }
 
             uint32_t attached_camera_index = kInvalidIndex;
             bool contains_active_camera = false;
@@ -5607,6 +6199,11 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
             if (leaf) {
               flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
             }
+            if (filtering) {
+              const ImGuiID node_id = ImGui::GetID(reinterpret_cast<void*>(static_cast<uintptr_t>(node_index) + 1u));
+              ImGui::SetNextItemStorageID(ImHashStr("filtered", 0u, node_id));
+              ImGui::SetNextItemOpen(true);
+            }
             if ((reveal_position != kInvalidIndex) && (reveal_position >= order_position) && (reveal_position < subtree_end) && (node_index != _scene_tree_reveal_node)) {
               ImGui::SetNextItemOpen(true);
             }
@@ -5631,7 +6228,7 @@ void UI::build_scene_tree_window(SceneRepresentation& scene_rep, const BuildCont
             const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<uintptr_t>(node_index) + 1u), flags, "%s", node_label.c_str());
             const ImVec2 node_item_min = ImGui::GetItemRectMin();
             const ImVec2 node_item_max = ImGui::GetItemRectMax();
-            if (ImGui::IsItemClicked()) {
+            if (ImGui::IsItemClicked() && (ImGui::IsItemToggledOpen() == false)) {
               set_selection(SelectionKind::Node, static_cast<int32_t>(node_index));
             }
             if (_scene_tree_reveal_node == node_index) {
@@ -5799,7 +6396,7 @@ void UI::build_resource_deletion_modal(SceneRepresentation& scene_rep) {
   std::string resource_name = "this resource";
   switch (_pending_resource_deletion_kind) {
     case SelectionKind::Material:
-      resource_available = _pending_resource_deletion < scene_rep.data().materials.size();
+      resource_available = _pending_resource_deletion < scene_rep.data().material_descriptions.size();
       delete_callback_available = static_cast<bool>(callbacks.material_deleted);
       if (const char* name = _material_mapping.name_for(_pending_resource_deletion); name != nullptr) {
         resource_name = name;
@@ -6055,6 +6652,10 @@ void UI::build_node_selection_properties(SceneRepresentation& scene_rep, const B
   }
   if (enabled_edit_available == false) {
     ImGui::EndDisabled();
+  }
+  if (enabled && (node_index < hierarchy.effective_enabled.size()) && (hierarchy.effective_enabled[node_index] == 0u)) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("Parent disabled");
   }
   if (_scene_edit_status != SceneEditStatus::Success) {
     ImGui::TextColored(kErrorTextColor, "%s", scene_edit_status_message(_scene_edit_status));
@@ -6590,24 +7191,37 @@ void UI::build_transform_gizmo(SceneRepresentation& scene_rep, const FrameData& 
   }
 }
 
-bool UI::build_material_class_selector(Material& material) {
-  return build_material_class_selector(material, false);
-}
-
-bool UI::build_material_class_selector(Material& material, bool mixed) {
+bool UI::build_material_class_selector(MaterialDescription& material, bool mixed, bool select_bsdf) {
   bool changed = false;
 
-  property_label("BSDF");
-  const char* material_name = mixed ? "mixed" : material_class_display_name(material.cls);
+  const uint32_t selected = select_bsdf ? (material.layers.explicit_layers != 0u ? material.layers.bsdf : material.cls) : material.cls;
+  property_label(select_bsdf ? "Model" : "Base type");
+  const char* material_name = mixed ? "Mixed" : (selected == MaterialClass::Undefined ? "Custom layers" : material_class_display_name(selected));
   ImVec2 button_size = ImVec2(ImGui::GetContentRegionAvail().x, 0.0f);
-  const std::string button_label = format_string("%s##material_class", material_name);
+  const char* popup_id = select_bsdf ? "material_bsdf_popup" : "material_base_popup";
+  const std::string button_label = format_string("%s##%s", material_name, popup_id);
   if (ImGui::Button(button_label.c_str(), button_size)) {
-    ImGui::OpenPopup("material_class_popup");
+    ImGui::OpenPopup(popup_id);
+  }
+
+  if (select_bsdf) {
+    draw_item_tooltip("Choose a material model, or Custom layers to configure the base, coating and thin film independently.", ImGuiHoveredFlags_DelayNormal);
   }
 
   const float popup_width = std::min(ImGui::GetFontSize() * 56.0f, ImGui::GetMainViewport()->WorkSize.x - ImGui::GetStyle().WindowPadding.x * 2.0f);
   ImGui::SetNextWindowSize(ImVec2(popup_width, 0.0f), ImGuiCond_Always);
-  if (ImGui::BeginPopup("material_class_popup")) {
+  if (ImGui::BeginPopup(popup_id)) {
+    if (select_bsdf) {
+      if (ImGui::Selectable("Custom layers", selected == MaterialClass::Undefined)) {
+        if (mixed || (selected != MaterialClass::Undefined) || (material.layers.explicit_layers == 0u)) {
+          configure_material_bsdf(material, MaterialClass::Undefined);
+          changed = true;
+        }
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::Separator();
+      ImGui::TextDisabled("Material models");
+    }
     const ImVec4 header_colors[] = {
       kMaterialHeaderPrimaryColor,
       kMaterialHeaderSpecializedColor,
@@ -6619,17 +7233,24 @@ bool UI::build_material_class_selector(Material& material, bool mixed) {
       ImGui::Columns(3, "material_class_columns", true);
     }
 
-    auto draw_material_column = [&](uint32_t column_index, const char* title, std::initializer_list<Material::Class> entries) {
+    auto draw_material_column = [&](uint32_t column_index, const char* title, std::initializer_list<MaterialDescription::Class> entries) {
       ImGui::PushStyleColor(ImGuiCol_Text, header_colors[column_index % (sizeof(header_colors) / sizeof(header_colors[0]))]);
       ImGui::Text("%s", title);
       ImGui::PopStyleColor();
       for (auto cls : entries) {
+        if ((select_bsdf == false) && ((cls == MaterialClass::Plastic) || (cls == MaterialClass::CoatedConductor))) {
+          continue;
+        }
         const char* material_name = material_class_display_name(cls);
         const std::string selectable_label = format_string("%s##cls_%u", material_name, static_cast<uint32_t>(cls));
-        const bool is_selected = (material.cls == cls);
+        const bool is_selected = selected == cls;
         if (ImGui::Selectable(selectable_label.c_str(), is_selected)) {
-          if (material.cls != cls) {
-            material.cls = cls;
+          if (mixed || (selected != cls) || (select_bsdf && (material.layers.explicit_layers == 0u))) {
+            if (select_bsdf) {
+              configure_material_bsdf(material, cls);
+            } else {
+              configure_material_base(material, cls);
+            }
             changed = true;
           }
           ImGui::CloseCurrentPopup();
@@ -6638,14 +7259,16 @@ bool UI::build_material_class_selector(Material& material, bool mixed) {
     };
 
     uint32_t column_index = 0u;
-    draw_material_column(column_index++, "Primary", {MaterialClass::Diffuse, MaterialClass::Plastic, MaterialClass::Conductor, MaterialClass::Dielectric});
+    draw_material_column(column_index++, "Primary",
+      {MaterialClass::Diffuse, MaterialClass::Plastic, MaterialClass::Conductor, MaterialClass::CoatedConductor, MaterialClass::Dielectric});
     if (separate_columns) {
       ImGui::NextColumn();
     } else {
       ImGui::Separator();
     }
     draw_material_column(column_index++, "Specialized",
-      {MaterialClass::OpenPBR, MaterialClass::Translucent, MaterialClass::Thinfilm, MaterialClass::DiffractionGrating, MaterialClass::Velvet, MaterialClass::Mirror});
+      {MaterialClass::OpenPBR, MaterialClass::Translucent, MaterialClass::Thinfilm, MaterialClass::DiffractionGrating, MaterialClass::Velvet, MaterialClass::Mirror,
+        MaterialClass::Mix});
     if (separate_columns) {
       ImGui::NextColumn();
     } else {
@@ -6679,10 +7302,27 @@ void UI::build_material_selection_properties(SceneRepresentation& scene_rep, con
   }
 
   uint32_t material_index = material_indices.front();
-  Material& material = scene_rep.data().materials[material_index];
+  MaterialDescription& material = scene_rep.data().material_descriptions[material_index];
   const char* material_name = _material_mapping.name(_selection.index);
 
   if (material_indices.size() == 1u) {
+    const float file_button_width = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+    if (ImGui::Button("Load Material...", ImVec2(file_button_width, 0.0f)) && callbacks.material_file_loaded) {
+      const std::string filename = open_file("json");
+      if (filename.empty() == false) {
+        select_resource_edit_result(SelectionKind::Material, callbacks.material_file_loaded(filename));
+        return;
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save Material...", ImVec2(file_button_width, 0.0f)) && callbacks.material_file_saved) {
+      const std::string filename = save_file("json");
+      if (filename.empty() == false) {
+        _resource_edit_status_kind = SelectionKind::Material;
+        _resource_edit_status = callbacks.material_file_saved(material_index, filename).empty() ? SceneResourceEditStatus::ResourceUpdateFailed : SceneResourceEditStatus::Success;
+      }
+    }
+    ImGui::Spacing();
     update_name_buffer(SelectionKind::Material, _selection.index, material_name);
 
     property_label("Name");
@@ -6717,8 +7357,8 @@ void UI::build_material_selection_properties(SceneRepresentation& scene_rep, con
   ImGui::Text("%u materials selected", static_cast<uint32_t>(material_indices.size()));
   ImGui::Separator();
 
-  Material edit_material = material;
-  const Material before = edit_material;
+  MaterialDescription edit_material = material;
+  const MaterialDescription before = edit_material;
   auto spectrum_value = [&](uint32_t spectrum_index) {
     SpectralDistribution result = {};
     if (spectrum_index < scene_rep.data().spectrum_values.size()) {
@@ -6737,10 +7377,12 @@ void UI::build_material_selection_properties(SceneRepresentation& scene_rep, con
   const SpectralDistribution before_ext_k = spectrum_value(before.ext_ior.k_index);
   const SpectralDistribution before_thinfilm_eta = spectrum_value(before.thinfilm.ior.eta_index);
   const SpectralDistribution before_thinfilm_k = spectrum_value(before.thinfilm.ior.k_index);
+  const SpectralDistribution before_coating_eta = spectrum_value(before.coating.ior.eta_index);
+  const SpectralDistribution before_coating_k = spectrum_value(before.coating.ior.k_index);
 
   _material_batch_changed_fields = 0u;
   const bool changed = build_material(scene_rep, edit_material, data, material_indices);
-  const uint32_t changed_fields = _material_batch_changed_fields;
+  const uint64_t changed_fields = _material_batch_changed_fields;
   _material_batch_changed_fields = 0u;
   if (changed == false) {
     return;
@@ -6757,84 +7399,91 @@ void UI::build_material_selection_properties(SceneRepresentation& scene_rep, con
     }
 
     for (const uint32_t selected_material_index : material_indices) {
-      if (selected_material_index >= scene_rep.data().materials.size()) {
+      if (selected_material_index >= scene_rep.data().material_descriptions.size()) {
         continue;
       }
 
-      const uint32_t target_index = target_spectrum_index(scene_rep.data().materials[selected_material_index]);
+      const uint32_t target_index = target_spectrum_index(scene_rep.data().material_descriptions[selected_material_index]);
       if (target_index < scene_rep.data().spectrum_values.size()) {
+        scene_rep.data().remember_material_spectrum_edit(target_index);
         scene_rep.data().spectrum_values[target_index] = after_spectrum;
       }
     }
   };
 
-  apply_spectrum_change(before_reflectance, before.reflectance.spectrum_index, false, [](const Material& value) {
+  apply_spectrum_change(before_reflectance, before.reflectance.spectrum_index, false, [](const MaterialDescription& value) {
     return value.reflectance.spectrum_index;
   });
-  apply_spectrum_change(before_scattering, before.scattering.spectrum_index, false, [](const Material& value) {
+  apply_spectrum_change(before_scattering, before.scattering.spectrum_index, false, [](const MaterialDescription& value) {
     return value.scattering.spectrum_index;
   });
-  apply_spectrum_change(before_emission, before.emission.spectrum_index, false, [](const Material& value) {
+  apply_spectrum_change(before_emission, before.emission.spectrum_index, false, [](const MaterialDescription& value) {
     return value.emission.spectrum_index;
   });
-  apply_spectrum_change(before_subsurface, before.subsurface.spectrum_index, false, [](const Material& value) {
+  apply_spectrum_change(before_subsurface, before.subsurface.spectrum_index, false, [](const MaterialDescription& value) {
     return value.subsurface.spectrum_index;
   });
   const bool int_ior_changed = (changed_fields & MaterialBatchChangedIntIOR) != 0u;
   const bool ext_ior_changed = (changed_fields & MaterialBatchChangedExtIOR) != 0u;
   const bool thinfilm_ior_changed = (changed_fields & MaterialBatchChangedThinfilmIOR) != 0u;
-  apply_spectrum_change(before_int_eta, before.int_ior.eta_index, int_ior_changed, [](const Material& value) {
+  const bool coating_ior_changed = (changed_fields & MaterialBatchChangedCoatingIOR) != 0u;
+  apply_spectrum_change(before_int_eta, before.int_ior.eta_index, int_ior_changed, [](const MaterialDescription& value) {
     return value.int_ior.eta_index;
   });
-  apply_spectrum_change(before_int_k, before.int_ior.k_index, int_ior_changed, [](const Material& value) {
+  apply_spectrum_change(before_int_k, before.int_ior.k_index, int_ior_changed, [](const MaterialDescription& value) {
     return value.int_ior.k_index;
   });
-  apply_spectrum_change(before_ext_eta, before.ext_ior.eta_index, ext_ior_changed, [](const Material& value) {
+  apply_spectrum_change(before_ext_eta, before.ext_ior.eta_index, ext_ior_changed, [](const MaterialDescription& value) {
     return value.ext_ior.eta_index;
   });
-  apply_spectrum_change(before_ext_k, before.ext_ior.k_index, ext_ior_changed, [](const Material& value) {
+  apply_spectrum_change(before_ext_k, before.ext_ior.k_index, ext_ior_changed, [](const MaterialDescription& value) {
     return value.ext_ior.k_index;
   });
-  apply_spectrum_change(before_thinfilm_eta, before.thinfilm.ior.eta_index, thinfilm_ior_changed, [](const Material& value) {
+  apply_spectrum_change(before_thinfilm_eta, before.thinfilm.ior.eta_index, thinfilm_ior_changed, [](const MaterialDescription& value) {
     return value.thinfilm.ior.eta_index;
   });
-  apply_spectrum_change(before_thinfilm_k, before.thinfilm.ior.k_index, thinfilm_ior_changed, [](const Material& value) {
+  apply_spectrum_change(before_thinfilm_k, before.thinfilm.ior.k_index, thinfilm_ior_changed, [](const MaterialDescription& value) {
     return value.thinfilm.ior.k_index;
   });
-
-  if ((changed_fields & MaterialBatchChangedClass) != 0u) {
-    for (const uint32_t selected_material_index : material_indices) {
-      if (selected_material_index < scene_rep.data().materials.size()) {
-        scene_rep.data().materials[selected_material_index].cls = edit_material.cls;
-      }
-    }
-  }
+  apply_spectrum_change(before_coating_eta, before.coating.ior.eta_index, coating_ior_changed, [](const MaterialDescription& value) {
+    return value.coating.ior.eta_index;
+  });
+  apply_spectrum_change(before_coating_k, before.coating.ior.k_index, coating_ior_changed, [](const MaterialDescription& value) {
+    return value.coating.ior.k_index;
+  });
 
   if (int_ior_changed) {
     for (const uint32_t selected_material_index : material_indices) {
-      if (selected_material_index < scene_rep.data().materials.size()) {
-        scene_rep.data().materials[selected_material_index].int_ior.cls = edit_material.int_ior.cls;
+      if (selected_material_index < scene_rep.data().material_descriptions.size()) {
+        scene_rep.data().material_descriptions[selected_material_index].int_ior.cls = edit_material.int_ior.cls;
       }
     }
   }
 
   if (ext_ior_changed) {
     for (const uint32_t selected_material_index : material_indices) {
-      if (selected_material_index < scene_rep.data().materials.size()) {
-        scene_rep.data().materials[selected_material_index].ext_ior.cls = edit_material.ext_ior.cls;
+      if (selected_material_index < scene_rep.data().material_descriptions.size()) {
+        scene_rep.data().material_descriptions[selected_material_index].ext_ior.cls = edit_material.ext_ior.cls;
       }
     }
   }
 
   if (thinfilm_ior_changed) {
     for (const uint32_t selected_material_index : material_indices) {
-      if (selected_material_index < scene_rep.data().materials.size()) {
-        scene_rep.data().materials[selected_material_index].thinfilm.ior.cls = edit_material.thinfilm.ior.cls;
+      if (selected_material_index < scene_rep.data().material_descriptions.size()) {
+        scene_rep.data().material_descriptions[selected_material_index].thinfilm.ior.cls = edit_material.thinfilm.ior.cls;
+      }
+    }
+  }
+  if (coating_ior_changed) {
+    for (const uint32_t selected_material_index : material_indices) {
+      if (selected_material_index < scene_rep.data().material_descriptions.size()) {
+        scene_rep.data().material_descriptions[selected_material_index].coating.ior.cls = edit_material.coating.ior.cls;
       }
     }
   }
 
-  apply_material_changes(scene_rep, material_indices, before, edit_material);
+  apply_material_changes(scene_rep, material_indices, before, edit_material, changed_fields);
   for (const uint32_t changed_material_index : material_indices) {
     queue_material_change(changed_material_index);
   }
@@ -6941,20 +7590,20 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     // Find a triangle that uses this emitter profile to get the material
     for (size_t tri_idx = 0; tri_idx < scene_rep.data().triangles.size(); ++tri_idx) {
       const Triangle& tri = scene_rep.data().triangles[tri_idx];
-      if (tri.emitter_index == emitter_index && tri.material_index < scene_rep.data().materials.size()) {
+      if (tri.emitter_index == emitter_index && tri.material_index < scene_rep.data().material_descriptions.size()) {
         material_index = tri.material_index;
         break;
       }
     }
   }
 
-  if ((emitter.cls == EmitterProfile::Class::Area) && (material_index >= scene_rep.data().materials.size())) {
+  if ((emitter.cls == EmitterProfile::Class::Area) && (material_index >= scene_rep.data().material_descriptions.size())) {
     ImGui::TextColored(kErrorTextColor, "Material: None");
     return;
   }
   bool common_changed = false;
   if (emitter.cls == EmitterProfile::Class::Area) {
-    auto& material = scene_rep.data().materials[material_index];
+    auto& material = scene_rep.data().material_descriptions[material_index];
     const std::string material_id = std::to_string(material_index);
     const bool spectrum_changed =
       spectrum_control(scene_rep, "Emission", {{material_index, material.emission.spectrum_index, SpectrumTarget::Channel::Emission}}, SpectrumSource::Kind::Emission, false);
@@ -6963,7 +7612,7 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     const std::string texture_label = "Emission Texture##area_emission_texture_" + material_id;
     const bool texture_changed = image_picker(scene_rep, texture_label.c_str(), material.emission.image_index, Image::BuildSamplingTable | Image::RepeatU | Image::RepeatV);
     common_changed = spectrum_changed || texture_changed;
-    if (common_changed && (material_index < scene_rep.data().materials.size())) {
+    if (common_changed && (material_index < scene_rep.data().material_descriptions.size())) {
       float3 integrated = material.emission.spectrum_index < scene_rep.data().spectrum_values.size()  //
                             ? scene_rep.data().spectrum_values[material.emission.spectrum_index].integrated()
                             : float3{0.0f};
@@ -6988,8 +7637,8 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     ImGui::Spacing();
     property_label("External Medium");
     ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
-    if (emitter.cls == EmitterProfile::Class::Area && material_index < scene_rep.data().materials.size()) {
-      auto& material = scene_rep.data().materials[material_index];
+    if (emitter.cls == EmitterProfile::Class::Area && material_index < scene_rep.data().material_descriptions.size()) {
+      auto& material = scene_rep.data().material_descriptions[material_index];
       if (medium_dropdown("##area_external_medium", material.ext_medium)) {
         common_changed = true;
       }
@@ -7002,7 +7651,7 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
   }
 
   if (common_changed) {
-    if (emitter.cls == EmitterProfile::Class::Area && material_index < scene_rep.data().materials.size()) {
+    if (emitter.cls == EmitterProfile::Class::Area && material_index < scene_rep.data().material_descriptions.size()) {
       material_changed = true;
     }
     changed = true;
@@ -7012,8 +7661,8 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    if (material_index < scene_rep.data().materials.size()) {
-      auto& material = scene_rep.data().materials[material_index];
+    if (material_index < scene_rep.data().material_descriptions.size()) {
+      auto& material = scene_rep.data().material_descriptions[material_index];
 
       const char* mat_name = _material_mapping.name_for(material_index);
       if (mat_name != nullptr) {
@@ -7146,7 +7795,7 @@ void UI::build_emitter_resource_properties(SceneRepresentation& scene_rep, uint3
     }
   }
 
-  if (material_changed && (material_index < scene_rep.data().materials.size())) {
+  if (material_changed && (material_index < scene_rep.data().material_descriptions.size())) {
     queue_material_change(material_index);
   }
   if (changed && (material_changed == false)) {
@@ -7167,10 +7816,14 @@ uint32_t UI::build_mesh_material_assignment(SceneRepresentation& scene_rep, uint
     for (uint64_t position = 0u; position < _material_mapping.size(); ++position) {
       const uint32_t material_index = _material_mapping.at(static_cast<int32_t>(position));
       ImGui::PushID(static_cast<int>(material_index));
-      if (ImGui::Selectable(_material_mapping.name(static_cast<int32_t>(position)), material_index == current_material) && callbacks.mesh_material_changed) {
+      if (ImGui::Selectable(_material_mapping.name(static_cast<int32_t>(position)), material_index == current_material) && callbacks.mesh_material_changed &&
+          commit_pending_edits(scene_rep)) {
         const auto result = callbacks.mesh_material_changed(node_index, mesh_index, source_material, material_index, false);
         _scene_edit_status = result.status;
         if (result.succeeded()) {
+          if (source_material != kInvalidIndex) {
+            rebind_material_spectrum(scene_rep, source_material, result.material_index);
+          }
           mesh_index = result.mesh_index;
           current_material = result.material_index;
           _mesh_materials_dirty = true;
@@ -7188,7 +7841,7 @@ void UI::update_mesh_material_usage(const SceneData& scene) {
     return;
   }
   _mesh_material_indices.resize(scene.meshes.size());
-  std::vector<uint32_t> seen(scene.materials.size(), kInvalidIndex);
+  std::vector<uint32_t> seen(scene.material_descriptions.size(), kInvalidIndex);
   for (uint32_t i = 0u; i < scene.meshes.size(); ++i) {
     auto& materials = _mesh_material_indices[i];
     materials.clear();
@@ -7245,7 +7898,13 @@ void UI::build_node_appearance_properties(SceneRepresentation& scene_rep, const 
       bool replaced_all = false;
       if (materials.size() > 1u) {
         ImGui::PushID("replace_all");
-        replaced_all = build_mesh_material_assignment(scene_rep, static_cast<uint32_t>(_selection.index), mesh_index, kInvalidIndex) != kInvalidIndex;
+        const uint32_t replacement = build_mesh_material_assignment(scene_rep, static_cast<uint32_t>(_selection.index), mesh_index, kInvalidIndex);
+        replaced_all = replacement != kInvalidIndex;
+        if (replaced_all) {
+          for (const uint32_t previous_material : materials) {
+            rebind_material_spectrum(scene_rep, previous_material, replacement);
+          }
+        }
         ImGui::PopID();
       }
       if (replaced_all == false) {
@@ -7255,15 +7914,16 @@ void UI::build_node_appearance_properties(SceneRepresentation& scene_rep, const 
                                                                _material_mapping.name_for(materials[slot]), slot == 0u);
           if (slot_open) {
             uint32_t material_index = build_mesh_material_assignment(scene_rep, static_cast<uint32_t>(_selection.index), mesh_index, materials[slot]);
-            if (material_index < scene_rep.data().materials.size()) {
+            if (material_index < scene_rep.data().material_descriptions.size()) {
               const uint32_t usage = material_mesh_usage_count(scene_rep, material_index);
               if (usage > 1u) {
                 ImGui::TextDisabled("Editing shared material: %u objects", usage);
                 property_label("Material scope");
-                if (ImGui::Button("Make unique", ImVec2(-FLT_MIN, 0.0f)) && callbacks.mesh_material_changed) {
+                if (ImGui::Button("Make unique", ImVec2(-FLT_MIN, 0.0f)) && callbacks.mesh_material_changed && commit_pending_edits(scene_rep)) {
                   const auto result = callbacks.mesh_material_changed(static_cast<uint32_t>(_selection.index), mesh_index, material_index, material_index, true);
                   _scene_edit_status = result.status;
                   if (result.succeeded()) {
+                    rebind_material_spectrum(scene_rep, material_index, result.material_index);
                     mesh_index = result.mesh_index;
                     material_index = result.material_index;
                     _mesh_materials_dirty = true;
@@ -7273,7 +7933,7 @@ void UI::build_node_appearance_properties(SceneRepresentation& scene_rep, const 
                 }
               }
               ImGui::PushID("inline_material_editor");
-              Material& material = scene_rep.data().materials[material_index];
+              MaterialDescription& material = scene_rep.data().material_descriptions[material_index];
               const std::vector<uint32_t> targets = {material_index};
               if (build_material(scene_rep, material, data, targets)) {
                 queue_material_change(material_index);

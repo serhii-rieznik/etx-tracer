@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -63,7 +64,7 @@ struct BufferPool {
  private:
   struct Slot {
     std::string name;
-    std::vector<uint8_t> bytes;
+    std::shared_ptr<std::vector<uint8_t>> bytes;
     uint64_t used = 0u;
     uint32_t generation = 1u;
     bool alive = false;
@@ -74,6 +75,7 @@ struct BufferPool {
 
   Slot* resolve(BufferHandle handle);
   const Slot* resolve(BufferHandle handle) const;
+  static std::vector<uint8_t>& writable_bytes(Slot& slot);
 
   static uint64_t align_up(uint64_t value, uint64_t alignment);
   static uint64_t next_capacity(uint64_t required, uint64_t current);

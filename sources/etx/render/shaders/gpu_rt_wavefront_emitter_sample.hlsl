@@ -1,4 +1,6 @@
+#pragma once
 
+#include "gpu_rt_wavefront_emission_consumer_storage.hlsl"
 bool wavefront_try_load_environment_emitter_state(out uint emitter_instance_count, out uint environment_emitter_count) {
   emitter_instance_count = 0u;
   environment_emitter_count = 0u;
@@ -58,9 +60,15 @@ bool wavefront_sample_emitter_index(uint light_sampling_mode, inout uint seed, o
   return true;
 }
 
-bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_sample, SpectralQuery spect, float3 from_point, inout uint seed,
-  out WavefrontEmitterSample sample_value) {
+SpectralResponse wavefront_completed_sampled_emission(GPUWavefrontResources resources, uint slot, WavefrontEmitterSample sample_value, out uint seed) {
+  const SpectralResponse radiance = wavefront_completed_emission(resources, slot, seed);
+  return spectral_response_mul(radiance, sampled_material_coverage(sample_value.material_index, sample_value.image_uv));
+}
+
+bool wavefront_propose_emitter_to_point_from_index(uint emitter_index, float pdf_sample, SpectralQuery spect, float3 from_point, inout uint seed,
+  out WavefrontEmitterSample sample_value, out WavefrontEmissionInput emission_input) {
   sample_value = (WavefrontEmitterSample)0;
+  emission_input = wavefront_empty_emission_input();
   GPUEmitterInstanceABIData emitter_instance = (GPUEmitterInstanceABIData)0;
   GPUEmitterProfileABIData emitter_profile = (GPUEmitterProfileABIData)0;
   if ((try_load_emitter_instance(emitter_index, emitter_instance) == false) || (try_load_emitter_profile(emitter_instance.emitter_profile_index, emitter_profile) == false)) {
@@ -75,6 +83,7 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
   sample_value.pdf_sample = pdf_sample;
   float2 emitter_sample_rnd = float2(rnd01(seed), rnd01(seed));
 
+#if ETX_ENABLE_AREA_EMITTERS
   if (emitter_instance.emitter_class == EmitterClass::Area) {
     TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
     sample_value.barycentric = random_barycentric(emitter_sample_rnd);
@@ -98,6 +107,14 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
       return false;
     }
 
+    Material root_material = material;
+    sample_value.material_index = resolve_mix_material(tri.material_index, vertex.tex, seed);
+    if (try_load_material_full(sample_value.material_index, material) == false) {
+      return false;
+    }
+    sample_value.medium_index = thermal_surface_emission_medium(material, dot(geo_normal, -sample_value.direction));
+    tri.material_index = sample_value.material_index;
+    vertex = coated_emitter_vertex(vertex, tri, sample_value.barycentric, emitter_instance.instance_index, material, sample_value.direction);
     sample_value.value = spectral_response_zero(spect);
     sample_value.is_delta = 0u;
     sample_value.is_distant = 0u;
@@ -106,7 +123,7 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
       return true;
     }
 
-    const bool two_sided_thermal = (material.thermal_rgb_image_index != kInvalidIndex) && (material.two_sided != 0u);
+    const bool two_sided_thermal = thermal_surface_side_probability(root_material) == 0.5f;
     if ((two_sided_thermal == false) && (dot(geo_normal, dp) >= 0.0f)) {
       return true;
     }
@@ -117,15 +134,18 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
     }
     const float cosine = two_sided_thermal ? abs(signed_cosine) : max(0.0f, signed_cosine);
     if (cosine > kEpsilon) {
-      const float exponent = thermal_surface_sampling_exponent(material);
-      const float direction_pdf = scene_math_shared_collimated_direction_pdf(cosine, exponent) * thermal_surface_side_probability(material);
+      const float exponent = thermal_surface_sampling_exponent(root_material);
+      const float direction_pdf = scene_math_shared_collimated_direction_pdf(cosine, exponent) * thermal_surface_side_probability(root_material);
       sample_value.pdf_dir = sample_value.pdf_area * distance_squared / cosine;
       sample_value.pdf_dir_out = sample_value.pdf_area * direction_pdf;
-      sample_value.value =
-        thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, vertex.tex, signed_cosine, abs(dot(vertex.nrm, -sample_value.direction)));
+      emission_input.material_index = sample_value.material_index;
+      emission_input.uv = vertex.tex;
+      emission_input.geometric_cosine = signed_cosine;
+      emission_input.local_outgoing = thermal_surface_local_direction(material, vertex.nrm, vertex.tan, vertex.btn, -sample_value.direction);
     }
     return true;
   }
+#endif
 
   EmitterAccess access = (EmitterAccess)0;
   if (emitter_access_try_load(make_scene_emitter_access_gpu_context(), emitter_index, access) == false) {
@@ -185,19 +205,22 @@ bool wavefront_sample_emitter_to_point_from_index(uint emitter_index, float pdf_
   return true;
 }
 
-bool wavefront_sample_emitter_to_point(uint light_sampling_mode, SpectralQuery spect, float3 from_point, inout uint seed, out WavefrontEmitterSample sample_value) {
+bool wavefront_propose_emitter_to_point(uint light_sampling_mode, SpectralQuery spect, float3 from_point, inout uint seed, out WavefrontEmitterSample sample_value,
+  out WavefrontEmissionInput emission_input) {
   sample_value = (WavefrontEmitterSample)0;
+  emission_input = wavefront_empty_emission_input();
   uint emitter_index = kInvalidIndex;
   float pdf_sample = 0.0f;
   if (wavefront_sample_emitter_index(light_sampling_mode, seed, emitter_index, pdf_sample) == false) {
     return false;
   }
 
-  return wavefront_sample_emitter_to_point_from_index(emitter_index, pdf_sample, spect, from_point, seed, sample_value);
+  return wavefront_propose_emitter_to_point_from_index(emitter_index, pdf_sample, spect, from_point, seed, sample_value, emission_input);
 }
 
-bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out WavefrontEmitterSample sample_value) {
+bool wavefront_propose_light_emission(SpectralQuery spect, inout uint seed, out WavefrontEmitterSample sample_value, out WavefrontEmissionInput emission_input) {
   sample_value = (WavefrontEmitterSample)0;
+  emission_input = wavefront_empty_emission_input();
   float pdf_sample = 0.0f;
   uint emitter_index = sample_emitter_distribution(seed, pdf_sample);
   if (emitter_index == kInvalidIndex) {
@@ -217,6 +240,7 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
   sample_value.medium_index = emitter_access_external_medium_index(make_scene_emitter_access_gpu_context(), emitter_index);
   sample_value.pdf_sample = pdf_sample;
 
+#if ETX_ENABLE_AREA_EMITTERS
   if (emitter_instance.emitter_class == EmitterClass::Area) {
     TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
     sample_value.barycentric = random_barycentric(float2(rnd01(seed), rnd01(seed)));
@@ -229,24 +253,35 @@ bool wavefront_sample_light_emission(SpectralQuery spect, inout uint seed, out W
       return false;
     }
 
-    const float exponent = thermal_surface_sampling_exponent(material);
+    Material root_material = material;
+    sample_value.material_index = resolve_mix_material(tri.material_index, vertex.tex, seed);
+    if (try_load_material_full(sample_value.material_index, material) == false) {
+      return false;
+    }
+    const float exponent = thermal_surface_sampling_exponent(root_material);
     sample_value.origin = vertex.pos;
     sample_value.normal = geo_normal;
-    if ((thermal_surface_side_probability(material) == 0.5f) && (rnd01(seed) < 0.5f)) {
+    if ((thermal_surface_side_probability(root_material) == 0.5f) && (rnd01(seed) < 0.5f)) {
       sample_value.normal = -geo_normal;
     }
     sample_value.direction = sample_cosine_distribution(float2(rnd01(seed), rnd01(seed)), sample_value.normal, exponent);
+    sample_value.medium_index = thermal_surface_emission_medium(material, dot(geo_normal, sample_value.direction));
     sample_value.image_uv = vertex.tex;
     sample_value.pdf_area = (emitter_instance.triangle_area > 0.0f) ? (1.0f / emitter_instance.triangle_area) : 0.0f;
     const float cosine = max(0.0f, dot(sample_value.normal, sample_value.direction));
-    sample_value.pdf_dir = scene_math_shared_collimated_direction_pdf(cosine, exponent) * thermal_surface_side_probability(material);
+    sample_value.pdf_dir = scene_math_shared_collimated_direction_pdf(cosine, exponent) * thermal_surface_side_probability(root_material);
     sample_value.pdf_dir_out = sample_value.pdf_area * sample_value.pdf_dir;
-    sample_value.value = thermal_surface_combined_radiance(make_scene_bsdf_resource_gpu_context(), spect, material, vertex.tex, dot(geo_normal, sample_value.direction),
-      abs(dot(vertex.nrm, sample_value.direction)));
+    tri.material_index = sample_value.material_index;
+    vertex = coated_emitter_vertex(vertex, tri, sample_value.barycentric, emitter_instance.instance_index, material, -sample_value.direction);
+    emission_input.material_index = sample_value.material_index;
+    emission_input.uv = vertex.tex;
+    emission_input.geometric_cosine = dot(geo_normal, sample_value.direction);
+    emission_input.local_outgoing = thermal_surface_local_direction(material, vertex.nrm, vertex.tan, vertex.btn, sample_value.direction);
     sample_value.is_delta = 0u;
     sample_value.is_distant = 0u;
     return sample_value.pdf_dir > 0.0f;
   }
+#endif
 
   SceneGPUSharedGlobals globals_data = scene_gpu_load_globals(bindless_buffers[NonUniformResourceIndex(constants.scene.scene_globals)]);
   if (emitter_instance.emitter_class == EmitterClass::Directional) {

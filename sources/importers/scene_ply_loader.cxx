@@ -152,11 +152,17 @@ void triangulate(const std::vector<uint32_t>& face, const std::vector<float3>& p
   const size_t axis =
     (std::abs(normal[0]) > std::abs(normal[1])) ? ((std::abs(normal[0]) > std::abs(normal[2])) ? 0u : 2u) : ((std::abs(normal[1]) > std::abs(normal[2])) ? 1u : 2u);
   if (normal[axis] == 0.0)
-    throw std::runtime_error("PLY polygon has no unambiguous orientation.");
+    return;
   points.clear();
   for (uint32_t index : face) {
     const auto& p = positions[index];
     points.push_back(axis == 0u ? Point2{p.y, p.z} : (axis == 1u ? Point2{p.z, p.x} : Point2{p.x, p.y}));
+  }
+  for (size_t i = 0u; i < points.size(); ++i) {
+    for (size_t j = i + 1u; j < points.size(); ++j) {
+      if ((points[i].x == points[j].x) && (points[i].y == points[j].y))
+        return;
+    }
   }
   for (size_t i = 0u; i < points.size(); ++i) {
     const size_t next_i = (i + 1u) % points.size();
@@ -428,12 +434,14 @@ ImportedMesh load_ply_mesh(const std::filesystem::path& path) {
         }
       }
       if (element.name == "face") {
-        if ((face.size() < 3u) || (face.size() > (std::numeric_limits<uint32_t>::max() - corners.size())) || (face_uv && (uv.size() != (2u * face.size()))))
+        if ((face.size() > (std::numeric_limits<uint32_t>::max() - corners.size())) || (face_uv && (uv.size() != (2u * face.size()))))
           throw std::runtime_error("Invalid PLY face or face texture-coordinate count.");
         for (uint32_t index : face) {
           if (index >= mesh.positions.size())
             throw std::runtime_error("PLY face references an invalid vertex.");
         }
+        if (face.size() < 3u)
+          continue;
         corners.insert(corners.end(), face.begin(), face.end());
         face_ends.push_back(static_cast<uint32_t>(corners.size()));
         for (size_t index = 0u; index < uv.size(); index += 2u)

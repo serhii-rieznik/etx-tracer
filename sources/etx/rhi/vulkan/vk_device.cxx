@@ -9,16 +9,20 @@
 # define VK_USE_PLATFORM_WIN32_KHR
 # include <windows.h>
 # include <Psapi.h>
+#else
+# include <unistd.h>
 #endif
 
 #include <vulkan/vulkan.h>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <new>
+#include <shared_mutex>
 #include <stdexcept>
 #include <thread>
 namespace etx {
@@ -26,6 +30,7 @@ namespace etx {
 namespace {
 
 constexpr const char* kVK_KHR_portability_subset_extension_name = "VK_KHR_portability_subset";
+std::shared_mutex pipeline_cache_file_mutex;
 
 std::filesystem::path vulkan_pipeline_cache_directory() {
   std::filesystem::path root(env().cache_folder());
@@ -35,47 +40,119 @@ std::filesystem::path vulkan_pipeline_cache_directory() {
 
 std::filesystem::path vulkan_pipeline_cache_file_path(const VkPhysicalDeviceProperties& properties) {
   char file_name[128] = {};
-  std::snprintf(file_name, sizeof(file_name), "pipeline_cache_%08x_%08x_%08x.bin", properties.vendorID, properties.deviceID, properties.driverVersion);
+  std::snprintf(file_name, sizeof(file_name), "graphics_cache_%08x_%08x_%08x.bin", properties.vendorID, properties.deviceID, properties.driverVersion);
   return vulkan_pipeline_cache_directory() / file_name;
 }
 
-bool read_binary_file(const std::filesystem::path& path, std::vector<uint8_t>& out_data) {
-  std::ifstream stream(path, std::ios::binary | std::ios::ate);
-  if (stream.is_open() == false) {
-    return false;
+struct PipelineCacheFile {
+  const void* data = nullptr;
+  size_t size = 0u;
+#if ETX_PLATFORM_WINDOWS
+  HANDLE file = INVALID_HANDLE_VALUE;
+  HANDLE mapping = nullptr;
+#else
+  std::vector<uint8_t> storage;
+#endif
+
+  ~PipelineCacheFile() {
+    clear();
   }
 
-  const std::streamoff size = stream.tellg();
-  if (size <= 0) {
-    return false;
-  }
-  if (static_cast<uint64_t>(size) > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
-    return false;
+  void clear() {
+#if ETX_PLATFORM_WINDOWS
+    if (data != nullptr) {
+      UnmapViewOfFile(data);
+    }
+    if (mapping != nullptr) {
+      CloseHandle(mapping);
+      mapping = nullptr;
+    }
+    if (file != INVALID_HANDLE_VALUE) {
+      CloseHandle(file);
+      file = INVALID_HANDLE_VALUE;
+    }
+#else
+    storage.clear();
+#endif
+    data = nullptr;
+    size = 0u;
   }
 
-  try {
-    out_data.resize(static_cast<size_t>(size));
-  } catch (const std::bad_alloc&) {
-    out_data.clear();
-    return false;
-  } catch (const std::length_error&) {
-    out_data.clear();
-    return false;
+  bool load(const std::filesystem::path& path) {
+#if ETX_PLATFORM_WINDOWS
+    file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) {
+      return false;
+    }
+    LARGE_INTEGER file_size = {};
+    if ((GetFileSizeEx(file, &file_size) == 0) || (file_size.QuadPart <= 0) ||
+        (static_cast<uint64_t>(file_size.QuadPart) > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))) {
+      return false;
+    }
+    mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0u, 0u, nullptr);
+    if (mapping == nullptr) {
+      return false;
+    }
+    data = MapViewOfFile(mapping, FILE_MAP_READ, 0u, 0u, 0u);
+    if (data == nullptr) {
+      return false;
+    }
+    size = static_cast<size_t>(file_size.QuadPart);
+    return true;
+#else
+    std::ifstream stream(path, std::ios::binary | std::ios::ate);
+    if (stream.is_open() == false) {
+      return false;
+    }
+
+    const std::streamoff file_size = stream.tellg();
+    if (file_size <= 0) {
+      return false;
+    }
+    if (static_cast<uint64_t>(file_size) > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+      return false;
+    }
+
+    try {
+      storage.resize(static_cast<size_t>(file_size));
+    } catch (const std::bad_alloc&) {
+      storage.clear();
+      return false;
+    } catch (const std::length_error&) {
+      storage.clear();
+      return false;
+    }
+    stream.seekg(0, std::ios::beg);
+    stream.read(reinterpret_cast<char*>(storage.data()), static_cast<std::streamsize>(file_size));
+    if (stream.good() == false) {
+      return false;
+    }
+    data = storage.data();
+    size = storage.size();
+    return true;
+#endif
   }
-  stream.seekg(0, std::ios::beg);
-  stream.read(reinterpret_cast<char*>(out_data.data()), static_cast<std::streamsize>(size));
-  return stream.good();
-}
+};
 
 bool write_binary_file_atomic(const std::filesystem::path& path, const std::vector<uint8_t>& data) {
+  std::unique_lock lock(pipeline_cache_file_mutex);
   std::error_code ec;
   std::filesystem::create_directories(path.parent_path(), ec);
   if (ec.value() != 0) {
     return false;
   }
 
+  static std::atomic<uint64_t> write_id = 0u;
+#if ETX_PLATFORM_WINDOWS
+  const uint64_t process_id = GetCurrentProcessId();
+#else
+  const uint64_t process_id = static_cast<uint64_t>(getpid());
+#endif
+  char suffix[64] = {};
+  std::snprintf(suffix, sizeof(suffix), ".%llu.%llu.tmp", static_cast<unsigned long long>(process_id),
+    static_cast<unsigned long long>(write_id.fetch_add(1u, std::memory_order_relaxed)));
   std::filesystem::path temp_path = path;
-  temp_path += ".tmp";
+  temp_path += suffix;
 
   {
     std::ofstream stream(temp_path, std::ios::binary | std::ios::trunc);
@@ -86,8 +163,9 @@ bool write_binary_file_atomic(const std::filesystem::path& path, const std::vect
     if (data.empty() == false) {
       stream.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
     }
+    stream.flush();
+    stream.close();
     if (stream.good() == false) {
-      stream.close();
       std::filesystem::remove(temp_path, ec);
       return false;
     }
@@ -307,6 +385,8 @@ struct VKDevice::Impl {
   uint64_t min_storage_buffer_offset_alignment = 0;
 
   bool bindless_supported = false;
+  bool pipeline_executable_properties_supported = false;
+  bool frame_boundary_supported = false;
   std::vector<const char*> enabled_extensions = {};
   std::vector<VkExtensionProperties> available_device_extensions = {};
   std::vector<VkExtensionProperties> available_instance_extensions = {};
@@ -320,6 +400,7 @@ struct VKDevice::Impl {
   VKResourcePool<VKTextureData, RHIBindlessHandle> textures;
   VKResourcePool<VKSamplerData, RHIBindlessHandle> samplers;
   VKResourcePool<VKPipelineData, RHIPipeline> compute_pipelines;
+  mutable std::mutex compute_pipelines_mutex;
   VKResourcePool<VKPipelineData, RHIPipeline> graphics_pipelines;
   VKResourcePool<VKAccelerationStructureData, RHIBindlessHandle> acceleration_structures;
   VKResourcePool<VkSemaphore, RHISemaphore> semaphores;
@@ -338,8 +419,11 @@ struct VKDevice::Impl {
 
   VKStagingBuffer staging_buffer = {};
   VkPipelineLayout bindless_layout = {};
+  std::mutex bindless_layout_mutex;
   VkPipelineCache pipeline_cache = VK_NULL_HANDLE;
   std::filesystem::path pipeline_cache_path = {};
+  std::atomic<uint64_t> pipeline_cache_revision = 0u;
+  uint64_t persisted_pipeline_cache_revision = 0u;
   bool pipeline_creation_cache_control_supported = false;
   uint32_t max_push_constants_size = 128;
 
@@ -424,7 +508,11 @@ struct VKDevice::Impl {
   RHIResult create_vulkan_sampler(const RHISamplerDesc& desc, VkSampler& out_sampler);
   RHIResult create_vulkan_graphics_pipeline(const RHIGraphicsPipelineDesc& desc, VkPipelineLayout layout, VkPipeline& out_pipeline);
   RHIResult create_vulkan_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, VkPipelineCache pipeline_cache_value, bool cache_only,
-    VkPipeline& out_pipeline);
+    VkPipeline& out_pipeline, bool& application_cache_hit);
+  RHIResult create_cached_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, uint32_t pipeline_index,
+    const RHIPipelineBatchProgressCallback& progress_callback, const std::function<bool()>& should_continue, RHICreatePipelineBatchEntry& entry, VkPipeline& out_pipeline);
+  VkPipelineCache load_pipeline_cache(const std::filesystem::path& path, bool log_load, bool& loaded);
+  bool save_pipeline_cache_data(VkPipelineCache cache, const std::filesystem::path& path, bool log_save);
   RHIResult execute_single_time_commands(std::function<void(VkCommandBuffer)> recorder);
 
   RHICreateResult<VkPipelineLayout> get_bindless_pipeline_layout();
@@ -459,7 +547,12 @@ struct VKDevice::Impl {
 
   void reserve_scene_resource_destruction(size_t additional) {
     // Resource retirement must not allocate while unwinding a failed scene preparation.
-    const size_t live = buffers.size() + textures.size() + samplers.size() + acceleration_structures.size() + compute_pipelines.size() + graphics_pipelines.size();
+    size_t compute_pipeline_count = 0u;
+    {
+      std::lock_guard lock(compute_pipelines_mutex);
+      compute_pipeline_count = compute_pipelines.size();
+    }
+    const size_t live = buffers.size() + textures.size() + samplers.size() + acceleration_structures.size() + compute_pipeline_count + graphics_pipelines.size();
     for (auto& resources : deferred_resources) {
       const size_t required = resources.size() + live + additional;
       if (required > resources.capacity()) {
@@ -838,6 +931,8 @@ bool VKDevice::Impl::initialize_device() {
   const bool deferred_host_operations_extension_available = has_extension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
   const bool portability_subset_extension_available = has_extension(kVK_KHR_portability_subset_extension_name);
   const bool ray_query_extension_available = has_extension(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+  const bool pipeline_executable_extension_available = has_extension(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+  const bool frame_boundary_extension_available = headless && has_extension(VK_EXT_FRAME_BOUNDARY_EXTENSION_NAME);
 
   if (memory_budget_extension_available) {
     device_extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
@@ -872,6 +967,8 @@ bool VKDevice::Impl::initialize_device() {
   VkPhysicalDevicePipelineCreationCacheControlFeatures pipeline_creation_cache_control_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_CREATION_CACHE_CONTROL_FEATURES};
 
   VkPhysicalDeviceFeatures2 supported_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+  VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pipeline_executable_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR};
+  VkPhysicalDeviceFrameBoundaryFeaturesEXT frame_boundary_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAME_BOUNDARY_FEATURES_EXT};
   supported_features.pNext = &pipeline_creation_cache_control_features;
   pipeline_creation_cache_control_features.pNext = &descriptor_indexing_features;
   descriptor_indexing_features.pNext = &dynamic_rendering_features;
@@ -879,6 +976,14 @@ bool VKDevice::Impl::initialize_device() {
   demote_to_helper_features.pNext = &ray_query_features;
   ray_query_features.pNext = &acceleration_structure_features;
   acceleration_structure_features.pNext = &buffer_device_address_features;
+  if (pipeline_executable_extension_available) {
+    pipeline_executable_features.pNext = supported_features.pNext;
+    supported_features.pNext = &pipeline_executable_features;
+  }
+  if (frame_boundary_extension_available) {
+    frame_boundary_features.pNext = supported_features.pNext;
+    supported_features.pNext = &frame_boundary_features;
+  }
   vkGetPhysicalDeviceFeatures2(physical_device, &supported_features);
 
   const bool descriptor_indexing_supported =
@@ -899,6 +1004,14 @@ bool VKDevice::Impl::initialize_device() {
 
   const bool shader_demote_supported = (demote_to_helper_features.shaderDemoteToHelperInvocation == VK_TRUE);
   pipeline_creation_cache_control_supported = (pipeline_creation_cache_control_features.pipelineCreationCacheControl == VK_TRUE);
+  pipeline_executable_properties_supported = pipeline_executable_extension_available && (pipeline_executable_features.pipelineExecutableInfo == VK_TRUE);
+  if (pipeline_executable_properties_supported) {
+    device_extensions.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);
+  }
+  frame_boundary_supported = frame_boundary_extension_available && (frame_boundary_features.frameBoundary == VK_TRUE);
+  if (frame_boundary_supported) {
+    device_extensions.push_back(VK_EXT_FRAME_BOUNDARY_EXTENSION_NAME);
+  }
   buffer_device_address_supported = buffer_device_address_extension_available && (buffer_device_address_features.bufferDeviceAddress == VK_TRUE);
   ray_tracing_supported = buffer_device_address_supported && acceleration_structure_extension_available && deferred_host_operations_extension_available &&
                           ray_query_extension_available && (acceleration_structure_features.accelerationStructure == VK_TRUE) && (ray_query_features.rayQuery == VK_TRUE);
@@ -954,6 +1067,14 @@ bool VKDevice::Impl::initialize_device() {
     pipeline_creation_cache_control_features.pNext = feature_chain;
     feature_chain = &pipeline_creation_cache_control_features;
   }
+  if (pipeline_executable_properties_supported) {
+    pipeline_executable_features.pNext = feature_chain;
+    feature_chain = &pipeline_executable_features;
+  }
+  if (frame_boundary_supported) {
+    frame_boundary_features.pNext = feature_chain;
+    feature_chain = &frame_boundary_features;
+  }
   device_create_info.pNext = feature_chain;
   device_create_info.queueCreateInfoCount = static_cast<uint32_t>(queue_create_infos.size());
   device_create_info.pQueueCreateInfos = queue_create_infos.data();
@@ -992,36 +1113,64 @@ bool VKDevice::Impl::initialize_device() {
 
 void VKDevice::Impl::initialize_pipeline_cache() {
   pipeline_cache_path = vulkan_pipeline_cache_file_path(properties);
+  bool loaded = false;
+  pipeline_cache = load_pipeline_cache(pipeline_cache_path, true, loaded);
+}
 
-  std::vector<uint8_t> cache_data = {};
+VkPipelineCache VKDevice::Impl::load_pipeline_cache(const std::filesystem::path& path, bool log_load, bool& loaded) {
+  const auto load_begin = std::chrono::steady_clock::now();
+  std::shared_lock lock(pipeline_cache_file_mutex);
+  loaded = false;
+
+  PipelineCacheFile cache_data;
   std::error_code ec;
-  if ((std::filesystem::exists(pipeline_cache_path, ec) && (ec.value() == 0)) && (read_binary_file(pipeline_cache_path, cache_data) == false)) {
-    std::filesystem::remove(pipeline_cache_path, ec);
+  if ((std::filesystem::exists(path, ec) && (ec.value() == 0)) && (cache_data.load(path) == false)) {
     cache_data.clear();
+    log::warning("Vulkan: failed to read pipeline cache %s", path.generic_string().c_str());
   }
-  if (cache_data.empty() == false) {
-    log::info("Vulkan: loaded pipeline cache %.2f MiB", static_cast<double>(cache_data.size()) / (1024.0 * 1024.0));
+  if (cache_data.size > 0u) {
+    VkPipelineCacheHeaderVersionOne header = {};
+    if (cache_data.size >= sizeof(header)) {
+      std::memcpy(&header, cache_data.data, sizeof(header));
+    }
+    if ((header.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE) || (header.headerSize < sizeof(header)) || (header.headerSize > cache_data.size) ||
+        (header.vendorID != properties.vendorID) || (header.deviceID != properties.deviceID) ||
+        (std::memcmp(header.pipelineCacheUUID, properties.pipelineCacheUUID, VK_UUID_SIZE) != 0)) {
+      log::warning("Vulkan: ignoring incompatible pipeline cache %s", path.generic_string().c_str());
+      cache_data.clear();
+    }
   }
+  const auto read_end = std::chrono::steady_clock::now();
 
   VkPipelineCacheCreateInfo cache_info = {VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-  if (cache_data.empty() == false) {
-    cache_info.initialDataSize = cache_data.size();
-    cache_info.pInitialData = cache_data.data();
+  if (cache_data.size > 0u) {
+    cache_info.initialDataSize = cache_data.size;
+    cache_info.pInitialData = cache_data.data;
   }
 
-  VkResult result = vkCreatePipelineCache(device, &cache_info, nullptr, &pipeline_cache);
-  if ((result != VK_SUCCESS) && (cache_data.empty() == false)) {
-    std::filesystem::remove(pipeline_cache_path, ec);
+  VkPipelineCache cache = VK_NULL_HANDLE;
+  VkResult result = vkCreatePipelineCache(device, &cache_info, nullptr, &cache);
+  if ((result != VK_SUCCESS) && (cache_data.size > 0u)) {
     cache_info.initialDataSize = 0u;
     cache_info.pInitialData = nullptr;
     cache_data.clear();
-    result = vkCreatePipelineCache(device, &cache_info, nullptr, &pipeline_cache);
+    result = vkCreatePipelineCache(device, &cache_info, nullptr, &cache);
   }
 
+  const size_t initial_size = cache_data.size;
+  cache_data.clear();
   if (result != VK_SUCCESS) {
-    pipeline_cache = VK_NULL_HANDLE;
     log::warning("Vulkan: failed to create pipeline cache (%s)", vk_error_to_string(result));
+    return VK_NULL_HANDLE;
   }
+  loaded = initial_size > 0u;
+  if (log_load && loaded) {
+    const auto load_end = std::chrono::steady_clock::now();
+    log::info("Vulkan: loaded pipeline cache %.2f MiB read=%.2fms driver=%.2fms total=%.2fms", static_cast<double>(initial_size) / (1024.0 * 1024.0),
+      std::chrono::duration<double, std::milli>(read_end - load_begin).count(), std::chrono::duration<double, std::milli>(load_end - read_end).count(),
+      std::chrono::duration<double, std::milli>(load_end - load_begin).count());
+  }
+  return cache;
 }
 
 void VKDevice::Impl::save_pipeline_cache() {
@@ -1029,10 +1178,23 @@ void VKDevice::Impl::save_pipeline_cache() {
     return;
   }
 
-  size_t cache_size = 0u;
-  VkResult result = vkGetPipelineCacheData(device, pipeline_cache, &cache_size, nullptr);
-  if ((result != VK_SUCCESS) || (cache_size == 0u)) {
+  const uint64_t revision = pipeline_cache_revision.load(std::memory_order_relaxed);
+  if (revision == persisted_pipeline_cache_revision) {
     return;
+  }
+
+  if (save_pipeline_cache_data(pipeline_cache, pipeline_cache_path, true)) {
+    // Cache additions during serialization still need a later save.
+    persisted_pipeline_cache_revision = revision;
+  }
+}
+
+bool VKDevice::Impl::save_pipeline_cache_data(VkPipelineCache cache, const std::filesystem::path& path, bool log_save) {
+  const auto save_begin = std::chrono::steady_clock::now();
+  size_t cache_size = 0u;
+  VkResult result = vkGetPipelineCacheData(device, cache, &cache_size, nullptr);
+  if ((result != VK_SUCCESS) || (cache_size == 0u)) {
+    return false;
   }
 
   std::vector<uint8_t> cache_data = {};
@@ -1040,22 +1202,29 @@ void VKDevice::Impl::save_pipeline_cache() {
     cache_data.resize(cache_size);
   } catch (const std::bad_alloc&) {
     log::warning("Vulkan: insufficient memory to persist %.2f MiB pipeline cache", static_cast<double>(cache_size) / (1024.0 * 1024.0));
-    return;
+    return false;
   } catch (const std::length_error&) {
     log::warning("Vulkan: pipeline cache size is not addressable: %llu bytes", static_cast<unsigned long long>(cache_size));
-    return;
+    return false;
   }
-  result = vkGetPipelineCacheData(device, pipeline_cache, &cache_size, cache_data.data());
+  result = vkGetPipelineCacheData(device, cache, &cache_size, cache_data.data());
   if (result != VK_SUCCESS) {
-    return;
+    return false;
   }
 
   cache_data.resize(cache_size);
-  if (write_binary_file_atomic(pipeline_cache_path, cache_data) == false) {
-    log::warning("Vulkan: failed to write pipeline cache %s", pipeline_cache_path.generic_string().c_str());
-  } else {
-    log::info("Vulkan: persisted pipeline cache %.2f MiB", static_cast<double>(cache_data.size()) / (1024.0 * 1024.0));
+  const auto serialization_end = std::chrono::steady_clock::now();
+  if (write_binary_file_atomic(path, cache_data) == false) {
+    log::warning("Vulkan: failed to write pipeline cache %s", path.generic_string().c_str());
+    return false;
   }
+  if (log_save) {
+    const auto save_end = std::chrono::steady_clock::now();
+    log::info("Vulkan: persisted pipeline cache %.2f MiB serialize=%.2fms write=%.2fms total=%.2fms", static_cast<double>(cache_data.size()) / (1024.0 * 1024.0),
+      std::chrono::duration<double, std::milli>(serialization_end - save_begin).count(), std::chrono::duration<double, std::milli>(save_end - serialization_end).count(),
+      std::chrono::duration<double, std::milli>(save_end - save_begin).count());
+  }
+  return true;
 }
 
 void VKDevice::Impl::destroy_bindless_pipeline_layout() {
@@ -1340,6 +1509,7 @@ static VkBlendOp convert_blend_op(RHIBlendOp op) {
 }
 
 RHICreateResult<VkPipelineLayout> VKDevice::Impl::get_bindless_pipeline_layout() {
+  std::lock_guard lock(bindless_layout_mutex);
   if (bindless_layout)
     return {RHIResult::Success, bindless_layout};
 
@@ -1543,6 +1713,14 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   pipeline_info.pDynamicState = &dynamic_state_info;
   pipeline_info.layout = layout;
 
+  VkPipelineCreationFeedback feedback = {};
+  const VkPipelineCreationFeedbackCreateInfo feedback_info = {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO,
+    .pNext = &rendering_info,
+    .pPipelineCreationFeedback = &feedback,
+  };
+  pipeline_info.pNext = &feedback_info;
+
   const VkResult pipeline_result = etx_vk_call(vkCreateGraphicsPipelines(device, pipeline_cache, 1, &pipeline_info, nullptr, &out_pipeline));
   if (pipeline_result != VK_SUCCESS) {
     vkDestroyShaderModule(device, frag_module, nullptr);
@@ -1552,11 +1730,17 @@ RHIResult VKDevice::Impl::create_vulkan_graphics_pipeline(const RHIGraphicsPipel
   vkDestroyShaderModule(device, frag_module, nullptr);
   vkDestroyShaderModule(device, vert_module, nullptr);
 
+  constexpr VkPipelineCreationFeedbackFlags cache_hit_flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT | VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT;
+  if ((pipeline_cache != VK_NULL_HANDLE) && ((feedback.flags & cache_hit_flags) != cache_hit_flags)) {
+    pipeline_cache_revision.fetch_add(1u, std::memory_order_relaxed);
+  }
+
   return RHIResult::Success;
 }
 
 RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, VkPipelineCache pipeline_cache_value, bool cache_only,
-  VkPipeline& out_pipeline) {
+  VkPipeline& out_pipeline, bool& application_cache_hit) {
+  application_cache_hit = false;
   VkShaderModuleCreateInfo comp_info = {
     .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
     .codeSize = desc.compute_shader.spirv_size,
@@ -1583,6 +1767,17 @@ RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelin
     .basePipelineIndex = -1,
   };
 
+  VkPipelineCreationFeedback feedback = {};
+  const VkPipelineCreationFeedbackCreateInfo feedback_info = {
+    .sType = VK_STRUCTURE_TYPE_PIPELINE_CREATION_FEEDBACK_CREATE_INFO,
+    .pPipelineCreationFeedback = &feedback,
+  };
+  pipeline_info.pNext = &feedback_info;
+
+  if (desc.capture_statistics && pipeline_executable_properties_supported) {
+    pipeline_info.flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
+  }
+
   const VkResult create_result = vkCreateComputePipelines(device, pipeline_cache_value, 1u, &pipeline_info, nullptr, &out_pipeline);
   vkDestroyShaderModule(device, comp_module, nullptr);
 
@@ -1593,7 +1788,123 @@ RHIResult VKDevice::Impl::create_vulkan_compute_pipeline(const RHIComputePipelin
     log::error("Vulkan: compute pipeline creation failed (%s)", vk_error_to_string(create_result));
     return convert_vk_result_to_rhi(create_result);
   }
+  constexpr VkPipelineCreationFeedbackFlags cache_hit_flags = VK_PIPELINE_CREATION_FEEDBACK_VALID_BIT | VK_PIPELINE_CREATION_FEEDBACK_APPLICATION_PIPELINE_CACHE_HIT_BIT;
+  application_cache_hit = (pipeline_cache_value != VK_NULL_HANDLE) && ((feedback.flags & cache_hit_flags) == cache_hit_flags);
+  if (desc.capture_statistics && pipeline_executable_properties_supported) {
+    const auto get_properties = reinterpret_cast<PFN_vkGetPipelineExecutablePropertiesKHR>(vkGetDeviceProcAddr(device, "vkGetPipelineExecutablePropertiesKHR"));
+    const auto get_statistics = reinterpret_cast<PFN_vkGetPipelineExecutableStatisticsKHR>(vkGetDeviceProcAddr(device, "vkGetPipelineExecutableStatisticsKHR"));
+    const VkPipelineInfoKHR pipeline_query = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INFO_KHR, .pipeline = out_pipeline};
+    uint32_t executable_count = 0u;
+    if (get_properties(device, &pipeline_query, &executable_count, nullptr) == VK_SUCCESS) {
+      std::vector<VkPipelineExecutablePropertiesKHR> executables(executable_count, {.sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_PROPERTIES_KHR});
+      if (get_properties(device, &pipeline_query, &executable_count, executables.data()) == VK_SUCCESS) {
+        for (uint32_t index = 0u; index < executable_count; ++index) {
+          log::info("GPU kernel properties [%s]: executable=%s subgroup_size=%u", desc.compute_shader.entry_point.c_str(), executables[index].name,
+            executables[index].subgroupSize);
+          const VkPipelineExecutableInfoKHR executable_query = {.sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_INFO_KHR, .pipeline = out_pipeline, .executableIndex = index};
+          uint32_t statistic_count = 0u;
+          if (get_statistics(device, &executable_query, &statistic_count, nullptr) != VK_SUCCESS) {
+            continue;
+          }
+          std::vector<VkPipelineExecutableStatisticKHR> statistics(statistic_count, {.sType = VK_STRUCTURE_TYPE_PIPELINE_EXECUTABLE_STATISTIC_KHR});
+          if (get_statistics(device, &executable_query, &statistic_count, statistics.data()) != VK_SUCCESS) {
+            continue;
+          }
+          for (uint32_t statistic_index = 0u; statistic_index < statistic_count; ++statistic_index) {
+            const auto& statistic = statistics[statistic_index];
+            const char* entry = desc.compute_shader.entry_point.c_str();
+            switch (statistic.format) {
+              case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_BOOL32_KHR:
+                log::info("GPU kernel statistic [%s]: %s=%u (%s)", entry, statistic.name, statistic.value.b32, statistic.description);
+                break;
+              case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_INT64_KHR:
+                log::info("GPU kernel statistic [%s]: %s=%lld (%s)", entry, statistic.name, static_cast<long long>(statistic.value.i64), statistic.description);
+                break;
+              case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_UINT64_KHR:
+                log::info("GPU kernel statistic [%s]: %s=%llu (%s)", entry, statistic.name, static_cast<unsigned long long>(statistic.value.u64), statistic.description);
+                break;
+              case VK_PIPELINE_EXECUTABLE_STATISTIC_FORMAT_FLOAT64_KHR:
+                log::info("GPU kernel statistic [%s]: %s=%.6f (%s)", entry, statistic.name, statistic.value.f64, statistic.description);
+                break;
+              default:
+                break;
+            }
+          }
+        }
+      }
+    }
+  } else if (desc.capture_statistics) {
+    log::info("GPU kernel properties [%s]: driver does not support pipeline executable statistics", desc.compute_shader.entry_point.c_str());
+  }
   return RHIResult::Success;
+}
+
+RHIResult VKDevice::Impl::create_cached_compute_pipeline(const RHIComputePipelineDesc& desc, VkPipelineLayout layout, uint32_t pipeline_index,
+  const RHIPipelineBatchProgressCallback& progress_callback, const std::function<bool()>& should_continue, RHICreatePipelineBatchEntry& entry, VkPipeline& out_pipeline) {
+  if ((desc.compute_shader.spirv_data == nullptr) || (desc.compute_shader.spirv_size == 0u)) {
+    return RHIResult::InvalidArgument;
+  }
+  if (should_continue && (should_continue() == false)) {
+    return RHIResult::NotReady;
+  }
+
+  // Bump the schema when bindless binding types or flags change.
+  const std::array<uint64_t, 11> key = {
+    1u,
+    xxh64(desc.compute_shader.spirv_data, desc.compute_shader.spirv_size),
+    desc.compute_shader.spirv_size,
+    xxh64(desc.compute_shader.entry_point.data(), desc.compute_shader.entry_point.size()),
+    desc.compute_shader.entry_point.size(),
+    max_push_constants_size,
+    bindless_manager->get_max_buffers(),
+    bindless_manager->get_max_textures(),
+    bindless_manager->get_max_samplers(),
+    bindless_manager->get_max_acceleration_structures(),
+    static_cast<uint64_t>(desc.capture_statistics && pipeline_executable_properties_supported),
+  };
+  char uuid[VK_UUID_SIZE * 2u + 1u] = {};
+  for (uint32_t index = 0u; index < VK_UUID_SIZE; ++index) {
+    std::snprintf(uuid + index * 2u, 3u, "%02x", static_cast<uint32_t>(properties.pipelineCacheUUID[index]));
+  }
+  char file_name[128] = {};
+  std::snprintf(file_name, sizeof(file_name), "compute_%08x_%08x_%08x_%s_%016llx.bin", properties.vendorID, properties.deviceID, properties.driverVersion, uuid,
+    static_cast<unsigned long long>(xxh64(key.data(), sizeof(key))));
+  const std::filesystem::path path = vulkan_pipeline_cache_directory() / "compute" / file_name;
+  entry.state = RHIPipelineBatchProgressState::CheckingCache;
+  if (progress_callback) {
+    progress_callback(pipeline_index, entry);
+  }
+  if (should_continue && (should_continue() == false)) {
+    return RHIResult::NotReady;
+  }
+  bool loaded = false;
+  const VkPipelineCache cache = load_pipeline_cache(path, false, loaded);
+  const auto create = [&](bool cache_only) {
+    const auto begin = std::chrono::steady_clock::now();
+    bool application_cache_hit = false;
+    const RHIResult result = create_vulkan_compute_pipeline(desc, layout, cache, cache_only, out_pipeline, application_cache_hit);
+    entry.elapsed_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+    entry.cache_hit = (result == RHIResult::Success) && (cache_only || application_cache_hit);
+    return result;
+  };
+  RHIResult result = RHIResult::NotReady;
+  if ((should_continue ? should_continue() : true) && loaded && pipeline_creation_cache_control_supported) {
+    result = create(true);
+  }
+  if ((result == RHIResult::NotReady) && (should_continue ? should_continue() : true)) {
+    entry.state = RHIPipelineBatchProgressState::DriverCompiling;
+    if (progress_callback) {
+      progress_callback(pipeline_index, entry);
+    }
+    result = create(false);
+    if ((result == RHIResult::Success) && (cache != VK_NULL_HANDLE) && ((loaded == false) || (entry.cache_hit == false))) {
+      save_pipeline_cache_data(cache, path, false);
+    }
+  }
+  if (cache != VK_NULL_HANDLE) {
+    vkDestroyPipelineCache(device, cache, nullptr);
+  }
+  return result;
 }
 
 static VkFilter convert_sampler_filter(RHISamplerFilter filter) {
@@ -2096,8 +2407,10 @@ void VKDevice::Impl::cleanup_pools() {
   buffers.clear();
 }
 
-const VKPipelineData* VKDevice::get_compute_pipeline_data(RHIPipeline handle) const {
-  return _impl->compute_pipelines.get_data_ptr(handle);
+VKPipelineData VKDevice::get_compute_pipeline_data(RHIPipeline handle) const {
+  std::lock_guard lock(_impl->compute_pipelines_mutex);
+  const VKPipelineData* data = _impl->compute_pipelines.get_data_ptr(handle);
+  return (data != nullptr) ? *data : VKPipelineData{};
 }
 
 const VKPipelineData* VKDevice::get_graphics_pipeline_data(RHIPipeline handle) const {
@@ -2168,13 +2481,17 @@ void VKDevice::destroy_all_resources() {
   }
 
   uint32_t graphics_pipeline_count = static_cast<uint32_t>(_impl->graphics_pipelines.size());
-  uint32_t compute_pipeline_count = static_cast<uint32_t>(_impl->compute_pipelines.size());
+  std::vector<RHIPipeline> compute_pipeline_handles;
+  {
+    std::lock_guard lock(_impl->compute_pipelines_mutex);
+    compute_pipeline_handles = _impl->compute_pipelines.get_all_keys();
+  }
+  const uint32_t compute_pipeline_count = static_cast<uint32_t>(compute_pipeline_handles.size());
   uint32_t texture_count = static_cast<uint32_t>(_impl->textures.size());
   uint32_t buffer_count = static_cast<uint32_t>(_impl->buffers.size());
   uint32_t sampler_count = static_cast<uint32_t>(_impl->samplers.size());
 
   std::vector<RHIPipeline> graphics_pipeline_handles = _impl->graphics_pipelines.get_all_keys();
-  std::vector<RHIPipeline> compute_pipeline_handles = _impl->compute_pipelines.get_all_keys();
   std::vector<RHIBindlessHandle> texture_handles = _impl->textures.get_all_keys();
   std::vector<RHIBindlessHandle> buffer_handles = _impl->buffers.get_all_keys();
   std::vector<RHIBindlessHandle> sampler_handles = _impl->samplers.get_all_keys();
@@ -2193,7 +2510,10 @@ void VKDevice::destroy_all_resources() {
       log::warning("Failed to destroy compute pipeline %llu: %d", handle.value, static_cast<int>(result));
     }
   }
-  _impl->compute_pipelines.clear();
+  {
+    std::lock_guard lock(_impl->compute_pipelines_mutex);
+    _impl->compute_pipelines.clear();
+  }
 
   for (RHIBindlessHandle handle : texture_handles) {
     RHIResult result = destroy_texture(handle);
@@ -2469,7 +2789,8 @@ RHICreatePipelineResult VKDevice::create_graphics_pipeline(const RHIGraphicsPipe
 
   uint32_t index = _impl->graphics_pipelines.allocate_index();
   uint32_t generation = _impl->graphics_pipelines.get_generation(index);
-  RHIPipeline pipeline_handle = Handle::construct(0, index, generation);
+  // Graphics and compute pipelines have separate pools and require distinct handle classes.
+  RHIPipeline pipeline_handle = Handle::construct(1u, index, generation);
 
   // Initialize POD data
   auto& pipeline_data = _impl->graphics_pipelines.get_data(index);
@@ -2499,11 +2820,13 @@ RHICreatePipelineResult VKDevice::create_compute_pipeline(const RHIComputePipeli
   }
 
   VkPipeline vk_pipeline = VK_NULL_HANDLE;
-  RHIResult pipeline_result = _impl->create_vulkan_compute_pipeline(desc, vk_layout.handle, _impl->pipeline_cache, false, vk_pipeline);
+  RHICreatePipelineBatchEntry entry = {};
+  const RHIResult pipeline_result = _impl->create_cached_compute_pipeline(desc, vk_layout.handle, 0u, {}, {}, entry, vk_pipeline);
   if (pipeline_result != RHIResult::Success) {
     return {pipeline_result, {}};
   }
 
+  std::lock_guard lock(_impl->compute_pipelines_mutex);
   uint32_t index = _impl->compute_pipelines.allocate_index();
   uint32_t generation = _impl->compute_pipelines.get_generation(index);
   RHIPipeline pipeline_handle = Handle::construct(0, index, generation);
@@ -2520,8 +2843,8 @@ RHICreatePipelineResult VKDevice::create_compute_pipeline(const RHIComputePipeli
 }
 
 std::vector<RHICreatePipelineBatchEntry> VKDevice::create_compute_pipelines(const std::vector<RHIComputePipelineDesc>& descs, uint32_t max_concurrency,
-  const RHIPipelineBatchProgressCallback& progress_callback) {
-  std::vector<RHICreatePipelineBatchEntry> results(descs.size());
+  const RHIPipelineBatchProgressCallback& progress_callback, const std::function<bool()>& should_continue) {
+  std::vector<RHICreatePipelineBatchEntry> results(descs.size(), {.result = RHIResult::NotReady});
   if (descs.empty()) {
     return results;
   }
@@ -2542,112 +2865,42 @@ std::vector<RHICreatePipelineBatchEntry> VKDevice::create_compute_pipelines(cons
     return results;
   }
 
+  if (should_continue && (should_continue() == false)) {
+    return results;
+  }
   std::vector<VkPipeline> vk_pipelines(descs.size(), VK_NULL_HANDLE);
-  std::vector<uint32_t> compile_indices = {};
-  compile_indices.reserve(descs.size());
-  for (uint32_t i = 0u; i < static_cast<uint32_t>(descs.size()); ++i) {
-    const auto begin = std::chrono::steady_clock::now();
-    RHIResult result = RHIResult::NotReady;
-    if (_impl->pipeline_creation_cache_control_supported) {
-      results[i].state = RHIPipelineBatchProgressState::CheckingCache;
-      if (progress_callback) {
-        progress_callback(i, results[i]);
-      }
-      result = _impl->create_vulkan_compute_pipeline(descs[i], vk_layout.handle, _impl->pipeline_cache, true, vk_pipelines[i]);
-    }
-    if (result == RHIResult::Success) {
-      results[i].result = RHIResult::Success;
-      results[i].cache_hit = true;
-      results[i].elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
-      results[i].state = RHIPipelineBatchProgressState::Complete;
-      if (progress_callback) {
-        progress_callback(i, results[i]);
-      }
-    } else if (result == RHIResult::NotReady) {
-      compile_indices.push_back(i);
-      results[i].state = RHIPipelineBatchProgressState::Queued;
-      if (progress_callback) {
-        progress_callback(i, results[i]);
-      }
-    } else {
-      results[i].result = result;
-      results[i].elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
-      results[i].state = RHIPipelineBatchProgressState::Complete;
-      if (progress_callback) {
-        progress_callback(i, results[i]);
-      }
+  for (uint32_t index = 0u; index < static_cast<uint32_t>(descs.size()); ++index) {
+    results[index].state = RHIPipelineBatchProgressState::Queued;
+    if (progress_callback) {
+      progress_callback(index, results[index]);
     }
   }
-
-  if (compile_indices.empty() == false) {
-    const uint32_t worker_count = std::min<uint32_t>(static_cast<uint32_t>(compile_indices.size()), std::max(1u, max_concurrency));
-    std::vector<VkPipelineCache> worker_pipeline_caches(worker_count, VK_NULL_HANDLE);
-    const VkPipelineCacheCreateInfo cache_create_info = {
-      .sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO,
-    };
-    bool worker_cache_creation_succeeded = true;
-    for (auto& worker_pipeline_cache : worker_pipeline_caches) {
-      const VkResult cache_result = vkCreatePipelineCache(_impl->device, &cache_create_info, nullptr, &worker_pipeline_cache);
-      if (cache_result != VK_SUCCESS) {
-        log::warning("Vulkan: worker pipeline cache creation failed (%s)", vk_error_to_string(cache_result));
-        worker_cache_creation_succeeded = false;
-        break;
+  const uint32_t worker_count = std::min<uint32_t>(static_cast<uint32_t>(descs.size()), std::max(1u, max_concurrency));
+  std::atomic<uint32_t> next_index = 0u;
+  const auto compile_worker = [&]() {
+    while (true) {
+      if (should_continue && (should_continue() == false)) {
+        return;
+      }
+      const uint32_t index = next_index.fetch_add(1u, std::memory_order_relaxed);
+      if (index >= static_cast<uint32_t>(descs.size())) {
+        return;
+      }
+      results[index].result = _impl->create_cached_compute_pipeline(descs[index], vk_layout.handle, index, progress_callback, should_continue, results[index], vk_pipelines[index]);
+      results[index].state = RHIPipelineBatchProgressState::Complete;
+      if (progress_callback) {
+        progress_callback(index, results[index]);
       }
     }
-    if (worker_cache_creation_succeeded == false) {
-      for (const VkPipelineCache worker_pipeline_cache : worker_pipeline_caches) {
-        if (worker_pipeline_cache != VK_NULL_HANDLE) {
-          vkDestroyPipelineCache(_impl->device, worker_pipeline_cache, nullptr);
-        }
-      }
-      worker_pipeline_caches.clear();
-    }
-
-    std::atomic<uint32_t> next_compile_index = 0u;
-    const auto compile_worker = [&](uint32_t worker_index) {
-      const VkPipelineCache worker_pipeline_cache = worker_pipeline_caches.empty() ? VK_NULL_HANDLE : worker_pipeline_caches[worker_index];
-      while (true) {
-        const uint32_t work_index = next_compile_index.fetch_add(1u, std::memory_order_relaxed);
-        if (work_index >= static_cast<uint32_t>(compile_indices.size())) {
-          return;
-        }
-        const uint32_t pipeline_index = compile_indices[work_index];
-        results[pipeline_index].state = RHIPipelineBatchProgressState::DriverCompiling;
-        if (progress_callback) {
-          progress_callback(pipeline_index, results[pipeline_index]);
-        }
-        const auto begin = std::chrono::steady_clock::now();
-        results[pipeline_index].result = _impl->create_vulkan_compute_pipeline(descs[pipeline_index], vk_layout.handle, worker_pipeline_cache, false, vk_pipelines[pipeline_index]);
-        results[pipeline_index].elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
-        results[pipeline_index].state = RHIPipelineBatchProgressState::Complete;
-        if (progress_callback) {
-          progress_callback(pipeline_index, results[pipeline_index]);
-        }
-      }
-    };
-
-    std::vector<std::thread> workers = {};
-    workers.reserve(worker_count - 1u);
-    for (uint32_t worker_index = 1u; worker_index < worker_count; ++worker_index) {
-      workers.emplace_back(compile_worker, worker_index);
-    }
-    compile_worker(0u);
-    for (auto& worker : workers) {
-      worker.join();
-    }
-
-    if ((worker_pipeline_caches.empty() == false) && (_impl->pipeline_cache != VK_NULL_HANDLE)) {
-      const VkResult merge_result =
-        vkMergePipelineCaches(_impl->device, _impl->pipeline_cache, static_cast<uint32_t>(worker_pipeline_caches.size()), worker_pipeline_caches.data());
-      if (merge_result != VK_SUCCESS) {
-        log::warning("Vulkan: worker pipeline cache merge failed (%s)", vk_error_to_string(merge_result));
-      }
-    }
-    if (worker_pipeline_caches.empty() == false) {
-      for (const VkPipelineCache worker_pipeline_cache : worker_pipeline_caches) {
-        vkDestroyPipelineCache(_impl->device, worker_pipeline_cache, nullptr);
-      }
-    }
+  };
+  std::vector<std::thread> workers = {};
+  workers.reserve(worker_count - 1u);
+  for (uint32_t index = 1u; index < worker_count; ++index) {
+    workers.emplace_back(compile_worker);
+  }
+  compile_worker();
+  for (auto& worker : workers) {
+    worker.join();
   }
 
   for (uint32_t i = 0u; i < static_cast<uint32_t>(descs.size()); ++i) {
@@ -2659,6 +2912,7 @@ std::vector<RHICreatePipelineBatchEntry> VKDevice::create_compute_pipelines(cons
       continue;
     }
 
+    std::lock_guard lock(_impl->compute_pipelines_mutex);
     const uint32_t index = _impl->compute_pipelines.allocate_index();
     const uint32_t generation = _impl->compute_pipelines.get_generation(index);
     const RHIPipeline pipeline_handle = Handle::construct(0u, index, generation);
@@ -2795,13 +3049,16 @@ RHIResult VKDevice::destroy_pipeline(RHIPipeline pipeline_handle) {
   if ((pipeline_handle.valid() == false) || (_impl == nullptr))
     return RHIResult::Success;
 
-  uint32_t compute_index = _impl->compute_pipelines.get_index(pipeline_handle);
-  if (compute_index != UINT32_MAX) {
-    _impl->compute_pipelines.remove_handle(pipeline_handle);
-    _impl->compute_pipelines.free_index(compute_index, [this](const VKPipelineData& data) {
-      _impl->queue_deferred_destruction(data, true);
-    });
-    return RHIResult::Success;
+  {
+    std::lock_guard lock(_impl->compute_pipelines_mutex);
+    uint32_t compute_index = _impl->compute_pipelines.get_index(pipeline_handle);
+    if (compute_index != UINT32_MAX) {
+      _impl->compute_pipelines.remove_handle(pipeline_handle);
+      _impl->compute_pipelines.free_index(compute_index, [this](const VKPipelineData& data) {
+        _impl->queue_deferred_destruction(data, true);
+      });
+      return RHIResult::Success;
+    }
   }
 
   uint32_t graphics_index = _impl->graphics_pipelines.get_index(pipeline_handle);
@@ -3385,6 +3642,10 @@ bool VKDevice::supports_bindless() const {
 
 bool VKDevice::supports_ray_tracing() const {
   return _impl->ray_tracing_supported;
+}
+
+bool VKDevice::supports_frame_boundary() const {
+  return _impl->frame_boundary_supported;
 }
 
 bool VKDevice::supports_timestamp_stage(RHITimestampStage stage) const {

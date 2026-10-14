@@ -37,6 +37,7 @@ enum class ApplicationCommandType : uint32_t {
   ReloadGeometry,
   ReloadShaders,
   CancelPreparation,
+  DismissDiagnostic,
   SetExposure,
   SetViewLayer,
   SetOutputView,
