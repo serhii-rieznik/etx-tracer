@@ -1,14 +1,18 @@
 #include "gpu_rt_wavefront_surface_common.hlsl"
 
+void wavefront_accumulate_camera_direct_hit(WavefrontEmissionConsumer consumer, SpectralResponse radiance) {
+  const SpectralResponse contribution = spectral_response_mul(spectral_response_mul(radiance, consumer.factor), consumer.selected_weight);
+  if (spectral_response_is_zero(contribution) == false) {
+    wavefront_film_add(consumer.output_pixel_index, wavefront_spectral_estimate(contribution, consumer.spect));
+  }
+}
+
 void wavefront_finish_camera_direct_hit(GPUWavefrontResources resources, uint slot, WavefrontEmissionConsumer consumer, SpectralResponse radiance, uint seed) {
   GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, consumer.owner_index);
   state.sampler_seed = seed;
   wavefront_store_path_state(resources.camera_state_buffer, consumer.owner_index, state);
   wavefront_emission_consumer_complete(resources, slot);
-  const SpectralResponse contribution = spectral_response_mul(spectral_response_mul(radiance, consumer.factor), consumer.selected_weight);
-  if (spectral_response_is_zero(contribution) == false) {
-    wavefront_film_add(consumer.output_pixel_index, wavefront_spectral_estimate(contribution, consumer.spect));
-  }
+  wavefront_accumulate_camera_direct_hit(consumer, radiance);
 }
 
 [numthreads(64, 1, 1)] void wavefront_camera_direct_hit_accumulate_main(uint3 dtid : SV_DispatchThreadID) {
@@ -73,6 +77,18 @@ void wavefront_finish_camera_direct_hit(GPUWavefrontResources resources, uint sl
   consumer.spect = state.spect;
   consumer.factor = current_vertex.throughput;
   consumer.selected_weight = wavefront_local_direct_hit_weight(meta.camera_path_length, current_vertex, previous_vertex, hit.emitter_index, pdf_area, pdf_dir, pdf_dir_out);
+  Material material = (Material)0;
+  if (try_load_material_full(emission_input.material_index, material) == false) {
+    return;
+  }
+  if (thermal_surface_uses_substrate_escape(material) == false) {
+    const BSDFResourceContext context = make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.spectral_values,
+      constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
+    const SpectralResponse radiance =
+      thermal_surface_combined_radiance(context, state.spect, material, emission_input.uv, emission_input.geometric_cosine, emission_input.local_outgoing.z);
+    wavefront_accumulate_camera_direct_hit(consumer, radiance);
+    return;
+  }
   wavefront_queue_emission_input(resources, dispatch_index, emission_input, state.spect, state.sampler_seed);
   wavefront_emission_consumer_suspend(resources, dispatch_index, consumer);
 }

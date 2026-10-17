@@ -98,9 +98,10 @@ struct EnergyCompensationGpuParams {
   float4 coating_k = {};
   float coating_thickness_nm = 0.0f;
   uint32_t coating_cls = SpectralDistribution::Invalid;
+  BSDFEnergyCompensationDielectricLut dielectric_lut = {};
 };
 
-static_assert(sizeof(EnergyCompensationGpuParams) == 232u);
+static_assert(sizeof(EnergyCompensationGpuParams) == 248u);
 static_assert(offsetof(EnergyCompensationGpuParams, output_directional_index) == 0u);
 static_assert(offsetof(EnergyCompensationGpuParams, cache_mode) == 28u);
 static_assert(offsetof(EnergyCompensationGpuParams, spectral_channel) == 56u);
@@ -116,6 +117,7 @@ static_assert(offsetof(EnergyCompensationGpuParams, coating_eta) == 192u);
 static_assert(offsetof(EnergyCompensationGpuParams, coating_k) == 208u);
 static_assert(offsetof(EnergyCompensationGpuParams, coating_thickness_nm) == 224u);
 static_assert(offsetof(EnergyCompensationGpuParams, coating_cls) == 228u);
+static_assert(offsetof(EnergyCompensationGpuParams, dielectric_lut) == 232u);
 
 struct EnergyCompensationGpuPushConstants {
   uint32_t params_buffer_index = kInvalidIndex;
@@ -170,6 +172,7 @@ struct EnergyCompensationAsyncStep {
   bool save_spectral_geometric = false;
   bool gpu_complete = false;
   bool save_result = false;
+  BSDFEnergyCompensationDielectricLut dielectric_lut = {};
 };
 
 float lut_parameter(uint32_t index, uint32_t size) {
@@ -254,6 +257,7 @@ RefractiveIndexSample sample_refractive_index(const SceneData& data, const Refra
   result.cls = refractive_index.cls;
   result.eta = spectrum_or_default(data, refractive_index.eta_index, spect, 1.0f);
   result.k = spectrum_or_default(data, refractive_index.k_index, spect, 0.0f);
+  static_cast<::RefractiveIndexSample&>(result) = refractive_index_sample_transport(result);
   return result;
 }
 
@@ -312,13 +316,37 @@ bool conductor_terminal_source_required(const Material& material) {
   return (material.coherent_coating.ior.cls == SpectralDistribution::Dielectric) || (material.coherent_coating.ior.cls == SpectralDistribution::Conductor);
 }
 
+BSDFEnergyCompensationDielectricLut dielectric_lut_layout(const Material& material) {
+  BSDFEnergyCompensationDielectricLut result = {};
+  const float2 roughness = {material.roughness.value.x, material.roughness.value.y};
+  if ((material.cls != MaterialClass::Dielectric) || bsdf_energy_compensated_roughness_isotropic(roughness)) {
+    return result;
+  }
+  result.azimuth_count = kBSDFEnergyCompensationDielectricAzimuthCount;
+  if (material.roughness.image_index == kInvalidIndex) {
+    result.roughness = roughness;
+    result.roughness_count = 1u;
+  } else {
+    // A roughness texture scales both authored axes, so their ratio is fixed.
+    result.roughness = roughness / (0.5f * (roughness.x + roughness.y));
+  }
+  return result;
+}
+
+float2 dielectric_roughness_parameter(const BSDFEnergyCompensationDielectricLut& layout, uint32_t index) {
+  return layout.roughness_count == 1u ? layout.roughness : layout.roughness * alpha_parameter(index, layout.roughness_count);
+}
+
 bool interface_lut_dimensions_valid(const Material& material, uint32_t material_class, uint32_t cache_mode, SceneDiagnostic& diagnostic) {
+  const auto layout = dielectric_lut_layout(material);
   const uint64_t slices = thinfilm_lut_slice_count(material.thinfilm);
   const uint64_t groups = cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar ? kEnergyCompensationSpectralWavelengthGroupCount : 1u;
   const uint64_t branches = material_class == MaterialClass::Conductor ? 1u : kEnergyCompensationDielectricBranchCount;
-  const uint64_t height = ((material_class == MaterialClass::Conductor) && conductor_terminal_source_required(material)) ? kBSDFEnergyCompensationConductorTerminalLutHeight
-                                                                                                                         : kEnergyCompensationDielectricLutSize;
-  const uint64_t bytes = branches * kEnergyCompensationDielectricLutSize * height * slices * groups * sizeof(float4);
+  const uint64_t height = ((material_class == MaterialClass::Conductor) && conductor_terminal_source_required(material))
+                            ? kBSDFEnergyCompensationConductorTerminalLutHeight
+                            : (material_class == MaterialClass::Conductor ? kEnergyCompensationConductorLutSize : layout.roughness_count);
+  const uint64_t bytes =
+    branches * kEnergyCompensationDielectricLutSize * (material_class == MaterialClass::Dielectric ? layout.azimuth_count : 1u) * height * slices * groups * sizeof(float4);
   if (bytes > std::numeric_limits<uint32_t>::max()) {
     diagnostic.fail(SceneDiagnosticKind::Resource, "Energy-compensation tables", "Material interface LUT requires %llu bytes per image, exceeding the 32-bit image payload limit",
       static_cast<unsigned long long>(bytes));
@@ -686,6 +714,7 @@ EnergyCompensationGpuParams make_gpu_params(const SceneData& data, const Materia
     result.coating_k = spectral_response_to_gpu_float4(thinfilm.coating_ior.k);
   }
 
+  result.dielectric_lut = dielectric_lut_layout(material);
   return result;
 }
 
@@ -725,7 +754,8 @@ uint64_t hash_thinfilm(const SceneData& data, const Thinfilm& thinfilm, uint64_t
 
 uint64_t hash_material_interface(const SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode) {
   uint64_t result = 0u;
-  const uint32_t generator_version = material_class == MaterialClass::Dielectric ? kEnergyCompensationDielectricGeneratorVersion : kEnergyCompensationGeneratorVersion;
+  const uint32_t generator_version = (material_class == MaterialClass::Dielectric ? kEnergyCompensationDielectricGeneratorVersion : kEnergyCompensationGeneratorVersion) +
+                                     uint32_t(cache_mode == kBSDFEnergyCompensationCacheModeIntegratedRGB);
   result = etx_hash64_continue(&generator_version, sizeof(generator_version), result);
   result = etx_hash64_continue(&material_class, sizeof(material_class), result);
   result = etx_hash64_continue(&cache_mode, sizeof(cache_mode), result);
@@ -760,6 +790,14 @@ uint64_t hash_material_interface(const SceneData& data, const Material& material
     result = etx_hash64_continue(&material.coherent_coating.max_thickness_nm, sizeof(float), result);
     const uint32_t coating_count = coherent_coating_lut_slice_count(material.coherent_coating);
     result = etx_hash64_continue(&coating_count, sizeof(coating_count), result);
+  }
+  if (material_class == MaterialClass::Dielectric) {
+    const auto layout = dielectric_lut_layout(material);
+    if (layout.azimuth_count > 1u) {
+      constexpr uint32_t anisotropic_model_version = 2u;
+      result = etx_hash64_continue(&anisotropic_model_version, sizeof(anisotropic_model_version), result);
+      result = etx_hash64_continue(&layout, sizeof(layout), result);
+    }
   }
   return result;
 }
@@ -943,13 +981,12 @@ SpectralDirectionalAlbedoResult integrate_conductor_directional(const SpectralQu
 }
 
 DielectricDirectionalAlbedoResult integrate_dielectric_directional(const SpectralQuery& spect, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior,
-  const ThinfilmEval& thinfilm, bool incident_outside, float mu_i, float alpha) {
+  const ThinfilmEval& thinfilm, bool incident_outside, const float3& w_i, const float2& alpha) {
   DielectricDirectionalAlbedoResult result = {};
-  if (mu_i <= kEpsilon) {
+  if (w_i.z <= kEpsilon) {
     return result;
   }
 
-  const float3 w_i = incident_direction_from_mu(mu_i);
   const uint32_t incident_side = dielectric_side(incident_outside);
   const uint32_t opposite_side = 1u - incident_side;
 
@@ -962,7 +999,7 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
   }
 
   const InterfaceOptics oriented = bsdf_fresnel_orient_coherent_interface(thinfilm, incident_outside);
-  const float lambda_i = bsdf_external_ray_info_make(w_i, float2(alpha, alpha)).Lambda;
+  const float lambda_i = bsdf_external_ray_info_make(w_i, alpha).Lambda;
   for (uint32_t sample_index = 0u; sample_index < kEnergyCompensationSampleCount; ++sample_index) {
     const float3 m = bsdf_energy_compensated_sample_vndf_local(w_i, alpha, hammersley(sample_index, kEnergyCompensationSampleCount));
     const float i_dot_m = dot(w_i, m);
@@ -980,7 +1017,7 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
       result.branch_visible_probability[incident_side] += fresnel_probability;
     }
     if (w_o_r.z > kEpsilon) {
-      const float lambda_o = bsdf_external_ray_info_make(w_o_r, float2(alpha, alpha)).Lambda;
+      const float lambda_o = bsdf_external_ray_info_make(w_o_r, alpha).Lambda;
       const float weight = (1.0f + lambda_i) / (1.0f + lambda_i + lambda_o);
       const float3 albedo = spectral_response_is_spectral(fresnel) ? float3(fresnel.value, 0.0f, 0.0f) : fresnel.integrated;
       result.branch_albedo[incident_side] += albedo * weight;
@@ -992,7 +1029,7 @@ DielectricDirectionalAlbedoResult integrate_dielectric_directional(const Spectra
         result.branch_visible_probability[opposite_side] += spectral_response_monochromatic(transmission);
       }
       if (w_o_t.z < -kEpsilon) {
-        const float lambda_o = bsdf_external_ray_info_make(-w_o_t, float2(alpha, alpha)).Lambda;
+        const float lambda_o = bsdf_external_ray_info_make(-w_o_t, alpha).Lambda;
         const float weight = (1.0f + lambda_i) * bsdf_external_beta(1.0f + lambda_i, 1.0f + lambda_o);
         const float3 albedo = spectral_response_is_spectral(transmission) ? float3(transmission.value, 0.0f, 0.0f) : transmission.integrated;
         result.branch_albedo[opposite_side] += albedo * weight;
@@ -1051,14 +1088,12 @@ DielectricDirectionalAlbedoResult invalid_dielectric_directional_result() {
 }
 
 DielectricDirectionalAlbedoResult integrate_dielectric_multiscatter_directional(const SpectralQuery& spect, const RefractiveIndexSample& ext_ior,
-  const RefractiveIndexSample& int_ior, const ThinfilmEval& thinfilm, bool incident_outside, float mu_i, float alpha) {
+  const RefractiveIndexSample& int_ior, const ThinfilmEval& thinfilm, bool incident_outside, const float3& w_i, const float2& alpha) {
   DielectricDirectionalAlbedoResult result = {};
-  if (mu_i <= kEpsilon) {
+  if (w_i.z <= kEpsilon) {
     return result;
   }
 
-  const float2 alpha2 = float2(alpha, alpha);
-  const float3 w_i = incident_direction_from_mu(mu_i);
   const uint32_t incident_side = dielectric_side(incident_outside);
   const uint32_t opposite_side = 1u - incident_side;
 
@@ -1068,7 +1103,7 @@ DielectricDirectionalAlbedoResult integrate_dielectric_multiscatter_directional(
   }
 
   for (uint32_t sample_index = 0u; sample_index < kEnergyCompensationDielectricMultiScatterSampleCount; ++sample_index) {
-    BSDFExternalRayInfo ray = bsdf_external_ray_info_make(-w_i, alpha2);
+    BSDFExternalRayInfo ray = bsdf_external_ray_info_make(-w_i, alpha);
     ray = bsdf_external_ray_info_update_height(ray, 1.0f);
     bool ray_outside = true;
     bool valid = true;
@@ -1093,7 +1128,7 @@ DielectricDirectionalAlbedoResult integrate_dielectric_multiscatter_directional(
       const float rnd_reflection = sampler_next_random(random_state);
       const RefractiveIndexSample& phase_ext_ior = ray_outside ? ext_ior : int_ior;
       const RefractiveIndexSample& phase_int_ior = ray_outside ? int_ior : ext_ior;
-      const BSDFExternalDielectricSample sample = bsdf_external_sample_phase_function_dielectric(spect, rnd_slope, rnd_reflection, -ray.w, alpha2, phase_ext_ior, phase_int_ior,
+      const BSDFExternalDielectricSample sample = bsdf_external_sample_phase_function_dielectric(spect, rnd_slope, rnd_reflection, -ray.w, alpha, phase_ext_ior, phase_int_ior,
         bsdf_fresnel_orient_coherent_interface(thinfilm, incident_outside == ray_outside));
       if (sample.numerical_failure) {
         return invalid_dielectric_directional_result();
@@ -1108,11 +1143,11 @@ DielectricDirectionalAlbedoResult integrate_dielectric_multiscatter_directional(
       }
 
       if (sample.reflection) {
-        ray = bsdf_external_ray_info_update_direction(ray, sample.w_o, alpha2);
+        ray = bsdf_external_ray_info_update_direction(ray, sample.w_o, alpha);
         ray = bsdf_external_ray_info_update_height(ray, ray.h);
       } else {
         ray_outside = (ray_outside == false);
-        ray = bsdf_external_ray_info_update_direction(ray, -sample.w_o, alpha2);
+        ray = bsdf_external_ray_info_update_direction(ray, -sample.w_o, alpha);
         ray = bsdf_external_ray_info_update_height(ray, -ray.h);
       }
 
@@ -1171,16 +1206,21 @@ float3 integrate_average(const std::vector<SpectralDirectionalAlbedoResult>& dir
   return saturate(total);
 }
 
-float3 integrate_dielectric_branch_average(const std::vector<DielectricDirectionalAlbedoResult>& directional, uint32_t alpha_index, uint32_t incident_side,
-  uint32_t outgoing_side) {
+float3 integrate_dielectric_branch_average(const std::vector<DielectricDirectionalAlbedoResult>& directional, uint32_t alpha_index, uint32_t incident_side, uint32_t outgoing_side,
+  const BSDFEnergyCompensationDielectricLut& layout) {
   float3 total = {};
-  const uint32_t side_entry_count = kEnergyCompensationDielectricLutSize * kEnergyCompensationDielectricLutSize;
-  const uint32_t side_offset = incident_side * side_entry_count;
-  for (uint32_t mu_index = 0u; mu_index < (kEnergyCompensationDielectricLutSize - 1u); ++mu_index) {
-    const float2 weights = bsdf_energy_compensated_dielectric_average_weights(mu_index, kEnergyCompensationDielectricLutSize);
-    const float3 value_0 = directional[side_offset + alpha_index * kEnergyCompensationDielectricLutSize + mu_index].branch_albedo[outgoing_side];
-    const float3 value_1 = directional[side_offset + alpha_index * kEnergyCompensationDielectricLutSize + mu_index + 1u].branch_albedo[outgoing_side];
-    total += value_0 * weights.x + value_1 * weights.y;
+  const uint32_t direction_count = kEnergyCompensationDielectricLutSize * layout.azimuth_count;
+  const uint32_t side_offset = incident_side * direction_count * layout.roughness_count;
+  for (uint32_t azimuth = 0u; azimuth < layout.azimuth_count; ++azimuth) {
+    float3 azimuth_total = {};
+    const uint32_t offset = side_offset + alpha_index * direction_count + azimuth * kEnergyCompensationDielectricLutSize;
+    for (uint32_t mu_index = 0u; mu_index < (kEnergyCompensationDielectricLutSize - 1u); ++mu_index) {
+      const float2 weights = bsdf_energy_compensated_dielectric_average_weights(mu_index, kEnergyCompensationDielectricLutSize);
+      const float3 value_0 = directional[offset + mu_index].branch_albedo[outgoing_side];
+      const float3 value_1 = directional[offset + mu_index + 1u].branch_albedo[outgoing_side];
+      azimuth_total += value_0 * weights.x + value_1 * weights.y;
+    }
+    total += azimuth_total * bsdf_energy_compensated_dielectric_azimuth_weight(azimuth, layout.azimuth_count);
   }
   return total;
 }
@@ -1375,9 +1415,10 @@ bool generate_conductor_interface_spectral(const SceneData& data, const Material
 }
 
 bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const RefractiveIndexSample& ext_ior, const RefractiveIndexSample& int_ior, const ThinfilmEval& thinfilm,
-  TaskScheduler& scheduler, SceneDiagnostic& diagnostic) {
+  const BSDFEnergyCompensationDielectricLut& layout, TaskScheduler& scheduler, SceneDiagnostic& diagnostic) {
   const SpectralQuery spect = {};
-  const uint32_t side_entry_count = kEnergyCompensationDielectricLutSize * kEnergyCompensationDielectricLutSize;
+  const uint32_t direction_count = kEnergyCompensationDielectricLutSize * layout.azimuth_count;
+  const uint32_t side_entry_count = direction_count * layout.roughness_count;
   std::vector<DielectricDirectionalAlbedoResult> directional(side_entry_count * 2u);
   std::vector<DielectricDirectionalAlbedoResult> multiscatter_directional(side_entry_count * 2u);
   scheduler.execute(side_entry_count * 2u, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
@@ -1385,12 +1426,15 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
     for (uint32_t index = begin; index < end; ++index) {
       const uint32_t side = index / side_entry_count;
       const uint32_t side_index = index - side * side_entry_count;
-      const uint32_t alpha_index = side_index / kEnergyCompensationDielectricLutSize;
-      const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
+      const uint32_t alpha_index = side_index / direction_count;
+      const uint32_t mu_index = side_index - alpha_index * direction_count;
       const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
       const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
       directional[index] = integrate_dielectric_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
-        bsdf_energy_compensated_dielectric_mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
+        bsdf_energy_compensated_dielectric_lut_direction(
+          bsdf_energy_compensated_dielectric_mu_parameter(mu_index % kEnergyCompensationDielectricLutSize, kEnergyCompensationDielectricLutSize),
+          mu_index / kEnergyCompensationDielectricLutSize, layout.azimuth_count),
+        dielectric_roughness_parameter(layout, alpha_index));
     }
   });
   scheduler.execute(side_entry_count * 2u, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
@@ -1398,22 +1442,25 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
     for (uint32_t index = begin; index < end; ++index) {
       const uint32_t side = index / side_entry_count;
       const uint32_t side_index = index - side * side_entry_count;
-      const uint32_t alpha_index = side_index / kEnergyCompensationDielectricLutSize;
-      const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
+      const uint32_t alpha_index = side_index / direction_count;
+      const uint32_t mu_index = side_index - alpha_index * direction_count;
       const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
       const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
       multiscatter_directional[index] = integrate_dielectric_multiscatter_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
-        bsdf_energy_compensated_dielectric_mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
+        bsdf_energy_compensated_dielectric_lut_direction(
+          bsdf_energy_compensated_dielectric_mu_parameter(mu_index % kEnergyCompensationDielectricLutSize, kEnergyCompensationDielectricLutSize),
+          mu_index / kEnergyCompensationDielectricLutSize, layout.azimuth_count),
+        dielectric_roughness_parameter(layout, alpha_index));
     }
   });
 
   if (dielectric_multiscatter_results_valid(multiscatter_directional, diagnostic) == false) {
     return false;
   }
-  const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize;
-  std::vector<float4> image(width * kEnergyCompensationDielectricLutSize, float4{0.0f, 0.0f, 0.0f, 0.0f});
-  std::vector<float4> average(kEnergyCompensationDielectricAverageWidth * kEnergyCompensationDielectricLutSize, float4{0.0f, 0.0f, 0.0f, 1.0f});
-  for (uint32_t alpha_index = 0u; alpha_index < kEnergyCompensationDielectricLutSize; ++alpha_index) {
+  const uint32_t width = kEnergyCompensationDielectricBranchCount * direction_count;
+  std::vector<float4> image(width * layout.roughness_count, float4{0.0f, 0.0f, 0.0f, 0.0f});
+  std::vector<float4> average(kEnergyCompensationDielectricAverageWidth * layout.roughness_count, float4{0.0f, 0.0f, 0.0f, 1.0f});
+  for (uint32_t alpha_index = 0u; alpha_index < layout.roughness_count; ++alpha_index) {
     float3 single_average[kEnergyCompensationDielectricBranchCount] = {};
     float3 multiscatter_average[kEnergyCompensationDielectricBranchCount] = {};
     float3 residual_average[kEnergyCompensationDielectricBranchCount] = {};
@@ -1421,8 +1468,8 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
     for (uint32_t incident_side = 0u; incident_side < 2u; ++incident_side) {
       for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
         const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
-        single_average[branch] = integrate_dielectric_branch_average(directional, alpha_index, incident_side, outgoing_side);
-        multiscatter_average[branch] = integrate_dielectric_branch_average(multiscatter_directional, alpha_index, incident_side, outgoing_side);
+        single_average[branch] = integrate_dielectric_branch_average(directional, alpha_index, incident_side, outgoing_side, layout);
+        multiscatter_average[branch] = integrate_dielectric_branch_average(multiscatter_directional, alpha_index, incident_side, outgoing_side, layout);
       }
     }
 
@@ -1490,12 +1537,13 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
 
     for (uint32_t side = 0u; side < 2u; ++side) {
       const uint32_t side_offset = side * side_entry_count;
-      for (uint32_t mu_index = 0u; mu_index < kEnergyCompensationDielectricLutSize; ++mu_index) {
-        const uint32_t source_index = side_offset + alpha_index * kEnergyCompensationDielectricLutSize + mu_index;
+      for (uint32_t mu_index = 0u; mu_index < direction_count; ++mu_index) {
+        const uint32_t source_index = side_offset + alpha_index * direction_count + mu_index;
         const DielectricDirectionalAlbedoResult& value = directional[source_index];
         for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
           const uint32_t branch = dielectric_branch_index(side, outgoing_side);
-          const uint32_t x = branch * kEnergyCompensationDielectricLutSize + mu_index;
+          const uint32_t x = (mu_index / kEnergyCompensationDielectricLutSize * kEnergyCompensationDielectricBranchCount + branch) * kEnergyCompensationDielectricLutSize +
+                             mu_index % kEnergyCompensationDielectricLutSize;
           const float3 branch_value = value.branch_albedo[outgoing_side];
           image[alpha_index * width + x] = float4(branch_value.x, branch_value.y, branch_value.z, value.branch_visible_probability[outgoing_side]);
         }
@@ -1506,17 +1554,19 @@ bool generate_dielectric_interface(const GeneratedInterfacePaths& paths, const R
   if ((dielectric_lut_pixels_valid(image, diagnostic) == false) || (dielectric_lut_pixels_valid(average, diagnostic) == false)) {
     return false;
   }
-  return save_exr_rgba(paths.directional, image, width, kEnergyCompensationDielectricLutSize, diagnostic) &&
-         save_exr_rgba(paths.average, average, kEnergyCompensationDielectricAverageWidth, kEnergyCompensationDielectricLutSize, diagnostic);
+  return save_exr_rgba(paths.directional, image, width / layout.azimuth_count, layout.roughness_count * layout.azimuth_count, diagnostic) &&
+         save_exr_rgba(paths.average, average, kEnergyCompensationDielectricAverageWidth, layout.roughness_count, diagnostic);
 }
 
 bool generate_dielectric_interface_spectral(const SceneData& data, const Material& material, const GeneratedInterfacePaths& paths, uint32_t thinfilm_slice_index,
   uint32_t thinfilm_slice_count, uint32_t wavelength_group_index, TaskScheduler& scheduler) {
-  const uint32_t side_entry_count = kEnergyCompensationDielectricLutSize * kEnergyCompensationDielectricLutSize;
-  const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize;
-  std::vector<float4> image(width * kEnergyCompensationDielectricLutSize, float4{0.0f, 0.0f, 0.0f, 0.0f});
-  std::vector<float4> probability(width * kEnergyCompensationDielectricLutSize, float4{0.0f, 0.0f, 0.0f, 0.0f});
-  std::vector<float4> average(kEnergyCompensationDielectricAverageWidth * kEnergyCompensationDielectricLutSize, float4{0.0f, 0.0f, 0.0f, 0.0f});
+  const auto layout = dielectric_lut_layout(material);
+  const uint32_t direction_count = kEnergyCompensationDielectricLutSize * layout.azimuth_count;
+  const uint32_t side_entry_count = direction_count * layout.roughness_count;
+  const uint32_t width = kEnergyCompensationDielectricBranchCount * direction_count;
+  std::vector<float4> image(width * layout.roughness_count, float4{0.0f, 0.0f, 0.0f, 0.0f});
+  std::vector<float4> probability(width * layout.roughness_count, float4{0.0f, 0.0f, 0.0f, 0.0f});
+  std::vector<float4> average(kEnergyCompensationDielectricAverageWidth * layout.roughness_count, float4{0.0f, 0.0f, 0.0f, 0.0f});
 
   for (uint32_t channel = 0u; channel < kEnergyCompensationSpectralWavelengthGroupSize; ++channel) {
     const uint32_t wavelength_index = wavelength_group_index * kEnergyCompensationSpectralWavelengthGroupSize + channel;
@@ -1531,12 +1581,15 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
       for (uint32_t index = begin; index < end; ++index) {
         const uint32_t side = index / side_entry_count;
         const uint32_t side_index = index - side * side_entry_count;
-        const uint32_t alpha_index = side_index / kEnergyCompensationDielectricLutSize;
-        const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
+        const uint32_t alpha_index = side_index / direction_count;
+        const uint32_t mu_index = side_index - alpha_index * direction_count;
         const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
         const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
         directional[index] = integrate_dielectric_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
-          bsdf_energy_compensated_dielectric_mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
+          bsdf_energy_compensated_dielectric_lut_direction(
+            bsdf_energy_compensated_dielectric_mu_parameter(mu_index % kEnergyCompensationDielectricLutSize, kEnergyCompensationDielectricLutSize),
+            mu_index / kEnergyCompensationDielectricLutSize, layout.azimuth_count),
+          dielectric_roughness_parameter(layout, alpha_index));
       }
     });
     scheduler.execute(side_entry_count * 2u, [&](uint32_t begin, uint32_t end, uint32_t thread_id) {
@@ -1544,19 +1597,22 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
       for (uint32_t index = begin; index < end; ++index) {
         const uint32_t side = index / side_entry_count;
         const uint32_t side_index = index - side * side_entry_count;
-        const uint32_t alpha_index = side_index / kEnergyCompensationDielectricLutSize;
-        const uint32_t mu_index = side_index - alpha_index * kEnergyCompensationDielectricLutSize;
+        const uint32_t alpha_index = side_index / direction_count;
+        const uint32_t mu_index = side_index - alpha_index * direction_count;
         const RefractiveIndexSample& source_ior = (side == 0u) ? ext_ior : int_ior;
         const RefractiveIndexSample& target_ior = (side == 0u) ? int_ior : ext_ior;
         multiscatter_directional[index] = integrate_dielectric_multiscatter_directional(spect, source_ior, target_ior, thinfilm, side == 0u,
-          bsdf_energy_compensated_dielectric_mu_parameter(mu_index, kEnergyCompensationDielectricLutSize), alpha_parameter(alpha_index, kEnergyCompensationDielectricLutSize));
+          bsdf_energy_compensated_dielectric_lut_direction(
+            bsdf_energy_compensated_dielectric_mu_parameter(mu_index % kEnergyCompensationDielectricLutSize, kEnergyCompensationDielectricLutSize),
+            mu_index / kEnergyCompensationDielectricLutSize, layout.azimuth_count),
+          dielectric_roughness_parameter(layout, alpha_index));
       }
     });
 
     if (dielectric_multiscatter_results_valid(multiscatter_directional, data.diagnostic) == false) {
       return false;
     }
-    for (uint32_t alpha_index = 0u; alpha_index < kEnergyCompensationDielectricLutSize; ++alpha_index) {
+    for (uint32_t alpha_index = 0u; alpha_index < layout.roughness_count; ++alpha_index) {
       float3 single_average[kEnergyCompensationDielectricBranchCount] = {};
       float3 multiscatter_average[kEnergyCompensationDielectricBranchCount] = {};
       float3 residual_average[kEnergyCompensationDielectricBranchCount] = {};
@@ -1564,8 +1620,8 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
       for (uint32_t incident_side = 0u; incident_side < 2u; ++incident_side) {
         for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
           const uint32_t branch = dielectric_branch_index(incident_side, outgoing_side);
-          single_average[branch] = integrate_dielectric_branch_average(directional, alpha_index, incident_side, outgoing_side);
-          multiscatter_average[branch] = integrate_dielectric_branch_average(multiscatter_directional, alpha_index, incident_side, outgoing_side);
+          single_average[branch] = integrate_dielectric_branch_average(directional, alpha_index, incident_side, outgoing_side, layout);
+          multiscatter_average[branch] = integrate_dielectric_branch_average(multiscatter_directional, alpha_index, incident_side, outgoing_side, layout);
         }
       }
 
@@ -1600,12 +1656,13 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
 
       for (uint32_t side = 0u; side < 2u; ++side) {
         const uint32_t side_offset = side * side_entry_count;
-        for (uint32_t mu_index = 0u; mu_index < kEnergyCompensationDielectricLutSize; ++mu_index) {
-          const uint32_t source_index = side_offset + alpha_index * kEnergyCompensationDielectricLutSize + mu_index;
+        for (uint32_t mu_index = 0u; mu_index < direction_count; ++mu_index) {
+          const uint32_t source_index = side_offset + alpha_index * direction_count + mu_index;
           const DielectricDirectionalAlbedoResult& value = directional[source_index];
           for (uint32_t outgoing_side = 0u; outgoing_side < 2u; ++outgoing_side) {
             const uint32_t branch = dielectric_branch_index(side, outgoing_side);
-            const uint32_t x = branch * kEnergyCompensationDielectricLutSize + mu_index;
+            const uint32_t x = (mu_index / kEnergyCompensationDielectricLutSize * kEnergyCompensationDielectricBranchCount + branch) * kEnergyCompensationDielectricLutSize +
+                               mu_index % kEnergyCompensationDielectricLutSize;
             const uint32_t image_index = alpha_index * width + x;
             set_float4_channel(image[image_index], channel, saturate(value.branch_albedo[outgoing_side].x));
             set_float4_channel(probability[image_index], channel, saturate(value.branch_visible_probability[outgoing_side]));
@@ -1619,9 +1676,9 @@ bool generate_dielectric_interface_spectral(const SceneData& data, const Materia
       (dielectric_lut_pixels_valid(probability, data.diagnostic) == false)) {
     return false;
   }
-  return save_exr_rgba(paths.directional, image, width, kEnergyCompensationDielectricLutSize, data.diagnostic) &&
-         save_exr_rgba(paths.average, average, kEnergyCompensationDielectricAverageWidth, kEnergyCompensationDielectricLutSize, data.diagnostic) &&
-         save_exr_rgba(paths.probability, probability, width, kEnergyCompensationDielectricLutSize, data.diagnostic);
+  return save_exr_rgba(paths.directional, image, width / layout.azimuth_count, layout.roughness_count * layout.azimuth_count, data.diagnostic) &&
+         save_exr_rgba(paths.average, average, kEnergyCompensationDielectricAverageWidth, layout.roughness_count, data.diagnostic) &&
+         save_exr_rgba(paths.probability, probability, width / layout.azimuth_count, layout.roughness_count * layout.azimuth_count, data.diagnostic);
 }
 
 bool generate_conductor_interface_gpu(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, const SceneData& data, const Material& material,
@@ -1734,9 +1791,10 @@ bool generate_conductor_interface_gpu(RHIContext& rhi, EnergyCompensationGpuPipe
 
 bool generate_dielectric_interface_gpu(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, const SceneData& data, const Material& material,
   const GeneratedInterfacePaths& paths, uint32_t cache_mode, uint32_t thinfilm_slice_index, uint32_t thinfilm_slice_count, uint32_t wavelength_group_index) {
-  const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize;
-  const uint64_t directional_count = uint64_t(width) * uint64_t(kEnergyCompensationDielectricLutSize);
-  const uint64_t average_count = uint64_t(kEnergyCompensationDielectricAverageWidth) * uint64_t(kEnergyCompensationDielectricLutSize);
+  const auto layout = dielectric_lut_layout(material);
+  const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize * layout.azimuth_count;
+  const uint64_t directional_count = uint64_t(width) * uint64_t(layout.roughness_count);
+  const uint64_t average_count = uint64_t(kEnergyCompensationDielectricAverageWidth) * uint64_t(layout.roughness_count);
   EnergyCompensationGpuBuffers buffers = {};
   bool result = false;
 
@@ -1773,7 +1831,8 @@ bool generate_dielectric_interface_gpu(RHIContext& rhi, EnergyCompensationGpuPip
       break;
     }
 
-    if (gpu_dispatch_energy_compensation(rhi, pipeline, buffers, kEnergyCompensationDielectricLutSize, 2u * kEnergyCompensationDielectricLutSize, true, data.diagnostic) == false) {
+    if (gpu_dispatch_energy_compensation(rhi, pipeline, buffers, kEnergyCompensationDielectricLutSize * layout.azimuth_count, 2u * layout.roughness_count, true, data.diagnostic) ==
+        false) {
       break;
     }
 
@@ -1797,10 +1856,10 @@ bool generate_dielectric_interface_gpu(RHIContext& rhi, EnergyCompensationGpuPip
         break;
       }
     }
-    result = save_exr_rgba(paths.directional, directional_pixels, width, kEnergyCompensationDielectricLutSize, data.diagnostic) &&
-             save_exr_rgba(paths.average, average_pixels, kEnergyCompensationDielectricAverageWidth, kEnergyCompensationDielectricLutSize, data.diagnostic);
+    result = save_exr_rgba(paths.directional, directional_pixels, width / layout.azimuth_count, layout.roughness_count * layout.azimuth_count, data.diagnostic) &&
+             save_exr_rgba(paths.average, average_pixels, kEnergyCompensationDielectricAverageWidth, layout.roughness_count, data.diagnostic);
     if (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
-      result = save_exr_rgba(paths.probability, probability_pixels, width, kEnergyCompensationDielectricLutSize, data.diagnostic) && result;
+      result = save_exr_rgba(paths.probability, probability_pixels, width / layout.azimuth_count, layout.roughness_count * layout.azimuth_count, data.diagnostic) && result;
     }
   } while (false);
 
@@ -1934,14 +1993,16 @@ EnergyCompensationAsyncStep* begin_conductor_interface_gpu_async(RHIContext& rhi
 EnergyCompensationAsyncStep* begin_dielectric_interface_gpu_async(RHIContext& rhi, EnergyCompensationGpuPipeline& pipeline, TaskScheduler& scheduler, const SceneData& data,
   const Material& material, const GeneratedInterfacePaths& paths, uint32_t cache_mode, uint32_t thinfilm_slice_index, uint32_t thinfilm_slice_count,
   uint32_t wavelength_group_index) {
-  const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize;
-  const uint64_t directional_count = uint64_t(width) * uint64_t(kEnergyCompensationDielectricLutSize);
-  const uint64_t average_count = uint64_t(kEnergyCompensationDielectricAverageWidth) * uint64_t(kEnergyCompensationDielectricLutSize);
+  const auto layout = dielectric_lut_layout(material);
+  const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize * layout.azimuth_count;
+  const uint64_t directional_count = uint64_t(width) * uint64_t(layout.roughness_count);
+  const uint64_t average_count = uint64_t(kEnergyCompensationDielectricAverageWidth) * uint64_t(layout.roughness_count);
   auto step = std::make_unique<EnergyCompensationAsyncStep>();
   step->paths = paths;
   step->scheduler = &scheduler;
   step->cache_mode = cache_mode;
   step->kind = EnergyCompensationAsyncStepKind::Dielectric;
+  step->dielectric_lut = layout;
 
   EnergyCompensationGpuBuffers& buffers = step->buffers;
   if ((gpu_create_float4_async_output_buffer(rhi, directional_count, buffers.directional, "ec_async_dielectric_directional", data.diagnostic) == false) ||
@@ -1972,8 +2033,8 @@ EnergyCompensationAsyncStep* begin_dielectric_interface_gpu_async(RHIContext& rh
     params_created = gpu_create_params_buffer(rhi, directional_params, buffers.params_directional[channel], debug_name.c_str(), data.diagnostic) && params_created;
   }
   params_created = gpu_create_params_buffer(rhi, average_params, buffers.params_average, "ec_async_dielectric_average_params", data.diagnostic) && params_created;
-  if ((params_created == false) ||
-      (begin_energy_compensation_async_command(rhi, pipeline, *step, kEnergyCompensationDielectricLutSize, 2u * kEnergyCompensationDielectricLutSize, data.diagnostic) == false)) {
+  if ((params_created == false) || (begin_energy_compensation_async_command(rhi, pipeline, *step, kEnergyCompensationDielectricLutSize * layout.azimuth_count,
+                                      2u * layout.roughness_count, data.diagnostic) == false)) {
     cleanup_energy_compensation_async_step(rhi, step.release());
     return nullptr;
   }
@@ -2036,9 +2097,10 @@ CacheGenerationStepResult poll_energy_compensation_async_step(RHIContext& rhi, E
                     read_result;
     }
   } else {
-    const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize;
-    const uint64_t directional_count = uint64_t(width) * uint64_t(kEnergyCompensationDielectricLutSize);
-    const uint64_t average_count = uint64_t(kEnergyCompensationDielectricAverageWidth) * uint64_t(kEnergyCompensationDielectricLutSize);
+    const auto& layout = step->dielectric_lut;
+    const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize * layout.azimuth_count;
+    const uint64_t directional_count = uint64_t(width) * uint64_t(layout.roughness_count);
+    const uint64_t average_count = uint64_t(kEnergyCompensationDielectricAverageWidth) * uint64_t(layout.roughness_count);
     std::vector<float4> raw_total_pixels;
     read_result = gpu_read_host_float4_output_buffer(rhi, step->buffers.total, directional_count, raw_total_pixels, "ec_async_dielectric_raw_total", diagnostic) &&
                   dielectric_lut_pixels_valid(raw_total_pixels, diagnostic) &&
@@ -2093,13 +2155,15 @@ CacheGenerationStepResult poll_energy_compensation_async_step(RHIContext& rhi, E
       return;
     }
 
-    const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize;
+    const auto& layout = save_step->dielectric_lut;
+    const uint32_t width = kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize * layout.azimuth_count;
     save_step->save_result =
-      save_exr_rgba(save_step->paths.directional, save_step->directional_pixels, width, kEnergyCompensationDielectricLutSize, diagnostic) &&
-      save_exr_rgba(save_step->paths.average, save_step->average_pixels, kEnergyCompensationDielectricAverageWidth, kEnergyCompensationDielectricLutSize, diagnostic);
+      save_exr_rgba(save_step->paths.directional, save_step->directional_pixels, width / layout.azimuth_count, layout.roughness_count * layout.azimuth_count, diagnostic) &&
+      save_exr_rgba(save_step->paths.average, save_step->average_pixels, kEnergyCompensationDielectricAverageWidth, layout.roughness_count, diagnostic);
     if (save_step->cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar) {
       save_step->save_result =
-        save_exr_rgba(save_step->paths.probability, save_step->probability_pixels, width, kEnergyCompensationDielectricLutSize, diagnostic) && save_step->save_result;
+        save_exr_rgba(save_step->paths.probability, save_step->probability_pixels, width / layout.azimuth_count, layout.roughness_count * layout.azimuth_count, diagnostic) &&
+        save_step->save_result;
     }
   });
   return CacheGenerationStepResult::Pending;
@@ -2173,7 +2237,7 @@ bool ensure_cache_file(const SceneData& data, const Material& material, uint32_t
     const auto time_begin = std::chrono::steady_clock::now();
     const bool generated = conductor
                              ? generate_conductor_interface(slice_paths_value, ext_ior, int_ior, thinfilm, conductor_terminal_source_required(material), scheduler, data.diagnostic)
-                             : generate_dielectric_interface(slice_paths_value, ext_ior, int_ior, thinfilm, scheduler, data.diagnostic);
+                             : generate_dielectric_interface(slice_paths_value, ext_ior, int_ior, thinfilm, dielectric_lut_layout(material), scheduler, data.diagnostic);
     const auto time_end = std::chrono::steady_clock::now();
     const double elapsed_seconds = std::chrono::duration<double>(time_end - time_begin).count();
     if (generated) {
@@ -2366,13 +2430,11 @@ bool ensure_cache_file_gpu(RHIContext& rhi, EnergyCompensationGpuPipeline& pipel
 }
 
 void release_energy_compensation_interface_images(SceneData& data, const Scene::EnergyCompensationInterface& interface_data) {
-  data.images.remove(interface_data.directional_lut);
-  data.images.remove(interface_data.average_lut);
-  data.images.remove(interface_data.geometric_lut);
-  data.images.remove(interface_data.geometric_average_lut);
-  data.images.remove(interface_data.conductor_fms_lut);
-  data.images.remove(interface_data.probability_lut);
-  data.images.remove(interface_data.terminal_source_lut);
+  for (const uint32_t index : {interface_data.directional_lut, interface_data.average_lut, interface_data.geometric_lut, interface_data.geometric_average_lut,
+         interface_data.conductor_fms_lut, interface_data.probability_lut, interface_data.terminal_source_lut, interface_data.rgb_fresnel_lut}) {
+    data.energy_compensation_image_hashes.erase(index);
+    data.images.remove(index);
+  }
 }
 
 void release_energy_compensation_interface_block(SceneData& data, const std::vector<Scene::EnergyCompensationInterface>& interfaces, uint32_t index) {
@@ -2591,15 +2653,114 @@ bool bind_velvet_interface(SceneData& data, const std::vector<Scene::EnergyCompe
   return true;
 }
 
-bool load_energy_compensation_interface_images(SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode, const GeneratedInterfacePaths& paths,
-  std::vector<Scene::EnergyCompensationInterface>& prepared_interfaces) {
+std::array<float3, kEnergyCompensationSpectralWavelengthCount> conductor_rgb_integration_weights() {
+  std::array<float3, kEnergyCompensationSpectralWavelengthCount> weights = {};
+  const auto white = SpectralDistribution::rgb_luminance({1.0f, 1.0f, 1.0f});
+  float3 normalization = {};
+  for (uint32_t index = 0u; index < WavelengthCount; ++index) {
+    const float wavelength = kShortestWavelength + float(index);
+    const float axis = float(index) * float(kEnergyCompensationSpectralWavelengthCount - 1u) / float(WavelengthCount - 1u);
+    const uint32_t first = min(uint32_t(axis), kEnergyCompensationSpectralWavelengthCount - 2u);
+    const float fraction = axis - float(first);
+    const float endpoint_weight = ((index == 0u) || (index == (WavelengthCount - 1u))) ? 0.5f : 1.0f;
+    const float3 value = spectral_xyz_to_rgb(spectral_xyz(index)) * white.query(SpectralQuery(wavelength, SpectralFlags::Spectral)).value * endpoint_weight;
+    weights[first] += value * (1.0f - fraction);
+    weights[first + 1u] += value * fraction;
+    normalization += value;
+  }
+  for (float3& weight : weights) {
+    weight /= normalization;
+  }
+  return weights;
+}
+
+void integrate_conductor_rgb_lut(std::vector<float4>& pixels, uint32_t entry_count, uint32_t slice_count,
+  const std::array<float3, kEnergyCompensationSpectralWavelengthCount>& weights, bool bounded) {
+  if (pixels.empty()) {
+    return;
+  }
+  std::vector<float4> integrated(size_t(entry_count) * slice_count);
+  for (uint32_t slice = 0u; slice < slice_count; ++slice) {
+    for (uint32_t entry = 0u; entry < entry_count; ++entry) {
+      float3 value = {};
+      for (uint32_t wavelength = 0u; wavelength < kEnergyCompensationSpectralWavelengthCount; ++wavelength) {
+        const uint32_t group = slice * kEnergyCompensationSpectralWavelengthGroupCount + wavelength / kEnergyCompensationSpectralWavelengthGroupSize;
+        value +=
+          weights[wavelength] * bsdf_energy_compensated_float4_channel(pixels[size_t(group) * entry_count + entry], wavelength % kEnergyCompensationSpectralWavelengthGroupSize);
+      }
+      // RGB can only represent passive reflectances inside its color gamut.
+      value = bounded ? saturate(value) : max(value, float3{});
+      integrated[size_t(slice) * entry_count + entry] = {value.x, value.y, value.z, 1.0f};
+    }
+  }
+  pixels = std::move(integrated);
+}
+
+std::vector<float4> conductor_rgb_fresnel(const SceneData& data, const Material& material, uint32_t coating_index, uint32_t slice_count,
+  const std::array<float3, kEnergyCompensationSpectralWavelengthCount>& weights) {
+  std::vector<float4> pixels(size_t(kBSDFConductorRGBFresnelSize) * slice_count);
+  for (uint32_t slice = 0u; slice < slice_count; ++slice) {
+    for (uint32_t wavelength = 0u; wavelength < kEnergyCompensationSpectralWavelengthCount; ++wavelength) {
+      const SpectralQuery spect = spectral_cache_query(wavelength);
+      const auto exterior = sample_refractive_index(data, material.ext_ior, spect);
+      const auto interior = sample_refractive_index(data, material.int_ior, spect);
+      const auto film = sample_interface_slice(data, material, spect, coating_index * slice_count + slice, interface_lut_slice_count(material));
+      for (uint32_t cosine = 0u; cosine < kBSDFConductorRGBFresnelSize; ++cosine) {
+        const float mu = float(cosine) / float(kBSDFConductorRGBFresnelSize - 1u);
+        const float response = bsdf_fresnel_calculate(spect, mu, exterior, interior, film).value;
+        const float3 value = weights[wavelength] * response;
+        pixels[size_t(slice) * kBSDFConductorRGBFresnelSize + cosine] += float4{value.x, value.y, value.z, 0.0f};
+      }
+    }
+  }
+  for (float4& pixel : pixels) {
+    pixel = {saturate(pixel.x), saturate(pixel.y), saturate(pixel.z), 1.0f};
+  }
+  return pixels;
+}
+
+void pack_anisotropic_dielectric_spectral_lut(std::vector<float4>& directional, std::vector<float4>& probability, uint32_t slice_count,
+  const BSDFEnergyCompensationDielectricLut& layout) {
+  // Keep the disk cache wavelength-packed; runtime texels contain both exit energies and probabilities for one incident side.
+  std::vector<float4> outside(directional.size());
+  std::vector<float4> inside(directional.size());
+  const uint32_t width = kEnergyCompensationDielectricLutSize;
+  const uint32_t rows = layout.roughness_count * layout.azimuth_count;
+  for (uint32_t slice = 0u; slice < slice_count; ++slice) {
+    for (uint32_t wavelength = 0u; wavelength < kEnergyCompensationSpectralWavelengthCount; ++wavelength) {
+      const uint32_t group = slice * kEnergyCompensationSpectralWavelengthGroupCount + wavelength / kEnergyCompensationSpectralWavelengthGroupSize;
+      const uint32_t channel = wavelength % kEnergyCompensationSpectralWavelengthGroupSize;
+      const size_t source_slice = size_t(group) * rows * 4u * width;
+      const size_t target_slice = size_t(slice * kEnergyCompensationSpectralWavelengthCount + wavelength) * rows * width;
+      for (uint32_t row = 0u; row < rows; ++row) {
+        for (uint32_t mu = 0u; mu < width; ++mu) {
+          const size_t source = source_slice + size_t(row) * 4u * width + mu;
+          const size_t target = target_slice + size_t(row) * width + mu;
+          outside[target] = {bsdf_energy_compensated_float4_channel(directional[source], channel), bsdf_energy_compensated_float4_channel(directional[source + width], channel),
+            bsdf_energy_compensated_float4_channel(probability[source], channel), bsdf_energy_compensated_float4_channel(probability[source + width], channel)};
+          inside[target] = {bsdf_energy_compensated_float4_channel(directional[source + 2u * width], channel),
+            bsdf_energy_compensated_float4_channel(directional[source + 3u * width], channel), bsdf_energy_compensated_float4_channel(probability[source + 2u * width], channel),
+            bsdf_energy_compensated_float4_channel(probability[source + 3u * width], channel)};
+        }
+      }
+    }
+  }
+  directional.swap(outside);
+  probability.swap(inside);
+}
+
+bool load_energy_compensation_interface_images(SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode, uint32_t target_cache_mode,
+  const GeneratedInterfacePaths& paths, std::vector<Scene::EnergyCompensationInterface>& prepared_interfaces) {
   const bool conductor = material_class == MaterialClass::Conductor;
+  const auto layout = dielectric_lut_layout(material);
   const uint32_t coating_count = coherent_coating_lut_slice_count(material.coherent_coating);
   prepared_interfaces.reserve(coating_count);
   for (uint32_t coating_index = 0u; coating_index < coating_count; ++coating_index) {
     Scene::EnergyCompensationInterface interface_data = {};
     interface_data.cls = material_class;
     interface_data.cache_mode = cache_mode;
+    interface_data.dielectric_azimuth_count = layout.azimuth_count;
+    interface_data.dielectric_roughness_count = layout.roughness_count;
     const uint32_t slice_count = thinfilm_lut_slice_count(material.thinfilm);
     interface_data.thinfilm_slice_count = thinfilm_lut_slice_count(material.thinfilm);
     interface_data.coating_slice_count = coating_index == 0u ? coating_count : 1u;
@@ -2618,10 +2779,10 @@ bool load_energy_compensation_interface_images(SceneData& data, const Material& 
     std::vector<float4> probability_pixels;
     std::vector<float4> terminal_pixels;
     const uint32_t directional_width = conductor ? kEnergyCompensationConductorLutSize : (kEnergyCompensationDielectricBranchCount * kEnergyCompensationDielectricLutSize);
-    const uint32_t directional_height = conductor ? kEnergyCompensationConductorLutSize : kEnergyCompensationDielectricLutSize;
+    const uint32_t directional_height = conductor ? kEnergyCompensationConductorLutSize : (layout.roughness_count * layout.azimuth_count);
     const uint32_t average_width = conductor ? kEnergyCompensationConductorLutSize : kEnergyCompensationDielectricAverageWidth;
-    const uint32_t average_height = conductor ? 1u : kEnergyCompensationDielectricLutSize;
-    const uint32_t packed_slice_count = spectral ? (slice_count * kEnergyCompensationSpectralWavelengthGroupCount) : slice_count;
+    const uint32_t average_height = conductor ? 1u : layout.roughness_count;
+    uint32_t packed_slice_count = spectral ? (slice_count * kEnergyCompensationSpectralWavelengthGroupCount) : slice_count;
     bool loaded = load_rgba32f_lut_slices(paths, directional_width, directional_height, packed_slice_count, directional_pixels, &GeneratedInterfacePaths::directional,
                     coating_index * packed_slice_count, data.diagnostic) &&
                   load_rgba32f_lut_slices(paths, average_width, average_height, packed_slice_count, average_pixels, &GeneratedInterfacePaths::average,
@@ -2649,12 +2810,37 @@ bool load_energy_compensation_interface_images(SceneData& data, const Material& 
       return false;
     }
 
+    std::vector<float4> fresnel_pixels;
+    if (conductor && spectral && (target_cache_mode == kBSDFEnergyCompensationCacheModeIntegratedRGB)) {
+      const auto weights = conductor_rgb_integration_weights();
+      integrate_conductor_rgb_lut(directional_pixels, directional_width * directional_height, slice_count, weights, true);
+      integrate_conductor_rgb_lut(average_pixels, average_width * average_height, slice_count, weights, true);
+      integrate_conductor_rgb_lut(conductor_fms_pixels, kEnergyCompensationConductorLutSize, slice_count, weights, true);
+      integrate_conductor_rgb_lut(terminal_pixels, kEnergyCompensationConductorLutSize * kBSDFEnergyCompensationConductorTerminalLutHeight, slice_count, weights, false);
+      fresnel_pixels = conductor_rgb_fresnel(data, material, coating_index, slice_count, weights);
+      packed_slice_count = slice_count;
+      interface_data.cache_mode = kBSDFEnergyCompensationCacheModeIntegratedRGB;
+      interface_data.spectral_wavelength_count = 0u;
+      interface_data.spectral_shortest_wavelength = 0.0f;
+      interface_data.spectral_longest_wavelength = 0.0f;
+    }
+
+    const bool packed_dielectric = (conductor == false) && spectral && (layout.azimuth_count > 1u);
+    const uint3 directional_size = packed_dielectric ? uint3{kEnergyCompensationDielectricLutSize, directional_height, slice_count * kEnergyCompensationSpectralWavelengthCount}
+                                                     : uint3{directional_width, directional_height, packed_slice_count};
+    if (packed_dielectric) {
+      pack_anisotropic_dielectric_spectral_lut(directional_pixels, probability_pixels, slice_count, layout);
+    }
+
     // Load one coating plane before allocating its images; earlier planes are released on failure.
-    interface_data.directional_lut =
-      data.images.add_from_data_3d(directional_pixels.data(), uint3{directional_width, directional_height, packed_slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+    interface_data.directional_lut = data.images.add_from_data_3d(directional_pixels.data(), directional_size, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
     interface_data.average_lut =
       data.images.add_from_data_3d(average_pixels.data(), uint3{average_width, average_height, packed_slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
     if (conductor) {
+      if (fresnel_pixels.empty() == false) {
+        interface_data.rgb_fresnel_lut =
+          data.images.add_from_data_3d(fresnel_pixels.data(), uint3{kBSDFConductorRGBFresnelSize, 1u, slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+      }
       interface_data.geometric_lut = data.images.add_from_data_3d(geometric_pixels.data(),
         uint3{kEnergyCompensationConductorLutSize, kEnergyCompensationConductorLutSize, slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
       interface_data.geometric_average_lut = data.images.add_from_data_3d(geometric_average_pixels.data(), uint3{kEnergyCompensationConductorLutSize, 1u, slice_count},
@@ -2666,12 +2852,47 @@ bool load_energy_compensation_interface_images(SceneData& data, const Material& 
           uint3{kEnergyCompensationConductorLutSize, kBSDFEnergyCompensationConductorTerminalLutHeight, packed_slice_count}, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
       }
     } else if (spectral) {
-      interface_data.probability_lut = data.images.add_from_data_3d(probability_pixels.data(), uint3{directional_width, directional_height, packed_slice_count},
-        Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+      interface_data.probability_lut = data.images.add_from_data_3d(probability_pixels.data(), directional_size, Image::SkipSRGBConversion, {}, {1.0f, 1.0f, 1.0f});
+    }
+    for (const uint32_t index : {interface_data.directional_lut, interface_data.average_lut, interface_data.geometric_lut, interface_data.geometric_average_lut,
+           interface_data.conductor_fms_lut, interface_data.probability_lut, interface_data.terminal_source_lut, interface_data.rgb_fresnel_lut}) {
+      if (index != kInvalidIndex) {
+        const auto& image = data.images.get(index);
+        data.energy_compensation_image_hashes[index] = xxh64(image.pixels.f32.a, image.data_size);
+      }
     }
     prepared_interfaces.push_back(interface_data);
   }
   return true;
+}
+
+uint32_t interface_source_cache_mode(const SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode) {
+  if ((material_class != MaterialClass::Conductor) || (cache_mode == kBSDFEnergyCompensationCacheModeSpectralScalar)) {
+    return cache_mode;
+  }
+  bool sampled = false;
+  const auto spectral_ior = [&](const RefractiveIndex& ior) {
+    for (const uint32_t index : {ior.eta_index, ior.k_index}) {
+      if (index >= data.spectrum_values.size()) {
+        continue;
+      }
+      const auto& spectrum = data.spectrum_values[index];
+      const float3 rgb = spectrum.integrated_value;
+      if ((spectrum.spectral_entry_count == 0u) && ((rgb.x != rgb.y) || (rgb.y != rgb.z))) {
+        // Preserve explicitly RGB optical constants, which have no unique spectral interpretation.
+        return false;
+      }
+      sampled = sampled || (spectrum.spectral_entry_count > 0u);
+    }
+    return true;
+  };
+  const bool film = bsdf_resource_thinfilm_enabled(material.thinfilm);
+  const bool coating = material.coherent_coating.max_thickness_nm > 0.0f;
+  if ((spectral_ior(material.ext_ior) == false) || (spectral_ior(material.int_ior) == false) || (film && (spectral_ior(material.thinfilm.ior) == false)) ||
+      (coating && (spectral_ior(material.coherent_coating.ior) == false))) {
+    return cache_mode;
+  }
+  return (sampled || film || coating) ? kBSDFEnergyCompensationCacheModeSpectralScalar : cache_mode;
 }
 
 bool bind_energy_compensation_interface(SceneData& data, const Material& material, uint32_t material_class, uint32_t cache_mode,
@@ -2698,19 +2919,20 @@ bool bind_energy_compensation_interface(SceneData& data, const Material& materia
     return true;
   }
 
-  const GeneratedInterfacePaths paths = interface_paths(material_class, hash);
+  const uint32_t source_mode = interface_source_cache_mode(data, material, material_class, cache_mode);
+  const GeneratedInterfacePaths paths = interface_paths(material_class, hash_material_interface(data, material, material_class, source_mode));
   bool cache_ready = false;
   if ((rhi != nullptr) && (gpu_pipeline != nullptr)) {
-    cache_ready = ensure_cache_file_gpu(*rhi, *gpu_pipeline, data, material, material_class, cache_mode, paths);
+    cache_ready = ensure_cache_file_gpu(*rhi, *gpu_pipeline, data, material, material_class, source_mode, paths);
   } else {
-    cache_ready = ensure_cache_file(data, material, material_class, cache_mode, paths, scheduler);
+    cache_ready = ensure_cache_file(data, material, material_class, source_mode, paths, scheduler);
   }
   if (cache_ready == false) {
     return false;
   }
 
   std::vector<Scene::EnergyCompensationInterface> prepared_interfaces;
-  if (load_energy_compensation_interface_images(data, material, material_class, cache_mode, paths, prepared_interfaces) == false) {
+  if (load_energy_compensation_interface_images(data, material, material_class, source_mode, cache_mode, paths, prepared_interfaces) == false) {
     return false;
   }
   out_interface_index = static_cast<uint32_t>(data.energy_compensation_interfaces.size());
@@ -3052,7 +3274,7 @@ bool validate_energy_compensation_integrated_dielectric_parity(RHIContext& rhi, 
   const ThinfilmEval thinfilm = sample_interface_slice(data, material, spect, 0u, 1u);
 
   const bool cpu_generated = measure_energy_compensation_parity_generation(label, "CPU", [&]() {
-    return generate_dielectric_interface(cpu_paths, ext_ior, int_ior, thinfilm, scheduler, data.diagnostic);
+    return generate_dielectric_interface(cpu_paths, ext_ior, int_ior, thinfilm, dielectric_lut_layout(material), scheduler, data.diagnostic);
   });
   const bool gpu_generated = measure_energy_compensation_parity_generation(label, "GPU", [&]() {
     return generate_dielectric_interface_gpu(rhi, pipeline, data, material, gpu_paths, kBSDFEnergyCompensationCacheModeIntegratedRGB, 0u, 1u, 0u);
@@ -3298,6 +3520,7 @@ EnergyCompensationGenerationResult generate_energy_compensation_interfaces_step(
     std::unordered_set<uint64_t> counted_interfaces;
     uint32_t total_steps = 0u;
     const bool dimensions_valid = visit_interfaces([&](const Material& material, uint32_t material_class, uint32_t interface_cache_mode) {
+      interface_cache_mode = interface_source_cache_mode(data, material, material_class, interface_cache_mode);
       if (interface_lut_dimensions_valid(material, material_class, interface_cache_mode, data.diagnostic) == false) {
         return false;
       }
@@ -3322,6 +3545,7 @@ EnergyCompensationGenerationResult generate_energy_compensation_interfaces_step(
   std::unordered_set<uint64_t> generated_interfaces;
   CacheGenerationStepResult generation_result = CacheGenerationStepResult::Complete;
   visit_interfaces([&](const Material& material, uint32_t material_class, uint32_t interface_cache_mode) {
+    interface_cache_mode = interface_source_cache_mode(data, material, material_class, interface_cache_mode);
     const uint64_t hash = hash_material_interface(data, material, material_class, interface_cache_mode);
     if (generated_interfaces.insert(hash).second == false) {
       return true;

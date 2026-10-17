@@ -352,8 +352,8 @@ static_assert(offsetof(GPUWavefrontPathState, path_length) == kGPUWavefrontPathS
 static_assert(offsetof(GPUWavefrontPathState, pixel_index) == kGPUWavefrontPathStatePixelIndexOffset,
   "GPUWavefrontPathState::pixel_index offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, flags) == kGPUWavefrontPathStateFlagsOffset, "GPUWavefrontPathState::flags offset changed; update GPU wavefront ABI");
-static_assert(offsetof(GPUWavefrontPathState, path_source) == kGPUWavefrontPathStatePathSourceOffset,
-  "GPUWavefrontPathState::path_source offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontPathState, sample_index) == kGPUWavefrontPathStateSampleIndexOffset,
+  "GPUWavefrontPathState::sample_index offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, sampler_seed) == kGPUWavefrontPathStateSamplerSeedOffset,
   "GPUWavefrontPathState::sampler_seed offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontPathState, pixel) == kGPUWavefrontPathStatePixelOffset, "GPUWavefrontPathState::pixel offset changed; update GPU wavefront ABI");
@@ -804,6 +804,12 @@ static_assert(offsetof(GPUWavefrontResources, transport_work_buffer) == kGPUWave
   "GPUWavefrontResources::transport_work_buffer offset changed; update GPU wavefront ABI");
 static_assert(offsetof(GPUWavefrontResources, vcm_coating_buffer) == kGPUWavefrontResourcesVCMCoatingBufferOffset,
   "GPUWavefrontResources::vcm_coating_buffer offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, light_trace_normalization) == kGPUWavefrontResourcesLightTraceNormalizationOffset,
+  "GPUWavefrontResources::light_trace_normalization offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, scheduler_buffer) == kGPUWavefrontResourcesSchedulerBufferOffset,
+  "GPUWavefrontResources::scheduler_buffer offset changed; update GPU wavefront ABI");
+static_assert(offsetof(GPUWavefrontResources, sample_batch_size) == kGPUWavefrontResourcesSampleBatchSizeOffset,
+  "GPUWavefrontResources::sample_batch_size offset changed; update GPU wavefront ABI");
 static_assert((kGPUVCMCoatingSamplerOffset + 4u * sizeof(uint32_t)) <= kGPUVCMCoatingLaneStride, "VCM coating lane sampler exceeds its stride");
 
 static_assert(offsetof(GPUWavefrontResources, emission_request_stride) == kGPUWavefrontResourcesEmissionRequestStrideOffset,

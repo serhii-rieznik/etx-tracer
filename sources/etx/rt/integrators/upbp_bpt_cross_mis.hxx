@@ -92,9 +92,10 @@ inline UPBPSurfaceMISWeights upbp_bpt_direct_hit_cross_technique_weights(const U
   const UPBPPathVertexRecord& emitter = camera_path.vertices[emitter_vertex_index];
   const UPBPTransportSegmentRecord& segment = camera_path.segments[emitter_vertex_index - 1u];
   const double reverse_ray_pdf = std::exp(upbp_segment_sampling_log_density(segment, previous, emitter, true));
+  const double direct_pdf = emitter.distant_endpoint ? emitter.endpoint_pdf_direction : direct_area_pdf;
   UPBPSurfaceMISWeights result = {1.0};
   result.add_term(false,
-    {emitter_selection_pdf, direct_area_pdf, static_cast<double>((camera_weights.previous_delta == false) && camera_weights.previous_connectible), camera_weights.d_shared}, {});
+    {emitter_selection_pdf, direct_pdf, static_cast<double>((camera_weights.previous_delta == false) && camera_weights.previous_connectible), camera_weights.d_shared}, {});
   result.add_term(false, {emitter_selection_pdf, emission_direction_pdf, reverse_ray_pdf, camera_weights.d_bpt_base}, {});
   result.add_term(true, {emitter_selection_pdf, emission_direction_pdf, reverse_ray_pdf, configuration.factor(UPBPTechnique::Surface), camera_weights.d_surface}, {});
   return result;

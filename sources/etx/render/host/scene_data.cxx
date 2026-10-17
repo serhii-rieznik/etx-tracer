@@ -59,6 +59,7 @@ void SceneData::copy_material_preparation_from(const SceneData& source) {
   mediums.copy_contents(source.mediums);
   energy_compensation_interfaces = source.energy_compensation_interfaces;
   energy_compensation_interface_cache = source.energy_compensation_interface_cache;
+  energy_compensation_image_hashes = source.energy_compensation_image_hashes;
   thermal_surface_resources = source.thermal_surface_resources;
   thermal_medium_states = source.thermal_medium_states;
   thermal_medium_resources = source.thermal_medium_resources;
@@ -94,6 +95,7 @@ void SceneData::publish_material_preparation(SceneData& candidate) {
   mediums.swap_contents(candidate.mediums);
   swap(energy_compensation_interfaces, candidate.energy_compensation_interfaces);
   swap(energy_compensation_interface_cache, candidate.energy_compensation_interface_cache);
+  swap(energy_compensation_image_hashes, candidate.energy_compensation_image_hashes);
   swap(thermal_surface_resources, candidate.thermal_surface_resources);
   swap(thermal_medium_states, candidate.thermal_medium_states);
   swap(thermal_medium_resources, candidate.thermal_medium_resources);
@@ -196,10 +198,17 @@ uint64_t hash_payload_view(const BufferPool& buffer_pool, BufferView view, uint6
 
 uint64_t hash_images_struct_and_payload(const SceneData& scene_data) {
   uint64_t result = 0u;
-  for (const auto& image : scene_data.images_vector) {
+  for (uint32_t index = 0u; index < scene_data.images_vector.size(); ++index) {
+    const auto& image = scene_data.images_vector[index];
     const ::Image interop_image = make_gpu_image_descriptor(image);
     result = etx_hash64_continue(&interop_image, sizeof(::Image), result);
-    result = hash_payload_view(scene_data.buffer_pool, image.data, result);
+    const auto cached = scene_data.energy_compensation_image_hashes.find(index);
+    if (cached != scene_data.energy_compensation_image_hashes.end()) {
+      result = etx_hash64_continue(&image.data, sizeof(image.data), result);
+      result = etx_hash64_continue(&cached->second, sizeof(cached->second), result);
+    } else {
+      result = hash_payload_view(scene_data.buffer_pool, image.data, result);
+    }
     result = hash_payload_view(scene_data.buffer_pool, image.x_distributions_storage, result);
     result = hash_payload_view(scene_data.buffer_pool, image.y_distribution_storage, result);
   }
@@ -467,6 +476,7 @@ void SceneData::clear(TaskScheduler& scheduler) {
   mediums_vector.clear();
   energy_compensation_interfaces.clear();
   energy_compensation_interface_cache.clear();
+  energy_compensation_image_hashes.clear();
   thermal_surface_resources.clear();
   thermal_medium_states.clear();
   thermal_medium_resources.clear();
@@ -504,6 +514,7 @@ void SceneData::swap_contents(SceneData& other) {
   swap(mediums_vector, other.mediums_vector);
   swap(energy_compensation_interfaces, other.energy_compensation_interfaces);
   swap(energy_compensation_interface_cache, other.energy_compensation_interface_cache);
+  swap(energy_compensation_image_hashes, other.energy_compensation_image_hashes);
   swap(thermal_surface_resources, other.thermal_surface_resources);
   swap(thermal_medium_states, other.thermal_medium_states);
   swap(thermal_medium_resources, other.thermal_medium_resources);

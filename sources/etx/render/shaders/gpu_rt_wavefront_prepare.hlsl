@@ -38,6 +38,12 @@
     wavefront_queue_reset(wavefront_queue_next_descriptor(false));
     GPUWavefrontResources resources = wavefront_load_resources();
     wavefront_reset_work_queues(resources);
+    if (resources.scheduler_buffer != kInvalidIndex) {
+      RWByteAddressBuffer scheduler = WAVEFRONT_RW_BUFFER(resources.scheduler_buffer);
+      const uint pixel_count = constants.render_window_width * constants.render_window_height;
+      scheduler.Store4(0u, uint4(resources.path_capacity, pixel_count * resources.sample_batch_size, 0u, 0u));
+      scheduler.Store(kGPUWavefrontSchedulerLightMaxPathLengthOffset, 0u);
+    }
     if (resources.light_vertex_counter_buffer != kInvalidIndex) {
       RWByteAddressBuffer counter_buffer = bindless_rw_buffers[NonUniformResourceIndex(resources.light_vertex_counter_buffer)];
       counter_buffer.Store(0u, resources.path_capacity);
@@ -69,7 +75,25 @@
 
   wavefront_queue_reset(wavefront_queue_current_descriptor(true));
   wavefront_queue_reset(wavefront_queue_current_descriptor(false));
-  wavefront_reset_work_queues(wavefront_load_resources());
+  GPUWavefrontResources resources = wavefront_load_resources();
+  wavefront_reset_work_queues(resources);
+  if (resources.scheduler_buffer != kInvalidIndex) {
+    RWByteAddressBuffer scheduler = WAVEFRONT_RW_BUFFER(resources.scheduler_buffer);
+    const uint total_work = scheduler.Load(kGPUWavefrontSchedulerTotalWorkOffset);
+    const uint remaining = total_work - min(total_work, scheduler.Load(kGPUWavefrontSchedulerNextWorkOffset));
+    const uint camera_next = wavefront_queue_next_descriptor(true);
+    const uint light_next = wavefront_queue_next_descriptor(false);
+    const uint active_count = wavefront_queue_count(camera_next) + wavefront_queue_count(light_next);
+    scheduler.Store(kGPUWavefrontSchedulerRefillOffset, ((remaining > 0u) && (active_count < max(1u, resources.path_capacity / 2u))) ? 1u : 0u);
+    if (camera_next != kInvalidIndex) {
+      WAVEFRONT_RW_BUFFER(camera_next).Store(kGPUWavefrontQueuePad2Offset, remaining);
+      WAVEFRONT_RW_BUFFER(camera_next).Store(kGPUWavefrontQueueMaxPathLengthOffset, scheduler.Load(kGPUWavefrontSchedulerCameraMaxPathLengthOffset));
+    }
+    if (light_next != kInvalidIndex) {
+      WAVEFRONT_RW_BUFFER(light_next).Store(kGPUWavefrontQueuePad2Offset, remaining);
+      WAVEFRONT_RW_BUFFER(light_next).Store(kGPUWavefrontQueueMaxPathLengthOffset, scheduler.Load(kGPUWavefrontSchedulerLightMaxPathLengthOffset));
+    }
+  }
 }
 
   [numthreads(8, 8, 1)] void wavefront_finalize_sample_main(uint3 dtid : SV_DispatchThreadID) {

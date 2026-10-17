@@ -110,7 +110,7 @@ BSDFCoatedConductor wavefront_coating_prepare(RWByteAddressBuffer buffer, uint o
   const BSDFResourceContext context = wavefront_coating_context();
   BSDFData data;
   const BSDFCoatedConductor layer = wavefront_coating_prepare(buffer, offset, context, data);
-  BSDFCoatingWalk state = wavefront_coating_load_walk(buffer, offset + kGPUCoatingRequestWalkOffset);
+  BSDFCoatingWalk state = wavefront_coating_load_walk(buffer, offset + kGPUCoatingRequestWalkOffset, true);
   Sampler sampler = wavefront_coating_load_sampler(buffer, offset + kGPUCoatingRequestSamplerOffset);
   if (operation == BSDFCoatingWalk::VelvetProposal) {
     const BSDFEval evaluation = bsdf_coating_walk_velvet_evaluation(context, layer, state, sampler);
@@ -154,7 +154,7 @@ BSDFCoatedConductor wavefront_coating_prepare(RWByteAddressBuffer buffer, uint o
   const BSDFResourceContext context = wavefront_coating_context();
   BSDFData data;
   const BSDFCoatedConductor layer = wavefront_coating_prepare(buffer, offset, context, data);
-  const BSDFCoatingWalk state = wavefront_coating_load_walk(buffer, offset + kGPUCoatingRequestWalkOffset);
+  const BSDFCoatingWalk state = wavefront_coating_load_walk(buffer, offset + kGPUCoatingRequestWalkOffset, true);
   Sampler sampler = wavefront_coating_load_sampler(buffer, offset + kGPUCoatingRequestSamplerOffset);
   const BSDFEval result = bsdf_coated_conductor_resolve_evaluation(context, layer, state.outgoing, state.result, sampler);
   if (buffer.Load(offset + kGPUCoatingRequestKindOffset) == GPUCoatingRequestKind::Sample) {
@@ -210,10 +210,40 @@ BSDFCoatedConductor wavefront_coating_prepare(RWByteAddressBuffer buffer, uint o
   const BSDFResourceContext context = wavefront_coating_context();
   BSDFData data;
   const BSDFCoatedConductor layer = wavefront_coating_prepare(buffer, offset, context, data);
-  BSDFCoatingWalk state = wavefront_coating_load_walk(buffer, offset + kGPUCoatingRequestWalkOffset);
+# if (ETX_COATING_PHASE == 2) || (ETX_COATING_PHASE == 7)
+  // Delta sampling and opaque-base evaluation do not consume a rough-interface proposal.
+  const bool load_interface_sample = bsdf_coating_transmission_enabled(layer) || ((ETX_COATING_PHASE == 2) && (layer.interface_delta == false));
+# else
+  const bool load_interface_sample = true;
+# endif
+  BSDFCoatingWalk state = wavefront_coating_load_walk(buffer, offset + kGPUCoatingRequestWalkOffset, load_interface_sample);
   Sampler sampler = wavefront_coating_load_sampler(buffer, offset + kGPUCoatingRequestSamplerOffset);
   bsdf_sampler_pop_fixed(sampler);
 # if ETX_COATING_PHASE == 2
+  if (layer.interface_delta && (bsdf_coating_transmission_enabled(layer) == false)) {
+    // Each dispatch has a work budget; an unfinished walk resumes with its RNG and depth intact.
+    for (uint step = 0u; step < 8u; ++step) {
+      bsdf_sampler_pop_fixed(sampler);
+      if (state.operation == BSDFCoatingWalk::SampleBegin) {
+        bsdf_coating_walk_sample_delta(context, layer, state, sampler);
+      } else if (state.operation == BSDFCoatingWalk::Advance) {
+        bsdf_coating_walk_advance(layer, state, sampler);
+      } else {
+        break;
+      }
+    }
+    const uint walk_offset = offset + kGPUCoatingRequestWalkOffset;
+    buffer.Store(offset + kGPUCoatingRequestSamplerOffset, sampler.seed);
+    wavefront_coating_store_sample(buffer, walk_offset + kGPUCoatingWalkReverseExitOffset, state.reverse_exit);
+    wavefront_coating_store_response(buffer, walk_offset + kGPUCoatingWalkThroughputOffset, state.throughput);
+    buffer.Store3(walk_offset + kGPUCoatingWalkDirectionOffset, asuint(state.direction));
+    buffer.Store2(walk_offset + kGPUCoatingWalkHeightOffset, asuint(float2(state.height, state.continuation_pdf)));
+    buffer.Store(walk_offset + kGPUCoatingWalkDepthOffset, state.depth);
+    buffer.Store(walk_offset + kGPUCoatingWalkOperationOffset, state.operation);
+    buffer.Store2(walk_offset + kGPUCoatingWalkSampleTargetOffset, uint2(state.sample_target, state.exit_from_phase ? 1u : 0u));
+    buffer.Store(walk_offset + kGPUCoatingWalkContinuationDeltaOffset, state.continuation_delta ? 1u : 0u);
+    return;
+  }
   bsdf_coating_walk_sample_begin(context, layer, state, sampler);
 # elif ETX_COATING_PHASE == 3
   bsdf_coating_walk_sample_delta(context, layer, state, sampler);
@@ -223,6 +253,18 @@ BSDFCoatedConductor wavefront_coating_prepare(RWByteAddressBuffer buffer, uint o
   bsdf_coating_walk_advance(layer, state, sampler);
 # elif ETX_COATING_PHASE == 6
   bsdf_coating_walk_phase(context, layer, state, sampler);
+  if (layer.interface_delta && (bsdf_coating_transmission_enabled(layer) == false)) {
+    for (uint step = 0u; step < 4u; ++step) {
+      bsdf_sampler_pop_fixed(sampler);
+      if (state.operation == BSDFCoatingWalk::Advance) {
+        bsdf_coating_walk_advance(layer, state, sampler);
+      } else if (state.operation == BSDFCoatingWalk::Phase) {
+        bsdf_coating_walk_phase(context, layer, state, sampler);
+      } else {
+        break;
+      }
+    }
+  }
 # elif ETX_COATING_PHASE == 7
   if (entrance_evaluate) {
     bsdf_coating_transmission_entrance_evaluate(context, layer, state, sampler);
@@ -236,6 +278,14 @@ BSDFCoatedConductor wavefront_coating_prepare(RWByteAddressBuffer buffer, uint o
       bsdf_coating_walk_base_evaluate(context, layer, state, sampler);
     }
   }
+  if ((state.operation == BSDFCoatingWalk::BaseSample) && (bsdf_coating_transmission_enabled(layer) == false)) {
+    bsdf_sampler_pop_fixed(sampler);
+    bsdf_coating_walk_base_sample(context, layer, state, sampler);
+  }
+  if ((state.operation == BSDFCoatingWalk::Advance) && layer.interface_delta && (bsdf_coating_transmission_enabled(layer) == false)) {
+    bsdf_sampler_pop_fixed(sampler);
+    bsdf_coating_walk_advance(layer, state, sampler);
+  }
 # elif ETX_COATING_PHASE == 8
   bsdf_coating_walk_base_sample(context, layer, state, sampler);
 # elif ETX_COATING_PHASE == 9
@@ -244,10 +294,10 @@ BSDFCoatedConductor wavefront_coating_prepare(RWByteAddressBuffer buffer, uint o
   bsdf_coating_walk_exit_pdf(context, layer, state, sampler);
 # endif
   buffer.Store(offset + kGPUCoatingRequestSamplerOffset, sampler.seed);
-# if (ETX_COATING_PHASE == 4) || (ETX_COATING_PHASE == 5) || (ETX_COATING_PHASE == 7) || (ETX_COATING_PHASE == 9) || (ETX_COATING_PHASE == 10)
+# if (ETX_COATING_PHASE >= 3) && (ETX_COATING_PHASE <= 10)
   const uint walk_offset = offset + kGPUCoatingRequestWalkOffset;
   buffer.Store(walk_offset + kGPUCoatingWalkOperationOffset, state.operation);
-#  if ETX_COATING_PHASE == 4
+#  if (ETX_COATING_PHASE == 3) || (ETX_COATING_PHASE == 4)
   wavefront_coating_store_sample(buffer, walk_offset + kGPUCoatingWalkReverseExitOffset, state.reverse_exit);
   wavefront_coating_store_response(buffer, walk_offset + kGPUCoatingWalkThroughputOffset, state.throughput);
   buffer.Store3(walk_offset + kGPUCoatingWalkDirectionOffset, asuint(state.direction));
@@ -259,6 +309,16 @@ BSDFCoatedConductor wavefront_coating_prepare(RWByteAddressBuffer buffer, uint o
   buffer.Store(walk_offset + kGPUCoatingWalkHeightOffset, asuint(state.height));
   buffer.Store(walk_offset + kGPUCoatingWalkDepthOffset, state.depth);
   buffer.Store(walk_offset + kGPUCoatingWalkSampleTargetOffset, state.sample_target);
+#  elif ETX_COATING_PHASE == 6
+  wavefront_coating_store_response(buffer, walk_offset + kGPUCoatingWalkResultOffset, state.result);
+  wavefront_coating_store_response(buffer, walk_offset + kGPUCoatingWalkThroughputOffset, state.throughput);
+  buffer.Store(walk_offset + kGPUCoatingWalkHeightOffset, asuint(state.height));
+  buffer.Store(walk_offset + kGPUCoatingWalkDepthOffset, state.depth);
+  buffer.Store(walk_offset + kGPUCoatingWalkSampleTargetOffset, state.sample_target);
+  buffer.Store3(walk_offset + kGPUCoatingWalkDirectionOffset, asuint(state.direction));
+  buffer.Store(walk_offset + kGPUCoatingWalkContinuationPdfOffset, asuint(state.continuation_pdf));
+  buffer.Store(walk_offset + kGPUCoatingWalkExitFromPhaseOffset, state.exit_from_phase ? 1u : 0u);
+  buffer.Store(walk_offset + kGPUCoatingWalkContinuationDeltaOffset, state.continuation_delta ? 1u : 0u);
 #  elif ETX_COATING_PHASE == 7
   wavefront_coating_store_response(buffer, walk_offset + kGPUCoatingWalkResultOffset, state.result);
   wavefront_coating_store_response(buffer, walk_offset + kGPUCoatingWalkThroughputOffset, state.throughput);
@@ -266,9 +326,11 @@ BSDFCoatedConductor wavefront_coating_prepare(RWByteAddressBuffer buffer, uint o
   buffer.Store2(walk_offset + kGPUCoatingWalkHeightOffset, asuint(float2(state.height, state.continuation_pdf)));
   buffer.Store(walk_offset + kGPUCoatingWalkDepthOffset, state.depth);
   buffer.Store2(walk_offset + kGPUCoatingWalkSampleTargetOffset, uint2(state.sample_target, state.exit_from_phase ? 1u : 0u));
-  buffer.Store3(walk_offset + 256u, uint3(state.interface_sample.prepared.supported ? 1u : 0u, state.interface_sample.prepared.conductor_delta ? 1u : 0u,
-                                      state.interface_sample.prepared.dielectric_delta ? 1u : 0u));
-  buffer.Store(walk_offset + 376u, state.interface_sample.proposal.wavelength_dependent_direction ? 1u : 0u);
+  if (load_interface_sample) {
+    buffer.Store3(walk_offset + 256u, uint3(state.interface_sample.prepared.supported ? 1u : 0u, state.interface_sample.prepared.conductor_delta ? 1u : 0u,
+                                        state.interface_sample.prepared.dielectric_delta ? 1u : 0u));
+    buffer.Store(walk_offset + 376u, state.interface_sample.proposal.wavelength_dependent_direction ? 1u : 0u);
+  }
   buffer.Store(walk_offset + kGPUCoatingWalkContinuationDeltaOffset, state.continuation_delta ? 1u : 0u);
 #   if ETX_ENABLE_COATED_VELVET_SUBSTRATE
   if (state.operation == BSDFCoatingWalk::VelvetBaseEvaluate) {
@@ -276,6 +338,24 @@ BSDFCoatedConductor wavefront_coating_prepare(RWByteAddressBuffer buffer, uint o
     buffer.Store3(walk_offset + kGPUCoatingWalkVelvetOutgoingOffset, asuint(state.velvet_outgoing));
   }
 #   endif
+#  elif ETX_COATING_PHASE == 8
+#   if ETX_ENABLE_COATED_TRANSMISSION_SUBSTRATE
+  if (bsdf_coating_transmission_enabled(layer)) {
+    wavefront_coating_store_walk(buffer, walk_offset, state);
+  } else
+#   endif
+  {
+    wavefront_coating_store_response(buffer, walk_offset + kGPUCoatingWalkThroughputOffset, state.throughput);
+    buffer.Store3(walk_offset + kGPUCoatingWalkDirectionOffset, asuint(state.direction));
+    buffer.Store(walk_offset + kGPUCoatingWalkContinuationPdfOffset, asuint(state.continuation_pdf));
+    buffer.Store(walk_offset + kGPUCoatingWalkExitFromPhaseOffset, state.exit_from_phase ? 1u : 0u);
+#   if ETX_ENABLE_COATED_VELVET_SUBSTRATE
+    if (state.operation == BSDFCoatingWalk::VelvetBaseSample) {
+      wavefront_coating_store_velvet(buffer, walk_offset + kGPUCoatingWalkVelvetOffset, state.velvet);
+      buffer.Store3(walk_offset + kGPUCoatingWalkVelvetOutgoingOffset, asuint(state.velvet_outgoing));
+    }
+#   endif
+  }
 #  elif ETX_COATING_PHASE == 9
   wavefront_coating_store_response(buffer, walk_offset + kGPUCoatingWalkExitFunctionOffset, state.exit_func);
 #  elif ETX_COATING_PHASE == 10

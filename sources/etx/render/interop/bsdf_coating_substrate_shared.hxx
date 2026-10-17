@@ -93,5 +93,5 @@ ETX_SHARED_INLINE SpectralResponse bsdf_coating_substrate_specular_reflectance(E
   const RefractiveIndexSample exterior = bsdf_resource_evaluate_refractive_index(context, material.ext_ior, spect);
   const RefractiveIndexSample interior = bsdf_resource_evaluate_refractive_index(context, material.int_ior, spect);
   const ThinfilmEval no_film = ETX_ZERO(ThinfilmEval);
-  return spectral_response_mul(bsdf_fresnel_calculate(spect, cosine, exterior, interior, no_film), bsdf_resource_apply_image(context, spect, material.reflectance, tex));
+  return bsdf_conductor_tinted_fresnel(context, material, spect, cosine, exterior, interior, no_film, bsdf_resource_apply_image(context, spect, material.reflectance, tex));
 }

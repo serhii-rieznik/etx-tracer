@@ -618,6 +618,15 @@ ETX_SHARED_INLINE complex refractive_index_sample_as_complex_spectral(ETX_IN(Ref
   return make_complex(value.eta.value, value.k.value);
 }
 
+ETX_SHARED_INLINE RefractiveIndexSample refractive_index_sample_transport(ETX_IN(RefractiveIndexSample, value)) {
+  RefractiveIndexSample result = value;
+  if ((value.cls == SpectralDistribution::Dielectric) && (spectral_response_is_spectral(value.eta) == false)) {
+    // RGB transports one direction: Fresnel, Snell's law and their Jacobians must use the same index.
+    result.eta = spectral_response_make(spectral_response_as_query(value.eta), spectral_response_monochromatic(value.eta));
+  }
+  return result;
+}
+
 ETX_SHARED_INLINE complex refractive_index_sample_as_complex_x(ETX_IN(RefractiveIndexSample, value)) {
   return make_complex(value.eta.integrated.x, value.k.integrated.x);
 }

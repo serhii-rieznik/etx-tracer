@@ -56,7 +56,6 @@ float wavefront_medium_direct_light_weight(GPUWavefrontPathMeta path_meta, GPUWa
 }
 
 void wavefront_finish_direct_light_sample(GPUWavefrontResources resources, uint dispatch_index, uint path_index, uint seed, bool sampled, WavefrontEmitterSample emitter_sample) {
-  GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, path_index);
   const GPUWavefrontPathMeta meta = wavefront_load_path_meta(resources.path_meta_buffer, path_index);
   const GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(resources.camera_vertex_buffer, wavefront_camera_vertex_slot(path_index, meta.camera_path_length));
   const bool subsurface_connections = wavefront_subsurface_connections_enabled(current_vertex);
@@ -71,8 +70,7 @@ void wavefront_finish_direct_light_sample(GPUWavefrontResources resources, uint 
   const bool upbp = false;
 #endif
   if (upbp == false) {
-    state.sampler_seed = seed;
-    wavefront_store_path_state(resources.camera_state_buffer, path_index, state);
+    WAVEFRONT_RW_BUFFER(resources.camera_state_buffer).Store(path_index * kGPUWavefrontPathStateStride + kGPUWavefrontPathStateSamplerSeedOffset, seed);
   }
   wavefront_emission_consumer_complete(resources, dispatch_index);
   if (sampled == false) {
@@ -176,7 +174,7 @@ void wavefront_finish_direct_light_sample(GPUWavefrontResources resources, uint 
     } else
 #endif
     {
-      task.sampler_seed = state.sampler_seed;
+      task.sampler_seed = seed;
       task.upbp_auxiliary0_bits = asuint(mis_terms.x);
       task.upbp_auxiliary1_bits = asuint(mis_terms.y);
     }
@@ -248,16 +246,10 @@ void wavefront_advance_direct_light_sample(GPUWavefrontResources resources, uint
     return;
   }
 
-  GPUWavefrontDirectLightSample empty_sample = (GPUWavefrontDirectLightSample)0;
-  wavefront_store_direct_light_sample(resources.direct_light_sample_buffer, dispatch_index, empty_sample);
+  // Consumers ignore invalid payloads; shadow evaluation writes every queued result.
+  WAVEFRONT_RW_BUFFER(resources.direct_light_sample_buffer).Store(dispatch_index * kGPUWavefrontDirectLightSampleStride + kGPUWavefrontDirectLightSampleFlagsOffset, 0u);
   if (resources.direct_light_task_buffer != kInvalidIndex) {
-    GPUWavefrontDirectLightTask empty_task = (GPUWavefrontDirectLightTask)0;
-    empty_task.medium_index = kInvalidIndex;
-    wavefront_store_direct_light_task(resources.direct_light_task_buffer, dispatch_index, empty_task);
-  }
-  if (resources.direct_light_result_buffer != kInvalidIndex) {
-    GPUWavefrontDirectLightResult empty_result = (GPUWavefrontDirectLightResult)0;
-    wavefront_store_direct_light_result(resources.direct_light_result_buffer, dispatch_index, empty_result);
+    WAVEFRONT_RW_BUFFER(resources.direct_light_task_buffer).Store(dispatch_index * kGPUWavefrontDirectLightTaskStride + kGPUWavefrontDirectLightTaskFlagsOffset, 0u);
   }
   if (enable_camera_direct_light == false) {
     return;

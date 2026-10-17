@@ -163,7 +163,7 @@ float wavefront_distant_emitter_area_pdf(uint emitter_index, float3 emission_dir
   return result;
 }
 
-float2 wavefront_environment_emitter_pdf(float3 in_direction, GPUWavefrontPathVertex target_vertex) {
+float2 wavefront_environment_emitter_pdf(float3 in_direction) {
   uint environment_count = wavefront_environment_emitter_count();
   if (environment_count == 0u) {
     return float2(0.0f, 0.0f);
@@ -181,12 +181,11 @@ float2 wavefront_environment_emitter_pdf(float3 in_direction, GPUWavefrontPathVe
     pdf_joint += direction_pdf * gpu_distant_emission_area_pdf(emitter_index);
   }
 
-  float pdf_area = pdf_dir > 0.0f ? pdf_joint / pdf_dir : 0.0f;
-  if (wavefront_path_vertex_is_surface(target_vertex)) {
-    pdf_area *= abs(dot(target_vertex.geo_normal, in_direction));
-  }
+  // The recursive MIS coefficients already contain the surface cosine Jacobians.
+  // Environment emission uses the launch disk density, without another target cosine.
+  pdf_joint /= float(environment_count);
   pdf_dir /= float(environment_count);
-  return float2(pdf_area, pdf_dir);
+  return float2(pdf_joint, pdf_dir);
 }
 
 SpectralResponse wavefront_environment_direct_hit_emitter_radiance(uint emitter_index, float3 direction, SpectralQuery spect, bool directly_visible, out float local_pdf_dir) {
@@ -254,8 +253,8 @@ SpectralResponse wavefront_compute_environment_direct_hit_contribution(SpectralQ
 
   float mis_weight = 1.0f;
   if (scene_multiple_importance_sampling_enabled() && (state.path_length > 1u) && (scene_path_mode_is_path_tracing() == false) && (scene_path_mode_is_light_tracing() == false)) {
-    float2 emitter_pdfs = wavefront_environment_emitter_pdf(state.ray.d, previous_vertex);
-    mis_weight = 1.0f / (1.0f + state.forward_pdf * emitter_pdfs.y + wavefront_connection_mis(state) * emitter_pdfs.x * emitter_pdfs.y);
+    float2 emitter_pdfs = wavefront_environment_emitter_pdf(state.ray.d);
+    mis_weight = 1.0f / (1.0f + state.forward_pdf * emitter_pdfs.y + wavefront_connection_mis(state) * emitter_pdfs.x);
   }
 
   return spectral_response_mul(spectral_response_mul(state.throughput, accumulated), mis_weight);
@@ -546,6 +545,10 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
   GPUWavefrontPathState state = wavefront_load_path_state(state_descriptor, path_index);
   GPUWavefrontHit hit = wavefront_load_hit(hit_descriptor, path_index);
   if ((wavefront_path_state_valid(state) == false) || (wavefront_hit_valid(hit) == false)) {
+    if ((resources.scheduler_buffer != kInvalidIndex) && wavefront_path_state_valid(state)) {
+      state.flags = 0u;
+      wavefront_store_path_state(state_descriptor, path_index, state);
+    }
     return;
   }
 
@@ -612,6 +615,10 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
       if (try_load_emitter_instance(previous_vertex.emitter_index, emitter_instance) && (emitter_access_is_local_class(emitter_instance.emitter_class) == false)) {
         previous_vertex.pdf_from_prev = wavefront_distant_emitter_sample_pdf(previous_vertex.emitter_index, -previous_vertex.w_i);
         current_vertex.pdf_from_prev = wavefront_distant_emitter_area_pdf(previous_vertex.emitter_index, previous_vertex.w_i, current_vertex) * state.flight_pdf.x;
+        if (scene_path_mode_is_bdpt_full() || scene_path_mode_uses_bdpt_fast()) {
+          // The emission disk already samples the transverse area of this first segment.
+          current_vertex.forward_pdf = state.forward_pdf;
+        }
         wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u), previous_vertex);
       }
     }
@@ -643,27 +650,27 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
       support_random = float2(rnd01(state.sampler_seed), rnd01(state.sampler_seed));
     }
     if ((upbp_path == false) && from_camera && (state.path_length == 1u)) {
-      const bool use_blue_noise_bsdf = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamBSDF);
-      const bool use_blue_noise_connection = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamConnection);
-      const bool use_blue_noise_support = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamSupport);
+      const bool use_blue_noise_bsdf = sample_use_blue_noise_primary(state.sample_index, kSamplerStreamBSDF);
+      const bool use_blue_noise_connection = sample_use_blue_noise_primary(state.sample_index, kSamplerStreamConnection);
+      const bool use_blue_noise_support = sample_use_blue_noise_primary(state.sample_index, kSamplerStreamSupport);
       uint2 sample_pixel = state.pixel;
       if (use_blue_noise_bsdf || use_blue_noise_connection || use_blue_noise_support) {
         sample_pixel = sample_blue_noise_translated_pixel(state.pixel);
       }
       if (use_blue_noise_bsdf) {
         const uint bsdf_dimension = sampler_stream_dimension_base(kSamplerStreamBSDF);
-        sample_random = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, bsdf_dimension + 0u),
-          sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, bsdf_dimension + 1u));
+        sample_random = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, bsdf_dimension + 0u),
+          sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, bsdf_dimension + 1u));
       }
       if (use_blue_noise_connection) {
         const uint connection_dimension = sampler_stream_dimension_base(kSamplerStreamConnection);
-        connection_random = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, connection_dimension + 0u),
-          sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, connection_dimension + 1u));
+        connection_random = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, connection_dimension + 0u),
+          sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, connection_dimension + 1u));
       }
       if (use_blue_noise_support) {
         const uint support_dimension = sampler_stream_dimension_base(kSamplerStreamSupport);
-        support_random = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, support_dimension + 0u),
-          sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, support_dimension + 1u));
+        support_random = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, support_dimension + 0u),
+          sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, support_dimension + 1u));
       }
     }
     state.film_uv = connection_random;
@@ -738,10 +745,17 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
     return;
   }
 
-  wavefront_write_vertex(from_camera, path_index, state, hit);
+  GPUWavefrontPathVertex current_vertex = wavefront_prepare_surface_vertex(from_camera, path_index, state, hit);
+  if (wavefront_path_vertex_valid(current_vertex) == false) {
+    state.flags = 0u;
+    wavefront_store_path_state(state_descriptor, path_index, state);
+    return;
+  }
   wavefront_write_path_meta(from_camera, path_index, state);
   uint vertex_descriptor = from_camera ? resources.camera_vertex_buffer : resources.light_vertex_buffer;
-  GPUWavefrontPathVertex current_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length));
+#if ETX_WAVEFRONT_PATH_TRACING_ONLY
+  current_vertex.flight_pdf = state.flight_pdf;
+#else
   GPUWavefrontPathVertex previous_vertex = wavefront_load_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u));
   if (wavefront_path_vertex_valid(previous_vertex)) {
     current_vertex.flight_pdf = state.flight_pdf;
@@ -773,8 +787,9 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
         wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length - 1u), previous_vertex);
       }
     }
-    wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length), current_vertex);
   }
+#endif
+  wavefront_store_path_vertex(vertex_descriptor, wavefront_path_vertex_slot(from_camera, path_index, state.path_length), current_vertex);
 
   if (path_tracing_neutral_depth_exceeded) {
     state.flags = 0u;
@@ -796,5 +811,15 @@ void wavefront_surface_classify(bool from_camera, uint dispatch_index) {
 #endif
 
   state.reserved0 = 0u;
+#if ETX_WAVEFRONT_PATH_TRACING_ONLY
+  // Surface classification changes only these state fields; medium vertices use the full writeback above.
+  RWByteAddressBuffer state_buffer = WAVEFRONT_RW_BUFFER(state_descriptor);
+  const uint state_offset = path_index * kGPUWavefrontPathStateStride;
+  wavefront_store_spectral_response(state_buffer, state_offset + kGPUWavefrontPathStateThroughputOffset, state.throughput);
+  state_buffer.Store(state_offset + kGPUWavefrontPathStateFlagsOffset, state.flags);
+  state_buffer.Store(state_offset + kGPUWavefrontPathStateLastVertexIndexOffset, state.last_vertex_index);
+  state_buffer.Store(state_offset + kGPUWavefrontPathStateReserved0Offset, state.reserved0);
+#else
   wavefront_store_path_state(state_descriptor, path_index, state);
+#endif
 }

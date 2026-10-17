@@ -97,10 +97,16 @@ struct ETX_ALIGNED Scene {
     float spectral_longest_wavelength = 0.0f;
     uint32_t coating_slice_count = 1u;
     uint32_t terminal_source_lut = kInvalidIndex;
+    uint32_t rgb_fresnel_lut = kInvalidIndex;
+    uint32_t dielectric_azimuth_count = 1u;
+    uint32_t dielectric_roughness_count = 64u;
   };
 
-  static_assert(sizeof(EnergyCompensationInterface) == 56u);
+  static_assert(sizeof(EnergyCompensationInterface) == 68u);
   static_assert(offsetof(EnergyCompensationInterface, terminal_source_lut) == 52u);
+  static_assert(offsetof(EnergyCompensationInterface, rgb_fresnel_lut) == 56u);
+  static_assert(offsetof(EnergyCompensationInterface, dielectric_azimuth_count) == 60u);
+  static_assert(offsetof(EnergyCompensationInterface, dielectric_roughness_count) == 64u);
 
   ArrayView<EnergyCompensationInterface> energy_compensation_interfaces ETX_EMPTY_INIT;
 

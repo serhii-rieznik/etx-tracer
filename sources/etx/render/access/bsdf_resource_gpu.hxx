@@ -165,6 +165,9 @@ bool bsdf_resource_energy_compensation_interface_try_load(BSDFResourceContext co
   interface_data.spectral_longest_wavelength = asfloat(interface_buffer.Load(base_offset + 44u));
   interface_data.coating_slice_count = interface_buffer.Load(base_offset + 48u);
   interface_data.terminal_source_lut = interface_buffer.Load(base_offset + 52u);
+  interface_data.rgb_fresnel_lut = interface_buffer.Load(base_offset + 56u);
+  interface_data.dielectric_azimuth_count = interface_buffer.Load(base_offset + 60u);
+  interface_data.dielectric_roughness_count = interface_buffer.Load(base_offset + 64u);
   return true;
 }
 

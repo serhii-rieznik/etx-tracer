@@ -2,7 +2,8 @@
 
 #include "material.hxx"
 
-ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationInterfaceDataSize = 56u;
+ETX_STATIC_CONST uint32_t kBSDFEnergyCompensationInterfaceDataSize = 68u;
+ETX_STATIC_CONST uint32_t kBSDFConductorRGBFresnelSize = 1024u;
 
 struct BSDFEnergyCompensationInterfaceData {
   uint32_t cls ETX_INIT(MaterialClass::Undefined);
@@ -19,6 +20,9 @@ struct BSDFEnergyCompensationInterfaceData {
   float spectral_longest_wavelength ETX_INIT(0.0f);
   uint32_t coating_slice_count ETX_INIT(1u);
   uint32_t terminal_source_lut ETX_INIT(kInvalidIndex);
+  uint32_t rgb_fresnel_lut ETX_INIT(kInvalidIndex);
+  uint32_t dielectric_azimuth_count ETX_INIT(1u);
+  uint32_t dielectric_roughness_count ETX_INIT(64u);
 };
 
 #if ETX_CPP

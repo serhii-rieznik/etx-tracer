@@ -262,8 +262,8 @@ ETX_SHARED_NOINLINE SpectralResponse bsdf_coated_conductor_delta_weight(ETX_IN(B
   }
   const ThinfilmEval reverse_optics = bsdf_fresnel_orient_coherent_interface(film, false);
   const SpectralResponse reverse_reflection = bsdf_fresnel_calculate(spect, cosine_inside, coating, exterior, reverse_optics);
-  const SpectralResponse transmission = bsdf_fresnel_transmission_calculate(spect, cosine, exterior, coating, film);
-  const SpectralResponse reverse_transmission = bsdf_fresnel_transmission_calculate(spect, cosine_inside, coating, exterior, reverse_optics);
+  const SpectralResponse transmission = bsdf_fresnel_transmission_from_reflection(spect, cosine, exterior, coating, film, f);
+  const SpectralResponse reverse_transmission = bsdf_fresnel_transmission_from_reflection(spect, cosine_inside, coating, exterior, reverse_optics, reverse_reflection);
   const SpectralResponse r =
     bsdf_coating_substrate_specular_reflectance(context, spect, bsdf_coating_interface_material(layer.substrate_material, layer.substrate_class), layer.data.tex, cosine_inside);
   const SpectralResponse tr = bsdf_coating_transmittance(layer.extinction, layer.thickness / cosine_inside);
@@ -303,6 +303,12 @@ ETX_SHARED_INLINE bool bsdf_coating_free_flight(ETX_IN(BSDFCoatedConductor, laye
   const float sampled_distance = (coefficient > 0.0f) ? (-log(1.0f - bsdf_sampler_next(sampler)) / coefficient) : kMaxFloat;
   const bool scattered = sampled_distance < boundary_distance;
   distance = scattered ? sampled_distance : boundary_distance;
+  if (spectral_response_is_spectral(layer.extinction)) {
+    if (scattered) {
+      throughput = spectral_response_mul(throughput, layer.scattering.value / coefficient);
+    }
+    return scattered;
+  }
   const SpectralResponse tr = bsdf_coating_transmittance(layer.extinction, distance);
   SpectralResponse density = tr;
   SpectralResponse attenuation = tr;
@@ -1188,7 +1194,7 @@ ETX_SHARED_NOINLINE SpectralResponse bsdf_coating_substrate_absorptance(ETX_IN(B
         continue;
       }
       const BSDFEnergyCompensatedLobe lobe =
-        bsdf_energy_compensated_conductor_base_lobe(spect, incoming, outgoing, prepared.roughness, prepared.ext_ior, prepared.int_ior, prepared.thinfilm, one);
+        bsdf_energy_compensated_conductor_base_lobe(context, material, spect, incoming, outgoing, prepared.roughness, prepared.ext_ior, prepared.int_ior, prepared.thinfilm, one);
       if (lobe.pdf > 0.0f) {
         single = spectral_response_add(single, spectral_response_div(lobe.bsdf, lobe.pdf * float(count)));
       }

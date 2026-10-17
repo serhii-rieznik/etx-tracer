@@ -871,6 +871,19 @@ ETX_SHARED_INLINE SpectralResponse bsdf_fresnel_transmission_calculate(ETX_IN(Sp
   return bsdf_fresnel_thinfilm_transmission_calculate(spect, cos_theta, ext_ior, int_ior, thinfilm);
 }
 
+ETX_SHARED_INLINE SpectralResponse bsdf_fresnel_transmission_from_reflection(ETX_IN(SpectralQuery, spect), float cos_theta, ETX_IN(RefractiveIndexSample, ext_ior),
+  ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm), ETX_IN(SpectralResponse, reflection)) {
+#if ETX_ENABLE_COHERENT_COATING
+  if (thinfilm.coating_thickness_nm > 0.0f) {
+    return bsdf_fresnel_transmission_calculate(spect, cos_theta, ext_ior, int_ior, thinfilm);
+  }
+#endif
+  if (bsdf_fresnel_thinfilm_absorbs(thinfilm)) {
+    return bsdf_fresnel_thinfilm_transmission_calculate(spect, cos_theta, ext_ior, int_ior, thinfilm);
+  }
+  return spectral_response_sub(spectral_response_make(spect, 1.0f), reflection);
+}
+
 ETX_SHARED_NOINLINE float2 bsdf_fresnel_coherent_terminal_average(float wavelength, ETX_IN(complex, exterior), ETX_IN(complex, interior), ETX_IN(complex, film_ior),
   ETX_IN(complex, coating_ior), float film_thickness, float film_weight, float coating_thickness, bool incident_inside) {
   const float nodes[8] = {1.98550718e-2f, 1.01666761e-1f, 2.37233795e-1f, 4.08282679e-1f, 5.91717321e-1f, 7.62766205e-1f, 8.98333239e-1f, 9.80144928e-1f};

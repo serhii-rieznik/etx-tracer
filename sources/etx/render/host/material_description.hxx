@@ -62,11 +62,48 @@ struct MaterialDescription {
   float temperature_kelvin = 0.0f;
 };
 
+inline const char* material_class_display_name(uint32_t cls) {
+  switch (cls) {
+    case MaterialClass::Diffuse:
+      return "Diffuse";
+    case MaterialClass::Translucent:
+      return "Translucent";
+    case MaterialClass::Plastic:
+      return "Coated diffuse";
+    case MaterialClass::Conductor:
+      return "Conductor";
+    case MaterialClass::CoatedConductor:
+      return "Coated conductor";
+    case MaterialClass::Mix:
+      return "Mix";
+    case MaterialClass::Dielectric:
+      return "Dielectric";
+    case MaterialClass::Thinfilm:
+      return "Thinfilm";
+    case MaterialClass::Mirror:
+      return "Mirror";
+    case MaterialClass::Boundary:
+      return "Boundary";
+    case MaterialClass::Velvet:
+      return "Velvet";
+    case MaterialClass::OpenPBR:
+      return "OpenPBR";
+    case MaterialClass::Void:
+      return "Void";
+    case MaterialClass::DiffractionGrating:
+      return "Diffraction Grating";
+    case MaterialClass::Undefined:
+      return "Custom layers";
+    default:
+      return "Unknown material model";
+  }
+}
+
 inline void configure_material_base(MaterialDescription& material, uint32_t cls) {
   material.cls = cls;
-  const uint32_t ior_class = cls == MaterialClass::Conductor                                            ? SpectralDistribution::Conductor
-                             : ((cls == MaterialClass::Dielectric) || (cls == MaterialClass::Thinfilm)) ? SpectralDistribution::Dielectric
-                                                                                                        : SpectralDistribution::Invalid;
+  const uint32_t ior_class = cls == MaterialClass::Conductor                                                                               ? SpectralDistribution::Conductor
+                             : ((cls == MaterialClass::Dielectric) || (cls == MaterialClass::Thinfilm) || (cls == MaterialClass::OpenPBR)) ? SpectralDistribution::Dielectric
+                                                                                                                                           : SpectralDistribution::Invalid;
   if ((ior_class != SpectralDistribution::Invalid) && (material.int_ior.cls != ior_class)) {
     material.int_ior = {};
   }
@@ -86,6 +123,9 @@ inline void configure_material_bsdf(MaterialDescription& material, uint32_t bsdf
   if ((selected == MaterialClass::Plastic) || (selected == MaterialClass::CoatedConductor)) {
     configure_material_base(material, selected == MaterialClass::Plastic ? MaterialClass::Diffuse : MaterialClass::Conductor);
     material.layers.coating_enabled = 1u;
+    if (material.ext_ior.cls == SpectralDistribution::Conductor) {
+      material.ext_ior = {};
+    }
   } else if (bsdf != MaterialClass::Undefined) {
     configure_material_base(material, selected);
     material.layers.coating_enabled = 0u;

@@ -63,10 +63,10 @@
     result_value.transmittance = spectral_response_mul(result_value.transmittance, mis_weight);
   }
   if (scene_path_mode_is_upbp() == false) {
-    GPUWavefrontPathState state = wavefront_load_path_state(resources.camera_state_buffer, task.path_index);
-    if (wavefront_path_state_valid(state)) {
-      state.sampler_seed = seed;
-      wavefront_store_path_state(resources.camera_state_buffer, task.path_index, state);
+    RWByteAddressBuffer state_buffer = WAVEFRONT_RW_BUFFER(resources.camera_state_buffer);
+    const uint state_offset = task.path_index * kGPUWavefrontPathStateStride;
+    if ((state_buffer.Load(state_offset + kGPUWavefrontPathStateFlagsOffset) & GPUWavefrontPathFlags::Valid) != 0u) {
+      state_buffer.Store(state_offset + kGPUWavefrontPathStateSamplerSeedOffset, seed);
     }
   }
   wavefront_store_direct_light_result(resources.direct_light_result_buffer, dispatch_index, result_value);
@@ -205,10 +205,10 @@
     result_value.transmittance = spectral_response_mul(result_value.transmittance, mis_weight);
   }
   if (scene_path_mode_is_upbp() == false) {
-    GPUWavefrontPathState state = wavefront_load_path_state(resources.light_state_buffer, task.path_index);
-    if (wavefront_path_state_valid(state)) {
-      state.sampler_seed = seed;
-      wavefront_store_path_state(resources.light_state_buffer, task.path_index, state);
+    RWByteAddressBuffer state_buffer = WAVEFRONT_RW_BUFFER(resources.light_state_buffer);
+    const uint state_offset = task.path_index * kGPUWavefrontPathStateStride;
+    if ((state_buffer.Load(state_offset + kGPUWavefrontPathStateFlagsOffset) & GPUWavefrontPathFlags::Valid) != 0u) {
+      state_buffer.Store(state_offset + kGPUWavefrontPathStateSamplerSeedOffset, seed);
     }
   }
   wavefront_store_connect_camera_result(resources.connect_camera_result_buffer, dispatch_index, result_value);

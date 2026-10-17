@@ -101,7 +101,7 @@ ETX_SHARED_INLINE BSDFSample bsdf_dielectric_delta_sample_event(ETX_IN(BSDFResou
   }
 
   const SpectralResponse fresnel = bsdf_fresnel_calculate(data.spectrum_sample, w_i.z, ext_ior, int_ior, thinfilm);
-  const SpectralResponse transmission = bsdf_fresnel_transmission_calculate(data.spectrum_sample, w_i.z, ext_ior, int_ior, thinfilm);
+  const SpectralResponse transmission = bsdf_fresnel_transmission_from_reflection(data.spectrum_sample, w_i.z, ext_ior, int_ior, thinfilm, fresnel);
   const bool matching_media = bsdf_dielectric_equal_eta(ext_ior, int_ior);
   const float eta = matching_media ? 1.0f : bsdf_dielectric_directional_eta(ext_ior, int_ior);
   const bool total_internal_reflection = (matching_media == false) && (bsdf_external_transmission_possible(w_i.z, ext_ior, int_ior) == false);
@@ -185,7 +185,7 @@ ETX_SHARED_INLINE BSDFThinfilmInterface bsdf_thinfilm_interface(ETX_IN(BSDFResou
   const ThinfilmEval thinfilm =
     bsdf_fresnel_orient_coherent_interface(bsdf_resource_evaluate_interface_optics(context, data.spectrum_sample, material, data.tex, sampler), entering);
   const SpectralResponse fresnel = bsdf_fresnel_calculate(data.spectrum_sample, local_w_i.z, phase_ext_ior, phase_int_ior, thinfilm);
-  const SpectralResponse transmission = bsdf_fresnel_transmission_calculate(data.spectrum_sample, local_w_i.z, phase_ext_ior, phase_int_ior, thinfilm);
+  const SpectralResponse transmission = bsdf_fresnel_transmission_from_reflection(data.spectrum_sample, local_w_i.z, phase_ext_ior, phase_int_ior, thinfilm, fresnel);
   result.reflection = spectral_response_mul(bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex), fresnel);
   result.eta = bsdf_dielectric_directional_eta(phase_ext_ior, phase_int_ior);
   const float eta_factor = data.path_source == PathSource::Light ? 1.0f / (result.eta * result.eta) : 1.0f;

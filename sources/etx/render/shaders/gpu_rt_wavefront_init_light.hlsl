@@ -1,8 +1,9 @@
 #include "gpu_rt_wavefront_common.hlsl"
 #include "gpu_rt_wavefront_emitter_sample.hlsl"
+#include "gpu_rt_wavefront_init_camera.hlsl"
 
 void wavefront_finish_light_emission(GPUWavefrontResources resources, uint path_index, uint2 output_pixel, uint output_pixel_index, SpectralQuery spect, uint seed,
-  WavefrontEmitterSample emitter_sample) {
+  WavefrontEmitterSample emitter_sample, uint sample_index) {
 #if ETX_UPBP
   const GPUUPBPResources upbp_resources = upbp_load_resources(resources);
 #endif
@@ -45,7 +46,7 @@ void wavefront_finish_light_emission(GPUWavefrontResources resources, uint path_
   state.path_length = 1u;
   state.pixel_index = output_pixel_index;
   state.flags = GPUWavefrontPathFlags::Valid | GPUWavefrontPathFlags::From_light | GPUWavefrontPathFlags::Connectible;
-  state.path_source = PathSource::Light;
+  state.sample_index = sample_index;
   state.sampler_seed = seed;
   state.pixel = output_pixel;
   state.spect = spect;
@@ -66,50 +67,26 @@ void wavefront_finish_light_emission(GPUWavefrontResources resources, uint path_
     meta.from_delta = emitter_sample.is_delta;
     wavefront_store_path_meta(resources.path_meta_buffer, path_index, meta);
   }
-  wavefront_queue_append(wavefront_queue_current_descriptor(false), path_index);
+  wavefront_work_queue_append_wave(wavefront_queue_current_descriptor(false), 0u, path_index, true);
 }
 
-[numthreads(8, 8, 1)] void wavefront_init_light_path_0_main(uint3 dtid : SV_DispatchThreadID) {
-  if (scene_path_mode_is_path_tracing()) {
-    return;
-  }
-  if (constants.camera_buffer_index == kInvalidIndex) {
-    return;
-  }
+void wavefront_initialize_light_path(uint path_index, uint2 output_pixel, uint sample_index) {
   Camera camera = load_camera(bindless_buffers[NonUniformResourceIndex(constants.camera_buffer_index)]);
-  uint2 output_pixel = (uint2)0;
-  uint output_pixel_index = 0u;
-  uint path_index = 0u;
-  uint2 camera_space_pixel = (uint2)0;
-  uint seed_pixel_index = 0u;
+  uint output_pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
+  uint2 camera_space_pixel = uint2(output_pixel.x, camera.film_size.y - 1u - output_pixel.y);
+  uint seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
 #if ETX_UPBP
   GPUWavefrontResources upbp_wavefront_resources = wavefront_load_resources();
   GPUUPBPResources upbp_resources = upbp_load_resources(upbp_wavefront_resources);
   const bool upbp_linear_dispatch = scene_path_mode_is_upbp() && (constants.dispatch_item_count > 0u);
   if (upbp_linear_dispatch) {
-    const uint dispatch_width = max(1u, constants.render_window_width);
-    path_index = dtid.x + dtid.y * dispatch_width;
-    if (path_index >= constants.dispatch_item_count) {
-      return;
-    }
     seed_pixel_index = upbp_resources.iteration.light_batch_offset + path_index;
     output_pixel_index = seed_pixel_index;
     output_pixel = uint2(seed_pixel_index % camera.film_size.x, (seed_pixel_index / camera.film_size.x) % camera.film_size.y);
-    camera_space_pixel = uint2(output_pixel.x, camera.film_size.y - 1u - output_pixel.y);
-  } else
-#endif
-  {
-    if (wavefront_render_window_contains(dtid.xy) == false) {
-      return;
-    }
-    output_pixel = wavefront_output_pixel(dtid.xy);
-    output_pixel_index = output_pixel.x + output_pixel.y * camera.film_size.x;
-    path_index = wavefront_render_window_local_index(dtid.xy);
-    camera_space_pixel = uint2(output_pixel.x, camera.film_size.y - 1u - output_pixel.y);
-    seed_pixel_index = camera_space_pixel.x + camera_space_pixel.y * camera.film_size.x;
   }
-  uint seed = scene_random_domain_seed(seed_pixel_index, constants.sample_index, kSamplerRandomDomainLightPathRoot);
-  const SpectralQuery spect = wavefront_vcm_iteration_spectral_query();
+#endif
+  uint seed = scene_random_domain_seed(seed_pixel_index, sample_index, kSamplerRandomDomainLightPathRoot);
+  const SpectralQuery spect = wavefront_vcm_iteration_spectral_query(sample_index);
   if (scene_uses_spectral_mode()) {
     rnd01(seed);
   }
@@ -120,6 +97,7 @@ void wavefront_finish_light_emission(GPUWavefrontResources resources, uint path_
 #endif
   GPUWavefrontResources resources = wavefront_load_resources();
   GPUWavefrontPathState cleared_state = (GPUWavefrontPathState)0;
+  cleared_state.sample_index = sample_index;
   wavefront_store_path_state(resources.light_state_buffer, path_index, cleared_state);
 #if ETX_UPBP
   if (scene_path_mode_is_upbp()) {
@@ -167,7 +145,35 @@ void wavefront_finish_light_emission(GPUWavefrontResources resources, uint path_
     wavefront_emission_consumer_suspend(resources, path_index, consumer);
     return;
   }
-  wavefront_finish_light_emission(resources, path_index, output_pixel, output_pixel_index, spect, seed, emitter_sample);
+  wavefront_finish_light_emission(resources, path_index, output_pixel, output_pixel_index, spect, seed, emitter_sample, sample_index);
+}
+
+[numthreads(8, 8, 1)] void wavefront_init_light_path_0_main(uint3 dtid : SV_DispatchThreadID) {
+  if (scene_path_mode_is_path_tracing() || (constants.camera_buffer_index == kInvalidIndex)) {
+    return;
+  }
+  uint path_index;
+  uint2 output_pixel = (uint2)0;
+#if ETX_UPBP
+  if (scene_path_mode_is_upbp() && (constants.dispatch_item_count > 0u)) {
+    path_index = dtid.x + dtid.y * max(1u, constants.render_window_width);
+    if (path_index >= constants.dispatch_item_count) {
+      return;
+    }
+  } else
+#endif
+  {
+    if (wavefront_render_window_contains(dtid.xy) == false) {
+      return;
+    }
+    const uint2 size = wavefront_render_window_size();
+    path_index = wavefront_render_window_local_index(dtid.xy) + dtid.z * size.x * size.y;
+    if (path_index >= wavefront_load_resources().path_capacity) {
+      return;
+    }
+    output_pixel = wavefront_output_pixel(dtid.xy);
+  }
+  wavefront_initialize_light_path(path_index, output_pixel, constants.sample_index + dtid.z);
 }
 
   [numthreads(64, 1, 1)] void wavefront_init_light_path_0_resume_main(uint3 dtid : SV_DispatchThreadID) {
@@ -183,5 +189,71 @@ void wavefront_finish_light_emission(GPUWavefrontResources resources, uint path_
   uint seed = 0u;
   consumer.candidate.value = wavefront_completed_sampled_emission(resources, slot, consumer.candidate, seed);
   wavefront_emission_consumer_complete(resources, slot);
-  wavefront_finish_light_emission(resources, consumer.owner_index, consumer.output_pixel, consumer.output_pixel_index, consumer.spect, seed, consumer.candidate);
+  wavefront_finish_light_emission(resources, consumer.owner_index, consumer.output_pixel, consumer.output_pixel_index, consumer.spect, seed, consumer.candidate,
+    WAVEFRONT_RO_BUFFER(resources.light_state_buffer).Load(consumer.owner_index * kGPUWavefrontPathStateStride + kGPUWavefrontPathStateSampleIndexOffset));
+}
+
+bool wavefront_claim_scheduled_path(GPUWavefrontResources resources, out uint work_index) {
+  RWByteAddressBuffer scheduler = WAVEFRONT_RW_BUFFER(resources.scheduler_buffer);
+  const uint wave_count = WaveActiveCountBits(true);
+  const uint wave_offset = WavePrefixCountBits(true);
+  uint wave_base = 0u;
+  uint reserved_count = 0u;
+  if (WaveIsFirstLane()) {
+    const uint total_work = scheduler.Load(kGPUWavefrontSchedulerTotalWorkOffset);
+    // Each refill visits one resident pool; the host reserves that much counter headroom.
+    scheduler.InterlockedAdd(kGPUWavefrontSchedulerNextWorkOffset, wave_count, wave_base);
+    if (wave_base < total_work) {
+      reserved_count = min(wave_count, total_work - wave_base);
+      const uint remaining = total_work - wave_base - reserved_count;
+      const uint camera_queue = wavefront_queue_current_descriptor(true);
+      const uint light_queue = wavefront_queue_current_descriptor(false);
+      uint ignored;
+      if (camera_queue != kInvalidIndex) {
+        WAVEFRONT_RW_BUFFER(camera_queue).InterlockedMin(kGPUWavefrontQueuePad2Offset, remaining, ignored);
+      }
+      if (light_queue != kInvalidIndex) {
+        WAVEFRONT_RW_BUFFER(light_queue).InterlockedMin(kGPUWavefrontQueuePad2Offset, remaining, ignored);
+      }
+    }
+  }
+  wave_base = WaveReadLaneFirst(wave_base);
+  reserved_count = WaveReadLaneFirst(reserved_count);
+  work_index = wave_base + wave_offset;
+  return wave_offset < reserved_count;
+}
+
+[numthreads(64, 1, 1)] void wavefront_refill_paths_main(uint3 dtid : SV_DispatchThreadID) {
+  const GPUWavefrontResources resources = wavefront_load_resources();
+  const uint path_index = dtid.x;
+  if ((path_index >= resources.path_capacity) || (resources.scheduler_buffer == kInvalidIndex)) {
+    return;
+  }
+  if (WAVEFRONT_RO_BUFFER(resources.scheduler_buffer).Load(kGPUWavefrontSchedulerRefillOffset) == 0u) {
+    return;
+  }
+  const uint state_flags_offset = path_index * kGPUWavefrontPathStateStride + kGPUWavefrontPathStateFlagsOffset;
+  if ((resources.camera_state_buffer != kInvalidIndex) && ((WAVEFRONT_RO_BUFFER(resources.camera_state_buffer).Load(state_flags_offset) & GPUWavefrontPathFlags::Valid) != 0u)) {
+    return;
+  }
+  if ((resources.light_state_buffer != kInvalidIndex) && ((WAVEFRONT_RO_BUFFER(resources.light_state_buffer).Load(state_flags_offset) & GPUWavefrontPathFlags::Valid) != 0u)) {
+    return;
+  }
+  uint work_index;
+  if (wavefront_claim_scheduled_path(resources, work_index) == false) {
+    return;
+  }
+  const uint2 size = wavefront_render_window_size();
+  const uint pixel_count = size.x * size.y;
+  const uint pixel_index = work_index % pixel_count;
+  const uint2 output_pixel = wavefront_output_pixel(uint2(pixel_index % size.x, pixel_index / size.x));
+  const uint sample_index = constants.sample_index + work_index / pixel_count;
+  if (resources.camera_state_buffer != kInvalidIndex) {
+    wavefront_initialize_camera_path(path_index, output_pixel, sample_index, true);
+  }
+#if ETX_WAVEFRONT_PATH_TRACING_ONLY == 0
+  if (resources.light_state_buffer != kInvalidIndex) {
+    wavefront_initialize_light_path(path_index, output_pixel, sample_index);
+  }
+#endif
 }

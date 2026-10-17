@@ -151,7 +151,7 @@ ETX_SHARED_INLINE BSDFExternalRayInfo bsdf_external_ray_info_update_height(ETX_I
   BSDFExternalRayInfo result = ray;
   result.h = in_h;
   result.C1 = min(1.0f, max(0.0f, 0.5f * (result.h + 1.0f)));
-  if (result.w.z > 0.9999f) {
+  if ((result.w.z > 0.9999f) || (result.Lambda == 0.0f)) {
     result.G1 = 1.0f;
   } else if (result.w.z <= 0.0f) {
     result.G1 = 0.0f;
@@ -323,7 +323,7 @@ ETX_SHARED_INLINE BSDFExternalDielectricSample bsdf_external_sample_phase_functi
 
   float i_dot_m = dot(wi, wm);
   SpectralResponse f = bsdf_fresnel_calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
-  const SpectralResponse transmission = bsdf_fresnel_transmission_calculate(spect, i_dot_m, ext_ior, int_ior, thinfilm);
+  const SpectralResponse transmission = bsdf_fresnel_transmission_from_reflection(spect, i_dot_m, ext_ior, int_ior, thinfilm, f);
   const float eta = bsdf_dielectric_directional_eta(ext_ior, int_ior);
 
   BSDFExternalDielectricSample result = ETX_ZERO(BSDFExternalDielectricSample);

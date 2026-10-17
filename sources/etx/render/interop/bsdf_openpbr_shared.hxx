@@ -172,6 +172,14 @@ ETX_SHARED_NOINLINE BSDFSample bsdf_openpbr_sample(ETX_IN(BSDFResourceContext, c
     return result;
   }
 
+  const bool single_component = ((components.dielectric_weight == 0.0f) && (components.plastic_weight == 0.0f)) ||
+                                ((components.conductor_weight == 0.0f) && (components.plastic_weight == 0.0f)) ||
+                                ((components.conductor_weight == 0.0f) && (components.dielectric_weight == 0.0f));
+  if (single_component) {
+    result.properties &= ~BSDFSample::Diffuse;
+    return result;
+  }
+
   const BSDFEval eval = bsdf_openpbr_mix_eval(context, data, result.w_o, components, sampler);
   const uint32_t sample_properties = result.properties & BSDFSample::WavelengthDependentDirection;
   result.weight = spectral_response_zero(data.spectrum_sample);

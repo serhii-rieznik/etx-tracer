@@ -12,6 +12,9 @@ struct BSDFPlasticCoatingReflectionProposal {
 struct BSDFPlasticExternalAlbedos {
   SpectralResponse reflection ETX_INIT({});
   SpectralResponse transmission ETX_INIT({});
+  SpectralResponse internal_average_reflection ETX_INIT({});
+  SpectralResponse internal_average_transmission ETX_INIT({});
+  float compensation_reflection_probability ETX_INIT(0.0f);
 };
 
 struct BSDFPlasticDeltaThinfilmTerms {
@@ -74,10 +77,8 @@ ETX_SHARED_INLINE bool bsdf_plastic_delta_thinfilm_supported(ETX_IN(Material, ma
   return max(roughness.x, roughness.y) <= kDeltaAlphaTreshold;
 }
 
-ETX_SHARED_NOINLINE SpectralResponse bsdf_plastic_dielectric_total_branch_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
-  float mu, float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value) {
-  const BSDFEnergyCompensatedDielectricBranchPair pair =
-    bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, mu, alpha, incident_outside, interface_lut_value);
+ETX_SHARED_INLINE SpectralResponse bsdf_plastic_dielectric_total_branch_albedo_from_pair(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
+  ETX_IN(Material, material), ETX_IN(BSDFEnergyCompensatedDielectricBranchPair, pair), float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value) {
   const SpectralResponse single = bsdf_energy_compensated_dielectric_branch_pair_selected_albedo(spect, pair, outgoing_outside);
   const SpectralResponse e_i = bsdf_energy_compensated_dielectric_branch_pair_albedo(spect, pair);
   const SpectralResponse d_i = spectral_response_max(spectral_response_sub(bsdf_plastic_one(spect), e_i), 0.0f);
@@ -87,15 +88,36 @@ ETX_SHARED_NOINLINE SpectralResponse bsdf_plastic_dielectric_total_branch_albedo
   return spectral_response_min(spectral_response_add(single, spectral_response_mul(spectral_response_mul(coefficient, d_i), d_o)), 1.0f);
 }
 
-ETX_SHARED_NOINLINE SpectralResponse bsdf_plastic_dielectric_total_branch_average_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
-  ETX_IN(Material, material), float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value) {
+ETX_SHARED_NOINLINE SpectralResponse bsdf_plastic_dielectric_total_branch_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
+  float mu, float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value) {
+  const BSDFEnergyCompensatedDielectricBranchPair pair =
+    bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, mu, alpha, incident_outside, interface_lut_value);
+  return bsdf_plastic_dielectric_total_branch_albedo_from_pair(context, spect, material, pair, alpha, incident_outside, outgoing_outside, interface_lut_value);
+}
+
+ETX_SHARED_NOINLINE SpectralResponse bsdf_plastic_dielectric_total_branch_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
+  ETX_IN(float3, direction), float alpha, bool outgoing_outside, float2 interface_lut_value) {
+  const BSDFEnergyCompensatedDielectricBranchPair pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, direction, alpha, interface_lut_value);
+  return bsdf_plastic_dielectric_total_branch_albedo_from_pair(context, spect, material, pair, alpha, direction.z > 0.0f, outgoing_outside, interface_lut_value);
+}
+
+ETX_SHARED_INLINE SpectralResponse bsdf_plastic_dielectric_total_branch_average_albedo_from_residuals(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
+  ETX_IN(Material, material), float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value, ETX_IN(SpectralResponse, d_i), ETX_IN(SpectralResponse, d_o)) {
   const SpectralResponse single =
     bsdf_energy_compensated_dielectric_branch_average_albedo(context, spect, material, alpha, incident_outside, outgoing_outside, interface_lut_value);
-  const SpectralResponse d_i = bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, incident_outside, interface_lut_value);
-  const SpectralResponse d_o = bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, outgoing_outside, interface_lut_value);
-  const SpectralResponse coefficient =
-    bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, material, alpha, incident_outside, outgoing_outside, interface_lut_value);
+  const SpectralResponse coefficient = bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, material.energy_compensation_interface_index, alpha, incident_outside,
+    outgoing_outside, interface_lut_value, d_i, d_o);
   return spectral_response_min(spectral_response_add(single, spectral_response_mul(spectral_response_mul(coefficient, d_i), d_o)), 1.0f);
+}
+
+ETX_SHARED_INLINE SpectralResponse bsdf_plastic_dielectric_total_branch_average_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
+  ETX_IN(Material, material), float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value) {
+  const SpectralResponse d_i = bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, incident_outside, interface_lut_value);
+  SpectralResponse d_o = d_i;
+  if (incident_outside != outgoing_outside) {
+    d_o = bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, outgoing_outside, interface_lut_value);
+  }
+  return bsdf_plastic_dielectric_total_branch_average_albedo_from_residuals(context, spect, material, alpha, incident_outside, outgoing_outside, interface_lut_value, d_i, d_o);
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_plastic_external_reflection_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material), float mu,
@@ -110,37 +132,28 @@ ETX_SHARED_INLINE BSDFPlasticExternalAlbedos bsdf_plastic_external_albedos_from_
   const SpectralResponse d_i = spectral_response_max(spectral_response_sub(bsdf_plastic_one(spect), e_i), 0.0f);
   const SpectralResponse d_o_reflection = bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, true, interface_lut_value);
   const SpectralResponse d_o_transmission = bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, false, interface_lut_value);
-  const SpectralResponse reflection_coefficient = bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, material, alpha, true, true, interface_lut_value);
-  const SpectralResponse transmission_coefficient = bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, material, alpha, true, false, interface_lut_value);
+  const SpectralResponse reflection_coefficient = bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, material.energy_compensation_interface_index, alpha, true,
+    true, interface_lut_value, d_o_reflection, d_o_reflection);
+  const SpectralResponse transmission_coefficient = bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, material.energy_compensation_interface_index, alpha, true,
+    false, interface_lut_value, d_o_reflection, d_o_transmission);
   const SpectralResponse single_reflection = bsdf_energy_compensated_dielectric_branch_pair_selected_albedo(spect, pair, true);
   const SpectralResponse single_transmission = bsdf_energy_compensated_dielectric_branch_pair_selected_albedo(spect, pair, false);
   result.reflection =
     spectral_response_min(spectral_response_add(single_reflection, spectral_response_mul(spectral_response_mul(reflection_coefficient, d_i), d_o_reflection)), 1.0f);
   result.transmission =
     spectral_response_min(spectral_response_add(single_transmission, spectral_response_mul(spectral_response_mul(transmission_coefficient, d_i), d_o_transmission)), 1.0f);
+  result.compensation_reflection_probability =
+    bsdf_energy_compensated_dielectric_compensation_branch_proposal(reflection_coefficient, transmission_coefficient, d_o_reflection, d_o_transmission).x;
+  result.internal_average_reflection =
+    bsdf_plastic_dielectric_total_branch_average_albedo_from_residuals(context, spect, material, alpha, false, false, interface_lut_value, d_o_transmission, d_o_transmission);
+  result.internal_average_transmission =
+    bsdf_plastic_dielectric_total_branch_average_albedo_from_residuals(context, spect, material, alpha, false, true, interface_lut_value, d_o_transmission, d_o_reflection);
   return result;
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_plastic_internal_transmission_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
   float mu, float alpha, float2 interface_lut_value) {
   return bsdf_plastic_dielectric_total_branch_albedo(context, spect, material, mu, alpha, false, true, interface_lut_value);
-}
-
-ETX_SHARED_INLINE SpectralResponse bsdf_plastic_internal_average_transmission_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
-  float alpha, float2 interface_lut_value) {
-  return bsdf_plastic_dielectric_total_branch_average_albedo(context, spect, material, alpha, false, true, interface_lut_value);
-}
-
-ETX_SHARED_INLINE SpectralResponse bsdf_plastic_internal_average_reflection_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
-  float alpha, float2 interface_lut_value) {
-  return bsdf_plastic_dielectric_total_branch_average_albedo(context, spect, material, alpha, false, false, interface_lut_value);
-}
-
-ETX_SHARED_NOINLINE SpectralResponse bsdf_plastic_internal_bounce_denominator(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
-  ETX_IN(SpectralResponse, substrate), float alpha, float2 interface_lut_value) {
-  const SpectralResponse one = bsdf_plastic_one(spect);
-  const SpectralResponse r_internal_average = bsdf_plastic_internal_average_reflection_albedo(context, spect, material, alpha, interface_lut_value);
-  return spectral_response_max(spectral_response_sub(one, spectral_response_mul(substrate, r_internal_average)), kEpsilon);
 }
 
 ETX_SHARED_INLINE BSDFPlasticDeltaThinfilmTerms bsdf_plastic_delta_thinfilm_terms(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
@@ -163,7 +176,7 @@ ETX_SHARED_INLINE BSDFPlasticDeltaThinfilmTerms bsdf_plastic_delta_thinfilm_term
   const SpectralResponse internal_transmission_average =
     bsdf_fresnel_transmission_average(data.spectrum_sample, int_ior, ext_ior, bsdf_fresnel_orient_coherent_interface(thinfilm, false));
   const SpectralResponse denominator = spectral_response_max(spectral_response_sub(one, spectral_response_mul(result.substrate, internal_reflection_average)), kEpsilon);
-  const SpectralResponse t_i = bsdf_fresnel_transmission_calculate(data.spectrum_sample, result.local_w_i.z, ext_ior, int_ior, thinfilm);
+  const SpectralResponse t_i = bsdf_fresnel_transmission_from_reflection(data.spectrum_sample, result.local_w_i.z, ext_ior, int_ior, thinfilm, fresnel_i);
   result.reflection = spectral_response_mul(reflectance, fresnel_i);
   const SpectralResponse average_diffuse_scale = spectral_response_div(spectral_response_mul(t_i, internal_transmission_average), denominator);
   const SpectralResponse eta = spectral_response_div(int_ior.eta, ext_ior.eta);
@@ -295,16 +308,14 @@ ETX_SHARED_INLINE SpectralResponse bsdf_plastic_coated_diffuse_func_prepared(ETX
   return spectral_response_mul(substrate_func, diffuse_scale);
 }
 
-ETX_SHARED_INLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_reflection_proposal_from_pair(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
-  ETX_IN(Material, material), ETX_IN(BSDFEnergyCompensatedDielectricBranchPair, pair), float alpha, float2 interface_lut_value) {
+ETX_SHARED_INLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_reflection_proposal_from_pair(ETX_IN(SpectralQuery, spect),
+  ETX_IN(BSDFEnergyCompensatedDielectricBranchPair, pair), float compensation_branch_probability) {
   BSDFPlasticCoatingReflectionProposal result = ETX_ZERO(BSDFPlasticCoatingReflectionProposal);
   const float visible_probability = bsdf_energy_compensated_dielectric_branch_pair_visible_probability(pair);
   const float reflection_visible_probability = bsdf_energy_compensated_dielectric_branch_pair_selected_visible_probability(pair, true);
   const SpectralResponse e_i = bsdf_energy_compensated_dielectric_branch_pair_albedo(spect, pair);
   const float base_probability = bsdf_energy_compensated_saturate(spectral_response_monochromatic(e_i));
   const float base_reflection_probability = (visible_probability > kEpsilon) ? bsdf_energy_compensated_saturate(reflection_visible_probability / visible_probability) : 0.0f;
-  const float compensation_branch_probability =
-    bsdf_energy_compensated_dielectric_compensation_branch_probability(context, spect, material, alpha, true, true, interface_lut_value);
   const float base_mass = base_probability * base_reflection_probability;
   const float compensation_mass = max(0.0f, 1.0f - base_probability) * compensation_branch_probability;
   const float total_mass = base_mass + compensation_mass;
@@ -318,6 +329,13 @@ ETX_SHARED_INLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_refl
   return result;
 }
 
+ETX_SHARED_INLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_reflection_proposal_from_pair(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
+  ETX_IN(Material, material), ETX_IN(BSDFEnergyCompensatedDielectricBranchPair, pair), float alpha, float2 interface_lut_value) {
+  const float compensation_branch_probability =
+    bsdf_energy_compensated_dielectric_compensation_branch_probability(context, spect, material, alpha, true, true, interface_lut_value);
+  return bsdf_plastic_coating_reflection_proposal_from_pair(spect, pair, compensation_branch_probability);
+}
+
 ETX_SHARED_NOINLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_reflection_proposal(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
   ETX_IN(Material, material), float mu_i, float alpha, float2 interface_lut_value) {
   const BSDFEnergyCompensatedDielectricBranchPair pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, mu_i, alpha, true, interface_lut_value);
@@ -326,25 +344,26 @@ ETX_SHARED_NOINLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_re
 
 ETX_SHARED_INLINE BSDFPlasticCoatingReflectionProposal bsdf_plastic_coating_reflection_proposal(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
   ETX_IN(Material, material), ETX_IN(float3, local_w_i), float alpha, float2 interface_lut_value) {
-  return bsdf_plastic_coating_reflection_proposal(context, spect, material, local_w_i.z, alpha, interface_lut_value);
+  const BSDFEnergyCompensatedDielectricBranchPair pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, local_w_i, alpha, interface_lut_value);
+  return bsdf_plastic_coating_reflection_proposal_from_pair(context, spect, material, pair, alpha, interface_lut_value);
 }
 
-ETX_SHARED_NOINLINE BSDFPlasticIncidentTerms bsdf_plastic_prepare_incident_terms(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
+ETX_SHARED_INLINE BSDFPlasticIncidentTerms bsdf_plastic_prepare_incident_terms(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
   ETX_IN(float3, local_w_i), ETX_IN(SpectralResponse, substrate), float alpha, float2 interface_lut_value) {
   BSDFPlasticIncidentTerms result = ETX_ZERO(BSDFPlasticIncidentTerms);
   const BSDFEnergyCompensatedDielectricBranchPair pair =
-    bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, local_w_i.z, alpha, true, interface_lut_value);
+    bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, local_w_i, alpha, interface_lut_value);
   const BSDFPlasticExternalAlbedos external_albedos = bsdf_plastic_external_albedos_from_pair(context, data.spectrum_sample, material, pair, alpha, interface_lut_value);
-  const SpectralResponse transmission_average = bsdf_plastic_internal_average_transmission_albedo(context, data.spectrum_sample, material, alpha, interface_lut_value);
-  const SpectralResponse denominator = bsdf_plastic_internal_bounce_denominator(context, data.spectrum_sample, material, substrate, alpha, interface_lut_value);
-  result.diffuse_scale = spectral_response_div(spectral_response_mul(external_albedos.transmission, transmission_average), denominator);
+  const SpectralResponse denominator =
+    spectral_response_max(spectral_response_sub(bsdf_plastic_one(data.spectrum_sample), spectral_response_mul(substrate, external_albedos.internal_average_reflection)), kEpsilon);
+  result.diffuse_scale = spectral_response_div(spectral_response_mul(external_albedos.transmission, external_albedos.internal_average_transmission), denominator);
 
   const SpectralResponse diffuse_energy = spectral_response_mul(result.diffuse_scale, substrate);
   const float reflection_energy = max(0.0f, spectral_response_monochromatic(external_albedos.reflection));
   const float substrate_energy = max(0.0f, spectral_response_monochromatic(diffuse_energy));
   const float total_energy = reflection_energy + substrate_energy;
   result.specular_probability = (total_energy > kEpsilon) ? bsdf_energy_compensated_saturate(reflection_energy / total_energy) : 0.0f;
-  result.coating_proposal = bsdf_plastic_coating_reflection_proposal_from_pair(context, data.spectrum_sample, material, pair, alpha, interface_lut_value);
+  result.coating_proposal = bsdf_plastic_coating_reflection_proposal_from_pair(data.spectrum_sample, pair, external_albedos.compensation_reflection_probability);
   return result;
 }
 
@@ -361,8 +380,7 @@ ETX_SHARED_NOINLINE BSDFEval bsdf_plastic_evaluate_prepared_impl(ETX_IN(BSDFReso
   const float2 base_roughness = material.layer_base_class != 0u ? bsdf_resource_evaluate_base_roughness(context, material, data.tex) : roughness;
   const float diffuse_roughness = saturate(0.5f * (base_roughness.x + base_roughness.y));
   const float2 interface_lut_value = bsdf_energy_compensated_interface_lut_value(material, thinfilm);
-  const SpectralResponse outgoing_transmission =
-    bsdf_plastic_dielectric_total_branch_albedo(context, data.spectrum_sample, material, local_w_o.z, alpha, true, false, interface_lut_value);
+  const SpectralResponse outgoing_transmission = bsdf_plastic_dielectric_total_branch_albedo(context, data.spectrum_sample, material, local_w_o, alpha, false, interface_lut_value);
   const SpectralResponse transmission_average =
     bsdf_plastic_dielectric_total_branch_average_albedo(context, data.spectrum_sample, material, alpha, true, false, interface_lut_value);
   const SpectralResponse escape_scale = spectral_response_div(outgoing_transmission, spectral_response_max(transmission_average, kEpsilon));

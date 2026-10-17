@@ -87,9 +87,15 @@ bool wavefront_propose_emitter_to_point_from_index(uint emitter_index, float pdf
   if (emitter_instance.emitter_class == EmitterClass::Area) {
     TriangleData tri = load_triangle(bindless_buffers[NonUniformResourceIndex(constants.scene.triangles)], emitter_instance.triangle_index);
     sample_value.barycentric = random_barycentric(emitter_sample_rnd);
-    Vertex vertex = wavefront_interpolate_vertex(tri, sample_value.barycentric);
     const GPUSceneInstanceData scene_instance = load_scene_instance(emitter_instance.instance_index);
-    vertex = scene_instance_transform_vertex(scene_instance, vertex);
+    const ByteAddressBuffer positions = bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_positions)];
+    const float3 position = load_float3(positions, tri.i.x) * sample_value.barycentric.x + load_float3(positions, tri.i.y) * sample_value.barycentric.y +
+                            load_float3(positions, tri.i.z) * sample_value.barycentric.z;
+    Vertex vertex = (Vertex)0;
+    vertex.pos = scene_instance_transform_point(scene_instance, position);
+    if (constants.scene.vertex_texcoords != kInvalidIndex) {
+      vertex.tex = interpolate_uv_from_barycentrics(bindless_buffers[NonUniformResourceIndex(constants.scene.vertex_texcoords)], tri, sample_value.barycentric);
+    }
     const float3 geo_normal = scene_instance_transform_geometric_normal(scene_instance, tri.geo_n);
     sample_value.origin = vertex.pos;
     sample_value.normal = geo_normal;
@@ -113,8 +119,6 @@ bool wavefront_propose_emitter_to_point_from_index(uint emitter_index, float pdf
       return false;
     }
     sample_value.medium_index = thermal_surface_emission_medium(material, dot(geo_normal, -sample_value.direction));
-    tri.material_index = sample_value.material_index;
-    vertex = coated_emitter_vertex(vertex, tri, sample_value.barycentric, emitter_instance.instance_index, material, sample_value.direction);
     sample_value.value = spectral_response_zero(spect);
     sample_value.is_delta = 0u;
     sample_value.is_distant = 0u;
@@ -141,7 +145,20 @@ bool wavefront_propose_emitter_to_point_from_index(uint emitter_index, float pdf
       emission_input.material_index = sample_value.material_index;
       emission_input.uv = vertex.tex;
       emission_input.geometric_cosine = signed_cosine;
-      emission_input.local_outgoing = thermal_surface_local_direction(material, vertex.nrm, vertex.tan, vertex.btn, -sample_value.direction);
+      // Authored emission uses the geometric cosine; only thermal and substrate escape evaluation need a shading frame.
+      if (thermal_surface_uses_substrate_escape(material) || ((material.temperature_kelvin != 0.0f) && (material.thermal_rgb_image_index != kInvalidIndex))) {
+        vertex = scene_instance_transform_vertex(scene_instance, wavefront_interpolate_vertex(tri, sample_value.barycentric));
+        tri.material_index = sample_value.material_index;
+        vertex = coated_emitter_vertex(vertex, tri, sample_value.barycentric, emitter_instance.instance_index, material, sample_value.direction);
+        emission_input.local_outgoing = thermal_surface_local_direction(material, vertex.nrm, vertex.tan, vertex.btn, -sample_value.direction);
+      }
+      if (thermal_surface_uses_substrate_escape(material) == false) {
+        const BSDFResourceContext context = make_bsdf_resource_gpu_context(constants.scene.images, constants.scene.spectrums, constants.scene.spectral_values,
+          constants.scene.energy_compensation_interfaces, constants.scene.scene_globals);
+        const SpectralResponse radiance = thermal_surface_combined_radiance(context, spect, material, emission_input.uv, signed_cosine, emission_input.local_outgoing.z);
+        sample_value.value = spectral_response_mul(radiance, sampled_material_coverage(sample_value.material_index, sample_value.image_uv));
+        emission_input.material_index = kInvalidIndex;
+      }
     }
     return true;
   }

@@ -14,15 +14,20 @@ ETX_SHARED_INLINE bool bsdf_conductor_has_finite_coating(ETX_IN(Material, materi
 #endif
 }
 
-ETX_SHARED_INLINE SpectralResponse bsdf_conductor_tinted_fresnel(ETX_IN(SpectralQuery, spect), float cosine, ETX_IN(RefractiveIndexSample, exterior),
-  ETX_IN(RefractiveIndexSample, interior), ETX_IN(ThinfilmEval, optics), ETX_IN(SpectralResponse, reflectance)) {
-  const SpectralResponse metal = spectral_response_mul(bsdf_fresnel_calculate(spect, cosine, exterior, interior, optics), reflectance);
+ETX_SHARED_INLINE SpectralResponse bsdf_conductor_fresnel(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), uint32_t interface_index, ETX_IN(SpectralQuery, spect),
+  float cosine, ETX_IN(RefractiveIndexSample, exterior), ETX_IN(RefractiveIndexSample, interior), ETX_IN(ThinfilmEval, optics));
+
+ETX_SHARED_INLINE SpectralResponse bsdf_conductor_tinted_fresnel(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), ETX_IN(SpectralQuery, spect), float cosine,
+  ETX_IN(RefractiveIndexSample, exterior), ETX_IN(RefractiveIndexSample, interior), ETX_IN(ThinfilmEval, optics), ETX_IN(SpectralResponse, reflectance)) {
+  const SpectralResponse metal =
+    spectral_response_mul(bsdf_conductor_fresnel(context, material, material.energy_compensation_interface_index, spect, cosine, exterior, interior, optics), reflectance);
 #if ETX_ENABLE_COHERENT_COATING
   if ((optics.coating_ior.cls == SpectralDistribution::Conductor) && bsdf_resource_interface_has_layers(optics)) {
     RefractiveIndexSample black = exterior;
     black.cls = SpectralDistribution::Conductor;
     black.k = spectral_response_zero(spect);
-    const SpectralResponse black_reflection = bsdf_fresnel_calculate(spect, cosine, exterior, black, optics);
+    const SpectralResponse black_reflection =
+      bsdf_conductor_fresnel(context, material, material.coating.energy_compensation_interface_index, spect, cosine, exterior, black, optics);
     return spectral_response_add(metal, spectral_response_mul(black_reflection, spectral_response_sub(spectral_response_make(spect, 1.0f), reflectance)));
   }
 #endif
@@ -38,7 +43,7 @@ ETX_SHARED_INLINE SpectralResponse bsdf_conductor_delta_weight(ETX_IN(BSDFResour
   }
 
   const SpectralResponse reflectance = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
-  return bsdf_conductor_tinted_fresnel(data.spectrum_sample, w_i.z, ext_ior, int_ior, thinfilm, reflectance);
+  return bsdf_conductor_tinted_fresnel(context, material, data.spectrum_sample, w_i.z, ext_ior, int_ior, thinfilm, reflectance);
 }
 
 ETX_SHARED_INLINE float3 bsdf_conductor_delta_reflect(ETX_IN(BSDFData, data), ETX_IN(Material, material)) {

@@ -246,6 +246,8 @@ struct SceneData {
   std::vector<Medium> mediums_vector;
   std::vector<Scene::EnergyCompensationInterface> energy_compensation_interfaces;
   std::unordered_map<uint64_t, uint32_t> energy_compensation_interface_cache;
+  // Generated interface pixels are immutable until their images are released and replaced.
+  std::unordered_map<uint32_t, uint64_t> energy_compensation_image_hashes;
   struct ThermalSurfaceResources {
     uint64_t input_hash = 0u;
     uint64_t scattering_input_hash = 0u;

@@ -1375,7 +1375,7 @@ void upbp_evaluate_environment_direct_hit(uint path_index, GPUWavefrontResources
       } else {
         const float log_reverse_ray_pdf = segment.log_transport_pdf_reverse + (upbp_vertex_is_medium(previous) ? previous.log_medium_event_density : 0.0f);
         const float log_shared =
-          upbp_previous_bpt_connectible(endpoint.arrival_weights) ? log(emitter_selection_pdf) + log(pdf_area) + endpoint.arrival_weights.log_d_shared : kUPBPLogZero;
+          upbp_previous_bpt_connectible(endpoint.arrival_weights) ? log(emitter_selection_pdf) + log(pdf_dir) + endpoint.arrival_weights.log_d_shared : kUPBPLogZero;
         mis_weight = upbp_surface_mis_weight(upbp_bpt_direct_hit_cross_technique_weights(resources.iteration, endpoint.arrival_weights, log_shared,
                                                log(emitter_selection_pdf) + log(pdf_dir_out) + log_reverse_ray_pdf),
           0.0f);

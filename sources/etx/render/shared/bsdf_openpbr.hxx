@@ -158,11 +158,20 @@ ETX_SHARED_INLINE BSDFSample sample(const BSDFData& data, const Material& materi
     return result;
   }
 
+  const bool single_component = ((components.dielectric_weight == 0.0f) && (components.plastic_weight == 0.0f)) ||
+                                ((components.conductor_weight == 0.0f) && (components.plastic_weight == 0.0f)) ||
+                                ((components.conductor_weight == 0.0f) && (components.dielectric_weight == 0.0f));
+  if (single_component) {
+    result.properties &= ~BSDFSample::Diffuse;
+    return result;
+  }
+
   const BSDFEval eval = mix_eval(data, result.w_o, components, smp);
+  const uint32_t sample_properties = result.properties & BSDFSample::WavelengthDependentDirection;
   result.weight = (eval.pdf > 0.0f) ? (eval.bsdf / eval.pdf) : SpectralResponse(data.spectrum_sample, 0.0f);
   result.pdf = eval.pdf;
   result.eta = eval.eta;
-  result.properties = eval.properties;
+  result.properties = eval.properties | sample_properties;
   result.medium_index = eval.medium_index;
   return result;
 }

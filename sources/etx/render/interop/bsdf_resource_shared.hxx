@@ -99,7 +99,7 @@ ETX_SHARED_INLINE RefractiveIndexSample bsdf_resource_evaluate_refractive_index(
   } else {
     result.k = bsdf_resource_load_spectrum(context, refractive_index.k_index, query);
   }
-  return result;
+  return refractive_index_sample_transport(result);
 }
 
 ETX_SHARED_INLINE bool bsdf_resource_thinfilm_enabled(ETX_IN(Thinfilm, film)) {

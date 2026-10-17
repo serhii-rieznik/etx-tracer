@@ -80,6 +80,9 @@ GPUWavefrontResources wavefront_load_resources() {
   result.emission_request_stride = buffer.Load(kGPUWavefrontResourcesEmissionRequestStrideOffset);
   result.transport_work_buffer = buffer.Load(kGPUWavefrontResourcesTransportWorkBufferOffset);
   result.vcm_coating_buffer = buffer.Load(kGPUWavefrontResourcesVCMCoatingBufferOffset);
+  result.light_trace_normalization = asfloat(buffer.Load(kGPUWavefrontResourcesLightTraceNormalizationOffset));
+  result.scheduler_buffer = buffer.Load(kGPUWavefrontResourcesSchedulerBufferOffset);
+  result.sample_batch_size = buffer.Load(kGPUWavefrontResourcesSampleBatchSizeOffset);
   return result;
 }
 

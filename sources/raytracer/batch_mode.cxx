@@ -2677,6 +2677,9 @@ bool run_gpu_preloaded_scene_to_buffer(const BatchRenderOptions& options, BatchR
       render_wall_time_ms, first_frame_time_ms, average_frame_time_ms, steady_state_frame_time_ms);
   }
 
+  const RendererMemoryStats memory_stats = session.gpu_renderer.memory_stats();
+  log::info("GPU path statistics: reserved_paths=%u tiles=%u max_camera_depth=%u max_light_depth=%u", memory_stats.wavefront_path_capacity, memory_stats.tile_count,
+    memory_stats.max_observed_camera_path_length, memory_stats.max_observed_light_path_length);
   if (options.gpu_kernel_timings) {
     const RendererKernelTimingStats& timing_stats = session.gpu_renderer.kernel_timing_stats();
     if (timing_stats.supported == false) {

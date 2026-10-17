@@ -15,22 +15,26 @@ bool wavefront_subsurface_random_walk_applicable(Material material, BSDFSample b
 #endif
 
 uint wavefront_load_path_vertex_flags_only(uint descriptor_index, uint vertex_index) {
-  ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
   if (wavefront_path_vertex_descriptor_is_light(descriptor_index)) {
-    const uint packed_path_and_flags = buffer.Load(vertex_index * wavefront_light_path_vertex_stride() + kGPUWavefrontLightPathVertexPackedPathAndFlagsOffset);
+    const uint2 address = wavefront_light_vertex_address(descriptor_index, vertex_index);
+    ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(address.x);
+    const uint packed_path_and_flags = buffer.Load(address.y + kGPUWavefrontLightPathVertexPackedPathAndFlagsOffset);
     return wavefront_unpack_light_path_vertex_flags(packed_path_and_flags);
   }
 
+  ByteAddressBuffer buffer = WAVEFRONT_RO_BUFFER(descriptor_index);
   return buffer.Load(vertex_index * wavefront_path_vertex_stride() + kGPUWavefrontPathVertexFlagsOffset);
 }
 
 void wavefront_store_path_vertex_pdf_from_next_only(uint descriptor_index, uint vertex_index, float pdf_from_next) {
-  RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
   if (wavefront_path_vertex_descriptor_is_light(descriptor_index)) {
-    buffer.Store(vertex_index * wavefront_light_path_vertex_stride() + kGPUWavefrontLightPathVertexPdfFromNextOffset, asuint(pdf_from_next));
+    const uint2 address = wavefront_light_vertex_address(descriptor_index, vertex_index);
+    RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(address.x);
+    buffer.Store(address.y + kGPUWavefrontLightPathVertexPdfFromNextOffset, asuint(pdf_from_next));
     return;
   }
 
+  RWByteAddressBuffer buffer = WAVEFRONT_RW_BUFFER(descriptor_index);
   buffer.Store(vertex_index * wavefront_path_vertex_stride() + kGPUWavefrontPathVertexPdfFromNextOffset, asuint(pdf_from_next));
 }
 
@@ -73,6 +77,11 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
   if (wavefront_path_state_valid(state) == false) {
     return;
   }
+  if ((resources.scheduler_buffer != kInvalidIndex) && (state.path_length >= resources.max_path_length)) {
+    state.reserved0 = 0u;
+    wavefront_store_path_state(state_descriptor, path_index, state);
+    return;
+  }
   GPUWavefrontHit hit = wavefront_load_hit(hit_descriptor, path_index);
 
   Material material = (Material)0;
@@ -112,27 +121,27 @@ void wavefront_surface_continue_prepare_specialized(bool from_camera, uint dispa
     support_rnd = float2(rnd01(bsdf_sampler.seed), rnd01(bsdf_sampler.seed));
   }
   if ((use_upbp_path_sampler == false) && from_camera && (state.path_length == 1u)) {
-    const bool use_blue_noise_bsdf = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamBSDF);
-    const bool use_blue_noise_connection = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamConnection);
-    const bool use_blue_noise_support = sample_use_blue_noise_primary(constants.sample_index, kSamplerStreamSupport);
+    const bool use_blue_noise_bsdf = sample_use_blue_noise_primary(state.sample_index, kSamplerStreamBSDF);
+    const bool use_blue_noise_connection = sample_use_blue_noise_primary(state.sample_index, kSamplerStreamConnection);
+    const bool use_blue_noise_support = sample_use_blue_noise_primary(state.sample_index, kSamplerStreamSupport);
     uint2 sample_pixel = state.pixel;
     if (use_blue_noise_bsdf || use_blue_noise_connection || use_blue_noise_support) {
       sample_pixel = sample_blue_noise_translated_pixel(state.pixel);
     }
     if (use_blue_noise_bsdf) {
       uint bsdf_dimension = sampler_stream_dimension_base(kSamplerStreamBSDF);
-      bsdf_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, bsdf_dimension + 0u),
-        sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, bsdf_dimension + 1u));
+      bsdf_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, bsdf_dimension + 0u),
+        sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, bsdf_dimension + 1u));
     }
     if (use_blue_noise_connection) {
       uint connection_dimension = sampler_stream_dimension_base(kSamplerStreamConnection);
-      connection_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, connection_dimension + 0u),
-        sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, connection_dimension + 1u));
+      connection_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, connection_dimension + 0u),
+        sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, connection_dimension + 1u));
     }
     if (use_blue_noise_support) {
       uint support_dimension = sampler_stream_dimension_base(kSamplerStreamSupport);
-      support_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, support_dimension + 0u),
-        sample_blue_noise_value_at_translated_pixel(sample_pixel, constants.sample_index, support_dimension + 1u));
+      support_rnd = float2(sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, support_dimension + 0u),
+        sample_blue_noise_value_at_translated_pixel(sample_pixel, state.sample_index, support_dimension + 1u));
     }
   }
   state.film_uv = connection_rnd;

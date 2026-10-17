@@ -164,8 +164,9 @@ uint wavefront_vcm_merge_cell_hash(float3 position, uint cell_index) {
 
 bool wavefront_vcm_merge_candidate_matches(WavefrontVCMMergeQuery query, uint light_index, out float distance_squared) {
   distance_squared = 0.0f;
-  ByteAddressBuffer light_vertices = WAVEFRONT_RO_BUFFER(query.resources.light_vertex_buffer);
-  const uint light_vertex_offset = light_index * wavefront_light_path_vertex_stride();
+  const uint2 address = wavefront_light_vertex_address(query.resources.light_vertex_buffer, light_index);
+  ByteAddressBuffer light_vertices = WAVEFRONT_RO_BUFFER(address.x);
+  const uint light_vertex_offset = address.y;
   const uint packed_path_and_flags = light_vertices.Load(light_vertex_offset + kGPUWavefrontLightPathVertexPackedPathAndFlagsOffset);
   const uint light_path_length = wavefront_unpack_light_path_vertex_path_length(packed_path_and_flags);
   // VCM counts the first light-surface vertex as depth zero; GPU history includes the emitter root.

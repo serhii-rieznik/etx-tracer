@@ -19,6 +19,11 @@ void wavefront_store_dispatch_args(RWByteAddressBuffer buffer, uint offset, uint
   if (dtid.x == 0u) {
     wavefront_store_dispatch_args(dispatch_args, kGPUWavefrontCameraDispatchArgsOffset, camera_count, 1u);
     wavefront_store_dispatch_args(dispatch_args, kGPUWavefrontLightDispatchArgsOffset, light_count, 1u);
+    uint refill_count = 0u;
+    if ((resources.scheduler_buffer != kInvalidIndex) && (WAVEFRONT_RO_BUFFER(resources.scheduler_buffer).Load(kGPUWavefrontSchedulerRefillOffset) != 0u)) {
+      refill_count = resources.path_capacity;
+    }
+    wavefront_store_dispatch_args(dispatch_args, kGPUWavefrontRefillDispatchArgsOffset, refill_count, 1u);
     for (uint batch_size = 1u; batch_size <= kGPUWavefrontConnectDispatchArgsCount; ++batch_size) {
       const uint offset = kGPUWavefrontConnectDispatchArgsOffset + (batch_size - 1u) * kGPUWavefrontDispatchArgsStride;
       wavefront_store_dispatch_args(dispatch_args, offset, camera_count, batch_size);

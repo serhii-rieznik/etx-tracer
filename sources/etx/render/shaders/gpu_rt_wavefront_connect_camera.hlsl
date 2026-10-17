@@ -62,7 +62,7 @@
     return;
   }
 
-  SpectralResponse value = spectral_response_mul(spectral_response_mul(task.contribution, result_value.transmittance), mis_weight);
+  SpectralResponse value = spectral_response_mul(spectral_response_mul(task.contribution, result_value.transmittance), mis_weight * resources.light_trace_normalization);
   SpectralQuery spect = (SpectralQuery)0;
   spect.wavelength = value.wavelength;
   spect.flags = value.flags;

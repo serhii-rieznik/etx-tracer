@@ -324,7 +324,7 @@ bool upbp_complete_recursive_arrival(GPUUPBPVertex source, GPUUPBPVertex target,
     state.failure_vertex_index = vertex_index;
     return false;
   }
-  if ((vertex_index > 1u) || ((source.flags & GPUUPBPVertexFlags::DistantEndpoint) == 0u)) {
+  if (((target.flags & GPUUPBPVertexFlags::DistantEndpoint) == 0u) && ((vertex_index > 1u) || ((source.flags & GPUUPBPVertexFlags::DistantEndpoint) == 0u))) {
     const float log_distance = upbp_log_positive(segment.distance);
     state.weights.log_d_shared = upbp_log_product(state.weights.log_d_shared, upbp_log_product(log_distance, log_distance));
   }

@@ -9,6 +9,15 @@ uint wavefront_light_path_vertex_stride() {
   return scene_path_mode_is_vcm() ? kGPUWavefrontLightPathVertexVCMStride : kGPUWavefrontLightPathVertexStride;
 }
 
+uint2 wavefront_light_vertex_address(uint descriptor_index, uint vertex_index) {
+  if (scene_path_mode_is_vcm()) {
+    ByteAddressBuffer pages = WAVEFRONT_RO_BUFFER(descriptor_index);
+    descriptor_index = pages.Load((vertex_index / kGPUWavefrontLightVertexPageCapacity) * 4u);
+    vertex_index %= kGPUWavefrontLightVertexPageCapacity;
+  }
+  return uint2(descriptor_index, vertex_index * wavefront_light_path_vertex_stride());
+}
+
 float wavefront_vcm_surface_factor() {
   return scene_path_mode_is_vcm() ? constants.vcm_vm_weight : 0.0f;
 }

@@ -585,41 +585,6 @@ void sort_memory_allocation_rows(std::vector<MemoryAllocationRow>& rows, const I
   });
 }
 
-const char* material_class_display_name(const MaterialDescription::Class cls) {
-  switch (cls) {
-    case MaterialClass::Diffuse:
-      return "Diffuse";
-    case MaterialClass::Translucent:
-      return "Translucent";
-    case MaterialClass::Plastic:
-      return "Coated diffuse";
-    case MaterialClass::Conductor:
-      return "Conductor";
-    case MaterialClass::CoatedConductor:
-      return "Coated conductor";
-    case MaterialClass::Mix:
-      return "Mix";
-    case MaterialClass::Dielectric:
-      return "Dielectric";
-    case MaterialClass::Thinfilm:
-      return "Thinfilm";
-    case MaterialClass::Mirror:
-      return "Mirror";
-    case MaterialClass::Boundary:
-      return "Boundary";
-    case MaterialClass::Velvet:
-      return "Velvet";
-    case MaterialClass::OpenPBR:
-      return "OpenPBR";
-    case MaterialClass::Void:
-      return "Void";
-    case MaterialClass::DiffractionGrating:
-      return "Diffraction Grating";
-    default:
-      return "Undefined";
-  }
-}
-
 const char* spectral_distribution_class_display_name(SpectralDistribution::Class cls) {
   switch (cls) {
     case SpectralDistribution::Conductor:
@@ -3380,7 +3345,8 @@ bool UI::build_material(SceneRepresentation& scene_rep, MaterialDescription& mat
               uint32_t required_ior = SpectralDistribution::Invalid;
               if ((material.cls == MaterialClass::Conductor) || (material.cls == MaterialClass::CoatedConductor)) {
                 required_ior = SpectralDistribution::Conductor;
-              } else if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Plastic) || dielectric_support_ior) {
+              } else if ((material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::OpenPBR) ||
+                         dielectric_support_ior) {
                 required_ior = SpectralDistribution::Dielectric;
               }
               const bool int_ior_changed = mixed_control(int_ior_mixed, [&]() {
@@ -3399,8 +3365,8 @@ bool UI::build_material(SceneRepresentation& scene_rep, MaterialDescription& mat
             });
             const bool dielectric_exterior = (material.cls == MaterialClass::Conductor) || (material.cls == MaterialClass::Dielectric) ||
                                              (material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::CoatedConductor) ||
-                                             (material.cls == MaterialClass::Thinfilm) || (layer_authored && (material.layers.coating_enabled != 0u)) || uses_film_support_ior ||
-                                             uses_coated_translucent_ior;
+                                             (material.cls == MaterialClass::Thinfilm) || (material.cls == MaterialClass::OpenPBR) ||
+                                             (layer_authored && (material.layers.coating_enabled != 0u)) || uses_film_support_ior || uses_coated_translucent_ior;
             const bool ext_ior_changed = mixed_control(ext_ior_mixed, [&]() {
               return ior_picker(scene_rep, "Outside IOR", material.ext_ior, data, ext_ior_mixed,
                 dielectric_exterior ? SpectralDistribution::Dielectric : SpectralDistribution::Invalid, SpectrumTarget::Channel::OutsideEta, SpectrumTarget::Channel::OutsideK,
@@ -7196,7 +7162,7 @@ bool UI::build_material_class_selector(MaterialDescription& material, bool mixed
 
   const uint32_t selected = select_bsdf ? (material.layers.explicit_layers != 0u ? material.layers.bsdf : material.cls) : material.cls;
   property_label(select_bsdf ? "Model" : "Base type");
-  const char* material_name = mixed ? "Mixed" : (selected == MaterialClass::Undefined ? "Custom layers" : material_class_display_name(selected));
+  const char* material_name = mixed ? "Mixed" : material_class_display_name(selected);
   ImVec2 button_size = ImVec2(ImGui::GetContentRegionAvail().x, 0.0f);
   const char* popup_id = select_bsdf ? "material_bsdf_popup" : "material_base_popup";
   const std::string button_label = format_string("%s##%s", material_name, popup_id);

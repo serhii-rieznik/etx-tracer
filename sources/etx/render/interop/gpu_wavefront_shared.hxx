@@ -106,7 +106,7 @@ struct ETX_ALIGNED GPUWavefrontPathState {
   uint32_t path_length ETX_INIT(0u);
   uint32_t pixel_index ETX_INIT(0u);
   uint32_t flags ETX_INIT(0u);
-  uint32_t path_source ETX_INIT(0u);
+  uint32_t sample_index ETX_INIT(0u);
   uint32_t sampler_seed ETX_INIT(0u);
   uint2 pixel ETX_INIT({});
   SpectralQuery spect ETX_INIT({});
@@ -407,7 +407,7 @@ struct ETX_ALIGNED GPUWavefrontResources {
   uint32_t emission_request_stride ETX_INIT(0u);
   uint32_t transport_work_buffer ETX_INIT(kInvalidIndex);
   uint32_t vcm_coating_buffer ETX_INIT(kInvalidIndex);
-  uint32_t reserved_vcm_coating0 ETX_INIT(0u);
-  uint32_t reserved_vcm_coating1 ETX_INIT(0u);
-  uint32_t reserved_vcm_coating2 ETX_INIT(0u);
+  float light_trace_normalization ETX_INIT(1.0f);
+  uint32_t scheduler_buffer ETX_INIT(kInvalidIndex);
+  uint32_t sample_batch_size ETX_INIT(1u);
 };

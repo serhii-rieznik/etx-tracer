@@ -9,6 +9,9 @@ struct BSDFVelvetPrepared {
   SpectralResponse diffuse ETX_INIT({});
   SpectralResponse sheen ETX_INIT({});
   float roughness ETX_INIT(0.0f);
+  float root_alpha ETX_INIT(0.0f);
+  float lut_row ETX_INIT(0.0f);
+  float lut_log_extent ETX_INIT(0.0f);
   uint32_t image_index ETX_INIT(kInvalidIndex);
 };
 
@@ -18,6 +21,12 @@ ETX_SHARED_INLINE BSDFVelvetPrepared bsdf_velvet_prepare(ETX_IN(BSDFResourceCont
   result.sheen = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
   const float2 roughness = bsdf_resource_evaluate_roughness(context, material, data.tex);
   result.roughness = saturate(0.5f * (roughness.x + roughness.y));
+  if (result.roughness > kEpsilon) {
+    const float alpha = result.roughness;
+    result.root_alpha = sqrt(alpha);
+    result.lut_row = log(alpha / kEpsilon) / log(1.0f / kEpsilon);
+    result.lut_log_extent = log(1.0f + 1.0f / result.root_alpha);
+  }
   BSDFEnergyCompensationInterfaceData lookup = ETX_ZERO(BSDFEnergyCompensationInterfaceData);
   if (bsdf_resource_energy_compensation_interface_try_load(context, material.energy_compensation_interface_index, lookup) && (lookup.cls == MaterialClass::Velvet)) {
     result.image_index = lookup.directional_lut;
@@ -26,13 +35,10 @@ ETX_SHARED_INLINE BSDFVelvetPrepared bsdf_velvet_prepare(ETX_IN(BSDFResourceCont
 }
 
 ETX_SHARED_INLINE float bsdf_velvet_lookup(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFVelvetPrepared, prepared), float mu, bool projected_area) {
-  const float alpha = max(kEpsilon, prepared.roughness);
-  const float root_alpha = sqrt(alpha);
-  const float row = log(alpha / kEpsilon) / log(1.0f / kEpsilon);
-  const float coordinate = projected_area ? (asin(saturate(mu)) * (2.0f / kPi)) : sqrt(log(1.0f + saturate(mu) / root_alpha) / log(1.0f + 1.0f / root_alpha));
+  const float coordinate = projected_area ? (asin(saturate(mu)) * (2.0f / kPi)) : sqrt(log(1.0f + saturate(mu) / prepared.root_alpha) / prepared.lut_log_extent);
   const float scale = float(kVelvetPhysicalLutSize - 1u) / float(kVelvetPhysicalLutSize);
-  const float4 value = bsdf_resource_image_evaluate_rgba_no_pdf_or_zero(context, prepared.image_index, float2(coordinate * scale, row * scale));
-  return projected_area ? (value.y / root_alpha) : value.x;
+  const float4 value = bsdf_resource_image_evaluate_rgba_no_pdf_or_zero(context, prepared.image_index, float2(coordinate * scale, prepared.lut_row * scale));
+  return projected_area ? (value.y / prepared.root_alpha) : value.x;
 }
 
 ETX_SHARED_INLINE float bsdf_velvet_sheen_function(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFVelvetPrepared, prepared), ETX_IN(float3, incoming), ETX_IN(float3, outgoing)) {

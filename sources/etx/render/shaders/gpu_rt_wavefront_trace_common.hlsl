@@ -1114,6 +1114,17 @@ void wavefront_trace_path(bool from_camera, uint dispatch_index) {
   if (wavefront_path_state_valid(state) == false) {
     return;
   }
+  if (resources.scheduler_buffer != kInvalidIndex) {
+    const uint max_path_length = WaveActiveMax(state.path_length);
+    if (WaveIsFirstLane()) {
+      RWByteAddressBuffer scheduler = WAVEFRONT_RW_BUFFER(resources.scheduler_buffer);
+      const uint offset = from_camera ? kGPUWavefrontSchedulerCameraMaxPathLengthOffset : kGPUWavefrontSchedulerLightMaxPathLengthOffset;
+      if (max_path_length > scheduler.Load(offset)) {
+        uint ignored;
+        scheduler.InterlockedMax(offset, max_path_length, ignored);
+      }
+    }
+  }
   RayDesc ray = (RayDesc)0;
   ray.Origin = state.ray.o;
   ray.Direction = state.ray.d;

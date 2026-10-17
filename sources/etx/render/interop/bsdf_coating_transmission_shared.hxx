@@ -307,8 +307,8 @@ ETX_SHARED_NOINLINE float bsdf_coating_transmission_conditioned_pdf(ETX_IN(BSDFR
     return 0.0f;
   }
   const BSDFEnergyCompensatedPreparedMaterial prepared = bsdf_energy_compensated_prepare_material(context, data.spectrum_sample, material, data.tex, sampler);
-  const BSDFEnergyCompensatedDielectricBranchPair pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, abs(incoming_local.z),
-    prepared.alpha, incoming_local.z > 0.0f, prepared.interface_lut_value);
+  const BSDFEnergyCompensatedDielectricBranchPair pair =
+    bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, incoming_local, prepared.alpha, prepared.interface_lut_value);
   return bsdf_coating_transmission_conditioned_pdf_prepared(data.spectrum_sample, prepared, pair, incoming_local, outgoing, required_event);
 }
 
@@ -529,8 +529,7 @@ ETX_SHARED_NOINLINE BSDFEnergyCompensatedDielectricSampleState bsdf_coating_tran
   state.w_i_local = incoming_local;
   state.prepared = bsdf_energy_compensated_prepare_material(context, data.spectrum_sample, material, data.tex, sampler);
   const BSDFEnergyCompensatedPreparedMaterial prepared = state.prepared;
-  state.incident_pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, abs(incoming_local.z), prepared.alpha,
-    incoming_local.z > 0.0f, prepared.interface_lut_value);
+  state.incident_pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, incoming_local, prepared.alpha, prepared.interface_lut_value);
   const float base_probability = bsdf_coating_transmission_conditioned_base_probability(data.spectrum_sample, state.incident_pair);
   const float selector = fixed ? sampler.fixed_w : bsdf_sampler_next(sampler);
   float3 outgoing;

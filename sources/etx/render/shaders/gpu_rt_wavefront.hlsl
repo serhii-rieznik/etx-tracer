@@ -119,7 +119,7 @@ void wavefront_store_path_state(uint descriptor_index, uint index, GPUWavefrontP
   buffer.Store(base_offset + kGPUWavefrontPathStatePathLengthOffset, state.path_length);
   buffer.Store(base_offset + kGPUWavefrontPathStatePixelIndexOffset, state.pixel_index);
   buffer.Store(base_offset + kGPUWavefrontPathStateFlagsOffset, state.flags);
-  buffer.Store(base_offset + kGPUWavefrontPathStatePathSourceOffset, state.path_source);
+  buffer.Store(base_offset + kGPUWavefrontPathStateSampleIndexOffset, state.sample_index);
   buffer.Store(base_offset + kGPUWavefrontPathStateSamplerSeedOffset, state.sampler_seed);
   buffer.Store2(base_offset + kGPUWavefrontPathStatePixelOffset, state.pixel);
   buffer.Store(base_offset + kGPUWavefrontPathStateSpectralQueryOffset + 0u, asuint(state.spect.wavelength));
@@ -144,7 +144,7 @@ GPUWavefrontPathState wavefront_load_path_state(uint descriptor_index, uint inde
   result.path_length = buffer.Load(base_offset + kGPUWavefrontPathStatePathLengthOffset);
   result.pixel_index = buffer.Load(base_offset + kGPUWavefrontPathStatePixelIndexOffset);
   result.flags = buffer.Load(base_offset + kGPUWavefrontPathStateFlagsOffset);
-  result.path_source = buffer.Load(base_offset + kGPUWavefrontPathStatePathSourceOffset);
+  result.sample_index = buffer.Load(base_offset + kGPUWavefrontPathStateSampleIndexOffset);
   result.sampler_seed = buffer.Load(base_offset + kGPUWavefrontPathStateSamplerSeedOffset);
   result.pixel = buffer.Load2(base_offset + kGPUWavefrontPathStatePixelOffset);
   result.spect.wavelength = asfloat(buffer.Load(base_offset + kGPUWavefrontPathStateSpectralQueryOffset + 0u));
@@ -1105,7 +1105,7 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   state.path_length = 1u;
   state.pixel_index = output_pixel_index;
   state.flags = GPUWavefrontPathFlags::Valid | GPUWavefrontPathFlags::Connectible | GPUWavefrontPathFlags::From_camera;
-  state.path_source = PathSource::Camera;
+  state.sample_index = constants.sample_index;
   state.sampler_seed = seed;
   state.pixel = camera_space_pixel;
   state.spect = spect;
@@ -1152,7 +1152,7 @@ void wavefront_enqueue_next_state(bool from_camera, uint path_index, GPUWavefron
   state.path_length = 1u;
   state.pixel_index = path_index;
   state.flags = GPUWavefrontPathFlags::Valid | GPUWavefrontPathFlags::From_light | GPUWavefrontPathFlags::Connectible;
-  state.path_source = PathSource::Light;
+  state.sample_index = constants.sample_index;
   state.sampler_seed = seed;
   state.pixel = dtid.xy;
   state.spect = spect;

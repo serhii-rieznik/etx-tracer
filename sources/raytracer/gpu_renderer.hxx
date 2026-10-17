@@ -141,7 +141,8 @@ struct GPURaytracingRenderer : public Renderer {
     VCMCoatingClear = 116u,
     VCMCoatingContinue = 117u,
     VCMCoatingFinish = 118u,
-    Count = 119u,
+    RefillPaths = 119u,
+    Count = 120u,
   };
 
   GPURaytracingRenderer(TaskScheduler&);
@@ -509,12 +510,16 @@ struct GPURaytracingRenderer : public Renderer {
   bool upload_scene_data(RHIContext& ctx, const SceneRepresentation& scene, RHIBindlessHandle vertex_positions_buffer, SceneUpload& upload);
   bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes);
   bool update_scene_data_partial(RHIContext& ctx, SceneRepresentation& scene, const UpdateFlags& changes, SceneUpload& upload);
-  bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t path_capacity, uint32_t active_path_capacity, bool allow_light_history_shrink);
+  bool ensure_wavefront_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t path_capacity, uint32_t active_path_capacity, uint32_t light_path_count,
+    bool allow_light_history_shrink);
   bool ensure_upbp_buffers(RHIContext& ctx, const SceneRepresentation& scene, uint32_t global_path_count, uint32_t resident_light_capacity, uint32_t resident_camera_capacity,
     uint32_t camera_batch_index, uint32_t camera_batch_offset, uint32_t camera_batch_count);
   bool update_upbp_iteration_resources(RHIDevice& device, const SceneRepresentation& scene, uint32_t global_path_count);
   bool reserve_upbp_history(RHIContext& ctx, const SceneRepresentation& scene, const uint32_t* counters, uint32_t active_paths, uint32_t bounce_count, bool from_camera);
   bool ensure_light_vertex_capacity(RHIContext& ctx, uint32_t required_vertex_capacity);
+  bool ensure_vcm_light_vertex_pages(RHIDevice& device, uint32_t vertex_capacity);
+  void destroy_vcm_light_vertex_pages(RHIDevice& device);
+  uint64_t light_vertex_storage_size() const;
   void request_pipeline_preparation(const SceneRepresentation& scene, const char* reason, bool force_reload);
   void request_pending_pipeline_preparation(const SceneRepresentation& scene);
   void poll_preparation_tasks(RHIContext& ctx, bool wait_for_active = false);
@@ -579,6 +584,7 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _camera_buffer = {};
   RHIBindlessHandle _blue_noise_buffer = {};
   RHIBindlessHandle _wavefront_resources_buffer = {};
+  RHIBindlessHandle _wavefront_scheduler_buffer = {};
   GPUWavefrontResources _wavefront_resources = {};
   UPBPRuntimeResources _upbp = {};
   RHIBindlessHandle _camera_state_buffer = {};
@@ -596,6 +602,7 @@ struct GPURaytracingRenderer : public Renderer {
   RHIBindlessHandle _light_queue_count_readback_buffer = {};
   RHIBindlessHandle _camera_vertex_buffer = {};
   RHIBindlessHandle _light_vertex_buffer = {};
+  std::vector<RHIBindlessHandle> _vcm_light_vertex_pages = {};
   RHIBindlessHandle _fast_light_endpoint_buffer = {};
   RHIBindlessHandle _light_vertex_counter_buffer = {};
   RHIBindlessHandle _light_vertex_counter_readback_buffer = {};
@@ -640,6 +647,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint64_t _camera_buffer_size = 0;
   uint64_t _blue_noise_buffer_size = 0;
   uint64_t _wavefront_resources_buffer_size = 0;
+  uint64_t _wavefront_scheduler_buffer_size = 0;
   uint64_t _camera_state_buffer_size = 0;
   uint64_t _light_state_buffer_size = 0;
   uint64_t _camera_hit_buffer_size = 0;
@@ -681,6 +689,7 @@ struct GPURaytracingRenderer : public Renderer {
   uint32_t _spectral_values_buffer_descriptor_index = ~0u;
   uint32_t _blue_noise_buffer_descriptor_index = ~0u;
   uint32_t _wavefront_resources_buffer_descriptor_index = ~0u;
+  uint32_t _wavefront_scheduler_buffer_descriptor_index = ~0u;
   uint32_t _camera_state_buffer_descriptor_index = ~0u;
   uint32_t _light_state_buffer_descriptor_index = ~0u;
   uint32_t _camera_hit_buffer_descriptor_index = ~0u;
@@ -737,6 +746,8 @@ struct GPURaytracingRenderer : public Renderer {
   bool _integrator_data_revision_initialized = false;
   uint32_t _frame_index = 0u;
   uint32_t _sample_index = 0u;
+  uint32_t _wavefront_samples_per_batch = 1u;
+  uint32_t _wavefront_initial_samples_per_batch = 1u;
   WavefrontRenderStep _wavefront_render_step = WavefrontRenderStep::InitSample;
   std::array<DensityDispatch, 2u> _density_dispatches = {};
   uint32_t _density_dispatch_count = 0u;
@@ -776,7 +787,7 @@ struct GPURaytracingRenderer : public Renderer {
   bool _wavefront_tile_plan_valid = false;
   bool _wavefront_camera_phase_initialized = false;
   bool _wavefront_auto_tuning_enabled = false;
-  bool _batch_coarse_progress = true;
+  bool _batch_coarse_progress = false;
   RHIResourceState _wavefront_dispatch_args_buffer_state = RHIResourceState::Undefined;
   RHIResourceState _camera_queue_count_readback_state = RHIResourceState::Undefined;
   RHIResourceState _light_queue_count_readback_state = RHIResourceState::Undefined;

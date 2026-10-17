@@ -711,12 +711,6 @@ ETX_SHARED_INLINE SpectralResponse vcm_connect_to_camera(const Raytracing& rt, c
   float weight = options.enable_mis() ? (1.0f / (1.0f + w_light)) : 1.0f;
   ETX_VALIDATE(weight);
 
-  if (camera_at_medium == false) {
-    const auto& tri = scene.triangles[isect->triangle_index];
-    const float3 geo_normal = scene_triangle_world_geometric_normal(scene, tri, isect->instance_index);
-    weight *= fix_shading_normal(geo_normal, isect->nrm, isect->w_i, w_o);
-  }
-
   return tr * scatter * state.throughput * camera_sample.weight * weight;
 }
 
@@ -724,12 +718,7 @@ ETX_SHARED_INLINE void vcm_cam_handle_miss(const VCMOptions& options, const VCMI
   if (options.direct_hit() == false)
     return;
 
-  if (state.path_distance > 0.0f) {
-    state.d_vcm *= sqr(state.path_distance);
-    ETX_VALIDATE(state.d_vcm);
-    state.path_distance = 0.0f;
-  }
-
+  // Environment-hit PDFs use solid angle even when the last ray crossed transparent boundaries.
   SpectralResponse accumulated_value = {state.spect, 0.0f};
   float sum_pdf_dir_out = 0.0f;
   float sum_pdf_dir = 0.0f;
@@ -1307,9 +1296,11 @@ ETX_SHARED_INLINE LightStepResult vcm_light_step(const Scene& scene, const Camer
     float2 rnd_bsdf = state.sampler.next_2d();        // Phase function sampling
     float2 rnd_connection = state.sampler.next_2d();  // Camera connection
     float2 rnd_support = state.sampler.next_2d();     // Support operations
-    // Fold pending boundary + medium segment before connection/MIS
-    float seg = state.path_distance + medium_sample.sampled_medium_t;
-    state.d_vcm *= sqr(seg);
+    // Distant emission already samples transverse area, including at a first medium vertex.
+    if ((state.total_path_depth > 0u) || state.local_emitter()) {
+      const float seg = state.path_distance + medium_sample.sampled_medium_t;
+      state.d_vcm *= sqr(seg);
+    }
     ETX_VALIDATE(state.d_vcm);
     state.path_distance = 0.0f;
 

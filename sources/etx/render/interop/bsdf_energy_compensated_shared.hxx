@@ -326,6 +326,9 @@ ETX_SHARED_INLINE uint32_t bsdf_energy_compensated_coating_image(ETX_IN(BSDFReso
   if (image_index == lookup.terminal_source_lut) {
     return coating_lookup.terminal_source_lut;
   }
+  if (image_index == lookup.rgb_fresnel_lut) {
+    return coating_lookup.rgb_fresnel_lut;
+  }
   return image_index == lookup.probability_lut ? coating_lookup.probability_lut : kInvalidIndex;
 }
 
@@ -454,6 +457,20 @@ ETX_SHARED_INLINE float2 bsdf_energy_compensated_interface_lut_value(ETX_IN(Mate
   return float2(bsdf_energy_compensated_thinfilm_lut_value(material, optics), coating_value);
 }
 
+ETX_SHARED_INLINE SpectralResponse bsdf_conductor_fresnel(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), uint32_t interface_index, ETX_IN(SpectralQuery, spect),
+  float cosine, ETX_IN(RefractiveIndexSample, exterior), ETX_IN(RefractiveIndexSample, interior), ETX_IN(ThinfilmEval, optics)) {
+  if (spectral_query_is_spectral(spect) == false) {
+    BSDFEnergyCompensationInterfaceData lookup = ETX_ZERO(BSDFEnergyCompensationInterfaceData);
+    if (bsdf_resource_energy_compensation_interface_try_load(context, interface_index, lookup) && (lookup.rgb_fresnel_lut != kInvalidIndex)) {
+      const float2 uv = float2(bsdf_energy_compensated_lut_uv(saturate(abs(cosine)), kBSDFConductorRGBFresnelSize), 0.5f);
+      const float4 value = bsdf_energy_compensated_sample_interface_image(context, interface_index, lookup, lookup.rgb_fresnel_lut, uv, kBSDFConductorRGBFresnelSize, 1u,
+        bsdf_energy_compensated_interface_lut_value(material, optics));
+      return spectral_response_make(spect, float3(value.x, value.y, value.z));
+    }
+  }
+  return bsdf_fresnel_calculate(spect, cosine, exterior, interior, optics);
+}
+
 ETX_SHARED_INLINE float bsdf_energy_compensated_scalar_roughness_from_value(ETX_IN(float2, roughness)) {
   const float alpha = 0.5f * (roughness.x + roughness.y);
   return max(kBSDFNormalDistributionMinAlpha, bsdf_energy_compensated_saturate(alpha));
@@ -497,16 +514,6 @@ ETX_SHARED_INLINE uint32_t bsdf_energy_compensated_dielectric_lut_index(ETX_IN(B
   if (bsdf_resource_energy_compensation_interface_try_load(context, material.energy_compensation_interface_index, interface_data) &&
       (interface_data.cls == MaterialClass::Dielectric)) {
     return interface_data.directional_lut;
-  }
-
-  return kInvalidIndex;
-}
-
-ETX_SHARED_INLINE uint32_t bsdf_energy_compensated_dielectric_average_lut_index(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material)) {
-  BSDFEnergyCompensationInterfaceData interface_data = ETX_ZERO(BSDFEnergyCompensationInterfaceData);
-  if (bsdf_resource_energy_compensation_interface_try_load(context, material.energy_compensation_interface_index, interface_data) &&
-      (interface_data.cls == MaterialClass::Dielectric)) {
-    return interface_data.average_lut;
   }
 
   return kInvalidIndex;
@@ -791,6 +798,111 @@ ETX_SHARED_NOINLINE BSDFEnergyCompensatedDielectricBranchPair bsdf_energy_compen
   return result;
 }
 
+ETX_SHARED_NOINLINE BSDFEnergyCompensatedDielectricBranchPair bsdf_energy_compensated_dielectric_branch_pair_azimuth(ETX_IN(BSDFResourceContext, context),
+  ETX_IN(SpectralQuery, spect), uint32_t interface_index, float mu, bool incident_outside, float2 interface_lut_value, ETX_IN(BSDFEnergyCompensationInterfaceData, lookup),
+  float azimuth, uint32_t roughness_index) {
+  BSDFEnergyCompensatedDielectricBranchPair result = ETX_ZERO(BSDFEnergyCompensatedDielectricBranchPair);
+  const uint32_t image_index = lookup.directional_lut;
+  const uint32_t expected_width = 4u * kBSDFEnergyCompensationDielectricLutSize;
+  const uint32_t height = lookup.dielectric_azimuth_count * lookup.dielectric_roughness_count;
+  const uint32_t branch_0_offset = bsdf_energy_compensated_dielectric_branch_index(incident_outside, true) * kBSDFEnergyCompensationDielectricLutSize;
+  const uint32_t branch_1_offset = bsdf_energy_compensated_dielectric_branch_index(incident_outside, false) * kBSDFEnergyCompensationDielectricLutSize;
+  const float mu_axis = sqrt(bsdf_energy_compensated_saturate(mu)) * float(kBSDFEnergyCompensationDielectricLutSize - 1u);
+  const float y = (float(roughness_index * lookup.dielectric_azimuth_count) + azimuth) / float(height);
+  const float x_0 = (float(branch_0_offset) + mu_axis) / float(expected_width);
+  const float x_1 = (float(branch_1_offset) + mu_axis) / float(expected_width);
+  if (spectral_query_is_spectral(spect)) {
+    // Anisotropic spectral images store (outside energy, inside energy, outside probability, inside probability).
+    const uint32_t packed_image = incident_outside ? lookup.directional_lut : lookup.probability_lut;
+    uint32_t depth = 0u;
+    if ((lookup.cache_mode != kBSDFEnergyCompensationCacheModeSpectralScalar) || (lookup.spectral_wavelength_count != kBSDFEnergyCompensationSpectralWavelengthCount) ||
+        (lookup.thinfilm_slice_count == 0u) || (bsdf_resource_image_has_size(context, packed_image, kBSDFEnergyCompensationDielectricLutSize, height, depth) == false) ||
+        (depth != (lookup.thinfilm_slice_count * kBSDFEnergyCompensationSpectralWavelengthCount))) {
+      return result;
+    }
+    const float wavelength =
+      saturate((spect.wavelength - lookup.spectral_shortest_wavelength) / max(kEpsilon, lookup.spectral_longest_wavelength - lookup.spectral_shortest_wavelength)) *
+      float(kBSDFEnergyCompensationSpectralWavelengthCount - 1u);
+    const float film_axis = saturate(interface_lut_value.x) * float(lookup.thinfilm_slice_count - 1u);
+    const uint32_t film_0 = uint32_t(film_axis);
+    const uint32_t film_1 = min(film_0 + 1u, lookup.thinfilm_slice_count - 1u);
+    const float film_t = film_axis - float(film_0);
+    uint32_t coating_0 = 0u;
+    uint32_t coating_1 = 0u;
+    float coating_t = 0.0f;
+#if ETX_ENABLE_COHERENT_COATING
+    const float coating_axis = saturate(interface_lut_value.y) * float(lookup.coating_slice_count - 1u);
+    coating_0 = uint32_t(coating_axis);
+    coating_1 = min(coating_0 + 1u, lookup.coating_slice_count - 1u);
+    coating_t = coating_axis - float(coating_0);
+#endif
+    const float x = mu_axis / float(kBSDFEnergyCompensationDielectricLutSize);
+    const float z_0 = (float(film_0 * kBSDFEnergyCompensationSpectralWavelengthCount) + wavelength) / float(depth);
+    const float z_1 = (float(film_1 * kBSDFEnergyCompensationSpectralWavelengthCount) + wavelength) / float(depth);
+    const uint32_t image_0 = bsdf_energy_compensated_coating_image(context, interface_index, lookup, packed_image, coating_0);
+    float4 value = bsdf_resource_image_evaluate_rgba_3d_or_zero(context, image_0, float3(x, y, z_0));
+    if (film_0 != film_1) {
+      const float4 next = bsdf_resource_image_evaluate_rgba_3d_or_zero(context, image_0, float3(x, y, z_1));
+      value = value * (1.0f - film_t) + next * film_t;
+    }
+    if (coating_0 != coating_1) {
+      const uint32_t image_1 = bsdf_energy_compensated_coating_image(context, interface_index, lookup, packed_image, coating_1);
+      float4 next = bsdf_resource_image_evaluate_rgba_3d_or_zero(context, image_1, float3(x, y, z_0));
+      if (film_0 != film_1) {
+        const float4 next_film = bsdf_resource_image_evaluate_rgba_3d_or_zero(context, image_1, float3(x, y, z_1));
+        next = next * (1.0f - film_t) + next_film * film_t;
+      }
+      value = value * (1.0f - coating_t) + next * coating_t;
+    }
+    result.outside_albedo.x = saturate(value.x);
+    result.inside_albedo.x = saturate(value.y);
+    result.outside_probability = saturate(value.z);
+    result.inside_probability = saturate(value.w);
+    return result;
+  }
+
+  const float4 outside_value =
+    bsdf_energy_compensated_sample_interface_image(context, interface_index, lookup, image_index, float2(x_0, y), expected_width, height, interface_lut_value);
+  const float4 inside_value =
+    bsdf_energy_compensated_sample_interface_image(context, interface_index, lookup, image_index, float2(x_1, y), expected_width, height, interface_lut_value);
+  const float3 outside_albedo = saturate(make_float3(outside_value.x, outside_value.y, outside_value.z));
+  const float3 inside_albedo = saturate(make_float3(inside_value.x, inside_value.y, inside_value.z));
+  result.outside_albedo = float4(outside_albedo.x, outside_albedo.y, outside_albedo.z, 0.0f);
+  result.inside_albedo = float4(inside_albedo.x, inside_albedo.y, inside_albedo.z, 0.0f);
+  result.outside_probability = bsdf_energy_compensated_saturate(outside_value.w);
+  result.inside_probability = bsdf_energy_compensated_saturate(inside_value.w);
+  return result;
+}
+
+ETX_SHARED_INLINE BSDFEnergyCompensatedDielectricBranchPair bsdf_energy_compensated_dielectric_branch_pair_value(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
+  ETX_IN(Material, material), ETX_IN(float3, direction), float alpha, float2 interface_lut_value) {
+  BSDFEnergyCompensationInterfaceData lookup = ETX_ZERO(BSDFEnergyCompensationInterfaceData);
+  bsdf_resource_energy_compensation_interface_try_load(context, material.energy_compensation_interface_index, lookup);
+  if (lookup.dielectric_azimuth_count <= 1u) {
+    return bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material.energy_compensation_interface_index, abs(direction.z), alpha, direction.z > 0.0f,
+      interface_lut_value);
+  }
+  const float phi = ((direction.x == 0.0f) && (direction.y == 0.0f)) ? 0.0f : atan2(abs(direction.y), abs(direction.x));
+  const float coordinate = clamp(phi * (2.0f * kInvPi) * float(lookup.dielectric_azimuth_count - 1u), 0.0f, float(lookup.dielectric_azimuth_count - 1u));
+  if (lookup.dielectric_roughness_count == 1u) {
+    return bsdf_energy_compensated_dielectric_branch_pair_azimuth(context, spect, material.energy_compensation_interface_index, abs(direction.z), direction.z > 0.0f,
+      interface_lut_value, lookup, coordinate, 0u);
+  }
+  const float roughness_coordinate = bsdf_energy_compensated_dielectric_alpha_axis(alpha) * float(lookup.dielectric_roughness_count - 1u);
+  const uint32_t first = min(uint32_t(roughness_coordinate), lookup.dielectric_roughness_count - 2u);
+  const float fraction = roughness_coordinate - float(first);
+  const BSDFEnergyCompensatedDielectricBranchPair a = bsdf_energy_compensated_dielectric_branch_pair_azimuth(context, spect, material.energy_compensation_interface_index,
+    abs(direction.z), direction.z > 0.0f, interface_lut_value, lookup, coordinate, first);
+  const BSDFEnergyCompensatedDielectricBranchPair b = bsdf_energy_compensated_dielectric_branch_pair_azimuth(context, spect, material.energy_compensation_interface_index,
+    abs(direction.z), direction.z > 0.0f, interface_lut_value, lookup, coordinate, first + 1u);
+  BSDFEnergyCompensatedDielectricBranchPair result = ETX_ZERO(BSDFEnergyCompensatedDielectricBranchPair);
+  result.outside_albedo = lerp(a.outside_albedo, b.outside_albedo, fraction);
+  result.inside_albedo = lerp(a.inside_albedo, b.inside_albedo, fraction);
+  result.outside_probability = a.outside_probability + (b.outside_probability - a.outside_probability) * fraction;
+  result.inside_probability = a.inside_probability + (b.inside_probability - a.inside_probability) * fraction;
+  return result;
+}
+
 ETX_SHARED_INLINE BSDFEnergyCompensatedDielectricBranchPair bsdf_energy_compensated_dielectric_branch_pair_value(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
   ETX_IN(Material, material), float mu, float alpha, bool incident_outside, float2 interface_lut_value) {
   return bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material.energy_compensation_interface_index, mu, alpha, incident_outside, interface_lut_value);
@@ -857,20 +969,29 @@ ETX_SHARED_INLINE float bsdf_energy_compensated_dielectric_visible_probability(E
 
 ETX_SHARED_INLINE float4 bsdf_energy_compensated_dielectric_average_value(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material), float alpha, uint32_t column,
   float2 interface_lut_value) {
-  const uint32_t image_index = bsdf_energy_compensated_dielectric_average_lut_index(context, material);
+  BSDFEnergyCompensationInterfaceData lookup = ETX_ZERO(BSDFEnergyCompensationInterfaceData);
+  if ((bsdf_resource_energy_compensation_interface_try_load(context, material.energy_compensation_interface_index, lookup) == false) || (lookup.cls != MaterialClass::Dielectric)) {
+    return float4(0.0f, 0.0f, 0.0f, 0.0f);
+  }
+  const uint32_t image_index = lookup.average_lut;
+  const uint32_t height = lookup.dielectric_roughness_count;
   const float x = float(column) / 8.0f;
-  const float y = bsdf_energy_compensated_lut_uv(bsdf_energy_compensated_dielectric_alpha_axis(alpha), kBSDFEnergyCompensationDielectricLutSize);
-  return bsdf_energy_compensated_sample_interface_image(context, material.energy_compensation_interface_index, image_index, float2(x, y), 8u,
-    kBSDFEnergyCompensationDielectricLutSize, interface_lut_value);
+  const float y = bsdf_energy_compensated_lut_uv(bsdf_energy_compensated_dielectric_alpha_axis(alpha), height);
+  return bsdf_energy_compensated_sample_interface_image(context, material.energy_compensation_interface_index, image_index, float2(x, y), 8u, height, interface_lut_value);
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_energy_compensated_dielectric_branch_average_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
   ETX_IN(Material, material), float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value) {
   const uint32_t column = bsdf_energy_compensated_dielectric_branch_index(incident_outside, outgoing_outside);
-  const uint32_t image_index = bsdf_energy_compensated_dielectric_average_lut_index(context, material);
+  BSDFEnergyCompensationInterfaceData lookup = ETX_ZERO(BSDFEnergyCompensationInterfaceData);
+  if ((bsdf_resource_energy_compensation_interface_try_load(context, material.energy_compensation_interface_index, lookup) == false) || (lookup.cls != MaterialClass::Dielectric)) {
+    return spectral_response_zero(spect);
+  }
+  const uint32_t image_index = lookup.average_lut;
+  const uint32_t height = lookup.dielectric_roughness_count;
   const float x = float(column) / 8.0f;
-  const float y = bsdf_energy_compensated_lut_uv(bsdf_energy_compensated_dielectric_alpha_axis(alpha), kBSDFEnergyCompensationDielectricLutSize);
-  return bsdf_energy_compensated_lut_response(context, spect, material, image_index, float2(x, y), 8u, kBSDFEnergyCompensationDielectricLutSize, interface_lut_value);
+  const float y = bsdf_energy_compensated_lut_uv(bsdf_energy_compensated_dielectric_alpha_axis(alpha), height);
+  return bsdf_energy_compensated_lut_response(context, spect, material, image_index, float2(x, y), 8u, height, interface_lut_value);
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_energy_compensated_dielectric_branch_average_albedo(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
@@ -882,22 +1003,34 @@ ETX_SHARED_INLINE SpectralResponse bsdf_energy_compensated_dielectric_average_re
   ETX_IN(Material, material), float alpha, bool outside, float2 interface_lut_value);
 
 ETX_SHARED_NOINLINE SpectralResponse bsdf_energy_compensated_dielectric_branch_coefficient(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
-  uint32_t interface_index, float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value) {
+  uint32_t interface_index, float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value, ETX_IN(SpectralResponse, incident_average_residual),
+  ETX_IN(SpectralResponse, outgoing_average_residual)) {
   Material material = ETX_ZERO(Material);
   material.energy_compensation_interface_index = interface_index;
   const uint32_t column = 4u + bsdf_energy_compensated_dielectric_branch_index(incident_outside, outgoing_outside);
-  const uint32_t image_index = bsdf_energy_compensated_dielectric_average_lut_index(context, material);
+  BSDFEnergyCompensationInterfaceData lookup = ETX_ZERO(BSDFEnergyCompensationInterfaceData);
+  if ((bsdf_resource_energy_compensation_interface_try_load(context, material.energy_compensation_interface_index, lookup) == false) || (lookup.cls != MaterialClass::Dielectric)) {
+    return spectral_response_zero(spect);
+  }
+  const uint32_t image_index = lookup.average_lut;
+  const uint32_t height = lookup.dielectric_roughness_count;
   const float x = float(column) / 8.0f;
-  const float y = bsdf_energy_compensated_lut_uv(bsdf_energy_compensated_dielectric_alpha_axis(alpha), kBSDFEnergyCompensationDielectricLutSize);
-  const SpectralResponse residual =
-    bsdf_energy_compensated_lut_response(context, spect, material, image_index, float2(x, y), 8u, kBSDFEnergyCompensationDielectricLutSize, interface_lut_value);
+  const float y = bsdf_energy_compensated_lut_uv(bsdf_energy_compensated_dielectric_alpha_axis(alpha), height);
+  const SpectralResponse residual = bsdf_energy_compensated_lut_response(context, spect, material, image_index, float2(x, y), 8u, height, interface_lut_value);
+  // Interpolate energy budgets before forming their ratio to preserve lossless rows between texels.
+  return spectral_response_div(residual, spectral_response_max(spectral_response_mul(incident_average_residual, outgoing_average_residual), kEpsilon * kEpsilon));
+}
+
+ETX_SHARED_NOINLINE SpectralResponse bsdf_energy_compensated_dielectric_branch_coefficient(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
+  uint32_t interface_index, float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value) {
+  Material material = ETX_ZERO(Material);
+  material.energy_compensation_interface_index = interface_index;
   const SpectralResponse d_i = bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, incident_outside, interface_lut_value);
   SpectralResponse d_o = d_i;
   if (incident_outside != outgoing_outside) {
     d_o = bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, outgoing_outside, interface_lut_value);
   }
-  // Interpolate energy budgets before forming their ratio to preserve lossless rows between texels.
-  return spectral_response_div(residual, spectral_response_max(spectral_response_mul(d_i, d_o), kEpsilon * kEpsilon));
+  return bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, interface_index, alpha, incident_outside, outgoing_outside, interface_lut_value, d_i, d_o);
 }
 
 ETX_SHARED_INLINE SpectralResponse bsdf_energy_compensated_dielectric_branch_coefficient(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
@@ -933,17 +1066,28 @@ ETX_SHARED_INLINE SpectralResponse bsdf_energy_compensated_dielectric_average_re
   return bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, outside, float2(0.0f, 0.0f));
 }
 
+ETX_SHARED_INLINE float2 bsdf_energy_compensated_dielectric_compensation_branch_proposal(ETX_IN(SpectralResponse, outside_coefficient),
+  ETX_IN(SpectralResponse, inside_coefficient), ETX_IN(SpectralResponse, outside_residual), ETX_IN(SpectralResponse, inside_residual)) {
+  const float outside_probability = max(0.0f, spectral_response_monochromatic(spectral_response_mul(outside_coefficient, outside_residual)));
+  const float inside_probability = max(0.0f, spectral_response_monochromatic(spectral_response_mul(inside_coefficient, inside_residual)));
+  return bsdf_external_binary_proposal(outside_probability, inside_probability);
+}
+
 ETX_SHARED_NOINLINE float bsdf_energy_compensated_dielectric_compensation_branch_probability(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect),
   uint32_t interface_index, float alpha, bool incident_outside, bool outgoing_outside, float2 interface_lut_value) {
   Material material = ETX_ZERO(Material);
   material.energy_compensation_interface_index = interface_index;
   const SpectralResponse outside_residual = bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, true, interface_lut_value);
   const SpectralResponse inside_residual = bsdf_energy_compensated_dielectric_average_residual(context, spect, material, alpha, false, interface_lut_value);
-  const SpectralResponse outside_coefficient = bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, material, alpha, incident_outside, true, interface_lut_value);
-  const SpectralResponse inside_coefficient = bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, material, alpha, incident_outside, false, interface_lut_value);
-  const float outside_probability = max(0.0f, spectral_response_monochromatic(spectral_response_mul(outside_coefficient, outside_residual)));
-  const float inside_probability = max(0.0f, spectral_response_monochromatic(spectral_response_mul(inside_coefficient, inside_residual)));
-  const float2 proposal = bsdf_external_binary_proposal(outside_probability, inside_probability);
+  SpectralResponse incident_residual = outside_residual;
+  if (incident_outside == false) {
+    incident_residual = inside_residual;
+  }
+  const SpectralResponse outside_coefficient =
+    bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, interface_index, alpha, incident_outside, true, interface_lut_value, incident_residual, outside_residual);
+  const SpectralResponse inside_coefficient =
+    bsdf_energy_compensated_dielectric_branch_coefficient(context, spect, interface_index, alpha, incident_outside, false, interface_lut_value, incident_residual, inside_residual);
+  const float2 proposal = bsdf_energy_compensated_dielectric_compensation_branch_proposal(outside_coefficient, inside_coefficient, outside_residual, inside_residual);
   return outgoing_outside ? proposal.x : proposal.y;
 }
 
@@ -1047,8 +1191,9 @@ ETX_SHARED_INLINE float bsdf_energy_compensated_vndf_pdf(ETX_IN(float3, w_i), ET
   return bsdf_energy_compensated_vndf_pdf(w_i, m, float2(alpha, alpha));
 }
 
-ETX_SHARED_INLINE BSDFEnergyCompensatedLobe bsdf_energy_compensated_conductor_base_lobe(ETX_IN(SpectralQuery, spect), ETX_IN(float3, w_i), ETX_IN(float3, w_o),
-  ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm), ETX_IN(SpectralResponse, reflectance)) {
+ETX_SHARED_INLINE BSDFEnergyCompensatedLobe bsdf_energy_compensated_conductor_base_lobe(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material),
+  ETX_IN(SpectralQuery, spect), ETX_IN(float3, w_i), ETX_IN(float3, w_o), ETX_IN(float2, alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior),
+  ETX_IN(ThinfilmEval, thinfilm), ETX_IN(SpectralResponse, reflectance)) {
   BSDFEnergyCompensatedLobe result = ETX_ZERO(BSDFEnergyCompensatedLobe);
   result.bsdf = spectral_response_make(spect, 0.0f);
 
@@ -1067,7 +1212,7 @@ ETX_SHARED_INLINE BSDFEnergyCompensatedLobe bsdf_energy_compensated_conductor_ba
     return result;
   }
 
-  const SpectralResponse fresnel = bsdf_conductor_tinted_fresnel(spect, dot(w_i, m), ext_ior, int_ior, thinfilm, reflectance);
+  const SpectralResponse fresnel = bsdf_conductor_tinted_fresnel(context, material, spect, dot(w_i, m), ext_ior, int_ior, thinfilm, reflectance);
   const float lambda_i = bsdf_external_ray_info_make(w_i, alpha).Lambda;
   const float lambda_o = bsdf_external_ray_info_make(w_o, alpha).Lambda;
   const float d = bsdf_external_d_ggx(m, alpha);
@@ -1079,9 +1224,10 @@ ETX_SHARED_INLINE BSDFEnergyCompensatedLobe bsdf_energy_compensated_conductor_ba
   return result;
 }
 
-ETX_SHARED_INLINE BSDFEnergyCompensatedLobe bsdf_energy_compensated_conductor_base_lobe(ETX_IN(SpectralQuery, spect), ETX_IN(float3, w_i), ETX_IN(float3, w_o), float alpha,
-  ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior), ETX_IN(ThinfilmEval, thinfilm), ETX_IN(SpectralResponse, reflectance)) {
-  return bsdf_energy_compensated_conductor_base_lobe(spect, w_i, w_o, float2(alpha, alpha), ext_ior, int_ior, thinfilm, reflectance);
+ETX_SHARED_INLINE BSDFEnergyCompensatedLobe bsdf_energy_compensated_conductor_base_lobe(ETX_IN(BSDFResourceContext, context), ETX_IN(Material, material),
+  ETX_IN(SpectralQuery, spect), ETX_IN(float3, w_i), ETX_IN(float3, w_o), float alpha, ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior),
+  ETX_IN(ThinfilmEval, thinfilm), ETX_IN(SpectralResponse, reflectance)) {
+  return bsdf_energy_compensated_conductor_base_lobe(context, material, spect, w_i, w_o, float2(alpha, alpha), ext_ior, int_ior, thinfilm, reflectance);
 }
 
 ETX_SHARED_INLINE float bsdf_energy_compensated_conductor_pdf_local(ETX_IN(BSDFResourceContext, context), ETX_IN(SpectralQuery, spect), ETX_IN(Material, material),
@@ -1172,7 +1318,7 @@ ETX_SHARED_INLINE BSDFEval bsdf_conductor_energy_compensated_evaluate_prepared_l
 
   const float2 base_alpha = prepared.supported ? float2(prepared.alpha, prepared.alpha) : prepared.roughness;
   const BSDFEnergyCompensatedLobe base_lobe =
-    bsdf_energy_compensated_conductor_base_lobe(data.spectrum_sample, w_i, w_o, base_alpha, prepared.ext_ior, prepared.int_ior, prepared.thinfilm, reflectance);
+    bsdf_energy_compensated_conductor_base_lobe(context, material, data.spectrum_sample, w_i, w_o, base_alpha, prepared.ext_ior, prepared.int_ior, prepared.thinfilm, reflectance);
 
   SpectralResponse compensation_bsdf = spectral_response_make(data.spectrum_sample, 0.0f);
   const float e_i_scalar = incident.geometric_albedo;
@@ -1391,8 +1537,8 @@ ETX_SHARED_NOINLINE float bsdf_conductor_energy_compensated_pdf(ETX_IN(BSDFResou
   }
   const SpectralResponse reflectance = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
   if (prepared.supported == false) {
-    const BSDFEnergyCompensatedLobe base_lobe =
-      bsdf_energy_compensated_conductor_base_lobe(data.spectrum_sample, w_i, w_o, prepared.roughness, prepared.ext_ior, prepared.int_ior, prepared.thinfilm, reflectance);
+    const BSDFEnergyCompensatedLobe base_lobe = bsdf_energy_compensated_conductor_base_lobe(context, material, data.spectrum_sample, w_i, w_o, prepared.roughness, prepared.ext_ior,
+      prepared.int_ior, prepared.thinfilm, reflectance);
     return bsdf_energy_compensated_conductor_pdf_from_base_lobe(context, data.spectrum_sample, material, w_i, w_o, prepared.alpha, base_lobe.pdf, prepared.interface_lut_value,
       reflectance);
   }
@@ -1423,8 +1569,8 @@ ETX_SHARED_INLINE float bsdf_conductor_energy_compensated_pdf_prepared(ETX_IN(BS
   }
   const SpectralResponse reflectance = bsdf_resource_apply_image(context, data.spectrum_sample, material.reflectance, data.tex);
   if (prepared.supported == false) {
-    const BSDFEnergyCompensatedLobe base_lobe =
-      bsdf_energy_compensated_conductor_base_lobe(data.spectrum_sample, w_i, w_o, prepared.roughness, prepared.ext_ior, prepared.int_ior, prepared.thinfilm, reflectance);
+    const BSDFEnergyCompensatedLobe base_lobe = bsdf_energy_compensated_conductor_base_lobe(context, material, data.spectrum_sample, w_i, w_o, prepared.roughness, prepared.ext_ior,
+      prepared.int_ior, prepared.thinfilm, reflectance);
     return bsdf_energy_compensated_conductor_pdf_from_base_lobe(context, data.spectrum_sample, material, w_i, w_o, prepared.alpha, base_lobe.pdf, prepared.interface_lut_value,
       reflectance);
   }
@@ -1488,7 +1634,7 @@ ETX_SHARED_NOINLINE BSDFEnergyCompensatedLobe bsdf_energy_compensated_dielectric
 
     const float vndf_pdf = bsdf_energy_compensated_vndf_pdf(w_i, m, alpha);
     const SpectralResponse transmission =
-      bsdf_fresnel_transmission_calculate(spect, dot(w_i, m), phase_ext_ior, phase_int_ior, bsdf_fresnel_orient_coherent_interface(thinfilm, outside));
+      bsdf_fresnel_transmission_from_reflection(spect, dot(w_i, m), phase_ext_ior, phase_int_ior, bsdf_fresnel_orient_coherent_interface(thinfilm, outside), fresnel);
     const float reflection_probability =
       bsdf_dielectric_equal_eta(ext_ior, int_ior)
         ? 0.5f
@@ -1515,8 +1661,9 @@ ETX_SHARED_NOINLINE BSDFEnergyCompensatedLobe bsdf_energy_compensated_dielectric
     return result;
   }
 
+  const SpectralResponse fresnel = bsdf_fresnel_calculate(spect, i_dot_m, phase_ext_ior, phase_int_ior, bsdf_fresnel_orient_coherent_interface(thinfilm, outside));
   const SpectralResponse transmission =
-    bsdf_fresnel_transmission_calculate(spect, i_dot_m, phase_ext_ior, phase_int_ior, bsdf_fresnel_orient_coherent_interface(thinfilm, outside));
+    bsdf_fresnel_transmission_from_reflection(spect, i_dot_m, phase_ext_ior, phase_int_ior, bsdf_fresnel_orient_coherent_interface(thinfilm, outside), fresnel);
   const float3 oriented_w_o = -w_o;
   const float lambda_o = bsdf_external_ray_info_make(oriented_w_o, alpha).Lambda;
   const float d = bsdf_external_d_ggx(m, alpha);
@@ -1531,7 +1678,6 @@ ETX_SHARED_NOINLINE BSDFEnergyCompensatedLobe bsdf_energy_compensated_dielectric
   result.bsdf = spectral_response_mul(spectral_response_mul(transmission, texture), scalar * eta * eta);
 
   const float vndf_pdf = bsdf_energy_compensated_vndf_pdf(w_i, m, alpha);
-  const SpectralResponse fresnel = bsdf_fresnel_calculate(spect, i_dot_m, phase_ext_ior, phase_int_ior, bsdf_fresnel_orient_coherent_interface(thinfilm, outside));
   const float transmission_probability = bsdf_external_dielectric_proposal(fresnel, transmission, bsdf_external_transmission_possible(i_dot_m, phase_ext_ior, phase_int_ior)).y;
   const float dwh_dwo = (eta * eta) * abs(o_dot_m) / (denominator * denominator);
   result.pdf = transmission_probability * vndf_pdf * dwh_dwo;
@@ -1574,8 +1720,7 @@ ETX_SHARED_NOINLINE BSDFEnergyCompensatedDielectricComponents bsdf_energy_compen
   result.interface_lut_value = interface_lut_value;
   const bool incident_outside = w_i.z > 0.0f;
   const bool outgoing_outside = w_o.z > 0.0f;
-  const BSDFEnergyCompensatedDielectricBranchPair outgoing_pair =
-    bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, abs(w_o.z), alpha, outgoing_outside, interface_lut_value);
+  const BSDFEnergyCompensatedDielectricBranchPair outgoing_pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, w_o, alpha, interface_lut_value);
   const SpectralResponse e_i = bsdf_energy_compensated_dielectric_branch_pair_albedo(spect, incident_pair);
   const SpectralResponse e_o = bsdf_energy_compensated_dielectric_branch_pair_albedo(spect, outgoing_pair);
   result.incident_albedo = e_i;
@@ -1606,9 +1751,7 @@ ETX_SHARED_INLINE BSDFEnergyCompensatedDielectricComponents bsdf_energy_compensa
   ETX_IN(Material, material), ETX_IN(float3, w_i), ETX_IN(float3, w_o), float alpha, ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior),
   ETX_IN(ThinfilmEval, thinfilm), ETX_IN(SpectralResponse, texture)) {
   const float2 interface_lut_value = bsdf_energy_compensated_interface_lut_value(material, thinfilm);
-  const bool incident_outside = w_i.z > 0.0f;
-  const BSDFEnergyCompensatedDielectricBranchPair incident_pair =
-    bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, abs(w_i.z), alpha, incident_outside, interface_lut_value);
+  const BSDFEnergyCompensatedDielectricBranchPair incident_pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, w_i, alpha, interface_lut_value);
   return bsdf_energy_compensated_dielectric_components_local_with_incident_pair(context, spect, material, w_i, w_o, alpha, float2(alpha, alpha), ext_ior, int_ior, thinfilm,
     texture, incident_pair, interface_lut_value);
 }
@@ -1633,19 +1776,18 @@ ETX_SHARED_INLINE float bsdf_energy_compensated_dielectric_pdf_from_components(E
     matching_media);
 }
 
-ETX_SHARED_INLINE BSDFEval bsdf_approximate_anisotropic_dielectric_evaluate_prepared_local(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data), ETX_IN(Material, material),
-  ETX_IN(float3, w_i), ETX_IN(float3, w_o), ETX_IN(BSDFEnergyCompensatedPreparedMaterial, prepared), ETX_IN(SpectralResponse, texture)) {
+ETX_SHARED_INLINE BSDFEval bsdf_anisotropic_dielectric_energy_compensated_evaluate_prepared_local(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data),
+  ETX_IN(Material, material), ETX_IN(float3, w_i), ETX_IN(float3, w_o), ETX_IN(BSDFEnergyCompensatedPreparedMaterial, prepared), ETX_IN(SpectralResponse, texture)) {
   const bool outside = w_i.z > 0.0f;
   const BSDFEnergyCompensatedDielectricBranchPair incident_pair =
-    bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, abs(w_i.z), prepared.alpha, outside, prepared.interface_lut_value);
+    bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, w_i, prepared.alpha, prepared.interface_lut_value);
   const BSDFEnergyCompensatedDielectricComponents components = bsdf_energy_compensated_dielectric_components_local_with_incident_pair(context, data.spectrum_sample, material, w_i,
     w_o, prepared.alpha, prepared.roughness, prepared.ext_ior, prepared.int_ior, prepared.thinfilm, texture, incident_pair, prepared.interface_lut_value);
   SpectralResponse value = spectral_response_add(components.base, components.compensation);
   const bool reflection = (w_i.z * w_o.z) > 0.0f;
   if ((reflection == false) && (data.path_source == PathSource::Light)) {
-    const bool reverse_outside = w_o.z > 0.0f;
     const BSDFEnergyCompensatedDielectricBranchPair reverse_incident_pair =
-      bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, abs(w_o.z), prepared.alpha, reverse_outside, prepared.interface_lut_value);
+      bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, w_o, prepared.alpha, prepared.interface_lut_value);
     const BSDFEnergyCompensatedDielectricComponents reverse_components = bsdf_energy_compensated_dielectric_components_local_with_incident_pair(context, data.spectrum_sample,
       material, w_o, w_i, prepared.alpha, prepared.roughness, prepared.ext_ior, prepared.int_ior, prepared.thinfilm, texture, reverse_incident_pair, prepared.interface_lut_value);
     value = spectral_response_mul(spectral_response_add(reverse_components.base, reverse_components.compensation), abs(w_o.z) / max(kEpsilon, abs(w_i.z)));
@@ -1674,9 +1816,7 @@ ETX_SHARED_INLINE SpectralResponse bsdf_energy_compensated_dielectric_bsdf_local
   ETX_IN(float3, w_i), ETX_IN(float3, w_o), float alpha, ETX_IN(float2, base_alpha), ETX_IN(RefractiveIndexSample, ext_ior), ETX_IN(RefractiveIndexSample, int_ior),
   ETX_IN(ThinfilmEval, thinfilm), ETX_IN(SpectralResponse, texture)) {
   const float2 interface_lut_value = bsdf_energy_compensated_interface_lut_value(material, thinfilm);
-  const bool incident_outside = w_i.z > 0.0f;
-  const BSDFEnergyCompensatedDielectricBranchPair incident_pair =
-    bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, abs(w_i.z), alpha, incident_outside, interface_lut_value);
+  const BSDFEnergyCompensatedDielectricBranchPair incident_pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, w_i, alpha, interface_lut_value);
   const BSDFEnergyCompensatedDielectricComponents components = bsdf_energy_compensated_dielectric_components_local_with_incident_pair(context, spect, material, w_i, w_o, alpha,
     base_alpha, ext_ior, int_ior, thinfilm, texture, incident_pair, interface_lut_value);
   const SpectralResponse result = spectral_response_add(components.base, components.compensation);
@@ -1701,8 +1841,7 @@ ETX_SHARED_INLINE float bsdf_energy_compensated_dielectric_pdf_local(ETX_IN(BSDF
 
   const bool outside = w_i.z > 0.0f;
   const float2 interface_lut_value = bsdf_energy_compensated_interface_lut_value(material, thinfilm);
-  const BSDFEnergyCompensatedDielectricBranchPair incident_pair =
-    bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, abs(w_i.z), alpha, outside, interface_lut_value);
+  const BSDFEnergyCompensatedDielectricBranchPair incident_pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, spect, material, w_i, alpha, interface_lut_value);
   const float base_pdf = bsdf_energy_compensated_dielectric_base_pdf_local(spect, w_i, w_o, alpha, ext_ior, int_ior, thinfilm);
   const SpectralResponse e_i = bsdf_energy_compensated_dielectric_branch_pair_albedo(spect, incident_pair);
   const float base_probability =
@@ -1796,7 +1935,7 @@ ETX_SHARED_INLINE BSDFEval bsdf_dielectric_energy_compensated_evaluate_prepared(
     }
     const bool reflection = (w_i.z * w_o.z) > 0.0f;
     const SpectralResponse texture = bsdf_dielectric_boundary_texture(context, data, material, reflection);
-    return bsdf_approximate_anisotropic_dielectric_evaluate_prepared_local(context, data, material, w_i, w_o, prepared, texture);
+    return bsdf_anisotropic_dielectric_energy_compensated_evaluate_prepared_local(context, data, material, w_i, w_o, prepared, texture);
   }
   if (prepared.dielectric_delta) {
     return bsdf_eval_zero(data.spectrum_sample);
@@ -1830,7 +1969,7 @@ ETX_SHARED_NOINLINE BSDFEval bsdf_dielectric_energy_compensated_evaluate(ETX_IN(
     }
     const bool reflection = (w_i.z * w_o.z) > 0.0f;
     const SpectralResponse texture = bsdf_dielectric_boundary_texture(context, data, material, reflection);
-    return bsdf_approximate_anisotropic_dielectric_evaluate_prepared_local(context, data, material, w_i, w_o, prepared, texture);
+    return bsdf_anisotropic_dielectric_energy_compensated_evaluate_prepared_local(context, data, material, w_i, w_o, prepared, texture);
   }
   if (prepared.dielectric_delta) {
     return bsdf_eval_zero(data.spectrum_sample);
@@ -1889,7 +2028,7 @@ ETX_SHARED_NOINLINE BSDFEnergyCompensatedDielectricProposal bsdf_energy_compensa
     const float3 m = bsdf_energy_compensated_sample_vndf_local(w_i, base_alpha, rnd);
     const ThinfilmEval optics = bsdf_fresnel_orient_coherent_interface(prepared.thinfilm, outside);
     const SpectralResponse fresnel = bsdf_fresnel_calculate(data.spectrum_sample, dot(w_i, m), phase_ext_ior, phase_int_ior, optics);
-    const SpectralResponse transmission = bsdf_fresnel_transmission_calculate(data.spectrum_sample, dot(w_i, m), phase_ext_ior, phase_int_ior, optics);
+    const SpectralResponse transmission = bsdf_fresnel_transmission_from_reflection(data.spectrum_sample, dot(w_i, m), phase_ext_ior, phase_int_ior, optics, fresnel);
     const float branch_selector = bsdf_sampler_next(sampler);
     const bool matching_media = bsdf_dielectric_equal_eta(prepared.ext_ior, prepared.int_ior);
     const float2 branch_proposal = bsdf_external_dielectric_proposal(fresnel, transmission, bsdf_external_transmission_possible(dot(w_i, m), phase_ext_ior, phase_int_ior));
@@ -1973,9 +2112,8 @@ ETX_SHARED_NOINLINE BSDFSample bsdf_energy_compensated_dielectric_resolve_with_p
       reverse_bsdf = bsdf_energy_compensated_dielectric_bsdf_local(context, data.spectrum_sample, material, local_w_o, w_i_local, prepared.alpha, prepared.ext_ior,
         prepared.int_ior, prepared.thinfilm, texture);
     } else {
-      const bool reverse_outside = local_w_o.z > 0.0f;
-      const BSDFEnergyCompensatedDielectricBranchPair reverse_incident_pair = bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material,
-        abs(local_w_o.z), prepared.alpha, reverse_outside, prepared.interface_lut_value);
+      const BSDFEnergyCompensatedDielectricBranchPair reverse_incident_pair =
+        bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, local_w_o, prepared.alpha, prepared.interface_lut_value);
       const BSDFEnergyCompensatedDielectricComponents reverse_components =
         bsdf_energy_compensated_dielectric_components_local_with_incident_pair(context, data.spectrum_sample, material, local_w_o, w_i_local, prepared.alpha, prepared.roughness,
           prepared.ext_ior, prepared.int_ior, prepared.thinfilm, texture, reverse_incident_pair, prepared.interface_lut_value);
@@ -2045,9 +2183,8 @@ ETX_SHARED_NOINLINE BSDFEnergyCompensatedDielectricSampleState bsdf_energy_compe
     return state;
   }
 
-  const bool outside = w_i_local.z > 0.0f;
   const BSDFEnergyCompensatedDielectricBranchPair incident_pair =
-    bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, abs(w_i_local.z), prepared.alpha, outside, prepared.interface_lut_value);
+    bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, w_i_local, prepared.alpha, prepared.interface_lut_value);
   state.incident_pair = incident_pair;
   const BSDFEnergyCompensatedDielectricProposal proposal =
     bsdf_energy_compensated_dielectric_propose(context, data, interface_material, prepared, w_i_local, incident_pair, sampler);
@@ -2073,6 +2210,12 @@ ETX_SHARED_NOINLINE BSDFSample bsdf_energy_compensated_dielectric_sample_resolve
 
 ETX_SHARED_NOINLINE BSDFSample bsdf_dielectric_energy_compensated_sample(ETX_IN(BSDFResourceContext, context), ETX_IN(BSDFData, data),
   ETX_IN(BSDFInterfaceMaterial, interface_material), ETX_INOUT(Sampler, sampler)) {
+  const Material material = bsdf_interface_material(interface_material);
+  const float2 roughness = bsdf_resource_evaluate_roughness(context, material, data.tex);
+  if (max(roughness.x, roughness.y) <= kDeltaAlphaTreshold) {
+    return bsdf_dielectric_delta_sample(context, data, material, sampler);
+  }
+
   const BSDFEnergyCompensatedDielectricSampleState state = bsdf_energy_compensated_dielectric_sample_begin(context, data, interface_material, sampler);
   if (state.stage == BSDFEnergyCompensatedDielectricSampleState::Delta) {
     return bsdf_dielectric_delta_sample(context, data, bsdf_interface_material(interface_material), sampler);
@@ -2117,7 +2260,7 @@ ETX_SHARED_NOINLINE float bsdf_dielectric_energy_compensated_pdf(ETX_IN(BSDFReso
     const SpectralResponse texture = spectral_response_make(data.spectrum_sample, 1.0f);
     const bool outside = w_i.z > 0.0f;
     const BSDFEnergyCompensatedDielectricBranchPair incident_pair =
-      bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, abs(w_i.z), prepared.alpha, outside, prepared.interface_lut_value);
+      bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, w_i, prepared.alpha, prepared.interface_lut_value);
     const BSDFEnergyCompensatedDielectricComponents components = bsdf_energy_compensated_dielectric_components_local_with_incident_pair(context, data.spectrum_sample, material,
       w_i, w_o, prepared.alpha, prepared.roughness, prepared.ext_ior, prepared.int_ior, prepared.thinfilm, texture, incident_pair, prepared.interface_lut_value);
     return bsdf_energy_compensated_dielectric_pdf_from_components(context, data.spectrum_sample, material, components, w_o, prepared.alpha, outside,
@@ -2154,7 +2297,7 @@ ETX_SHARED_INLINE float bsdf_dielectric_energy_compensated_pdf_prepared(ETX_IN(B
     const SpectralResponse texture = spectral_response_make(data.spectrum_sample, 1.0f);
     const bool outside = w_i.z > 0.0f;
     const BSDFEnergyCompensatedDielectricBranchPair incident_pair =
-      bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, abs(w_i.z), prepared.alpha, outside, prepared.interface_lut_value);
+      bsdf_energy_compensated_dielectric_branch_pair_value(context, data.spectrum_sample, material, w_i, prepared.alpha, prepared.interface_lut_value);
     const BSDFEnergyCompensatedDielectricComponents components = bsdf_energy_compensated_dielectric_components_local_with_incident_pair(context, data.spectrum_sample, material,
       w_i, w_o, prepared.alpha, prepared.roughness, prepared.ext_ior, prepared.int_ior, prepared.thinfilm, texture, incident_pair, prepared.interface_lut_value);
     return bsdf_energy_compensated_dielectric_pdf_from_components(context, data.spectrum_sample, material, components, w_o, prepared.alpha, outside,

@@ -271,7 +271,7 @@ inline bool upbp_complete_recursive_arrival(const Scene& scene, const UPBPPathRe
     return false;
   }
   const double distance_squared = static_cast<double>(segment.distance) * segment.distance;
-  if ((vertex_index > 1u) || (path.vertices.front().distant_endpoint == false)) {
+  if ((target.distant_endpoint == false) && ((vertex_index > 1u) || (path.vertices.front().distant_endpoint == false))) {
     state.weights.d_shared *= distance_squared;
   }
   state.weights.d_shared /= cosine;

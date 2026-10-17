@@ -58,7 +58,7 @@ inline bool compile_material_layers(SceneData& data) {
   for (uint32_t index = 0u; index < data.material_descriptions.size(); ++index) {
     const MaterialLayerSettings& layers = data.material_descriptions[index].layers;
     if ((layers.bsdf != MaterialClass::Undefined) && (layers.bsdf >= MaterialClass::Count)) {
-      data.fail_material(index, SceneDiagnosticKind::Validation, "Material parameters", "has an invalid BSDF selection");
+      data.fail_material(index, SceneDiagnosticKind::Validation, "Model", "Unknown material model. Select a model from the Model menu.");
       return false;
     }
     if (layers.explicit_layers == 0u) {
@@ -71,8 +71,23 @@ inline bool compile_material_layers(SceneData& data) {
     Material& material = data.materials[index];
     material.layer_base_class = material.cls + 1u;
     if ((material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::CoatedConductor)) {
-      data.fail_material(index, SceneDiagnosticKind::Validation, "Material parameters", "must select a base rather than a legacy layered BSDF");
+      data.fail_material(index, SceneDiagnosticKind::Validation, "Base type", "'%s' already includes a coating. Select '%s' as the base and enable the coating separately.",
+        material_class_display_name(material.cls), material_class_display_name(material.cls == MaterialClass::Plastic ? MaterialClass::Diffuse : MaterialClass::Conductor));
       return false;
+    }
+    if (layers.bsdf != MaterialClass::Undefined) {
+      const bool coated = (layers.bsdf == MaterialClass::Plastic) || (layers.bsdf == MaterialClass::CoatedConductor);
+      const uint32_t base = layers.bsdf == MaterialClass::Plastic ? MaterialClass::Diffuse : layers.bsdf == MaterialClass::CoatedConductor ? MaterialClass::Conductor : layers.bsdf;
+      // The selected model constrains authored layers; compilation may choose a shared transport implementation.
+      if ((material.cls != base) || ((layers.coating_enabled != 0u) != coated)) {
+        return data.fail_material(index, "Model",
+          "'%s' requires a %s base with coating %s. Current layers use a %s base with coating %s. Select 'Custom layers' to configure the base and coating independently.",
+          material_class_display_name(layers.bsdf), material_class_display_name(base), coated ? "enabled" : "disabled", material_class_display_name(material.cls),
+          layers.coating_enabled != 0u ? "enabled" : "disabled");
+      }
+      if ((layers.bsdf == MaterialClass::Thinfilm) && (layers.thinfilm_enabled == 0u)) {
+        return data.fail_material(index, "Thin film", "The 'Thinfilm' model requires an enabled thin film. Select 'Custom layers' to disable it.");
+      }
     }
     if (layers.thinfilm_enabled == 0u) {
       material.thinfilm.weight = 0.0f;
@@ -82,7 +97,9 @@ inline bool compile_material_layers(SceneData& data) {
     } else if ((layers.coating_enabled == 0u) && (material.cls != MaterialClass::Conductor) && (material.cls != MaterialClass::Dielectric) &&
                (material.cls != MaterialClass::Thinfilm) && (material.cls != MaterialClass::OpenPBR) && (material.cls != MaterialClass::Diffuse) &&
                (material.cls != MaterialClass::Velvet)) {
-      data.fail_material(index, SceneDiagnosticKind::Unsupported, "Thin film", "requires a thin-film interface wrapper for base %u which is not implemented yet", material.cls);
+      data.fail_material(index, SceneDiagnosticKind::Unsupported, "Thin film",
+        "Thin films over a %s base are not supported. Disable the thin film or select a supported base: Diffuse, Velvet, Conductor, Dielectric, Thinfilm or OpenPBR.",
+        material_class_display_name(material.cls));
       return false;
     }
     if (layers.coating_enabled == 0u) {
@@ -112,11 +129,15 @@ inline bool compile_material_layers(SceneData& data) {
       const bool translucent_support = material.cls == MaterialClass::Translucent;
       if ((opaque_support == false) && (dielectric_support == false) && (translucent_support == false) &&
           ((material.cls != MaterialClass::Conductor) || (material.int_ior.cls != SpectralDistribution::Conductor))) {
-        data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating", "requires finite-metal coating transport for its base which is not implemented yet");
+        data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating / Base type",
+          "A conductor coating over a %s base is not supported with the current base IOR. Select a Diffuse, Velvet, Translucent, Dielectric or Conductor base with a compatible "
+          "IOR.",
+          material_class_display_name(material.cls));
         return false;
       }
       if (material.subsurface_cls != SubsurfaceMaterial::Disabled) {
-        data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating", "requires subsurface transmission through the finite-metal coating which is not implemented yet");
+        data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating / Subsurface scattering",
+          "Subsurface scattering through a conductor coating is not supported. Disable subsurface scattering before selecting a conductor coating IOR.");
         return false;
       }
       const SpectralImage coefficients[] = {material.coating.absorption, material.coating.scattering};
@@ -124,7 +145,9 @@ inline bool compile_material_layers(SceneData& data) {
         if ((coefficient.image_index != kInvalidIndex) ||
             ((coefficient.spectrum_index != kInvalidIndex) &&
               ((coefficient.spectrum_index >= data.spectrum_values.size()) || (data.spectrum_values[coefficient.spectrum_index].is_zero() == false)))) {
-          data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating", "requires volume transport within a finite-metal coating which is not implemented yet");
+          data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating / Volume coefficients",
+            "Conductor coatings use IOR k for absorption. Additional volume absorption or scattering is not supported. Set both coating coefficients to zero and remove their "
+            "textures before selecting a conductor coating IOR.");
           return false;
         }
       }
@@ -158,8 +181,8 @@ inline bool compile_material_layers(SceneData& data) {
         }
       }
       if (dielectric_support && (coherent_dielectric_base_reflection_is_unit(data, material.reflectance) == false)) {
-        data.fail_material(index, SceneDiagnosticKind::Unsupported, "Material parameters",
-          "requires unit effective base reflection tint; non-unit tint and unresolved textures are unsupported by the coherent matched dielectric endpoint");
+        data.fail_material(index, SceneDiagnosticKind::Unsupported, "Base / Reflection tint",
+          "A conductor coating over a Dielectric base requires a reflection tint of 1 at every wavelength. Set Reflection to white at strength 1 and remove its texture.");
         return false;
       }
       if (dielectric_support || translucent_support) {
@@ -179,8 +202,7 @@ inline bool compile_material_layers(SceneData& data) {
                                           (data.spectrum_values[material.emission.spectrum_index].integrated().x != 0.0f) ||
                                           (data.spectrum_values[material.emission.spectrum_index].integrated().y != 0.0f) ||
                                           (data.spectrum_values[material.emission.spectrum_index].integrated().z != 0.0f)));
-          const bool direct_interface = ((layers.bsdf == MaterialClass::Undefined) || (layers.bsdf == MaterialClass::Dielectric)) && (surface_source == false) &&
-                                        coherent_dielectric_base_reflection_is_unit(data, material.scattering);
+          const bool direct_interface = (surface_source == false) && coherent_dielectric_base_reflection_is_unit(data, material.scattering);
           if (direct_interface) {
             material.scattering = {.spectrum_index = data.thermal_unit_spectrum_index};
             continue;
@@ -205,7 +227,7 @@ inline bool compile_material_layers(SceneData& data) {
     }
     const Coating& coat = material.coating;
     if (material.ext_ior.cls != SpectralDistribution::Dielectric) {
-      return data.fail_material(index, "Outside IOR", "A dielectric exterior is required for a coating; supplied IOR class is %u.", material.ext_ior.cls);
+      return data.fail_material(index, "Outside IOR", "A coating requires a lossless dielectric outside IOR (eta > 0, k = 0). Select a dielectric outside IOR.");
     }
     if ((std::isfinite(coat.thickness.value.x) == false) || (coat.thickness.value.x < 0.0f)) {
       return data.fail_material(index, "Coating / Physical thickness", "Thickness %.9g m must be finite and nonnegative.", coat.thickness.value.x);
@@ -243,7 +265,9 @@ inline bool compile_material_layers(SceneData& data) {
     const bool transmitting_base = (material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Translucent);
     if (transmitting_base) {
       if (data.material_descriptions[index].subsurface_cls != SubsurfaceMaterial::Disabled) {
-        data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating", "requires subsurface transport through its transmitting-base coating which is not implemented yet");
+        data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating / Subsurface scattering",
+          "Subsurface scattering through a coating over a %s base is not supported. Disable subsurface scattering or select a Diffuse base.",
+          material_class_display_name(material.cls));
         return false;
       }
     }
@@ -261,7 +285,9 @@ inline bool compile_material_layers(SceneData& data) {
       }
       if (needs_transport) {
         if (material.subsurface_cls != SubsurfaceMaterial::Disabled) {
-          data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating", "requires subsurface transmission through the volume coating which is not implemented yet");
+          data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating / Subsurface scattering",
+            "Subsurface scattering cannot be combined with coating volume coefficients, emission or temperature. Disable subsurface scattering, or clear those coefficients and "
+            "textures and set emission and temperature to zero.");
           return false;
         }
         material.cls = MaterialClass::CoatedConductor;
@@ -276,15 +302,9 @@ inline bool compile_material_layers(SceneData& data) {
     } else if ((material.cls == MaterialClass::Conductor) || (material.cls == MaterialClass::Mirror) || (material.cls == MaterialClass::Velvet) || transmitting_base) {
       material.cls = MaterialClass::CoatedConductor;
     } else {
-      data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating", "requires coating transport for base %u which is not implemented yet", material.cls);
-      return false;
-    }
-  }
-  for (uint32_t index = 0u; index < data.material_descriptions.size(); ++index) {
-    const MaterialLayerSettings& layers = data.material_descriptions[index].layers;
-    if ((layers.explicit_layers != 0u) && (layers.bsdf != MaterialClass::Undefined) && (data.materials[index].cls != layers.bsdf)) {
-      data.fail_material(index, SceneDiagnosticKind::Validation, "Material parameters",
-        "parameters require BSDF %u, but explicit BSDF %u was selected. Select Auto or adjust the layers.", data.materials[index].cls, layers.bsdf);
+      data.fail_material(index, SceneDiagnosticKind::Unsupported, "Coating",
+        "A dielectric coating over base '%s' is not supported. Disable the coating or select a supported base: Diffuse, Conductor, Dielectric, Translucent, Mirror or Velvet.",
+        material_class_display_name(material.cls));
       return false;
     }
   }
@@ -379,13 +399,15 @@ inline bool material_graph_valid(const SceneData& data, const std::vector<Materi
         }
       }
     }
-    const bool dielectric_base = (material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Plastic);
+    const bool dielectric_base = (material.cls == MaterialClass::Dielectric) || (material.cls == MaterialClass::Plastic) || (material.cls == MaterialClass::OpenPBR);
     if (dielectric_base || (material.cls == MaterialClass::Conductor)) {
       const uint32_t base_ior_class = dielectric_base ? SpectralDistribution::Dielectric : SpectralDistribution::Conductor;
-      if (((material.ext_ior.cls != SpectralDistribution::Invalid) && (material.ext_ior.cls != SpectralDistribution::Dielectric)) ||
-          ((material.int_ior.cls != SpectralDistribution::Invalid) && (material.int_ior.cls != base_ior_class))) {
-        data.fail_material(index, SceneDiagnosticKind::Validation, "IOR", "has an IOR class incompatible with its base or exterior");
-        return false;
+      if ((material.ext_ior.cls != SpectralDistribution::Invalid) && (material.ext_ior.cls != SpectralDistribution::Dielectric)) {
+        return data.fail_material(index, "Outside IOR", "The %s model requires a dielectric outside IOR. Select a dielectric preset.", material_class_display_name(material.cls));
+      }
+      if ((material.int_ior.cls != SpectralDistribution::Invalid) && (material.int_ior.cls != base_ior_class)) {
+        return data.fail_material(index, "Base IOR", "The %s model requires a %s base IOR. Select a %s preset.", material_class_display_name(material.cls),
+          dielectric_base ? "dielectric" : "conductor", dielectric_base ? "dielectric" : "conductor");
       }
       const RefractiveIndex interfaces[] = {material.ext_ior, material.int_ior};
       for (uint32_t interface_index = 0u; interface_index < 2u; ++interface_index) {
